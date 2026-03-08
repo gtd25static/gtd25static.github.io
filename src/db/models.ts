@@ -49,9 +49,6 @@ export interface Subtask {
 
 export interface Settings {
   theme: 'light' | 'dark' | 'system';
-  workingOnTaskId?: string;
-  workingOnSubtaskId?: string;
-  keyboardShortcuts: Record<string, string>;
 }
 
 export interface SyncMeta {

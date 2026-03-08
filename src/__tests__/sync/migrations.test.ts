@@ -3,7 +3,7 @@ import { SYNC_VERSION } from '../../sync/version';
 import type { SyncData, Settings } from '../../db/models';
 
 function makeSettings(overrides?: Partial<Settings>): Settings {
-  return { theme: 'light', keyboardShortcuts: {}, ...overrides };
+  return { theme: 'light', ...overrides };
 }
 
 function makeSyncData(overrides?: Partial<SyncData>): SyncData {

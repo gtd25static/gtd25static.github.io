@@ -190,7 +190,7 @@ describe('encryptSyncData / decryptSyncData', () => {
       subtasks: [
         { id: 's1', taskId: 't1', title: 'Sub', status: 'todo', order: 0, createdAt: 1000, updatedAt: 1001 },
       ],
-      settings: { theme: 'dark', keyboardShortcuts: {} },
+      settings: { theme: 'dark' },
     };
 
     const encrypted = await encryptSyncData(testKey, data);

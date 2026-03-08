@@ -3,7 +3,6 @@ import type { SyncData, Settings, ChangeEntry } from '../db/models';
 import { getFile, putFile, deleteFile } from './github-api';
 import { cleanupSoftDeletes } from './conflict-resolution';
 import { applyRemoteEntries, getPendingEntries, clearPendingEntries } from './change-log';
-import { DEFAULT_KEYBOARD_SHORTCUTS } from '../lib/constants';
 import { toast } from '../components/ui/Toast';
 import { SYNC_VERSION, isCompatibleVersion, needsMigration } from './version';
 import { runRemoteMigrations } from './migrations';
@@ -136,7 +135,6 @@ async function getLocalSnapshot(): Promise<SyncData> {
   ]);
   const settings: Settings = {
     theme: (localStorage.getItem('gtd25-theme') as Settings['theme']) ?? 'system',
-    keyboardShortcuts: { ...DEFAULT_KEYBOARD_SHORTCUTS },
   };
   return { syncVersion: SYNC_VERSION, taskLists, tasks, subtasks, settings };
 }
@@ -570,7 +568,7 @@ async function compactSnapshot(pat: string, repo: string, encKey: CryptoKey) {
         snapshot = await decryptSyncData(encKey, snapshot);
       }
     } else {
-      snapshot = { taskLists: [], tasks: [], subtasks: [], settings: { theme: 'system', keyboardShortcuts: {} } };
+      snapshot = { taskLists: [], tasks: [], subtasks: [], settings: { theme: 'system' } };
     }
 
     // Get fresh changelog

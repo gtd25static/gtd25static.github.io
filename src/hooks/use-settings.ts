@@ -1,16 +1,6 @@
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../db';
-import type { Settings, LocalSettings } from '../db/models';
-import { DEFAULT_KEYBOARD_SHORTCUTS } from '../lib/constants';
-
-const defaultSettings: Settings = {
-  theme: 'system',
-  keyboardShortcuts: { ...DEFAULT_KEYBOARD_SHORTCUTS },
-};
-
-export function useSettings() {
-  return defaultSettings;
-}
+import type { LocalSettings } from '../db/models';
 
 export function useLocalSettings() {
   const local = useLiveQuery(() => db.localSettings.get('local'));

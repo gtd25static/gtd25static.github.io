@@ -2,7 +2,7 @@ import { cleanupSoftDeletes } from '../../sync/conflict-resolution';
 import type { SyncData, TaskList, Task, Subtask, Settings } from '../../db/models';
 
 function makeSettings(overrides?: Partial<Settings>): Settings {
-  return { theme: 'light', keyboardShortcuts: {}, ...overrides };
+  return { theme: 'light', ...overrides };
 }
 
 function makeList(overrides: Partial<TaskList>): TaskList {
