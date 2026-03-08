@@ -1,0 +1,40 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --color-accent-50: #e8f0fe;
+  --color-accent-100: #d2e3fc;
+  --color-accent-200: #aecbfa;
+  --color-accent-300: #8ab4f8;
+  --color-accent-400: #669df6;
+  --color-accent-500: #4285f4;
+  --color-accent-600: #1a73e8;
+  --color-accent-700: #1967d2;
+  --color-accent-800: #185abc;
+  --color-accent-900: #174ea6;
+  --color-accent-950: #0f3570;
+}
+
+html {
+  font-family: 'Google Sans', 'Roboto', system-ui, -apple-system, sans-serif;
+}
+
+body {
+  @apply bg-white text-zinc-800 dark:bg-zinc-900 dark:text-zinc-100;
+  margin: 0;
+}
+
+/* Focus ring utility */
+.focus-ring {
+  @apply outline-none ring-2 ring-accent-500 ring-offset-2 ring-offset-white dark:ring-offset-zinc-900;
+}
+
+/* Scrollbar styling */
+.scrollbar-thin {
+  scrollbar-width: thin;
+  scrollbar-color: theme(--color-zinc-300) transparent;
+}
+.dark .scrollbar-thin {
+  scrollbar-color: theme(--color-zinc-600) transparent;
+}

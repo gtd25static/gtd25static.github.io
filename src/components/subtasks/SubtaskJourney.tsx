@@ -1,0 +1,75 @@
+import { useState, useEffect } from 'react';
+import { useSubtasks, createSubtask, reorderSubtasks } from '../../hooks/use-subtasks';
+import { useAppState } from '../../stores/app-state';
+import { SubtaskForm } from './SubtaskForm';
+import { SortableSubtaskList } from './SortableSubtaskList';
+
+interface Props {
+  taskId: string;
+}
+
+export function SubtaskJourney({ taskId }: Props) {
+  const subtasks = useSubtasks(taskId);
+  const { addingSubtaskToTaskId, setAddingSubtaskToTaskId, focusedItemId, focusZone } = useAppState();
+  const addBtnFocused = focusedItemId === `add-subtask-${taskId}` && focusZone === 'main';
+  const [adding, setAdding] = useState(false);
+
+  // React to keyboard-triggered subtask creation (Tab key) and cancellation (Esc)
+  useEffect(() => {
+    if (addingSubtaskToTaskId === taskId && !adding) {
+      setAdding(true);
+    } else if (addingSubtaskToTaskId !== taskId && adding) {
+      setAdding(false);
+    }
+  }, [addingSubtaskToTaskId, taskId]);
+
+  return (
+    <div>
+      {subtasks.length > 0 && (
+        <>
+          {/* Fork curve from parent checkbox to indented subtask branch */}
+          <svg width="60" height="20" viewBox="0 0 60 20" fill="none">
+            <path
+              d="M 32 0 C 32 14, 50 6, 50 20"
+              stroke="currentColor"
+              strokeWidth="2"
+              fill="none"
+              className="text-zinc-300 dark:text-zinc-600"
+            />
+          </svg>
+          <SortableSubtaskList
+            subtasks={subtasks}
+            onReorder={(ids) => reorderSubtasks(ids)}
+          />
+        </>
+      )}
+
+      <div className={`mt-1 ${subtasks.length > 0 ? 'ml-[60px]' : 'ml-8'}`}>
+        {adding ? (
+          <SubtaskForm
+            onSubmit={(data) => {
+              createSubtask(taskId, data);
+              setAdding(false);
+              if (addingSubtaskToTaskId === taskId) setAddingSubtaskToTaskId(null);
+            }}
+            onCancel={() => {
+              setAdding(false);
+              if (addingSubtaskToTaskId === taskId) setAddingSubtaskToTaskId(null);
+            }}
+          />
+        ) : (
+          <button
+            data-focus-id={`add-subtask-${taskId}`}
+            onClick={() => setAdding(true)}
+            className={`flex items-center gap-1.5 rounded px-2 py-1 text-xs text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800 dark:hover:text-zinc-300 ${addBtnFocused ? 'ring-2 ring-accent-500/40 dark:ring-accent-400/30' : ''}`}
+          >
+            <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M8 3v10M3 8h10" />
+            </svg>
+            Add subtask
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
