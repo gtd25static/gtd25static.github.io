@@ -58,7 +58,7 @@ export async function deriveKey(password: string, saltBase64: string): Promise<C
   return crypto.subtle.deriveKey(
     {
       name: 'PBKDF2',
-      salt,
+      salt: salt as BufferSource,
       iterations: PBKDF2_ITERATIONS,
       hash: 'SHA-256',
     },
@@ -134,7 +134,7 @@ export async function encryptEntity(
 export async function decryptEntity(
   key: CryptoKey,
   entity: Record<string, unknown>,
-  entityType: string,
+  _entityType: string,
 ): Promise<Record<string, unknown>> {
   if (!entity._enc || typeof entity._enc !== 'string') return entity;
 

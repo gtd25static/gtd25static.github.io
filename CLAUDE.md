@@ -446,9 +446,10 @@ When recording actions, store:
 
 ## Git management
 
-You are working inside a WSL linux environment. Use external Windows git.exe since it has the credentials you need to interact with remotes github repo.
-
-Ensure you commit and push all changes after finishing a plan.
+- **Remote**: `git@github.com:gtd25static/gtd25static.github.io.git` (origin)
+- **Branch**: `main`
+- Use WSL git (not git.exe). SSH key `~/.ssh/id_ed25519` is configured for the `gtd25static` GitHub account.
+- Ensure you commit and push all changes after finishing a plan.
 
 ## Application Security
 
