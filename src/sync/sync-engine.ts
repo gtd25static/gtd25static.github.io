@@ -723,6 +723,13 @@ export async function forcePull() {
 
     let snapshot: SyncData = JSON.parse(snapshotFile.data);
 
+    if (!isCompatibleVersion(snapshot.syncVersion)) {
+      notifyVersionIncompatible();
+      reportProgress('error', 'Update required', 0);
+      toast('Remote data requires a newer app version', 'error');
+      return;
+    }
+
     // Resolve encryption (always required)
     const encResult = await resolveEncryptionKey(snapshot.encryptionSalt);
     if (encResult === 'needs-password') return;
