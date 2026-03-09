@@ -44,7 +44,7 @@ function SortableItem({ subtask, isFirst, isLast }: { subtask: Subtask; isFirst:
     <div ref={setNodeRef} style={style} className="relative flex items-stretch">
       {/* Branch line + commit square */}
       <div
-        className="relative flex w-5 shrink-0 cursor-grab touch-none items-center justify-center active:cursor-grabbing"
+        className="relative flex w-11 md:w-5 shrink-0 cursor-grab touch-none items-center justify-center active:cursor-grabbing"
         {...attributes}
         {...listeners}
       >
@@ -58,7 +58,7 @@ function SortableItem({ subtask, isFirst, isLast }: { subtask: Subtask; isFirst:
         )}
         {/* Clickable commit square */}
         <button
-          className="relative z-10"
+          className="relative z-10 p-3 md:p-0"
           onClick={handleToggleDone}
           title={subtask.status === 'done' ? 'Mark incomplete' : 'Mark complete'}
         >

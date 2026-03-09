@@ -92,7 +92,7 @@ function ListItem({ list, selected, onSelect, highlight, focused }: {
           <span className="text-xs text-zinc-400">{count}</span>
         )}
       </button>
-      <div className="mr-1 opacity-0 group-hover:opacity-100">
+      <div className="mr-1 md:opacity-0 md:group-hover:opacity-100">
         <DropdownMenu
           trigger={
             <svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor" className="text-zinc-400">

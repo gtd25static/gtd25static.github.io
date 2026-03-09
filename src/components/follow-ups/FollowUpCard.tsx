@@ -241,7 +241,7 @@ export function FollowUpCard({ task, index }: Props) {
       </div>
 
       {/* Hover actions: edit/delete */}
-      <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 shrink-0">
+      <div className="flex items-center gap-1 md:opacity-0 md:group-hover:opacity-100 shrink-0">
         <DropdownMenu
           trigger={
             <svg width="18" height="18" viewBox="0 0 20 20" fill="currentColor" className="text-zinc-400">

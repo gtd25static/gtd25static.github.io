@@ -26,7 +26,7 @@ export function DropdownMenu({ trigger, items }: Props) {
 
   return (
     <div ref={ref} className="relative">
-      <button onClick={() => setOpen(!open)} className="rounded-full p-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-800">
+      <button onClick={() => setOpen(!open)} className="rounded-full p-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-800 min-h-[44px] min-w-[44px] md:min-h-0 md:min-w-0 flex items-center justify-center">
         {trigger}
       </button>
       {open && (
@@ -35,7 +35,7 @@ export function DropdownMenu({ trigger, items }: Props) {
             <button
               key={item.label}
               onClick={() => { item.onClick(); setOpen(false); }}
-              className={`w-full px-4 py-2 text-left text-sm hover:bg-zinc-50 dark:hover:bg-zinc-800 ${
+              className={`w-full px-4 py-3 md:py-2 text-left text-sm hover:bg-zinc-50 dark:hover:bg-zinc-800 ${
                 item.danger ? 'text-red-600 dark:text-red-400' : 'text-zinc-700 dark:text-zinc-300'
               }`}
             >

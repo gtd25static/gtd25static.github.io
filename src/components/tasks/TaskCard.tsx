@@ -11,6 +11,7 @@ import { startWorkingOn, startWorkingOnTask } from '../../hooks/use-working-on';
 import { SubtaskJourney } from '../subtasks/SubtaskJourney';
 import { TaskForm } from './TaskForm';
 import { ContextMenu, type MenuItem } from '../ui/ContextMenu';
+import { DropdownMenu } from '../ui/DropdownMenu';
 
 interface Props {
   task: Task;
@@ -59,7 +60,7 @@ export function TaskCard({ task, index, dragHandleProps }: Props) {
   return (
     <div data-task-id={task.id} data-focus-id={task.id} className={`mb-1.5 rounded-lg ${focused ? 'relative z-10 ring-2 ring-accent-500 dark:ring-accent-400' : ''}`} onContextMenu={handleContextMenu}>
       <div
-        className={`group flex items-center gap-2 rounded-t-lg px-2 py-1.5 cursor-pointer border transition-shadow ${
+        className={`group flex items-center gap-2 rounded-t-lg px-2 py-3 md:py-1.5 cursor-pointer border transition-shadow ${
           focused
             ? 'border-accent-500/60 dark:border-accent-400/50'
             : 'border-zinc-200 dark:border-zinc-700/60'
@@ -189,8 +190,39 @@ export function TaskCard({ task, index, dragHandleProps }: Props) {
           )}
         </div>
 
-        {/* Inline actions */}
-        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 shrink-0" onClick={(e) => e.stopPropagation()}>
+        {/* Mobile dropdown */}
+        <div className="md:hidden shrink-0" onClick={(e) => e.stopPropagation()}>
+          <DropdownMenu
+            trigger={
+              <svg width="18" height="18" viewBox="0 0 20 20" fill="currentColor" className="text-zinc-400">
+                <circle cx="10" cy="4" r="1.5" />
+                <circle cx="10" cy="10" r="1.5" />
+                <circle cx="10" cy="16" r="1.5" />
+              </svg>
+            }
+            items={[
+              ...(task.status !== 'working' && !hasWorkingSubtask && task.status !== 'done' ? [{
+                label: 'Work', onClick: () => {
+                  if (subtasks.length > 0) {
+                    const firstUndone = subtasks.find((s) => s.status === 'todo' || s.status === 'blocked');
+                    if (firstUndone) startWorkingOn(firstUndone.id);
+                  } else {
+                    startWorkingOnTask(task.id);
+                  }
+                },
+              }] : []),
+              { label: task.status === 'blocked' ? 'Unblock' : 'Block', onClick: () => setTaskStatus(task.id, task.status === 'blocked' ? 'todo' : 'blocked') },
+              { label: 'Edit', onClick: () => setEditing(true) },
+              { label: 'Delete', onClick: () => {
+                if (!confirm('Delete this task?')) return;
+                deleteTask(task.id);
+                toast('Task deleted', 'info', () => restoreTask(task.id));
+              }, danger: true },
+            ]}
+          />
+        </div>
+        {/* Desktop inline actions */}
+        <div className="hidden md:flex items-center gap-1 md:opacity-0 md:group-hover:opacity-100 shrink-0" onClick={(e) => e.stopPropagation()}>
           {task.status !== 'working' && !hasWorkingSubtask && task.status !== 'done' && (
             <button
               onClick={() => {

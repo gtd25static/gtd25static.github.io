@@ -9,6 +9,7 @@ import { SubtaskForm } from './SubtaskForm';
 import { formatDate, dueDateColor } from '../../lib/date-utils';
 import { extractHostname } from '../../lib/link-utils';
 import { ContextMenu, type MenuItem } from '../ui/ContextMenu';
+import { DropdownMenu } from '../ui/DropdownMenu';
 
 interface Props {
   subtask: Subtask;
@@ -61,7 +62,7 @@ export function SubtaskItem({ subtask }: Props) {
     <div
       data-focus-id={subtask.id}
       onContextMenu={handleContextMenu}
-      className={`group flex items-center gap-2 rounded-md px-2 py-1 ${
+      className={`group flex items-center gap-2 rounded-md px-2 py-2.5 md:py-1 ${
         focused
           ? 'ring-2 ring-accent-500/40 dark:ring-accent-400/30'
           : ''
@@ -124,7 +125,29 @@ export function SubtaskItem({ subtask }: Props) {
           Work
         </button>
       )}
-      <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100">
+      {/* Mobile dropdown */}
+      <div className="md:hidden shrink-0" onClick={(e) => e.stopPropagation()}>
+        <DropdownMenu
+          trigger={
+            <svg width="18" height="18" viewBox="0 0 20 20" fill="currentColor" className="text-zinc-400">
+              <circle cx="10" cy="4" r="1.5" />
+              <circle cx="10" cy="10" r="1.5" />
+              <circle cx="10" cy="16" r="1.5" />
+            </svg>
+          }
+          items={[
+            { label: subtask.status === 'blocked' ? 'Unblock' : 'Block', onClick: () => setSubtaskStatus(subtask.id, subtask.status === 'blocked' ? 'todo' : 'blocked') },
+            { label: 'Edit', onClick: () => setEditing(true) },
+            { label: 'Delete', onClick: () => {
+              if (!confirm('Delete this subtask?')) return;
+              deleteSubtask(subtask.id);
+              toast('Subtask deleted', 'info', () => restoreSubtask(subtask.id));
+            }, danger: true },
+          ]}
+        />
+      </div>
+      {/* Desktop inline actions */}
+      <div className="hidden md:flex items-center gap-1 md:opacity-0 md:group-hover:opacity-100">
         <button
           onClick={() => setSubtaskStatus(subtask.id, subtask.status === 'blocked' ? 'todo' : 'blocked')}
           className={`rounded px-1.5 py-0.5 text-xs ${subtask.status === 'blocked' ? 'text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20' : 'text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800'}`}
