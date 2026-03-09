@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../db';
-import { syncNow, hasDirtyFlag, setSyncProgressCallback } from './sync-engine';
+import { syncNow, setSyncProgressCallback } from './sync-engine';
 import type { SyncProgress } from './sync-engine';
 import { hasPendingEntries } from './change-log';
 
@@ -24,12 +24,10 @@ export function useSync() {
     }
   }, [syncProgress]);
 
-  // Crash recovery: if dirty flag is set on startup, sync immediately
+  // Sync on startup (also covers crash recovery via dirty flag)
   useEffect(() => {
     if (!local?.syncEnabled) return;
-    if (hasDirtyFlag()) {
-      syncNow();
-    }
+    syncNow();
   }, [local?.syncEnabled]);
 
   // Periodic sync (5 min fallback)
