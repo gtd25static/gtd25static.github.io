@@ -448,7 +448,7 @@ When recording actions, store:
 
 - **Remote**: `git@github.com:gtd25static/gtd25static.github.io.git` (origin)
 - **Branch**: `main`
-- Use WSL git (not git.exe). SSH key `~/.ssh/id_ed25519` is configured for the `gtd25static` GitHub account.
+- Use WSL git (not git.exe). SSH key `~/.ssh/id_ed25519` is configured for the `gtd25static` GitHub account. Run `switchsshkey gtd25static` to set up the proper key under `~/.ssh/id_ed25519` when an error with the ssh key is thrown. If the error persist stop and seek guidance from the user.
 - Ensure you commit and push all changes after finishing a plan.
 
 ## Application Security
@@ -456,5 +456,5 @@ When recording actions, store:
 With each new added functionality, consider whether you are adding some security vulnerability:
 
 - Pay close attention to input validation
-- Ensure only the hardcoded or configured Telegram user ID is allowed to interact and command the bot
 - Handle corner cases gracefully
+- Create security tests when needed

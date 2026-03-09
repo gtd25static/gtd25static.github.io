@@ -34,7 +34,7 @@ export function AppShell() {
       // Require horizontal swipe (dx > dy) of at least 50px
       if (Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > 50) {
         const { sidebarOpen: isOpen } = useAppState.getState();
-        if (dx > 0 && !isOpen && touchRef.current.x < 80) setSidebarOpen(true);
+        if (dx > 0 && !isOpen) setSidebarOpen(true);
         if (dx < 0 && isOpen) setSidebarOpen(false);
       }
       touchRef.current = null;

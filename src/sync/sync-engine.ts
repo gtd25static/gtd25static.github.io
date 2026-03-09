@@ -936,3 +936,57 @@ export async function forcePull() {
     releaseSyncLock();
   }
 }
+
+export async function wipeAllData() {
+  const signal = acquireSyncLock();
+  if (!signal) return;
+
+  try {
+    // Clear local task data
+    await Promise.all([
+      db.taskLists.clear(),
+      db.tasks.clear(),
+      db.subtasks.clear(),
+      clearPendingEntries(),
+    ]);
+
+    // Push empty snapshot to remote if sync is configured
+    const creds = await getCredentials();
+    if (creds && hasEncryptionKey()) {
+      const encKey = getCachedEncryptionKey()!;
+      const salt = getCachedSalt()!;
+
+      let emptySnapshot: SyncData = {
+        syncVersion: SYNC_VERSION,
+        taskLists: [],
+        tasks: [],
+        subtasks: [],
+        settings: { theme: (localStorage.getItem('gtd25-theme') as Settings['theme']) ?? 'system' },
+        encryptionSalt: salt,
+        encryptionVerifier: await createVerifier(encKey),
+      };
+      emptySnapshot = await encryptSyncData(encKey, emptySnapshot);
+
+      const existing = await getFile(creds.pat, creds.repo, SNAPSHOT_FILE, signal);
+      await putFile(creds.pat, creds.repo, SNAPSHOT_FILE, JSON.stringify(emptySnapshot), existing?.sha, signal);
+
+      const changelog = await getFile(creds.pat, creds.repo, CHANGELOG_FILE, signal);
+      if (changelog) {
+        await putFile(creds.pat, creds.repo, CHANGELOG_FILE, '[]', changelog.sha, signal);
+      }
+    }
+
+    await db.syncMeta.update('sync-meta', {
+      lastPushedAt: Date.now(),
+      pendingChanges: false,
+    });
+
+    toast('All data wiped', 'success');
+  } catch (err) {
+    if (err instanceof DOMException && err.name === 'AbortError') return;
+    console.error('Wipe failed:', err);
+    toast('Wipe failed', 'error');
+  } finally {
+    releaseSyncLock();
+  }
+}
