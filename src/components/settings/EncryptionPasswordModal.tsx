@@ -14,6 +14,7 @@ export function EncryptionPasswordModal() {
   const [rememberPassword, setRememberPassword] = useState(true);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [showWipeConfirm, setShowWipeConfirm] = useState(false);
 
   const isNewPassword = salt === '';
 
@@ -24,6 +25,25 @@ export function EncryptionPasswordModal() {
   }, []);
 
   if (salt === null) return null;
+
+  async function handleWipeLocalData() {
+    // Delete IndexedDB database
+    db.close();
+    await new Promise<void>((resolve, reject) => {
+      const req = indexedDB.deleteDatabase('gtd25');
+      req.onsuccess = () => resolve();
+      req.onerror = () => reject(req.error);
+    });
+
+    // Clear all gtd25-related localStorage keys
+    const keysToRemove = Object.keys(localStorage).filter((k) => k.startsWith('gtd25-'));
+    for (const key of keysToRemove) {
+      localStorage.removeItem(key);
+    }
+
+    // Reload to start fresh
+    window.location.reload();
+  }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -169,6 +189,40 @@ export function EncryptionPasswordModal() {
           <Button size="sm" type="submit" disabled={loading || !password.trim() || (isNewPassword && !confirmPassword.trim())}>
             {loading ? 'Verifying...' : isNewPassword ? 'Set Password' : 'Unlock'}
           </Button>
+        </div>
+
+        <div className="mt-4 border-t border-zinc-200 pt-3 dark:border-zinc-700">
+          {showWipeConfirm ? (
+            <div className="space-y-2">
+              <p className="text-xs text-red-600 dark:text-red-400">
+                This will delete all local data and settings on this device. Remote data will not be affected. This cannot be undone.
+              </p>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={handleWipeLocalData}
+                  className="rounded px-2 py-1 text-xs font-medium text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-950"
+                >
+                  Confirm wipe
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowWipeConfirm(false)}
+                  className="rounded px-2 py-1 text-xs text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setShowWipeConfirm(true)}
+              className="text-xs text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300"
+            >
+              Can't access your data? Wipe this device and start over
+            </button>
+          )}
         </div>
       </form>
     </dialog>

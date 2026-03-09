@@ -48,10 +48,8 @@ function SortableItem({ subtask, isFirst, isLast }: { subtask: Subtask; isFirst:
         {...attributes}
         {...listeners}
       >
-        {/* Vertical line above square */}
-        {!isFirst && (
-          <div className="absolute left-1/2 top-0 h-1/2 w-[2px] -translate-x-1/2 bg-zinc-300 dark:bg-zinc-600" />
-        )}
+        {/* Vertical line above square (always shown — first item connects to bezier curve) */}
+        <div className="absolute left-1/2 top-0 h-1/2 w-[2px] -translate-x-1/2 bg-zinc-300 dark:bg-zinc-600" />
         {/* Vertical line below square */}
         {!isLast && (
           <div className="absolute left-1/2 top-1/2 bottom-0 w-[2px] -translate-x-1/2 bg-zinc-300 dark:bg-zinc-600" />

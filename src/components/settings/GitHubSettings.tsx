@@ -4,7 +4,7 @@ import { Input } from '../ui/Input';
 import { Button } from '../ui/Button';
 import { toast } from '../ui/Toast';
 import { testConnection } from '../../sync/github-api';
-import { syncNow, forcePush, forcePull, wipeAllData } from '../../sync/sync-engine';
+import { syncNow, forcePush, forcePull } from '../../sync/sync-engine';
 import { deriveKey, cacheEncryptionKey, generateSalt } from '../../sync/crypto';
 
 export function GitHubSettings() {
@@ -118,22 +118,6 @@ export function GitHubSettings() {
         <Button size="sm" variant="secondary" onClick={() => syncNow(true)}>Sync Now</Button>
         <Button size="sm" variant="ghost" onClick={() => forcePush()}>Force Push</Button>
         <Button size="sm" variant="ghost" onClick={() => forcePull()}>Force Pull</Button>
-      </div>
-      <div className="border-t border-zinc-200 pt-3 dark:border-zinc-700">
-        <Button
-          size="sm"
-          variant="danger"
-          onClick={() => {
-            if (window.confirm('This will permanently delete ALL tasks, lists, and subtasks on this device and all synced devices. This cannot be undone. Continue?')) {
-              wipeAllData();
-            }
-          }}
-        >
-          Wipe All Data
-        </Button>
-        <p className="mt-1 text-xs text-zinc-400 dark:text-zinc-500">
-          Deletes all tasks locally and remotely. Sync settings are preserved.
-        </p>
       </div>
     </div>
   );

@@ -28,9 +28,20 @@ export function SubtaskJourney({ taskId }: Props) {
       {subtasks.length > 0 && (
         <>
           {/* Fork curve from parent checkbox to indented subtask branch */}
-          <svg width="60" height="20" viewBox="0 0 60 20" fill="none">
+          {/* Desktop: checkbox center (34px) → branch center (ml-10 + w-5/2 = 50px) */}
+          <svg className="hidden md:block" width="60" height="20" viewBox="0 0 60 20" fill="none">
             <path
-              d="M 32 0 C 32 14, 50 6, 50 20"
+              d="M 34 0 C 34 14, 50 6, 50 20"
+              stroke="currentColor"
+              strokeWidth="2"
+              fill="none"
+              className="text-zinc-300 dark:text-zinc-600"
+            />
+          </svg>
+          {/* Mobile: checkbox center (34px) → branch center (ml-10 + w-11/2 = 62px) */}
+          <svg className="md:hidden" width="72" height="24" viewBox="0 0 72 24" fill="none">
+            <path
+              d="M 34 0 C 34 16, 62 8, 62 24"
               stroke="currentColor"
               strokeWidth="2"
               fill="none"

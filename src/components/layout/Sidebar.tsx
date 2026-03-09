@@ -1,6 +1,22 @@
 import { useState, useRef } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { useTaskLists, createTaskList, updateTaskList, deleteTaskList, restoreTaskList } from '../../hooks/use-task-lists';
+import {
+  DndContext,
+  closestCenter,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from '@dnd-kit/core';
+import {
+  SortableContext,
+  sortableKeyboardCoordinates,
+  useSortable,
+  verticalListSortingStrategy,
+} from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
+import { useTaskLists, createTaskList, updateTaskList, deleteTaskList, restoreTaskList, reorderTaskLists } from '../../hooks/use-task-lists';
 import { toast } from '../ui/Toast';
 import { useAppState } from '../../stores/app-state';
 import { Input } from '../ui/Input';
@@ -115,6 +131,31 @@ function ListItem({ list, selected, onSelect, highlight, focused }: {
   );
 }
 
+function SortableListItem({ list, selected, onSelect, highlight, focused }: {
+  list: { id: string; name: string; type: ListType };
+  selected: boolean;
+  onSelect: () => void;
+  highlight?: string;
+  focused?: boolean;
+}) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id: list.id,
+  });
+
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.5 : 1,
+    zIndex: isDragging ? 10 : undefined,
+  };
+
+  return (
+    <div ref={setNodeRef} style={style} {...attributes} {...listeners}>
+      <ListItem list={list} selected={selected} onSelect={onSelect} highlight={highlight} focused={focused} />
+    </div>
+  );
+}
+
 export function Sidebar() {
   const lists = useTaskLists();
   const { selectedListId, selectList, setSidebarOpen, setSettingsOpen, setTrashOpen, searchQuery, setSearchQuery } = useAppState();
@@ -125,9 +166,40 @@ export function Sidebar() {
 
   const { focusedItemId, focusZone } = useAppState();
 
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  );
+
   const filteredLists = searchQuery
     ? lists.filter((l) => l.name.toLowerCase().includes(searchQuery.toLowerCase()))
     : lists;
+
+  const taskLists = filteredLists.filter((l) => l.type === 'tasks');
+  const followUpLists = filteredLists.filter((l) => l.type === 'follow-ups');
+
+  function handleDragEnd(group: 'tasks' | 'follow-ups') {
+    return (event: DragEndEvent) => {
+      const { active, over } = event;
+      if (!over || active.id === over.id) return;
+
+      const sourceList = group === 'tasks' ? taskLists : followUpLists;
+      const otherList = group === 'tasks' ? followUpLists : taskLists;
+      const oldIndex = sourceList.findIndex((l) => l.id === active.id);
+      const newIndex = sourceList.findIndex((l) => l.id === over.id);
+      if (oldIndex === -1 || newIndex === -1) return;
+
+      const reordered = [...sourceList];
+      const [moved] = reordered.splice(oldIndex, 1);
+      reordered.splice(newIndex, 0, moved);
+
+      // Tasks always come first in global order
+      const allOrdered = group === 'tasks'
+        ? [...reordered, ...otherList]
+        : [...otherList, ...reordered];
+      reorderTaskLists(allOrdered.map((l) => l.id));
+    };
+  }
 
   async function handleCreate() {
     if (!newName.trim()) return;
@@ -206,22 +278,49 @@ export function Sidebar() {
       </div>
 
       <nav className="flex-1 overflow-y-auto px-2 pt-1 scrollbar-thin">
-        {/* Lists section */}
-        {filteredLists.length > 0 && (
+        {/* Task lists section */}
+        {taskLists.length > 0 && (
           <div className="mb-1">
             <div className="flex items-center justify-between px-3 py-2">
               <span className="text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Lists</span>
             </div>
-            {filteredLists.map((list) => (
-              <ListItem
-                key={list.id}
-                list={list}
-                selected={selectedListId === list.id}
-                onSelect={() => selectList(list.id)}
-                highlight={searchQuery}
-                focused={focusedItemId === list.id && focusZone === 'sidebar'}
-              />
-            ))}
+            <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd('tasks')}>
+              <SortableContext items={taskLists.map((l) => l.id)} strategy={verticalListSortingStrategy}>
+                {taskLists.map((list) => (
+                  <SortableListItem
+                    key={list.id}
+                    list={list}
+                    selected={selectedListId === list.id}
+                    onSelect={() => selectList(list.id)}
+                    highlight={searchQuery}
+                    focused={focusedItemId === list.id && focusZone === 'sidebar'}
+                  />
+                ))}
+              </SortableContext>
+            </DndContext>
+          </div>
+        )}
+
+        {/* Follow-ups section */}
+        {followUpLists.length > 0 && (
+          <div className="mb-1">
+            <div className="flex items-center justify-between px-3 py-2 mt-1 border-t border-zinc-200 dark:border-zinc-700">
+              <span className="text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Follow-ups</span>
+            </div>
+            <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd('follow-ups')}>
+              <SortableContext items={followUpLists.map((l) => l.id)} strategy={verticalListSortingStrategy}>
+                {followUpLists.map((list) => (
+                  <SortableListItem
+                    key={list.id}
+                    list={list}
+                    selected={selectedListId === list.id}
+                    onSelect={() => selectList(list.id)}
+                    highlight={searchQuery}
+                    focused={focusedItemId === list.id && focusZone === 'sidebar'}
+                  />
+                ))}
+              </SortableContext>
+            </DndContext>
           </div>
         )}
 

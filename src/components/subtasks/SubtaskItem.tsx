@@ -188,7 +188,7 @@ export function SubtaskItem({ subtask }: Props) {
     const items: MenuItem[] = [];
     if (targetLists.length > 0) {
       items.push({
-        label: 'Send to list',
+        label: 'Promote to task',
         children: targetLists.map((l) => ({
           label: l.name,
           onClick: () => convertSubtaskToTask(subtask.id, l.id),
