@@ -34,6 +34,11 @@ let syncStartedAt: number | null = null;
 let syncAbort: AbortController | null = null;
 let legacyChecked = false;
 
+// --- Cached sync state for flushOnHide ---
+let cachedChangelogSha: string | undefined;
+let cachedRemoteEntries: ChangeEntry[] = [];
+let cachedCreds: { pat: string; repo: string; deviceId: string } | null = null;
+
 // --- Scheduler constants ---
 const POLL_INTERVAL_MS = 30_000;
 const FIRST_BATCH_DELAY_MS = 15_000;
@@ -176,13 +181,28 @@ export function scheduleSyncDebounced() {
   notifyLocalChange();
 }
 
+async function flushOnHide() {
+  if (!cachedCreds || !cachedChangelogSha || !hasEncryptionKey()) return;
+  try {
+    const pending = await getPendingEntries();
+    if (pending.length === 0) return;
+    const encKey = getCachedEncryptionKey()!;
+    const encrypted = await encryptChangeEntries(encKey, pending);
+    const updatedChangelog = [...cachedRemoteEntries, ...encrypted];
+    const content = JSON.stringify(updatedChangelog);
+    // Fire-and-forget PUT with keepalive — browser completes it after page suspends
+    putFile(cachedCreds.pat, cachedCreds.repo, CHANGELOG_FILE, content, cachedChangelogSha, undefined, { keepalive: true });
+  } catch {
+    // Best-effort — data is safe in local IndexedDB
+  }
+}
+
 function handleVisibilityChange() {
   if (schedulerState === 'stopped') return;
   if (document.visibilityState === 'hidden') {
-    // Flush all pending changes immediately before browser throttles timers
     clearSchedulerTimer();
-    schedulerState = 'idle'; // pause polling while hidden
-    syncNow(); // push everything, then stay paused (no timer set)
+    schedulerState = 'idle';
+    flushOnHide(); // single keepalive PUT, no GETs needed
   } else {
     // Visible — immediate pull then restart idle polling
     syncNow().then(() => startIdlePoll());
@@ -525,7 +545,21 @@ export async function syncNow(manual = false, pushLimit?: number): Promise<numbe
     }
 
     // Get our pending local changes (optionally limited for batch pushes)
-    const pendingEntries = await getPendingEntries(pushLimit);
+    let pendingEntries = await getPendingEntries(pushLimit);
+
+    // Deduplicate: a previous flushOnHide may have pushed entries that weren't cleared locally
+    if (pendingEntries.length > 0 && remoteEntries.length > 0) {
+      const remoteIds = new Set(remoteEntries.map((e) => e.id));
+      const dupes = pendingEntries.filter((e) => remoteIds.has(e.id));
+      if (dupes.length > 0) {
+        await clearEntriesByIds(dupes.map((e) => e.id));
+        pendingEntries = pendingEntries.filter((e) => !remoteIds.has(e.id));
+      }
+    }
+
+    // Track final changelog state for flushOnHide cache
+    let finalChangelogSha = changelogSha;
+    let finalRemoteEntries = remoteEntries;
 
     if (pendingEntries.length > 0) {
       reportProgress('pushing', 'Pushing updates...', 0.8);
@@ -603,6 +637,8 @@ export async function syncNow(manual = false, pushLimit?: number): Promise<numbe
       }
 
       if (pushed) {
+        finalChangelogSha = currentSha;
+        finalRemoteEntries = [...remoteToWrite, ...entriesToPush];
         if (pushLimit != null) {
           // Batch push — only clear the entries we just pushed
           await clearEntriesByIds(pendingEntries.map((e) => e.id));
@@ -636,6 +672,11 @@ export async function syncNow(manual = false, pushLimit?: number): Promise<numbe
         await compactSnapshot(creds.pat, creds.repo, encKey);
       }
     }
+
+    // Update flushOnHide cache with current sync state
+    cachedCreds = creds;
+    cachedChangelogSha = finalChangelogSha;
+    cachedRemoteEntries = finalRemoteEntries;
 
     setDirtyFlag(false);
     reportProgress('done', 'Sync complete', 1.0);

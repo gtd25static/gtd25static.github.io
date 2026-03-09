@@ -9,16 +9,20 @@ async function githubFetch(
   path: string,
   options?: RequestInit,
   signal?: AbortSignal,
+  keepalive?: boolean,
 ) {
   const url = `https://api.github.com/repos/${repo}/contents/${path}`;
-  const timeoutSignal = AbortSignal.timeout(15_000);
-  const signals = signal
-    ? AbortSignal.any([timeoutSignal, signal])
-    : timeoutSignal;
+  // keepalive requests outlive the page — skip timeout/abort signal
+  const fetchSignal = keepalive
+    ? undefined
+    : signal
+      ? AbortSignal.any([AbortSignal.timeout(15_000), signal])
+      : AbortSignal.timeout(15_000);
   const resp = await fetch(url, {
     ...options,
     cache: 'no-store',
-    signal: signals,
+    signal: fetchSignal,
+    keepalive,
     headers: {
       Authorization: `Bearer ${pat}`,
       Accept: 'application/vnd.github.v3+json',
@@ -76,6 +80,7 @@ export async function putFile(
   content: string,
   sha?: string,
   signal?: AbortSignal,
+  options?: { keepalive?: boolean },
 ): Promise<string> {
   const body: Record<string, string> = {
     message: `gtd25 sync: ${path}`,
@@ -86,7 +91,7 @@ export async function putFile(
   const resp = await githubFetch(pat, repo, path, {
     method: 'PUT',
     body: JSON.stringify(body),
-  }, signal);
+  }, signal, options?.keepalive);
 
   if (resp.status === 409) throw new Error('CONFLICT');
   if (!resp.ok) throw new Error(`GitHub API error: ${resp.status}`);
