@@ -970,9 +970,11 @@ export async function wipeAllData() {
       const existing = await getFile(creds.pat, creds.repo, SNAPSHOT_FILE, signal);
       await putFile(creds.pat, creds.repo, SNAPSHOT_FILE, JSON.stringify(emptySnapshot), existing?.sha, signal);
 
+      // Delete changelog so other devices hit the bootstrap path
+      // and load the empty snapshot instead of applying entries incrementally
       const changelog = await getFile(creds.pat, creds.repo, CHANGELOG_FILE, signal);
       if (changelog) {
-        await putFile(creds.pat, creds.repo, CHANGELOG_FILE, '[]', changelog.sha, signal);
+        await deleteFile(creds.pat, creds.repo, CHANGELOG_FILE, changelog.sha);
       }
     }
 
