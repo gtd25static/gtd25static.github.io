@@ -31,10 +31,11 @@ export function AppShell() {
       const t = e.changedTouches[0];
       const dx = t.clientX - touchRef.current.x;
       const dy = t.clientY - touchRef.current.y;
-      // Require horizontal swipe (dx > dy) of at least 60px
-      if (Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > 60) {
-        if (dx > 0 && touchRef.current.x < 40) setSidebarOpen(true);
-        if (dx < 0 && sidebarOpen) setSidebarOpen(false);
+      // Require horizontal swipe (dx > dy) of at least 50px
+      if (Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > 50) {
+        const { sidebarOpen: isOpen } = useAppState.getState();
+        if (dx > 0 && !isOpen && touchRef.current.x < 80) setSidebarOpen(true);
+        if (dx < 0 && isOpen) setSidebarOpen(false);
       }
       touchRef.current = null;
     }
@@ -44,7 +45,7 @@ export function AppShell() {
       document.removeEventListener('touchstart', onTouchStart);
       document.removeEventListener('touchend', onTouchEnd);
     };
-  }, [sidebarOpen]);
+  }, [setSidebarOpen]);
 
   // Auto-select first list on initial load
   useEffect(() => {
