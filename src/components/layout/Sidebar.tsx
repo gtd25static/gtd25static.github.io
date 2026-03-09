@@ -7,6 +7,7 @@ import { Input } from '../ui/Input';
 import { DropdownMenu } from '../ui/DropdownMenu';
 import { db } from '../../db';
 import type { ListType } from '../../db/models';
+import { SyncIndicator } from './SyncIndicator';
 
 function useTaskCount(listId: string) {
   return useLiveQuery(async () => {
@@ -277,6 +278,7 @@ export function Sidebar() {
 
       {/* Bottom actions */}
       <div className="border-t border-zinc-200 px-2 py-2 dark:border-zinc-800">
+        <SyncIndicator />
         <button
           onClick={() => setTrashOpen(true)}
           className="flex w-full items-center gap-3 rounded-full px-3 py-2 text-sm text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800"

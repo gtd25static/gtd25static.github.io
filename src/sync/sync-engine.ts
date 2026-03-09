@@ -25,11 +25,14 @@ import {
 const SNAPSHOT_FILE = 'gtd25-snapshot.json';
 const CHANGELOG_FILE = 'gtd25-changelog.json';
 const LEGACY_FILE = 'gtd25-data.json';
-const COMPACTION_THRESHOLD = 100;
+const COMPACTION_THRESHOLD = 30;
 const MAX_RETRIES = 3;
 const MAX_REMOTE_BACKUPS = 2;
+const SYNC_TIMEOUT_MS = 45_000;
 
-let syncing = false;
+let syncStartedAt: number | null = null;
+let syncAbort: AbortController | null = null;
+let legacyChecked = false;
 let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 let maxWaitTimer: ReturnType<typeof setTimeout> | null = null;
 const DEBOUNCE_MS = 2000;
@@ -84,6 +87,24 @@ export function setSyncProgressCallback(cb: ((progress: SyncProgress) => void) |
 
 function reportProgress(phase: SyncPhase, label: string, progress: number) {
   onSyncProgress?.({ phase, label, progress });
+}
+
+// --- Sync lock ---
+function acquireSyncLock(): AbortSignal | null {
+  if (syncStartedAt !== null) {
+    if (Date.now() - syncStartedAt < SYNC_TIMEOUT_MS) return null; // still valid
+    // Lock expired — force-reset and abort previous
+    console.warn('Sync lock expired, force-resetting');
+    syncAbort?.abort();
+  }
+  syncStartedAt = Date.now();
+  syncAbort = new AbortController();
+  return syncAbort.signal;
+}
+
+function releaseSyncLock() {
+  syncStartedAt = null;
+  syncAbort = null;
 }
 
 // --- Dirty flag ---
@@ -254,8 +275,8 @@ async function pruneRemoteBackups(pat: string, repo: string) {
 }
 
 export async function syncNow(manual = false) {
-  if (syncing) return;
-  syncing = true;
+  const signal = acquireSyncLock();
+  if (!signal) return;
   setDirtyFlag(true);
 
   try {
@@ -264,8 +285,12 @@ export async function syncNow(manual = false) {
 
     reportProgress('connecting', 'Connecting...', 0.1);
 
-    // Legacy migration: parse legacy data, delete legacy file
-    const legacyData = await migrateFromLegacy(creds.pat, creds.repo);
+    // Legacy migration (skip after first check per session)
+    let legacyData: SyncData | null = null;
+    if (!legacyChecked) {
+      legacyData = await migrateFromLegacy(creds.pat, creds.repo);
+      legacyChecked = true;
+    }
     if (legacyData) {
       // Encrypt and write as new snapshot
       const encKey = await resolveEncryptionKey();
@@ -275,8 +300,8 @@ export async function syncNow(manual = false) {
       legacyData.encryptionSalt = salt;
       legacyData.encryptionVerifier = await createVerifier(encKey);
       const encrypted = await encryptSyncData(encKey, legacyData);
-      await putFile(creds.pat, creds.repo, SNAPSHOT_FILE, JSON.stringify(encrypted, null, 2));
-      await putFile(creds.pat, creds.repo, CHANGELOG_FILE, '[]');
+      await putFile(creds.pat, creds.repo, SNAPSHOT_FILE, JSON.stringify(encrypted), undefined, signal);
+      await putFile(creds.pat, creds.repo, CHANGELOG_FILE, '[]', undefined, signal);
       await clearPendingEntries();
       await db.syncMeta.update('sync-meta', {
         lastPulledAt: Date.now(),
@@ -289,8 +314,11 @@ export async function syncNow(manual = false) {
       return;
     }
 
-    // Get remote changelog
-    const remoteChangelogFile = await getFile(creds.pat, creds.repo, CHANGELOG_FILE);
+    // Fetch changelog and snapshot in parallel
+    const [remoteChangelogFile, remoteSnapshotFile] = await Promise.all([
+      getFile(creds.pat, creds.repo, CHANGELOG_FILE, signal),
+      getFile(creds.pat, creds.repo, SNAPSHOT_FILE, signal),
+    ]);
     let remoteEntries: ChangeEntry[] = [];
     let changelogSha = remoteChangelogFile?.sha;
 
@@ -298,12 +326,7 @@ export async function syncNow(manual = false) {
       remoteEntries = JSON.parse(remoteChangelogFile.data);
     }
 
-    reportProgress('pulling', 'Fetching changes...', 0.3);
-
-    // Bootstrap: if no remote files exist at all, create initial snapshot from local data
-    const remoteSnapshotFile = await getFile(creds.pat, creds.repo, SNAPSHOT_FILE);
-
-    reportProgress('pulling', 'Fetching snapshot...', 0.4);
+    reportProgress('pulling', 'Fetching changes...', 0.4);
 
     if (!remoteSnapshotFile && !remoteChangelogFile) {
       let localData = await getLocalSnapshot();
@@ -316,10 +339,10 @@ export async function syncNow(manual = false) {
         localData.encryptionSalt = salt;
         localData.encryptionVerifier = await createVerifier(encKey);
         localData = await encryptSyncData(encKey, localData);
-        const snapshotContent = JSON.stringify(localData, null, 2);
-        await putFile(creds.pat, creds.repo, SNAPSHOT_FILE, snapshotContent);
+        const snapshotContent = JSON.stringify(localData);
+        await putFile(creds.pat, creds.repo, SNAPSHOT_FILE, snapshotContent, undefined, signal);
       }
-      await putFile(creds.pat, creds.repo, CHANGELOG_FILE, '[]');
+      await putFile(creds.pat, creds.repo, CHANGELOG_FILE, '[]', undefined, signal);
       await clearPendingEntries();
       await db.syncMeta.update('sync-meta', {
         lastPulledAt: Date.now(),
@@ -359,7 +382,7 @@ export async function syncNow(manual = false) {
         await db.tasks.bulkPut(snapshot.tasks);
         await db.subtasks.bulkPut(snapshot.subtasks);
       });
-      await putFile(creds.pat, creds.repo, CHANGELOG_FILE, '[]');
+      await putFile(creds.pat, creds.repo, CHANGELOG_FILE, '[]', undefined, signal);
       await clearPendingEntries();
       await db.syncMeta.update('sync-meta', {
         lastPulledAt: Date.now(),
@@ -421,7 +444,7 @@ export async function syncNow(manual = false) {
       migrated.encryptionSalt = getCachedSalt()!;
       migrated.encryptionVerifier = await createVerifier(encKey);
       const encrypted = await encryptSyncData(encKey, migrated);
-      await putFile(creds.pat, creds.repo, SNAPSHOT_FILE, JSON.stringify(encrypted, null, 2), remoteSnapshotFile.sha);
+      await putFile(creds.pat, creds.repo, SNAPSHOT_FILE, JSON.stringify(encrypted), remoteSnapshotFile.sha, signal);
     }
 
     reportProgress('applying', 'Applying changes...', 0.6);
@@ -451,7 +474,7 @@ export async function syncNow(manual = false) {
 
       // Append our entries to the remote changelog
       const updatedChangelog = [...remoteToWrite, ...entriesToPush];
-      const content = JSON.stringify(updatedChangelog, null, 2);
+      const content = JSON.stringify(updatedChangelog);
 
       let retries = 0;
       let pushed = false;
@@ -459,7 +482,7 @@ export async function syncNow(manual = false) {
 
       while (!pushed && retries < MAX_RETRIES) {
         try {
-          const newSha = await putFile(creds.pat, creds.repo, CHANGELOG_FILE, content, currentSha);
+          const newSha = await putFile(creds.pat, creds.repo, CHANGELOG_FILE, content, currentSha, signal);
           currentSha = newSha;
           pushed = true;
         } catch (err) {
@@ -471,7 +494,7 @@ export async function syncNow(manual = false) {
               return;
             }
             // Re-fetch changelog and merge
-            const fresh = await getFile(creds.pat, creds.repo, CHANGELOG_FILE);
+            const fresh = await getFile(creds.pat, creds.repo, CHANGELOG_FILE, signal);
             if (fresh) {
               const freshEntries: ChangeEntry[] = JSON.parse(fresh.data);
               currentSha = fresh.sha;
@@ -494,9 +517,9 @@ export async function syncNow(manual = false) {
                 ...freshToWrite,
                 ...entriesToPush,
               ];
-              const retryContent = JSON.stringify(merged, null, 2);
+              const retryContent = JSON.stringify(merged);
               try {
-                const retrySha = await putFile(creds.pat, creds.repo, CHANGELOG_FILE, retryContent, currentSha);
+                const retrySha = await putFile(creds.pat, creds.repo, CHANGELOG_FILE, retryContent, currentSha, signal);
                 currentSha = retrySha;
                 pushed = true;
               } catch {
@@ -542,11 +565,12 @@ export async function syncNow(manual = false) {
     reportProgress('done', 'Sync complete', 1.0);
     if (manual) toast('Sync complete', 'success');
   } catch (err) {
+    if (err instanceof DOMException && err.name === 'AbortError') return; // aborted gracefully
     console.error('Sync failed:', err);
     reportProgress('error', 'Sync failed', 0);
     toast('Sync failed', 'error');
   } finally {
-    syncing = false;
+    releaseSyncLock();
   }
 }
 
@@ -616,7 +640,7 @@ async function compactSnapshot(pat: string, repo: string, encKey: CryptoKey) {
     snapshot = await encryptSyncData(encKey, snapshot);
 
     // Write updated snapshot
-    const snapshotContent = JSON.stringify(snapshot, null, 2);
+    const snapshotContent = JSON.stringify(snapshot);
     await putFile(pat, repo, SNAPSHOT_FILE, snapshotContent, snapshotSha);
 
     // Clear changelog (if 409, abort — new entries will be in next compaction)
@@ -632,8 +656,8 @@ async function compactSnapshot(pat: string, repo: string, encKey: CryptoKey) {
 }
 
 export async function forcePush() {
-  if (syncing) return;
-  syncing = true;
+  const signal = acquireSyncLock();
+  if (!signal) return;
 
   try {
     const creds = await getCredentials();
@@ -642,7 +666,7 @@ export async function forcePush() {
     reportProgress('connecting', 'Connecting...', 0.1);
 
     // Check existing remote for encryption state
-    const existing = await getFile(creds.pat, creds.repo, SNAPSHOT_FILE);
+    const existing = await getFile(creds.pat, creds.repo, SNAPSHOT_FILE, signal);
 
     // Backup current remote snapshot before overwriting
     if (existing) {
@@ -670,18 +694,18 @@ export async function forcePush() {
     localData.encryptionVerifier = await createVerifier(encKey);
     localData = await encryptSyncData(encKey, localData);
 
-    const content = JSON.stringify(localData, null, 2);
+    const content = JSON.stringify(localData);
 
     reportProgress('pushing', 'Pushing all data...', 0.4);
 
     // Overwrite snapshot with full local state
-    await putFile(creds.pat, creds.repo, SNAPSHOT_FILE, content, existing?.sha);
+    await putFile(creds.pat, creds.repo, SNAPSHOT_FILE, content, existing?.sha, signal);
 
     reportProgress('pushing', 'Clearing changelog...', 0.8);
 
     // Clear changelog
-    const changelog = await getFile(creds.pat, creds.repo, CHANGELOG_FILE);
-    await putFile(creds.pat, creds.repo, CHANGELOG_FILE, '[]', changelog?.sha);
+    const changelog = await getFile(creds.pat, creds.repo, CHANGELOG_FILE, signal);
+    await putFile(creds.pat, creds.repo, CHANGELOG_FILE, '[]', changelog?.sha, signal);
 
     // Clear local change log
     await clearPendingEntries();
@@ -693,17 +717,18 @@ export async function forcePush() {
     reportProgress('done', 'Sync complete', 1.0);
     toast('Force push complete', 'success');
   } catch (err) {
+    if (err instanceof DOMException && err.name === 'AbortError') return;
     console.error('Force push failed:', err);
     reportProgress('error', 'Force push failed', 0);
     toast('Force push failed', 'error');
   } finally {
-    syncing = false;
+    releaseSyncLock();
   }
 }
 
 export async function forcePull() {
-  if (syncing) return;
-  syncing = true;
+  const signal = acquireSyncLock();
+  if (!signal) return;
 
   try {
     const creds = await getCredentials();
@@ -712,7 +737,7 @@ export async function forcePull() {
     reportProgress('connecting', 'Connecting...', 0.1);
 
     // Bootstrap: load snapshot + apply changelog on top
-    const snapshotFile = await getFile(creds.pat, creds.repo, SNAPSHOT_FILE);
+    const snapshotFile = await getFile(creds.pat, creds.repo, SNAPSHOT_FILE, signal);
     if (!snapshotFile) {
       toast('No remote data found', 'error');
       reportProgress('error', 'No remote data', 0);
@@ -758,7 +783,7 @@ export async function forcePull() {
     });
 
     // Apply changelog entries on top
-    const changelogFile = await getFile(creds.pat, creds.repo, CHANGELOG_FILE);
+    const changelogFile = await getFile(creds.pat, creds.repo, CHANGELOG_FILE, signal);
     if (changelogFile) {
       let entries: ChangeEntry[] = JSON.parse(changelogFile.data);
       entries = await decryptChangeEntries(encKey, entries);
@@ -781,10 +806,11 @@ export async function forcePull() {
     reportProgress('done', 'Sync complete', 1.0);
     toast('Force pull complete', 'success');
   } catch (err) {
+    if (err instanceof DOMException && err.name === 'AbortError') return;
     console.error('Force pull failed:', err);
     reportProgress('error', 'Force pull failed', 0);
     toast('Force pull failed', 'error');
   } finally {
-    syncing = false;
+    releaseSyncLock();
   }
 }

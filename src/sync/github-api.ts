@@ -3,10 +3,22 @@ interface GitHubFileResponse {
   sha: string;
 }
 
-async function githubFetch(pat: string, repo: string, path: string, options?: RequestInit) {
+async function githubFetch(
+  pat: string,
+  repo: string,
+  path: string,
+  options?: RequestInit,
+  signal?: AbortSignal,
+) {
   const url = `https://api.github.com/repos/${repo}/contents/${path}`;
+  const timeoutSignal = AbortSignal.timeout(15_000);
+  const signals = signal
+    ? AbortSignal.any([timeoutSignal, signal])
+    : timeoutSignal;
   const resp = await fetch(url, {
     ...options,
+    cache: 'no-store',
+    signal: signals,
     headers: {
       Authorization: `Bearer ${pat}`,
       Accept: 'application/vnd.github.v3+json',
@@ -32,6 +44,8 @@ function base64ToUtf8(base64: string): string {
 export async function testConnection(pat: string, repo: string): Promise<boolean> {
   try {
     const resp = await fetch(`https://api.github.com/repos/${repo}`, {
+      cache: 'no-store',
+      signal: AbortSignal.timeout(15_000),
       headers: { Authorization: `Bearer ${pat}`, Accept: 'application/vnd.github.v3+json' },
     });
     return resp.ok;
@@ -44,8 +58,9 @@ export async function getFile(
   pat: string,
   repo: string,
   path: string,
+  signal?: AbortSignal,
 ): Promise<{ data: string; sha: string } | null> {
-  const resp = await githubFetch(pat, repo, path);
+  const resp = await githubFetch(pat, repo, path, undefined, signal);
   if (resp.status === 404) return null;
   if (!resp.ok) throw new Error(`GitHub API error: ${resp.status}`);
 
@@ -60,6 +75,7 @@ export async function putFile(
   path: string,
   content: string,
   sha?: string,
+  signal?: AbortSignal,
 ): Promise<string> {
   const body: Record<string, string> = {
     message: `gtd25 sync: ${path}`,
@@ -70,7 +86,7 @@ export async function putFile(
   const resp = await githubFetch(pat, repo, path, {
     method: 'PUT',
     body: JSON.stringify(body),
-  });
+  }, signal);
 
   if (resp.status === 409) throw new Error('CONFLICT');
   if (!resp.ok) throw new Error(`GitHub API error: ${resp.status}`);
@@ -84,6 +100,7 @@ export async function deleteFile(
   repo: string,
   path: string,
   sha: string,
+  signal?: AbortSignal,
 ): Promise<void> {
   const resp = await githubFetch(pat, repo, path, {
     method: 'DELETE',
@@ -91,7 +108,7 @@ export async function deleteFile(
       message: `gtd25: remove ${path}`,
       sha,
     }),
-  });
+  }, signal);
   if (!resp.ok && resp.status !== 404) {
     throw new Error(`GitHub API error deleting ${path}: ${resp.status}`);
   }
