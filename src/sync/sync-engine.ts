@@ -2,7 +2,7 @@ import { db } from '../db';
 import type { SyncData, Settings, ChangeEntry } from '../db/models';
 import { getFile, putFile, deleteFile } from './github-api';
 import { cleanupSoftDeletes } from './conflict-resolution';
-import { applyRemoteEntries, getPendingEntries, clearPendingEntries } from './change-log';
+import { applyRemoteEntries, getPendingEntries, clearPendingEntries, clearEntriesByIds, pendingEntryCount } from './change-log';
 import { toast } from '../components/ui/Toast';
 import { SYNC_VERSION, isCompatibleVersion, needsMigration } from './version';
 import { runRemoteMigrations } from './migrations';
@@ -33,10 +33,18 @@ const SYNC_TIMEOUT_MS = 45_000;
 let syncStartedAt: number | null = null;
 let syncAbort: AbortController | null = null;
 let legacyChecked = false;
-let debounceTimer: ReturnType<typeof setTimeout> | null = null;
-let maxWaitTimer: ReturnType<typeof setTimeout> | null = null;
-const DEBOUNCE_MS = 2000;
-const MAX_WAIT_MS = 10000;
+
+// --- Scheduler constants ---
+const POLL_INTERVAL_MS = 30_000;
+const FIRST_BATCH_DELAY_MS = 15_000;
+const BATCH_INTERVAL_MS = 30_000;
+const FIRST_BATCH_SIZE = 5;
+const BATCH_SIZE = 10;
+
+// --- Scheduler state machine ---
+type SchedulerState = 'stopped' | 'idle' | 'first-wait' | 'batching';
+let schedulerState: SchedulerState = 'stopped';
+let schedulerTimer: ReturnType<typeof setTimeout> | null = null;
 
 // --- Version incompatibility callbacks ---
 type VersionCallback = () => void;
@@ -120,26 +128,86 @@ export function hasDirtyFlag(): boolean {
   return localStorage.getItem('gtd25-sync-dirty') === '1';
 }
 
-export function scheduleSyncDebounced() {
-  if (debounceTimer) clearTimeout(debounceTimer);
+// --- Scheduler functions ---
 
-  if (!maxWaitTimer) {
-    maxWaitTimer = setTimeout(() => {
-      maxWaitTimer = null;
-      if (debounceTimer) clearTimeout(debounceTimer);
-      debounceTimer = null;
-      syncNow();
-    }, MAX_WAIT_MS);
+function clearSchedulerTimer() {
+  if (schedulerTimer) {
+    clearTimeout(schedulerTimer);
+    schedulerTimer = null;
   }
+}
 
-  debounceTimer = setTimeout(() => {
-    debounceTimer = null;
-    if (maxWaitTimer) {
-      clearTimeout(maxWaitTimer);
-      maxWaitTimer = null;
+function startIdlePoll() {
+  clearSchedulerTimer();
+  schedulerState = 'idle';
+  schedulerTimer = setTimeout(async function poll() {
+    if (schedulerState !== 'idle') return;
+    await syncNow();
+    if (schedulerState === 'idle') {
+      schedulerTimer = setTimeout(poll, POLL_INTERVAL_MS);
     }
-    syncNow();
-  }, DEBOUNCE_MS);
+  }, POLL_INTERVAL_MS);
+}
+
+async function onBatchTimerFired(batchSize: number) {
+  const remaining = await syncNow(false, batchSize);
+  if (remaining > 0) {
+    // More entries to push — continue batching
+    schedulerState = 'batching';
+    schedulerTimer = setTimeout(() => onBatchTimerFired(BATCH_SIZE), BATCH_INTERVAL_MS);
+  } else {
+    // All pushed — final pull then back to idle
+    await syncNow();
+    startIdlePoll();
+  }
+}
+
+function notifyLocalChange() {
+  if (schedulerState === 'stopped') return;
+  if (schedulerState === 'idle') {
+    clearSchedulerTimer();
+    schedulerState = 'first-wait';
+    schedulerTimer = setTimeout(() => onBatchTimerFired(FIRST_BATCH_SIZE), FIRST_BATCH_DELAY_MS);
+  }
+  // If already in first-wait or batching, let the current timer handle it
+}
+
+export function scheduleSyncDebounced() {
+  notifyLocalChange();
+}
+
+function handleVisibilityChange() {
+  if (schedulerState === 'stopped') return;
+  if (document.visibilityState === 'hidden') {
+    // Flush all pending changes immediately before browser throttles timers
+    clearSchedulerTimer();
+    schedulerState = 'idle'; // pause polling while hidden
+    syncNow(); // push everything, then stay paused (no timer set)
+  } else {
+    // Visible — immediate pull then restart idle polling
+    syncNow().then(() => startIdlePoll());
+  }
+}
+
+function handleOnline() {
+  if (schedulerState === 'stopped') return;
+  syncNow().then(() => {
+    if (schedulerState === 'idle') startIdlePoll();
+  });
+}
+
+export function startScheduler() {
+  syncNow(); // initial pull on startup
+  startIdlePoll();
+  document.addEventListener('visibilitychange', handleVisibilityChange);
+  window.addEventListener('online', handleOnline);
+}
+
+export function stopScheduler() {
+  clearSchedulerTimer();
+  schedulerState = 'stopped';
+  document.removeEventListener('visibilitychange', handleVisibilityChange);
+  window.removeEventListener('online', handleOnline);
 }
 
 async function getCredentials() {
@@ -274,14 +342,14 @@ async function pruneRemoteBackups(pat: string, repo: string) {
   }
 }
 
-export async function syncNow(manual = false) {
+export async function syncNow(manual = false, pushLimit?: number): Promise<number> {
   const signal = acquireSyncLock();
-  if (!signal) return;
+  if (!signal) return -1;
   setDirtyFlag(true);
 
   try {
     const creds = await getCredentials();
-    if (!creds) return;
+    if (!creds) return -1;
 
     reportProgress('connecting', 'Connecting...', 0.1);
 
@@ -294,7 +362,7 @@ export async function syncNow(manual = false) {
     if (legacyData) {
       // Encrypt and write as new snapshot
       const encKey = await resolveEncryptionKey();
-      if (encKey === 'needs-password') return;
+      if (encKey === 'needs-password') return -1;
       const salt = getCachedSalt()!;
       legacyData.syncVersion = SYNC_VERSION;
       legacyData.encryptionSalt = salt;
@@ -311,7 +379,7 @@ export async function syncNow(manual = false) {
       setDirtyFlag(false);
       reportProgress('done', 'Sync complete', 1.0);
       toast('Migrated sync data to new format', 'success');
-      return;
+      return 0;
     }
 
     // Fetch changelog and snapshot in parallel
@@ -334,7 +402,7 @@ export async function syncNow(manual = false) {
       if (hasData) {
         // Encryption is always required
         const encKey = await resolveEncryptionKey();
-        if (encKey === 'needs-password') return;
+        if (encKey === 'needs-password') return -1;
         const salt = getCachedSalt()!;
         localData.encryptionSalt = salt;
         localData.encryptionVerifier = await createVerifier(encKey);
@@ -352,7 +420,7 @@ export async function syncNow(manual = false) {
       setDirtyFlag(false);
       reportProgress('done', 'Sync complete', 1.0);
       if (manual) toast('Initial sync complete', 'success');
-      return;
+      return 0;
     }
 
     // If snapshot exists but we have no local data, bootstrap from remote
@@ -362,14 +430,14 @@ export async function syncNow(manual = false) {
 
       // Decrypt (encryption is always required for sync)
       const encKey = await resolveEncryptionKey(snapshot.encryptionSalt);
-      if (encKey === 'needs-password') return;
+      if (encKey === 'needs-password') return -1;
       if (snapshot.encryptionSalt) {
         const ok = await checkVerifier(encKey, snapshot.encryptionVerifier ?? '');
         if (!ok) {
           await db.localSettings.update('local', { encryptionPassword: undefined });
           clearEncryptionKey();
           notifyPasswordNeeded(snapshot.encryptionSalt);
-          return;
+          return -1;
         }
         snapshot = await decryptSyncData(encKey, snapshot);
       }
@@ -391,7 +459,7 @@ export async function syncNow(manual = false) {
       setDirtyFlag(false);
       reportProgress('done', 'Sync complete', 1.0);
       if (manual) toast('Synced from remote', 'success');
-      return;
+      return 0;
     }
 
     // --- Version check on remote snapshot ---
@@ -407,13 +475,13 @@ export async function syncNow(manual = false) {
         notifyVersionIncompatible();
         reportProgress('error', 'Update required', 0);
         if (manual) toast('Remote data requires a newer app version', 'error');
-        return;
+        return -1;
       }
     }
 
     // Resolve encryption key (always required)
     const encResult = await resolveEncryptionKey(remoteSalt);
-    if (encResult === 'needs-password') return;
+    if (encResult === 'needs-password') return -1;
     const encKey = encResult;
 
     // Verify password against remote verifier
@@ -426,7 +494,7 @@ export async function syncNow(manual = false) {
           await db.localSettings.update('local', { encryptionPassword: undefined });
           clearEncryptionKey();
           notifyPasswordNeeded(remoteSalt);
-          return;
+          return -1;
         }
       }
     }
@@ -456,8 +524,8 @@ export async function syncNow(manual = false) {
       await applyRemoteEntries(foreignEntries);
     }
 
-    // Get our pending local changes
-    const pendingEntries = await getPendingEntries();
+    // Get our pending local changes (optionally limited for batch pushes)
+    const pendingEntries = await getPendingEntries(pushLimit);
 
     if (pendingEntries.length > 0) {
       reportProgress('pushing', 'Pushing updates...', 0.8);
@@ -491,7 +559,7 @@ export async function syncNow(manual = false) {
             if (retries >= MAX_RETRIES) {
               toast('Sync conflict — will retry later', 'error');
               reportProgress('error', 'Sync conflict', 0.8);
-              return;
+              return -1;
             }
             // Re-fetch changelog and merge
             const fresh = await getFile(creds.pat, creds.repo, CHANGELOG_FILE, signal);
@@ -535,15 +603,23 @@ export async function syncNow(manual = false) {
       }
 
       if (pushed) {
-        await clearPendingEntries();
+        if (pushLimit != null) {
+          // Batch push — only clear the entries we just pushed
+          await clearEntriesByIds(pendingEntries.map((e) => e.id));
+        } else {
+          await clearPendingEntries();
+        }
       }
     }
+
+    // Count remaining entries after push
+    const remaining = await pendingEntryCount();
 
     // Update sync meta
     await db.syncMeta.update('sync-meta', {
       lastPulledAt: Date.now(),
       lastPushedAt: pendingEntries.length > 0 ? Date.now() : undefined,
-      pendingChanges: false,
+      pendingChanges: remaining > 0,
     });
 
     // First-time encryption: compact immediately to absorb all plaintext
@@ -564,11 +640,13 @@ export async function syncNow(manual = false) {
     setDirtyFlag(false);
     reportProgress('done', 'Sync complete', 1.0);
     if (manual) toast('Sync complete', 'success');
+    return remaining;
   } catch (err) {
-    if (err instanceof DOMException && err.name === 'AbortError') return; // aborted gracefully
+    if (err instanceof DOMException && err.name === 'AbortError') return -1;
     console.error('Sync failed:', err);
     reportProgress('error', 'Sync failed', 0);
     toast('Sync failed', 'error');
+    return -1;
   } finally {
     releaseSyncLock();
   }

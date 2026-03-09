@@ -1,9 +1,8 @@
 import { useState, useEffect } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../db';
-import { syncNow, setSyncProgressCallback } from './sync-engine';
+import { setSyncProgressCallback, startScheduler, stopScheduler } from './sync-engine';
 import type { SyncProgress } from './sync-engine';
-import { hasPendingEntries } from './change-log';
 
 export function useSync() {
   const local = useLiveQuery(() => db.localSettings.get('local'));
@@ -24,43 +23,11 @@ export function useSync() {
     }
   }, [syncProgress]);
 
-  // Sync on startup (also covers crash recovery via dirty flag)
+  // Start/stop scheduler based on sync enabled
   useEffect(() => {
     if (!local?.syncEnabled) return;
-    syncNow();
-  }, [local?.syncEnabled]);
-
-  // Periodic sync (5 min fallback)
-  useEffect(() => {
-    if (!local?.syncEnabled) return;
-    const interval = setInterval(syncNow, local.syncIntervalMs);
-    return () => clearInterval(interval);
-  }, [local?.syncEnabled, local?.syncIntervalMs]);
-
-  // visibilitychange: pull on visible, push on hidden
-  useEffect(() => {
-    if (!local?.syncEnabled) return;
-    const handler = async () => {
-      if (document.visibilityState === 'visible') {
-        syncNow();
-      } else if (document.visibilityState === 'hidden') {
-        const pending = await hasPendingEntries();
-        if (pending) syncNow();
-      }
-    };
-    document.addEventListener('visibilitychange', handler);
-    return () => document.removeEventListener('visibilitychange', handler);
-  }, [local?.syncEnabled]);
-
-  // Sync on online if pending changes
-  useEffect(() => {
-    if (!local?.syncEnabled) return;
-    const handler = async () => {
-      const pending = await hasPendingEntries();
-      if (pending) syncNow();
-    };
-    window.addEventListener('online', handler);
-    return () => window.removeEventListener('online', handler);
+    startScheduler();
+    return () => stopScheduler();
   }, [local?.syncEnabled]);
 
   return {

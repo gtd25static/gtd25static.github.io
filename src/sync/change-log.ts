@@ -89,12 +89,21 @@ export async function applyRemoteEntries(entries: ChangeEntry[]) {
   });
 }
 
-export async function getPendingEntries(): Promise<ChangeEntry[]> {
-  return db.changeLog.orderBy('timestamp').toArray();
+export async function getPendingEntries(limit?: number): Promise<ChangeEntry[]> {
+  const query = db.changeLog.orderBy('timestamp');
+  return limit != null ? query.limit(limit).toArray() : query.toArray();
 }
 
 export async function clearPendingEntries(): Promise<void> {
   await db.changeLog.clear();
+}
+
+export async function clearEntriesByIds(ids: string[]): Promise<void> {
+  await db.changeLog.bulkDelete(ids);
+}
+
+export function pendingEntryCount(): Promise<number> {
+  return db.changeLog.count();
 }
 
 export function hasPendingEntries(): Promise<boolean> {
