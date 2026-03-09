@@ -90,6 +90,8 @@ export interface SyncProgress {
   phase: SyncPhase;
   label: string;
   progress: number; // 0 to 1
+  pulled?: number;
+  pushed?: number;
 }
 
 let onSyncProgress: ((progress: SyncProgress) => void) | null = null;
@@ -98,8 +100,8 @@ export function setSyncProgressCallback(cb: ((progress: SyncProgress) => void) |
   onSyncProgress = cb;
 }
 
-function reportProgress(phase: SyncPhase, label: string, progress: number) {
-  onSyncProgress?.({ phase, label, progress });
+function reportProgress(phase: SyncPhase, label: string, progress: number, pulled?: number, pushed?: number) {
+  onSyncProgress?.({ phase, label, progress, pulled, pushed });
 }
 
 // --- Sync lock ---
@@ -679,13 +681,14 @@ export async function syncNow(manual = false, pushLimit?: number): Promise<numbe
     cachedRemoteEntries = finalRemoteEntries;
 
     setDirtyFlag(false);
-    reportProgress('done', 'Sync complete', 1.0);
+    reportProgress('done', 'Sync complete', 1.0, foreignEntries.length, pendingEntries.length);
     if (manual) toast('Sync complete', 'success');
     return remaining;
   } catch (err) {
     if (err instanceof DOMException && err.name === 'AbortError') return -1;
     console.error('Sync failed:', err);
-    reportProgress('error', 'Sync failed', 0);
+    const msg = err instanceof Error ? err.message : 'Sync failed';
+    reportProgress('error', msg, 0);
     toast('Sync failed', 'error');
     return -1;
   } finally {

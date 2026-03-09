@@ -66,7 +66,7 @@ function ListItem({ list, selected, onSelect, highlight, focused }: {
     <div data-focus-id={list.id} className="group flex items-center">
       <button
         onClick={onSelect}
-        className={`flex flex-1 items-center gap-3 rounded-full px-3 py-2 text-sm transition-colors ${
+        className={`flex flex-1 items-center gap-3 rounded-full px-3 py-3 md:py-2 text-sm transition-colors ${
           focused
             ? 'ring-2 ring-accent-500/40 dark:ring-accent-400/30'
             : ''
@@ -156,6 +156,9 @@ export function Sidebar() {
           <path d="M8 16l5 5L24 10" stroke="white" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" fill="none"/>
         </svg>
         <span className="text-[22px] font-normal text-zinc-700 dark:text-zinc-200">GTD25</span>
+        <div className="ml-auto">
+          <SyncIndicator />
+        </div>
       </div>
 
       {/* Create button */}
@@ -266,7 +269,7 @@ export function Sidebar() {
         ) : (
           <button
             onClick={() => setCreating(true)}
-            className="flex w-full items-center gap-3 rounded-full px-3 py-2 text-sm text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800"
+            className="flex w-full items-center gap-3 rounded-full px-3 py-3 md:py-2 text-sm text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800"
           >
             <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" className="text-zinc-400">
               <path d="M10 4v12M4 10h12" />
@@ -278,10 +281,9 @@ export function Sidebar() {
 
       {/* Bottom actions */}
       <div className="border-t border-zinc-200 px-2 py-2 dark:border-zinc-800">
-        <SyncIndicator />
         <button
           onClick={() => setTrashOpen(true)}
-          className="flex w-full items-center gap-3 rounded-full px-3 py-2 text-sm text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800"
+          className="flex w-full items-center gap-3 rounded-full px-3 py-3 md:py-2 text-sm text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800"
         >
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
             <path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6" />
@@ -290,7 +292,7 @@ export function Sidebar() {
         </button>
         <button
           onClick={() => setSettingsOpen(true)}
-          className="flex w-full items-center gap-3 rounded-full px-3 py-2 text-sm text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800"
+          className="flex w-full items-center gap-3 rounded-full px-3 py-3 md:py-2 text-sm text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800"
         >
           <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5">
             <circle cx="10" cy="10" r="3" />

@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { useAppState } from '../../stores/app-state';
 import { useTaskLists } from '../../hooks/use-task-lists';
 import { Sidebar } from './Sidebar';
@@ -18,6 +18,33 @@ import { ToastContainer } from '../ui/Toast';
 export function AppShell() {
   const { sidebarOpen, setSidebarOpen, searchQuery, selectedListId, selectList } = useAppState();
   const lists = useTaskLists();
+
+  // Swipe to open/close sidebar on mobile
+  const touchRef = useRef<{ x: number; y: number } | null>(null);
+  useEffect(() => {
+    function onTouchStart(e: TouchEvent) {
+      const t = e.touches[0];
+      touchRef.current = { x: t.clientX, y: t.clientY };
+    }
+    function onTouchEnd(e: TouchEvent) {
+      if (!touchRef.current) return;
+      const t = e.changedTouches[0];
+      const dx = t.clientX - touchRef.current.x;
+      const dy = t.clientY - touchRef.current.y;
+      // Require horizontal swipe (dx > dy) of at least 60px
+      if (Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > 60) {
+        if (dx > 0 && touchRef.current.x < 40) setSidebarOpen(true);
+        if (dx < 0 && sidebarOpen) setSidebarOpen(false);
+      }
+      touchRef.current = null;
+    }
+    document.addEventListener('touchstart', onTouchStart, { passive: true });
+    document.addEventListener('touchend', onTouchEnd, { passive: true });
+    return () => {
+      document.removeEventListener('touchstart', onTouchStart);
+      document.removeEventListener('touchend', onTouchEnd);
+    };
+  }, [sidebarOpen]);
 
   // Auto-select first list on initial load
   useEffect(() => {
