@@ -1,25 +1,39 @@
 import { useState, useEffect } from 'react';
 import { onVersionIncompatible, offVersionIncompatible } from '../../sync/sync-engine';
+import { useServiceWorker } from '../../hooks/use-service-worker';
 
 export function UpdateBanner() {
-  const [showBanner, setShowBanner] = useState(false);
+  const [syncIncompat, setSyncIncompat] = useState(false);
+  const { needRefresh, updateServiceWorker } = useServiceWorker();
 
   useEffect(() => {
-    const handler = () => setShowBanner(true);
+    const handler = () => setSyncIncompat(true);
     onVersionIncompatible(handler);
     return () => offVersionIncompatible(handler);
   }, []);
 
-  if (!showBanner) return null;
+  if (!syncIncompat && !needRefresh) return null;
+
+  const message = syncIncompat
+    ? 'A newer version of GTD25 is required to sync. Please update.'
+    : 'A new version of GTD25 is available.';
+
+  const handleClick = () => {
+    if (needRefresh) {
+      updateServiceWorker();
+    } else {
+      window.location.reload();
+    }
+  };
 
   return (
     <div className="flex items-center justify-between gap-3 bg-amber-500 px-4 py-2 text-sm font-medium text-white">
-      <span>A newer version of GTD25 is required to sync. Please update.</span>
+      <span>{message}</span>
       <button
-        onClick={() => window.location.reload()}
+        onClick={handleClick}
         className="shrink-0 rounded-md bg-white/20 px-3 py-1 text-xs font-bold hover:bg-white/30"
       >
-        Reload
+        {needRefresh ? 'Update now' : 'Reload'}
       </button>
     </div>
   );
