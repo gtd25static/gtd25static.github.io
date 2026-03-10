@@ -82,7 +82,7 @@ function ListItem({ list, selected, onSelect, highlight, focused }: {
     <div data-focus-id={list.id} className="group flex items-center">
       <button
         onClick={onSelect}
-        className={`flex flex-1 items-center gap-3 rounded-full px-3 py-3.5 md:py-2 text-sm transition-colors ${
+        className={`flex flex-1 min-w-0 items-center gap-3 rounded-full px-3 py-3.5 md:py-2 text-sm transition-colors ${
           focused
             ? 'ring-2 ring-accent-500/40 dark:ring-accent-400/30'
             : ''
@@ -103,7 +103,7 @@ function ListItem({ list, selected, onSelect, highlight, focused }: {
             <path d="M6 10l2.5 2.5L14 7" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
           </svg>
         )}
-        <span className="flex-1 truncate"><HighlightedName name={list.name} highlight={highlight ?? ''} /></span>
+        <span className="flex-1 min-w-0 break-words text-left"><HighlightedName name={list.name} highlight={highlight ?? ''} /></span>
         {count > 0 && (
           <span className="text-xs text-zinc-400">{count}</span>
         )}
