@@ -23,7 +23,7 @@ interface Props {
   onReorder: (orderedIds: string[]) => void;
 }
 
-function SortableItem({ subtask, isFirst, isLast }: { subtask: Subtask; isFirst: boolean; isLast: boolean }) {
+function SortableItem({ subtask, isLast }: { subtask: Subtask; isLast: boolean }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: subtask.id,
   });
@@ -110,7 +110,7 @@ export function SortableSubtaskList({ subtasks, onReorder }: Props) {
       <SortableContext items={subtasks.map((s) => s.id)} strategy={verticalListSortingStrategy}>
         <div className="ml-10">
           {subtasks.map((subtask, i) => (
-            <SortableItem key={subtask.id} subtask={subtask} isFirst={i === 0} isLast={i === subtasks.length - 1} />
+            <SortableItem key={subtask.id} subtask={subtask} isLast={i === subtasks.length - 1} />
           ))}
         </div>
       </SortableContext>
