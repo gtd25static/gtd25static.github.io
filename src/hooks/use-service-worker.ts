@@ -35,5 +35,5 @@ export function useServiceWorker() {
     };
   }, [checkForUpdate]);
 
-  return { needRefresh, updateServiceWorker };
+  return { needRefresh, updateServiceWorker, checkForUpdate };
 }

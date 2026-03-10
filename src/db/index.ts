@@ -2,6 +2,8 @@ import Dexie, { type Table } from 'dexie';
 import type { TaskList, Task, Subtask, SyncMeta, LocalSettings, ChangeEntry } from './models';
 import { newId } from '../lib/id';
 import { createLocalBackup } from './backup';
+import { SYNC_VERSION } from '../sync/version';
+import { runLocalMigrations } from '../sync/local-migrations';
 
 export class Gtd25DB extends Dexie {
   taskLists!: Table<TaskList, string>;
@@ -39,6 +41,7 @@ export async function ensureDefaults() {
       syncEnabled: false,
       syncIntervalMs: 300_000,
       deviceId: newId(),
+      appliedSyncVersion: SYNC_VERSION,
     });
   } else if (!local.deviceId) {
     await db.localSettings.update('local', { deviceId: newId() });
@@ -52,4 +55,12 @@ export async function ensureDefaults() {
   }
 
   await createLocalBackup();
+
+  // Run local migrations if needed
+  const current = await db.localSettings.get('local');
+  const appliedVersion = current?.appliedSyncVersion ?? 0;
+  if (appliedVersion < SYNC_VERSION) {
+    await runLocalMigrations(db, appliedVersion, SYNC_VERSION);
+    await db.localSettings.update('local', { appliedSyncVersion: SYNC_VERSION });
+  }
 }

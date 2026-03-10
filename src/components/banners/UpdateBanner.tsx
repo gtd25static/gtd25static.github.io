@@ -4,13 +4,16 @@ import { useServiceWorker } from '../../hooks/use-service-worker';
 
 export function UpdateBanner() {
   const [syncIncompat, setSyncIncompat] = useState(false);
-  const { needRefresh, updateServiceWorker } = useServiceWorker();
+  const { needRefresh, updateServiceWorker, checkForUpdate } = useServiceWorker();
 
   useEffect(() => {
-    const handler = () => setSyncIncompat(true);
+    const handler = () => {
+      setSyncIncompat(true);
+      checkForUpdate();
+    };
     onVersionIncompatible(handler);
     return () => offVersionIncompatible(handler);
-  }, []);
+  }, [checkForUpdate]);
 
   if (!syncIncompat && !needRefresh) return null;
 

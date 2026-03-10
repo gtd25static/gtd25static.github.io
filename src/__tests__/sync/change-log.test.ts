@@ -11,6 +11,7 @@ import {
   applyRemoteEntries,
 } from '../../sync/change-log';
 import { newId } from '../../lib/id';
+import { SYNC_VERSION } from '../../sync/version';
 
 beforeEach(async () => {
   await resetDb();
@@ -35,6 +36,12 @@ describe('recordChange', () => {
     const entries = await db.changeLog.toArray();
     expect(entries[0].deviceId).toBe('my-device-42');
   });
+
+  it('includes v: SYNC_VERSION in entries', async () => {
+    await recordChange('task', 'task-1', 'upsert', { id: 'task-1', title: 'Test' });
+    const entries = await db.changeLog.toArray();
+    expect(entries[0].v).toBe(SYNC_VERSION);
+  });
 });
 
 describe('recordChangeBatch', () => {
@@ -57,6 +64,16 @@ describe('recordChangeBatch', () => {
     await recordChangeBatch([]);
     const entries = await db.changeLog.toArray();
     expect(entries).toHaveLength(0);
+  });
+
+  it('includes v: SYNC_VERSION in batch entries', async () => {
+    await recordChangeBatch([
+      { entityType: 'task', entityId: 't1', operation: 'upsert' },
+      { entityType: 'subtask', entityId: 's1', operation: 'delete' },
+    ]);
+    const entries = await db.changeLog.toArray();
+    expect(entries).toHaveLength(2);
+    entries.forEach((e) => expect(e.v).toBe(SYNC_VERSION));
   });
 });
 
@@ -401,5 +418,36 @@ describe('applyRemoteEntries — entity shape validation', () => {
     }]);
     const task = await db.tasks.get(taskId);
     expect(task!.deletedAt).toBe(now + 100);
+  });
+});
+
+describe('applyRemoteEntries — entry migration', () => {
+  it('applies entries from older versions (migrateEntryData passthrough)', async () => {
+    const taskId = newId();
+    const now = Date.now();
+    // Entry with no version (old device) should still apply
+    await applyRemoteEntries([{
+      id: 'e1', deviceId: 'remote', timestamp: now,
+      entityType: 'task', entityId: taskId, operation: 'upsert',
+      data: { id: taskId, listId: 'list-1', title: 'Old Format', status: 'todo', order: 0, createdAt: now, updatedAt: now },
+      // no v field
+    }]);
+    const task = await db.tasks.get(taskId);
+    expect(task).toBeTruthy();
+    expect(task!.title).toBe('Old Format');
+  });
+
+  it('applies entries with explicit version', async () => {
+    const taskId = newId();
+    const now = Date.now();
+    await applyRemoteEntries([{
+      id: 'e1', deviceId: 'remote', timestamp: now,
+      entityType: 'task', entityId: taskId, operation: 'upsert',
+      data: { id: taskId, listId: 'list-1', title: 'Versioned', status: 'todo', order: 0, createdAt: now, updatedAt: now },
+      v: SYNC_VERSION,
+    }]);
+    const task = await db.tasks.get(taskId);
+    expect(task).toBeTruthy();
+    expect(task!.title).toBe('Versioned');
   });
 });

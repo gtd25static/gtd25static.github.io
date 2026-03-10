@@ -24,6 +24,11 @@ export async function resetSyncState() {
   for (const key of SYNC_LOCALSTORAGE_KEYS) {
     localStorage.removeItem(key);
   }
+  // Reset appliedSyncVersion so local migrations can be tested
+  const local = await db.localSettings.get('local');
+  if (local) {
+    await db.localSettings.update('local', { appliedSyncVersion: undefined });
+  }
 }
 
 export async function setupSyncCredentials(overrides?: Partial<{
@@ -32,6 +37,7 @@ export async function setupSyncCredentials(overrides?: Partial<{
   githubRepo: string;
   deviceId: string;
   encryptionPassword: string;
+  appliedSyncVersion: number;
 }>) {
   await db.localSettings.update('local', {
     syncEnabled: true,

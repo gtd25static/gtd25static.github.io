@@ -1,4 +1,4 @@
-import type { SyncData } from '../db/models';
+import type { SyncData, ChangeEntry } from '../db/models';
 
 interface RemoteMigration {
   fromVersion: number;
@@ -33,4 +33,18 @@ export function runRemoteMigrations(data: SyncData, from: number, to: number): S
   }
 
   return current;
+}
+
+/**
+ * Normalize a single changelog entry's data from an older format version.
+ * Called on each incoming remote entry before it's applied locally.
+ */
+export function migrateEntryData(
+  data: Record<string, unknown>,
+  _entityType: ChangeEntry['entityType'],
+  _entryVersion?: number,
+): Record<string, unknown> {
+  // Identity for now. When format changes happen, add transforms here.
+  // Example: if ((entryVersion ?? 0) < 3 && 'dueDate' in data) { ... }
+  return data;
 }

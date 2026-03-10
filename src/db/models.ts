@@ -67,6 +67,7 @@ export interface LocalSettings {
   syncIntervalMs: number;
   deviceId?: string;
   encryptionPassword?: string;
+  appliedSyncVersion?: number;
 }
 
 export interface ChangeEntry {
@@ -77,6 +78,7 @@ export interface ChangeEntry {
   entityId: string;
   operation: 'upsert' | 'delete';
   data?: Record<string, unknown>;
+  v?: number;
 }
 
 export interface SyncData {

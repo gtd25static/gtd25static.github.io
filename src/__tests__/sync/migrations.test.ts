@@ -1,4 +1,4 @@
-import { runRemoteMigrations } from '../../sync/migrations';
+import { runRemoteMigrations, migrateEntryData } from '../../sync/migrations';
 import { SYNC_VERSION } from '../../sync/version';
 import type { SyncData, Settings } from '../../db/models';
 
@@ -42,5 +42,35 @@ describe('runRemoteMigrations', () => {
     const data = makeSyncData();
     const result = runRemoteMigrations(data, 0, SYNC_VERSION);
     expect(result.syncVersion).toBe(SYNC_VERSION);
+  });
+});
+
+describe('migrateEntryData', () => {
+  it('returns data unchanged (identity)', () => {
+    const data = { id: 't1', listId: 'l1', title: 'Test', status: 'todo', order: 0, createdAt: 1000, updatedAt: 1000 };
+    const result = migrateEntryData(data, 'task', SYNC_VERSION);
+    expect(result).toEqual(data);
+  });
+
+  it('returns data unchanged when version is undefined', () => {
+    const data = { id: 't1', listId: 'l1', title: 'Test', status: 'todo', order: 0, createdAt: 1000, updatedAt: 1000 };
+    const result = migrateEntryData(data, 'task', undefined);
+    expect(result).toEqual(data);
+  });
+
+  it('is idempotent', () => {
+    const data = { id: 't1', listId: 'l1', title: 'Test', status: 'todo', order: 0, createdAt: 1000, updatedAt: 1000 };
+    const first = migrateEntryData(data, 'task', 1);
+    const second = migrateEntryData(first, 'task', 1);
+    expect(second).toEqual(first);
+  });
+
+  it('works for all entity types', () => {
+    const taskData = { id: 't1', listId: 'l1', title: 'T', status: 'todo', order: 0, createdAt: 1, updatedAt: 1 };
+    const listData = { id: 'l1', name: 'L', type: 'tasks', order: 0, createdAt: 1, updatedAt: 1 };
+    const subData = { id: 's1', taskId: 't1', title: 'S', status: 'todo', order: 0, createdAt: 1, updatedAt: 1 };
+    expect(migrateEntryData(taskData, 'task', 1)).toEqual(taskData);
+    expect(migrateEntryData(listData, 'taskList', 1)).toEqual(listData);
+    expect(migrateEntryData(subData, 'subtask', 1)).toEqual(subData);
   });
 });

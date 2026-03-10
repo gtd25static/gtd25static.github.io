@@ -1,6 +1,8 @@
 import { db } from '../db';
 import type { ChangeEntry } from '../db/models';
 import { newId } from '../lib/id';
+import { SYNC_VERSION } from './version';
+import { migrateEntryData } from './migrations';
 
 async function getDeviceId(): Promise<string> {
   const local = await db.localSettings.get('local');
@@ -22,6 +24,7 @@ export async function recordChange(
     entityId,
     operation,
     data,
+    v: SYNC_VERSION,
   });
 }
 
@@ -58,6 +61,7 @@ export async function recordChangeInTx(
     entityId,
     operation,
     data,
+    v: SYNC_VERSION,
   });
 }
 
@@ -80,6 +84,7 @@ export async function recordChangeBatch(
     entityId: e.entityId,
     operation: e.operation,
     data: e.data,
+    v: SYNC_VERSION,
   }));
   await db.changeLog.bulkAdd(records);
 }
@@ -108,6 +113,7 @@ export async function recordChangeBatchInTx(
     entityId: e.entityId,
     operation: e.operation,
     data: e.data,
+    v: SYNC_VERSION,
   }));
   await db.changeLog.bulkAdd(records);
 }
@@ -153,8 +159,11 @@ export async function applyRemoteEntries(entries: ChangeEntry[]) {
           }
         }
       } else {
+        // Migrate entry data from older format versions
+        const data = entry.data ? migrateEntryData(entry.data, entry.entityType, entry.v) : entry.data;
+
         // Validate entity shape before writing
-        if (!validateEntityShape(entry.data, entry.entityType)) {
+        if (!validateEntityShape(data, entry.entityType)) {
           console.warn(`Skipping malformed ${entry.entityType} entry ${entry.id}: missing required fields`);
           continue;
         }
@@ -164,10 +173,10 @@ export async function applyRemoteEntries(entries: ChangeEntry[]) {
         if (existing) {
           const localUpdatedAt = (existing as { updatedAt?: number }).updatedAt ?? 0;
           if (entry.timestamp >= localUpdatedAt) {
-            await table.put(entry.data as never);
+            await table.put(data as never);
           }
         } else {
-          await table.put(entry.data as never);
+          await table.put(data as never);
         }
       }
     }

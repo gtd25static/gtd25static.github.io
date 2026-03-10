@@ -410,6 +410,18 @@ func (d *Database) migrateV2() error {
 }
 ```
 
+## Sync Version Migration
+
+When changing the remote sync data format, follow this checklist:
+
+1. Bump `SYNC_VERSION` in `src/sync/version.ts`
+2. Add a remote migration in `src/sync/migrations.ts` — transforms `SyncData` from old → new format
+3. Add a local migration in `src/sync/local-migrations.ts` — transforms local DB data (pending changelog entries, entity records) to match the new format
+4. Update `migrateEntryData()` in `src/sync/migrations.ts` — normalizes individual changelog entries from old-format devices
+5. If the schema changes (new tables/indexes), also bump Dexie version in `src/db/index.ts`
+6. Run tests: `npx vitest run`
+7. Test multi-device: update one device first, verify the other device sees "Update required" banner, update it, verify sync converges
+
 ## Application Versioning
 
 Version info set at build time via ldflags:
