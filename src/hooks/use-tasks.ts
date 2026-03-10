@@ -27,7 +27,19 @@ export function useTask(taskId: string | undefined) {
 
 export async function createTask(
   listId: string,
-  data: { title: string; description?: string; link?: string; linkTitle?: string; dueDate?: number },
+  data: {
+    title: string;
+    description?: string;
+    link?: string;
+    linkTitle?: string;
+    dueDate?: number;
+    links?: TaskLink[];
+    recurrenceType?: 'time-based' | 'date-based';
+    recurrenceInterval?: number;
+    recurrenceUnit?: 'hours' | 'days' | 'weeks' | 'months';
+    nextOccurrence?: number;
+    skipFirst?: boolean;
+  },
 ) {
   const count = await db.tasks.where('listId').equals(listId).count();
   const now = Date.now();
@@ -39,7 +51,13 @@ export async function createTask(
     link: data.link,
     linkTitle: data.linkTitle,
     dueDate: data.dueDate,
-    status: 'todo',
+    links: data.links,
+    recurrenceType: data.recurrenceType,
+    recurrenceInterval: data.recurrenceInterval,
+    recurrenceUnit: data.recurrenceUnit,
+    nextOccurrence: data.nextOccurrence,
+    status: data.skipFirst ? 'done' : 'todo',
+    lastCompletedAt: data.skipFirst ? now : undefined,
     order: count,
     createdAt: now,
     updatedAt: now,

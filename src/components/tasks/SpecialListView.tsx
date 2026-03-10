@@ -57,7 +57,7 @@ function SpecialItemRow({ item }: { item: SpecialItem }) {
   }
 
   return (
-    <div className="group flex items-center gap-2 rounded-lg px-3 py-2 hover:bg-zinc-50 dark:hover:bg-zinc-800/50">
+    <div className="group flex items-center gap-2 rounded-lg px-3 py-3 md:py-2 hover:bg-zinc-50 dark:hover:bg-zinc-800/50">
       <button onClick={navigateToSource} className="flex-1 min-w-0 text-left">
         <span className="text-sm text-zinc-800 dark:text-zinc-200">{item.title}</span>
         {item.parentTitle && (
@@ -72,13 +72,13 @@ function SpecialItemRow({ item }: { item: SpecialItem }) {
           <>
             <button
               onClick={handleRemoveWarning}
-              className="rounded px-2 py-0.5 text-xs text-amber-600 hover:bg-amber-50 dark:text-amber-400 dark:hover:bg-amber-900/20"
+              className="rounded px-3 py-1.5 md:px-2 md:py-0.5 text-sm md:text-xs text-amber-600 hover:bg-amber-50 dark:text-amber-400 dark:hover:bg-amber-900/20"
             >
               Clear
             </button>
             <button
               onClick={handleDone}
-              className="rounded px-2 py-0.5 text-xs text-accent-600 hover:bg-accent-50 dark:text-accent-400 dark:hover:bg-accent-900/20"
+              className="rounded px-3 py-1.5 md:px-2 md:py-0.5 text-sm md:text-xs text-accent-600 hover:bg-accent-50 dark:text-accent-400 dark:hover:bg-accent-900/20"
             >
               Done
             </button>
@@ -88,13 +88,13 @@ function SpecialItemRow({ item }: { item: SpecialItem }) {
           <>
             <button
               onClick={handleUnblock}
-              className="rounded px-2 py-0.5 text-xs text-blue-600 hover:bg-blue-50 dark:text-blue-400 dark:hover:bg-blue-900/20"
+              className="rounded px-3 py-1.5 md:px-2 md:py-0.5 text-sm md:text-xs text-blue-600 hover:bg-blue-50 dark:text-blue-400 dark:hover:bg-blue-900/20"
             >
               Unblock
             </button>
             <button
               onClick={handleDone}
-              className="rounded px-2 py-0.5 text-xs text-accent-600 hover:bg-accent-50 dark:text-accent-400 dark:hover:bg-accent-900/20"
+              className="rounded px-3 py-1.5 md:px-2 md:py-0.5 text-sm md:text-xs text-accent-600 hover:bg-accent-50 dark:text-accent-400 dark:hover:bg-accent-900/20"
             >
               Done
             </button>
@@ -104,13 +104,13 @@ function SpecialItemRow({ item }: { item: SpecialItem }) {
           <>
             <button
               onClick={handleDone}
-              className="rounded px-2 py-0.5 text-xs text-accent-600 hover:bg-accent-50 dark:text-accent-400 dark:hover:bg-accent-900/20"
+              className="rounded px-3 py-1.5 md:px-2 md:py-0.5 text-sm md:text-xs text-accent-600 hover:bg-accent-50 dark:text-accent-400 dark:hover:bg-accent-900/20"
             >
               Done
             </button>
             <button
               onClick={handleWork}
-              className="rounded px-2 py-0.5 text-xs text-accent-600 hover:bg-accent-50 dark:text-accent-400 dark:hover:bg-accent-900/20"
+              className="rounded px-3 py-1.5 md:px-2 md:py-0.5 text-sm md:text-xs text-accent-600 hover:bg-accent-50 dark:text-accent-400 dark:hover:bg-accent-900/20"
             >
               Work
             </button>

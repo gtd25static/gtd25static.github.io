@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect } from 'react';
 import type { Task } from '../../db/models';
-import { formatDate, daysUntil } from '../../lib/date-utils';
+import { formatDate, daysUntil, formatTimeRemaining } from '../../lib/date-utils';
 import { setTaskStatus, deleteTask, restoreTask, updateTask, moveTaskToList } from '../../hooks/use-tasks';
 import { toast } from '../ui/Toast';
 import { useAppState } from '../../stores/app-state';
@@ -97,29 +97,29 @@ export function TaskCard({ task, index, dragHandleProps }: Props) {
           aria-label={task.status === 'done' ? 'Mark incomplete' : 'Mark complete'}
         >
           {task.status === 'done' ? (
-            <div className="flex h-6 w-6 items-center justify-center rounded bg-accent-500">
+            <div className="flex h-7 w-7 md:h-6 md:w-6 items-center justify-center rounded bg-accent-500">
               <svg width="14" height="14" viewBox="0 0 12 12" fill="none">
                 <path d="M2.5 6l2.5 3L9.5 3" stroke="white" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
               </svg>
             </div>
           ) : task.status === 'working' ? (
-            <div className="flex h-6 w-6 items-center justify-center rounded border-[1.5px] border-accent-500 bg-accent-50 dark:bg-accent-950/30">
+            <div className="flex h-7 w-7 md:h-6 md:w-6 items-center justify-center rounded border-[1.5px] border-accent-500 bg-accent-50 dark:bg-accent-950/30">
               <div className="h-2.5 w-2.5 rounded-sm bg-accent-500" />
             </div>
           ) : task.status === 'blocked' ? (
-            <div className="flex h-6 w-6 items-center justify-center rounded border-[1.5px] border-red-400">
+            <div className="flex h-7 w-7 md:h-6 md:w-6 items-center justify-center rounded border-[1.5px] border-red-400">
               <svg width="12" height="12" viewBox="0 0 10 10">
                 <path d="M2.5 5h5" stroke="#ef4444" strokeWidth="1.5" strokeLinecap="round" />
               </svg>
             </div>
           ) : hasWorkingSubtask ? (
-            <div className="flex h-6 w-6 items-center justify-center rounded border-[1.5px] border-accent-500 bg-accent-50 dark:bg-accent-950/30">
+            <div className="flex h-7 w-7 md:h-6 md:w-6 items-center justify-center rounded border-[1.5px] border-accent-500 bg-accent-50 dark:bg-accent-950/30">
               <span className="text-[10px] font-semibold leading-none text-accent-600 dark:text-accent-400">
                 {subtasks.filter((s) => s.status === 'done').length}/{subtasks.length}
               </span>
             </div>
           ) : hasBlockedSubtask ? (
-            <div className="flex h-6 w-6 items-center justify-center rounded border-[1.5px] border-red-400">
+            <div className="flex h-7 w-7 md:h-6 md:w-6 items-center justify-center rounded border-[1.5px] border-red-400">
               <span className="text-[10px] font-semibold leading-none text-red-500 dark:text-red-400">
                 {subtasks.filter((s) => s.status === 'done').length}/{subtasks.length}
               </span>
@@ -131,13 +131,13 @@ export function TaskCard({ task, index, dragHandleProps }: Props) {
               </svg>
             </div>
           ) : subtasks.length > 0 ? (
-            <div className="flex h-6 w-6 items-center justify-center rounded border-[1.5px] border-zinc-300 dark:border-zinc-600">
+            <div className="flex h-7 w-7 md:h-6 md:w-6 items-center justify-center rounded border-[1.5px] border-zinc-300 dark:border-zinc-600">
               <span className="text-[10px] font-semibold leading-none text-zinc-400 dark:text-zinc-500">
                 {subtasks.filter((s) => s.status === 'done').length}/{subtasks.length}
               </span>
             </div>
           ) : (
-            <div className="h-6 w-6 rounded border-[1.5px] border-zinc-300 hover:border-zinc-400 dark:border-zinc-600 dark:hover:border-zinc-500" />
+            <div className="h-7 w-7 md:h-6 md:w-6 rounded border-[1.5px] border-zinc-300 hover:border-zinc-400 dark:border-zinc-600 dark:hover:border-zinc-500" />
           )}
         </button>
 
@@ -185,10 +185,13 @@ export function TaskCard({ task, index, dragHandleProps }: Props) {
             </svg>
           )}
           {task.recurrenceType && (
-            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="#8b5cf6" strokeWidth="1.5" className="shrink-0 opacity-70">
-              <path d="M1 8a7 7 0 0113.6-2.3M15 8a7 7 0 01-13.6 2.3" strokeLinecap="round" />
-              <path d="M14.6 2v3.7h-3.7M1.4 14v-3.7h3.7" strokeLinecap="round" strokeLinejoin="round" />
-            </svg>
+            <span className="inline-flex items-center gap-0.5 rounded px-1 py-0.5 text-xs font-medium text-violet-600 bg-violet-50 dark:text-violet-400 dark:bg-violet-900/20 shrink-0">
+              <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" className="opacity-70">
+                <path d="M1 8a7 7 0 0113.6-2.3M15 8a7 7 0 01-13.6 2.3" strokeLinecap="round" />
+                <path d="M14.6 2v3.7h-3.7M1.4 14v-3.7h3.7" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+              {task.nextOccurrence ? formatTimeRemaining(task.nextOccurrence) : ''}
+            </span>
           )}
           {task.status !== 'done' && task.dueDate && <DueDateBadge dueDate={task.dueDate} />}
           <LinksList primaryLink={task.link} primaryTitle={task.linkTitle} links={task.links} />

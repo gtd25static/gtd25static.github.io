@@ -57,7 +57,7 @@ export function SubtaskForm({ onSubmit, onCancel, initial }: Props) {
         <>
           <div className="grid grid-cols-2 gap-2">
             <Input placeholder="Link" type="url" value={link} onChange={(e) => setLink(e.target.value)} />
-            <Input type="text" placeholder="dd/mm/yyyy" value={dueDate} onChange={(e) => setDueDate(e.target.value)} />
+            <Input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} />
           </div>
           {links.map((l, i) => (
             <div key={i} className="flex items-center gap-2 text-xs">

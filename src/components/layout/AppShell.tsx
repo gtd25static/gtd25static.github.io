@@ -15,7 +15,7 @@ import { SyncIndicator } from './SyncIndicator';
 import { ToastContainer } from '../ui/Toast';
 
 export function AppShell() {
-  const { sidebarOpen, setSidebarOpen, searchQuery, selectedListId, selectList } = useAppState();
+  const { sidebarOpen, setSidebarOpen, setSettingsOpen, searchQuery, selectedListId, selectList } = useAppState();
   const lists = useTaskLists();
 
   // Swipe to open/close sidebar on mobile
@@ -90,8 +90,18 @@ export function AppShell() {
             <path d="M8 16l5 5L24 10" stroke="white" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" fill="none"/>
           </svg>
           <span className="text-lg text-zinc-700 dark:text-zinc-200">GTD25</span>
-          <div className="ml-auto">
+          <div className="ml-auto flex items-center gap-1">
             <SyncIndicator />
+            <button
+              onClick={() => setSettingsOpen(true)}
+              className="rounded-full p-2 text-zinc-500 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800"
+              aria-label="Settings"
+            >
+              <svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5">
+                <circle cx="10" cy="10" r="3" />
+                <path d="M10 2v2M10 16v2M2 10h2M16 10h2M4.22 4.22l1.42 1.42M14.36 14.36l1.42 1.42M4.22 15.78l1.42-1.42M14.36 5.64l1.42-1.42" />
+              </svg>
+            </button>
           </div>
         </div>
 

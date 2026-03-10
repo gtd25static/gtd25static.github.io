@@ -118,7 +118,7 @@ export function SubtaskItem({ subtask }: Props) {
       {subtask.status !== 'working' && subtask.status !== 'done' && (
         <button
           onClick={() => startWorkingOn(subtask.id)}
-          className="rounded-full px-2.5 py-1 text-xs font-medium bg-accent-50 text-accent-600 hover:bg-accent-100 dark:bg-accent-900/30 dark:text-accent-300 dark:hover:bg-accent-800/40"
+          className="rounded-full px-2.5 py-1.5 md:py-1 text-sm md:text-xs font-medium bg-accent-50 text-accent-600 hover:bg-accent-100 dark:bg-accent-900/30 dark:text-accent-300 dark:hover:bg-accent-800/40"
           title="Start working"
         >
           Work

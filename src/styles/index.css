@@ -38,3 +38,10 @@ body {
 .dark .scrollbar-thin {
   scrollbar-color: theme(--color-zinc-600) transparent;
 }
+
+/* Checkbox styling */
+input[type="checkbox"] {
+  width: 1rem;
+  height: 1rem;
+  accent-color: var(--color-accent-600);
+}

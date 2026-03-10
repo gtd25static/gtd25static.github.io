@@ -1,4 +1,4 @@
-import { daysUntil, isDueSoon, dueDateColor, formatDate, toInputDate, fromInputDate } from '../../lib/date-utils';
+import { daysUntil, isDueSoon, dueDateColor, formatDate, toInputDate, fromInputDate, formatTimeRemaining } from '../../lib/date-utils';
 
 const PINNED = new Date('2026-03-08T12:00:00').getTime();
 
@@ -86,15 +86,15 @@ describe('formatDate', () => {
 });
 
 describe('toInputDate', () => {
-  it('converts timestamp to DD/MM/YYYY', () => {
+  it('converts timestamp to YYYY-MM-DD', () => {
     const ts = new Date('2026-03-08T00:00:00').getTime();
-    expect(toInputDate(ts)).toBe('08/03/2026');
+    expect(toInputDate(ts)).toBe('2026-03-08');
   });
 });
 
 describe('fromInputDate', () => {
-  it('parses valid DD/MM/YYYY to timestamp', () => {
-    const result = fromInputDate('08/03/2026');
+  it('parses valid YYYY-MM-DD to timestamp', () => {
+    const result = fromInputDate('2026-03-08');
     expect(result).toBeDefined();
     const d = new Date(result!);
     expect(d.getDate()).toBe(8);
@@ -104,6 +104,32 @@ describe('fromInputDate', () => {
 
   it('returns undefined for invalid input', () => {
     expect(fromInputDate('not-a-date')).toBeUndefined();
-    expect(fromInputDate('2026-03-08')).toBeUndefined();
+    expect(fromInputDate('08/03/2026')).toBeUndefined();
+  });
+});
+
+describe('formatTimeRemaining', () => {
+  it('returns "now" for past timestamps', () => {
+    expect(formatTimeRemaining(PINNED - 1000)).toBe('now');
+  });
+
+  it('returns hours for <24h', () => {
+    const fiveHours = PINNED + 5 * 60 * 60 * 1000;
+    expect(formatTimeRemaining(fiveHours)).toBe('5h');
+  });
+
+  it('returns days for <7d', () => {
+    const threeDays = PINNED + 3 * 24 * 60 * 60 * 1000;
+    expect(formatTimeRemaining(threeDays)).toBe('3d');
+  });
+
+  it('returns weeks for <5w', () => {
+    const twoWeeks = PINNED + 14 * 24 * 60 * 60 * 1000;
+    expect(formatTimeRemaining(twoWeeks)).toBe('2w');
+  });
+
+  it('returns months for longer periods', () => {
+    const threeMonths = PINNED + 90 * 24 * 60 * 60 * 1000;
+    expect(formatTimeRemaining(threeMonths)).toBe('3mo');
   });
 });

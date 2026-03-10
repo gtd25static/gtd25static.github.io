@@ -21,6 +21,7 @@ interface Props {
     recurrenceInterval?: number;
     recurrenceUnit?: 'hours' | 'days' | 'weeks' | 'months';
     nextOccurrence?: number;
+    skipFirst?: boolean;
   }) => void;
   initial?: Partial<Task>;
 }
@@ -38,6 +39,7 @@ export function TaskForm({ open, onClose, onSubmit, initial }: Props) {
   const [recurrenceType, setRecurrenceType] = useState<'time-based' | 'date-based'>(initial?.recurrenceType ?? 'time-based');
   const [recurrenceInterval, setRecurrenceInterval] = useState(initial?.recurrenceInterval ?? 1);
   const [recurrenceUnit, setRecurrenceUnit] = useState<'hours' | 'days' | 'weeks' | 'months'>(initial?.recurrenceUnit ?? 'days');
+  const [skipFirst, setSkipFirst] = useState(false);
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -47,7 +49,6 @@ export function TaskForm({ open, onClose, onSubmit, initial }: Props) {
       title: title.trim(),
       description: description.trim() || undefined,
       link: link.trim() && isValidUrl(link.trim()) ? link.trim() : undefined,
-      dueDate: dueDate ? fromInputDate(dueDate) : undefined,
       links: links.length > 0 ? links : undefined,
     };
 
@@ -55,15 +56,22 @@ export function TaskForm({ open, onClose, onSubmit, initial }: Props) {
       data.recurrenceType = recurrenceType;
       data.recurrenceInterval = recurrenceInterval;
       data.recurrenceUnit = recurrenceUnit;
+      // Clear dueDate when recurring
+      data.dueDate = undefined;
       // Set initial nextOccurrence if not already set
       if (!initial?.nextOccurrence) {
         data.nextOccurrence = computeNextOccurrence(Date.now(), recurrenceInterval, recurrenceUnit);
       }
-    } else if (initial?.recurrenceType) {
-      // Clearing recurrence
-      data.recurrenceType = undefined;
-      data.recurrenceInterval = undefined;
-      data.recurrenceUnit = undefined;
+      if (!initial && skipFirst) data.skipFirst = true;
+    } else {
+      data.dueDate = dueDate ? fromInputDate(dueDate) : undefined;
+      // Clear recurrence when using dueDate
+      if (initial?.recurrenceType) {
+        data.recurrenceType = undefined;
+        data.recurrenceInterval = undefined;
+        data.recurrenceUnit = undefined;
+        data.nextOccurrence = undefined;
+      }
     }
 
     onSubmit(data);
@@ -91,7 +99,10 @@ export function TaskForm({ open, onClose, onSubmit, initial }: Props) {
           />
         </div>
         <Input label="Link" type="url" value={link} onChange={(e) => setLink(e.target.value)} placeholder="https://..." />
-        <Input label="Due date" type="text" placeholder="dd/mm/yyyy" value={dueDate} onChange={(e) => setDueDate(e.target.value)} />
+        {/* Due date — hidden when recurring */}
+        {!recurring && (
+          <Input label="Due date" type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} />
+        )}
 
         {/* Additional links */}
         <div className="flex flex-col gap-1">
@@ -121,43 +132,53 @@ export function TaskForm({ open, onClose, onSubmit, initial }: Props) {
           )}
         </div>
 
-        {/* Recurrence */}
-        <div className="flex flex-col gap-2">
-          <label className="flex items-center gap-2 text-xs font-medium text-zinc-500 dark:text-zinc-400">
-            <input type="checkbox" checked={recurring} onChange={(e) => setRecurring(e.target.checked)} className="rounded" />
-            Recurring
-          </label>
-          {recurring && (
-            <div className="flex items-center gap-2 ml-5">
-              <select
-                value={recurrenceType}
-                onChange={(e) => setRecurrenceType(e.target.value as 'time-based' | 'date-based')}
-                className="rounded border border-zinc-300 bg-white px-2 py-1 text-xs dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200"
-              >
-                <option value="time-based">Time-based</option>
-                <option value="date-based">Date-based</option>
-              </select>
-              <span className="text-xs text-zinc-500">every</span>
-              <input
-                type="number"
-                min={1}
-                value={recurrenceInterval}
-                onChange={(e) => setRecurrenceInterval(Math.max(1, parseInt(e.target.value) || 1))}
-                className="w-16 rounded border border-zinc-300 bg-white px-2 py-1 text-xs dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200"
-              />
-              <select
-                value={recurrenceUnit}
-                onChange={(e) => setRecurrenceUnit(e.target.value as 'hours' | 'days' | 'weeks' | 'months')}
-                className="rounded border border-zinc-300 bg-white px-2 py-1 text-xs dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200"
-              >
-                <option value="hours">hours</option>
-                <option value="days">days</option>
-                <option value="weeks">weeks</option>
-                <option value="months">months</option>
-              </select>
-            </div>
-          )}
-        </div>
+        {/* Recurrence — hidden when dueDate is set */}
+        {!dueDate && (
+          <div className="flex flex-col gap-2">
+            <label className="flex items-center gap-2 text-xs font-medium text-zinc-500 dark:text-zinc-400">
+              <input type="checkbox" checked={recurring} onChange={(e) => { setRecurring(e.target.checked); if (e.target.checked) setDueDate(''); }} className="shrink-0 rounded" />
+              Recurring
+            </label>
+            {recurring && (
+              <>
+                <div className="flex items-center gap-2 ml-5">
+                  <select
+                    value={recurrenceType}
+                    onChange={(e) => setRecurrenceType(e.target.value as 'time-based' | 'date-based')}
+                    className="rounded border border-zinc-300 bg-white px-2 py-2 md:py-1 text-sm md:text-xs dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200"
+                  >
+                    <option value="time-based">Time-based</option>
+                    <option value="date-based">Date-based</option>
+                  </select>
+                  <span className="text-sm md:text-xs text-zinc-500">every</span>
+                  <input
+                    type="number"
+                    min={1}
+                    value={recurrenceInterval}
+                    onChange={(e) => setRecurrenceInterval(Math.max(1, parseInt(e.target.value) || 1))}
+                    className="w-16 rounded border border-zinc-300 bg-white px-2 py-2 md:py-1 text-sm md:text-xs dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200"
+                  />
+                  <select
+                    value={recurrenceUnit}
+                    onChange={(e) => setRecurrenceUnit(e.target.value as 'hours' | 'days' | 'weeks' | 'months')}
+                    className="rounded border border-zinc-300 bg-white px-2 py-2 md:py-1 text-sm md:text-xs dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200"
+                  >
+                    <option value="hours">hours</option>
+                    <option value="days">days</option>
+                    <option value="weeks">weeks</option>
+                    <option value="months">months</option>
+                  </select>
+                </div>
+                {!initial && (
+                  <label className="flex items-center gap-2 ml-5 text-xs text-zinc-500 dark:text-zinc-400">
+                    <input type="checkbox" checked={skipFirst} onChange={(e) => setSkipFirst(e.target.checked)} className="shrink-0 rounded" />
+                    Skip first (create as done)
+                  </label>
+                )}
+              </>
+            )}
+          </div>
+        )}
 
         <div className="flex justify-end gap-2 pt-2">
           <Button type="button" variant="ghost" onClick={onClose}>Cancel</Button>

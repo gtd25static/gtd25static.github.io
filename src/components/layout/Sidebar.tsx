@@ -240,8 +240,8 @@ export function Sidebar() {
         </div>
       </div>
 
-      {/* Create button */}
-      <div className="px-3 pb-2">
+      {/* Create button + Settings cog */}
+      <div className="flex items-center gap-2 px-3 pb-2">
         <button
           onClick={() => setCreating(true)}
           className="flex items-center gap-3 rounded-2xl border border-zinc-300 px-5 py-2.5 text-sm font-medium text-zinc-700 shadow-sm transition-shadow hover:shadow-md dark:border-zinc-600 dark:text-zinc-200"
@@ -250,6 +250,16 @@ export function Sidebar() {
             <path d="M10 4v12M4 10h12" />
           </svg>
           Create
+        </button>
+        <button
+          onClick={() => setSettingsOpen(true)}
+          className="ml-auto rounded-full p-2 text-zinc-500 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800"
+          aria-label="Settings"
+        >
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5">
+            <circle cx="10" cy="10" r="3" />
+            <path d="M10 2v2M10 16v2M2 10h2M16 10h2M4.22 4.22l1.42 1.42M14.36 14.36l1.42 1.42M4.22 15.78l1.42-1.42M14.36 5.64l1.42-1.42" />
+          </svg>
         </button>
       </div>
 
@@ -359,13 +369,22 @@ export function Sidebar() {
             <span className="flex-1 text-left">Attention</span>
             <span className="flex items-center gap-1.5 text-xs">
               {warningCount > 0 && (
-                <span className="text-amber-500">{warningCount}</span>
+                <span className="flex items-center gap-0.5 text-amber-500">
+                  <svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor"><path d="M8 1l7 13H1L8 1z" /><rect x="7.2" y="6" width="1.6" height="4" rx="0.8" fill="white" /><circle cx="8" cy="12" r="0.9" fill="white" /></svg>
+                  {warningCount}
+                </span>
               )}
               {blockedCount > 0 && (
-                <span className="text-red-500">{blockedCount}</span>
+                <span className="flex items-center gap-0.5 text-red-500">
+                  <svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor"><path d="M8 1l7 13H1L8 1z" /><rect x="7.2" y="6" width="1.6" height="4" rx="0.8" fill="white" /><circle cx="8" cy="12" r="0.9" fill="white" /></svg>
+                  {blockedCount}
+                </span>
               )}
               {recurringCount > 0 && (
-                <span className="text-violet-500">{recurringCount}</span>
+                <span className="flex items-center gap-0.5 text-violet-500">
+                  <svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M1 8a7 7 0 0113.6-2.3M15 8a7 7 0 01-13.6 2.3" strokeLinecap="round" /><path d="M14.6 2v3.7h-3.7M1.4 14v-3.7h3.7" strokeLinecap="round" strokeLinejoin="round" /></svg>
+                  {recurringCount}
+                </span>
               )}
             </span>
           </button>
@@ -430,16 +449,6 @@ export function Sidebar() {
             <path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6" />
           </svg>
           Trash
-        </button>
-        <button
-          onClick={() => setSettingsOpen(true)}
-          className="flex w-full items-center gap-3 rounded-full px-3 py-3.5 md:py-2 text-sm text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800"
-        >
-          <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5">
-            <circle cx="10" cy="10" r="3" />
-            <path d="M10 2v2M10 16v2M2 10h2M16 10h2M4.22 4.22l1.42 1.42M14.36 14.36l1.42 1.42M4.22 15.78l1.42-1.42M14.36 5.64l1.42-1.42" />
-          </svg>
-          Settings
         </button>
       </div>
     </aside>

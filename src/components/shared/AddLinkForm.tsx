@@ -22,23 +22,24 @@ export function AddLinkForm({ onAdd, onCancel }: Props) {
   }
 
   return (
-    <form onSubmit={handleSubmit} className="flex items-center gap-2">
+    <form onSubmit={handleSubmit} className="flex flex-col gap-2">
       <Input
         placeholder="https://..."
         type="url"
         value={url}
         onChange={(e) => setUrl(e.target.value)}
         autoFocus
-        className="flex-1"
       />
-      <Input
-        placeholder="Title (optional)"
-        value={title}
-        onChange={(e) => setTitle(e.target.value)}
-        className="flex-1"
-      />
-      <Button type="submit" size="sm">Add</Button>
-      <Button type="button" variant="ghost" size="sm" onClick={onCancel}>Cancel</Button>
+      <div className="flex items-center gap-2">
+        <Input
+          placeholder="Title (optional)"
+          value={title}
+          onChange={(e) => setTitle(e.target.value)}
+          className="flex-1"
+        />
+        <Button type="submit" size="sm">Add</Button>
+        <Button type="button" variant="ghost" size="sm" onClick={onCancel}>Cancel</Button>
+      </div>
     </form>
   );
 }

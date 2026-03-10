@@ -20,11 +20,11 @@ function WorkingSection() {
   }
 
   return (
-    <div className="flex items-center gap-2 border-b border-accent-100 bg-accent-50/60 px-5 py-1.5 dark:border-accent-800/40 dark:bg-accent-950/50">
-      <span className="shrink-0 text-xs font-medium text-zinc-400">Working on</span>
+    <div className="flex items-center gap-2 border-b border-accent-100 bg-accent-50/60 px-5 py-2.5 md:py-1.5 dark:border-accent-800/40 dark:bg-accent-950/50">
+      <span className="shrink-0 text-sm md:text-xs font-medium text-zinc-400">Working on</span>
       <button
         onClick={navigateToTask}
-        className="flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs hover:bg-accent-100 dark:hover:bg-accent-900/40"
+        className="flex items-center gap-1.5 rounded-full px-2.5 py-1.5 md:py-1 text-sm md:text-xs hover:bg-accent-100 dark:hover:bg-accent-900/40"
       >
         <span className="max-w-[200px] truncate font-medium text-accent-700 dark:text-accent-300">{task.title}</span>
         {subtask && (
@@ -38,15 +38,15 @@ function WorkingSection() {
       <div className="flex items-center gap-1 shrink-0">
         <button
           onClick={() => markWorkingDone()}
-          className="rounded-full bg-accent-600 px-3 py-1 text-xs font-semibold text-white hover:bg-accent-700"
+          className="rounded-full bg-accent-600 px-3 py-1.5 md:py-1 text-sm md:text-xs font-semibold text-white hover:bg-accent-700"
         >Done</button>
         <button
           onClick={() => markWorkingBlocked()}
-          className="rounded-full px-2.5 py-1 text-xs font-medium text-zinc-500 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800"
+          className="rounded-full px-2.5 py-1.5 md:py-1 text-sm md:text-xs font-medium text-zinc-500 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800"
         >Blocked</button>
         <button
           onClick={() => stopWorking()}
-          className="rounded-full px-2.5 py-1 text-xs font-medium text-zinc-400 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800"
+          className="rounded-full px-2.5 py-1.5 md:py-1 text-sm md:text-xs font-medium text-zinc-400 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800"
         >Stop</button>
       </div>
     </div>
@@ -78,11 +78,11 @@ function SuggestionSection() {
   }
 
   return (
-    <div className="flex items-center gap-2 border-b border-zinc-100 px-5 py-1.5 dark:border-zinc-800">
-      <span className="shrink-0 text-xs font-medium text-zinc-400">Next up</span>
+    <div className="flex items-center gap-2 border-b border-zinc-100 px-5 py-2.5 md:py-1.5 dark:border-zinc-800">
+      <span className="shrink-0 text-sm md:text-xs font-medium text-zinc-400">Next up</span>
       <button
         onClick={navigateToTask}
-        className="flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs hover:bg-zinc-100 dark:hover:bg-zinc-800"
+        className="flex items-center gap-1.5 rounded-full px-2.5 py-1.5 md:py-1 text-sm md:text-xs hover:bg-zinc-100 dark:hover:bg-zinc-800"
       >
         <span className="max-w-[200px] truncate font-medium text-zinc-700 dark:text-zinc-300">{suggestion.taskTitle}</span>
         {suggestion.subtaskTitle && (
@@ -95,11 +95,11 @@ function SuggestionSection() {
       <div className="flex items-center gap-1 shrink-0">
         <button
           onClick={handleWork}
-          className="rounded-full bg-accent-600 px-3 py-1 text-xs font-semibold text-white hover:bg-accent-700"
+          className="rounded-full bg-accent-600 px-3 py-1.5 md:py-1 text-sm md:text-xs font-semibold text-white hover:bg-accent-700"
         >Work</button>
         <button
           onClick={rollAgain}
-          className="rounded-full px-2.5 py-1 text-xs font-medium text-zinc-400 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800"
+          className="rounded-full px-2.5 py-1.5 md:py-1 text-sm md:text-xs font-medium text-zinc-400 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800"
           title="Pick a different task"
         >
           <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
@@ -180,13 +180,18 @@ function DueSoonSection() {
   }
 
   return (
-    <div className="border-b border-zinc-100 px-5 py-1.5 dark:border-zinc-800">
+    <div className="border-b border-zinc-100 px-5 py-2.5 md:py-1.5 dark:border-zinc-800">
       <div className="flex items-start gap-3">
-        <span className="shrink-0 text-xs font-medium text-zinc-400 pt-0.5">Due soon</span>
+        <span className="shrink-0 text-sm md:text-xs font-medium text-zinc-400 pt-0.5 flex items-center gap-1">
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" className="opacity-70">
+            <path d="M4 1v2M12 1v2M1 6h14M3 3h10a2 2 0 012 2v8a2 2 0 01-2 2H3a2 2 0 01-2-2V5a2 2 0 012-2z" />
+          </svg>
+          Due soon
+        </span>
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
           {nonEmpty.map((bucket) => (
             <div key={bucket.label} className="flex items-center gap-1">
-              <span className={`text-xs font-medium ${bucket.colorClass}`}>{bucket.label}:</span>
+              <span className={`text-sm md:text-xs font-medium ${bucket.colorClass}`}>{bucket.label}:</span>
               {bucket.items.slice(0, 3).map((item) => {
                 const days = daysUntil(item.dueDate);
                 const suffix = days < 0 ? ` (${Math.abs(days)}d overdue)` : '';
@@ -194,7 +199,7 @@ function DueSoonSection() {
                   <button
                     key={item.id}
                     onClick={() => handleClick(item)}
-                    className="rounded-full px-2 py-0.5 text-xs hover:bg-zinc-100 dark:hover:bg-zinc-800"
+                    className="rounded-full px-2 py-1 md:py-0.5 text-sm md:text-xs hover:bg-zinc-100 dark:hover:bg-zinc-800"
                   >
                     <span className="max-w-[120px] truncate text-zinc-600 dark:text-zinc-300">
                       {item.parentTitle ? `${item.parentTitle} > ` : ''}{item.title}
