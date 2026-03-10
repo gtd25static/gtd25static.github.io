@@ -126,6 +126,10 @@ export async function maybeCreateBackups(
   );
 }
 
+export function __resetForTesting() {
+  lastBackupCheckAt = 0;
+}
+
 /**
  * Lists available remote backups without decrypting them.
  * Reads backedUpAt from the top-level JSON (not encrypted).

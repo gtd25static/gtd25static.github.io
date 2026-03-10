@@ -1139,6 +1139,19 @@ export async function importData(data: ImportData) {
   }
 }
 
+export function __resetForTesting() {
+  stopScheduler();
+  syncStartedAt = null;
+  syncAbort = null;
+  legacyChecked = false;
+  cachedChangelogSha = undefined;
+  cachedRemoteEntries = [];
+  cachedCreds = null;
+  versionIncompatibleListeners.clear();
+  passwordNeededListeners.clear();
+  onSyncProgress = null;
+}
+
 export async function restoreFromBackup(tier: BackupTier) {
   const signal = acquireSyncLock();
   if (!signal) return;
