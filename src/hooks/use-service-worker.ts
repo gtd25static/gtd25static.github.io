@@ -1,7 +1,7 @@
 import { useEffect, useCallback, useRef } from 'react';
 import { useRegisterSW } from 'virtual:pwa-register/react';
 
-const UPDATE_INTERVAL_MS = 60 * 60 * 1000; // 60 minutes
+const UPDATE_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
 
 export function useServiceWorker() {
   const {
@@ -26,7 +26,7 @@ export function useServiceWorker() {
     };
     document.addEventListener('visibilitychange', onVisibilityChange);
 
-    // Check every 60 minutes
+    // Check every 30 minutes
     const interval = setInterval(checkForUpdate, UPDATE_INTERVAL_MS);
 
     return () => {
