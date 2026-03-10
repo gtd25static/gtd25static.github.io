@@ -24,6 +24,7 @@ import { DropdownMenu } from '../ui/DropdownMenu';
 import { db } from '../../db';
 import type { ListType } from '../../db/models';
 import { SyncIndicator } from './SyncIndicator';
+import { GIT_COMMIT } from '../../lib/constants';
 
 function useTaskCount(listId: string) {
   return useLiveQuery(async () => {
@@ -227,7 +228,10 @@ export function Sidebar() {
           <rect width="32" height="32" rx="6" fill="#4285f4"/>
           <path d="M8 16l5 5L24 10" stroke="white" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" fill="none"/>
         </svg>
-        <span className="text-[22px] font-normal text-zinc-700 dark:text-zinc-200">GTD25</span>
+        <div className="flex flex-col">
+          <span className="text-[22px] font-normal leading-tight text-zinc-700 dark:text-zinc-200">GTD25</span>
+          <span className="text-[10px] font-mono text-zinc-400 dark:text-zinc-500">{GIT_COMMIT}</span>
+        </div>
         <div className="ml-auto">
           <SyncIndicator />
         </div>

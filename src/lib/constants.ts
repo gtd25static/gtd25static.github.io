@@ -1,5 +1,7 @@
 declare const __APP_VERSION__: string;
+declare const __GIT_COMMIT__: string;
 export const APP_VERSION: string = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '0.0.0';
+export const GIT_COMMIT: string = typeof __GIT_COMMIT__ !== 'undefined' ? __GIT_COMMIT__ : 'dev';
 
 export const DUE_SOON_DAYS = 10;
 export const SOFT_DELETE_CLEANUP_DAYS = 30;
