@@ -13,10 +13,12 @@ import { TrashModal } from '../trash/TrashModal';
 import { HelpOverlay } from './HelpOverlay';
 import { SyncIndicator } from './SyncIndicator';
 import { ToastContainer } from '../ui/Toast';
+import { useSpecialList } from '../../hooks/use-special-list';
 
 export function AppShell() {
   const { sidebarOpen, setSidebarOpen, setSettingsOpen, searchQuery, selectedListId, selectList } = useAppState();
   const lists = useTaskLists();
+  const { warningCount, blockedCount } = useSpecialList();
 
   // Swipe to open/close sidebar on mobile
   const touchRef = useRef<{ x: number; y: number } | null>(null);
@@ -90,6 +92,22 @@ export function AppShell() {
             <path d="M8 16l5 5L24 10" stroke="white" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" fill="none"/>
           </svg>
           <span className="text-lg text-zinc-700 dark:text-zinc-200">GTD25</span>
+          {(warningCount > 0 || blockedCount > 0) && (
+            <span className="flex items-center gap-1.5 text-xs">
+              {warningCount > 0 && (
+                <span className="flex items-center gap-0.5 text-amber-500">
+                  <svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor"><path d="M8 1l7 13H1L8 1z" /><rect x="7.2" y="6" width="1.6" height="4" rx="0.8" fill="white" /><circle cx="8" cy="12" r="0.9" fill="white" /></svg>
+                  {warningCount}
+                </span>
+              )}
+              {blockedCount > 0 && (
+                <span className="flex items-center gap-0.5 text-red-500">
+                  <svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor"><path d="M8 1l7 13H1L8 1z" /><rect x="7.2" y="6" width="1.6" height="4" rx="0.8" fill="white" /><circle cx="8" cy="12" r="0.9" fill="white" /></svg>
+                  {blockedCount}
+                </span>
+              )}
+            </span>
+          )}
           <div className="ml-auto flex items-center gap-1">
             <SyncIndicator />
             <button
