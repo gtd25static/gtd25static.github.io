@@ -25,6 +25,42 @@ export async function recordChange(
   });
 }
 
+// Cached deviceId to avoid reading db.localSettings inside transactions
+let cachedDeviceId: string | null = null;
+
+export async function ensureDeviceId(): Promise<string> {
+  if (cachedDeviceId) return cachedDeviceId;
+  cachedDeviceId = await getDeviceId();
+  return cachedDeviceId;
+}
+
+export function clearDeviceIdCache() {
+  cachedDeviceId = null;
+}
+
+/**
+ * Record a change within an existing Dexie transaction.
+ * The caller must include db.changeLog in the transaction scope.
+ * Uses cached deviceId to avoid accessing db.localSettings within the transaction.
+ */
+export async function recordChangeInTx(
+  entityType: ChangeEntry['entityType'],
+  entityId: string,
+  operation: ChangeEntry['operation'],
+  data?: Record<string, unknown>,
+) {
+  const deviceId = cachedDeviceId ?? await getDeviceId();
+  await db.changeLog.add({
+    id: newId(),
+    deviceId,
+    timestamp: Date.now(),
+    entityType,
+    entityId,
+    operation,
+    data,
+  });
+}
+
 export async function recordChangeBatch(
   entries: Array<{
     entityType: ChangeEntry['entityType'];
@@ -48,11 +84,54 @@ export async function recordChangeBatch(
   await db.changeLog.bulkAdd(records);
 }
 
+/**
+ * Record a batch of changes within an existing Dexie transaction.
+ * The caller must include db.changeLog in the transaction scope.
+ * Uses cached deviceId to avoid accessing db.localSettings within the transaction.
+ */
+export async function recordChangeBatchInTx(
+  entries: Array<{
+    entityType: ChangeEntry['entityType'];
+    entityId: string;
+    operation: ChangeEntry['operation'];
+    data?: Record<string, unknown>;
+  }>,
+) {
+  if (entries.length === 0) return;
+  const deviceId = cachedDeviceId ?? await getDeviceId();
+  const now = Date.now();
+  const records: ChangeEntry[] = entries.map((e) => ({
+    id: newId(),
+    deviceId,
+    timestamp: now,
+    entityType: e.entityType,
+    entityId: e.entityId,
+    operation: e.operation,
+    data: e.data,
+  }));
+  await db.changeLog.bulkAdd(records);
+}
+
 const tableForEntity = {
   taskList: () => db.taskLists,
   task: () => db.tasks,
   subtask: () => db.subtasks,
 } as const;
+
+const requiredFields: Record<ChangeEntry['entityType'], string[]> = {
+  taskList: ['id', 'name', 'order', 'createdAt', 'updatedAt'],
+  task: ['id', 'listId', 'title', 'status', 'order', 'createdAt', 'updatedAt'],
+  subtask: ['id', 'taskId', 'title', 'status', 'order', 'createdAt', 'updatedAt'],
+};
+
+function validateEntityShape(data: Record<string, unknown> | undefined, entityType: ChangeEntry['entityType']): boolean {
+  if (!data || typeof data !== 'object') return false;
+  const fields = requiredFields[entityType];
+  for (const field of fields) {
+    if (!(field in data) || data[field] == null) return false;
+  }
+  return true;
+}
 
 export async function applyRemoteEntries(entries: ChangeEntry[]) {
   // Sort by timestamp ascending so later entries win
@@ -74,6 +153,12 @@ export async function applyRemoteEntries(entries: ChangeEntry[]) {
           }
         }
       } else {
+        // Validate entity shape before writing
+        if (!validateEntityShape(entry.data, entry.entityType)) {
+          console.warn(`Skipping malformed ${entry.entityType} entry ${entry.id}: missing required fields`);
+          continue;
+        }
+
         // upsert
         const existing = await table.get(entry.entityId);
         if (existing) {

@@ -3,6 +3,7 @@ import { resetDb } from './db-helpers';
 import { __resetForTesting as resetSyncEngine } from '../../sync/sync-engine';
 import { __resetForTesting as resetRemoteBackups } from '../../sync/remote-backups';
 import { clearEncryptionKey } from '../../sync/crypto';
+import { clearDeviceIdCache } from '../../sync/change-log';
 import type { ChangeEntry } from '../../db/models';
 import { newId } from '../../lib/id';
 
@@ -19,6 +20,7 @@ export async function resetSyncState() {
   resetSyncEngine();
   resetRemoteBackups();
   clearEncryptionKey();
+  clearDeviceIdCache();
   for (const key of SYNC_LOCALSTORAGE_KEYS) {
     localStorage.removeItem(key);
   }

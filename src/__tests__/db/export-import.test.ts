@@ -128,6 +128,17 @@ describe('parseImportZip — validation', () => {
     await expect(parseImportZip(file)).rejects.toThrow('Invalid backup: found item without id field');
   });
 
+  it('rejects future exportVersion with clear error', async () => {
+    const file = await makeTestZip(JSON.stringify({
+      exportVersion: 99,
+      exportedAt: Date.now(),
+      taskLists: [],
+      tasks: [],
+      subtasks: [],
+    }));
+    await expect(parseImportZip(file)).rejects.toThrow('This backup was created by a newer version of the app');
+  });
+
   it('error messages start with "Invalid backup:"', async () => {
     const file = await makeTestZip(null);
     try {

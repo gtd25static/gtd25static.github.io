@@ -1,7 +1,7 @@
 import { db } from '../db';
 import type { SyncData, Settings, ChangeEntry } from '../db/models';
 import type { ImportData } from '../db/export-import';
-import { getFile, putFile, deleteFile } from './github-api';
+import { getFile, putFile, deleteFile, RateLimitError } from './github-api';
 import { cleanupSoftDeletes } from './conflict-resolution';
 import { applyRemoteEntries, getPendingEntries, clearPendingEntries, clearEntriesByIds, pendingEntryCount } from './change-log';
 import { toast } from '../components/ui/Toast';
@@ -29,9 +29,22 @@ export const SNAPSHOT_FILE = 'gtd25-snapshot.json';
 export const CHANGELOG_FILE = 'gtd25-changelog.json';
 const LEGACY_FILE = 'gtd25-data.json';
 const COMPACTION_THRESHOLD = 30;
+const MAX_CHANGELOG_ENTRIES = 500;
 const MAX_RETRIES = 3;
 const MAX_REMOTE_BACKUPS = 2;
 const SYNC_TIMEOUT_MS = 45_000;
+
+// --- Safe JSON parsing ---
+function safeParseJson<T>(raw: string, label: string): { ok: true; value: T } | { ok: false; error: string } {
+  try {
+    const parsed = JSON.parse(raw);
+    return { ok: true, value: parsed as T };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.warn(`Failed to parse ${label}: ${msg}`);
+    return { ok: false, error: msg };
+  }
+}
 
 let syncStartedAt: number | null = null;
 let syncAbort: AbortController | null = null;
@@ -53,6 +66,11 @@ const BATCH_SIZE = 10;
 type SchedulerState = 'stopped' | 'idle' | 'first-wait' | 'batching';
 let schedulerState: SchedulerState = 'stopped';
 let schedulerTimer: ReturnType<typeof setTimeout> | null = null;
+
+// --- Error backoff state ---
+let consecutiveErrors = 0;
+let rateLimitTimer: ReturnType<typeof setTimeout> | null = null;
+let lastErrorToastAt = 0;
 
 // --- Version incompatibility callbacks ---
 type VersionCallback = () => void;
@@ -147,16 +165,23 @@ function clearSchedulerTimer() {
   }
 }
 
+function getBackoffInterval(): number {
+  if (consecutiveErrors === 0) return POLL_INTERVAL_MS;
+  // Exponential backoff: 30s → 60s → 120s → 240s → 300s (cap at 5 min)
+  return Math.min(POLL_INTERVAL_MS * Math.pow(2, consecutiveErrors), 300_000);
+}
+
 function startIdlePoll() {
   clearSchedulerTimer();
   schedulerState = 'idle';
+  const interval = getBackoffInterval();
   schedulerTimer = setTimeout(async function poll() {
     if (schedulerState !== 'idle') return;
     await syncNow();
     if (schedulerState === 'idle') {
-      schedulerTimer = setTimeout(poll, POLL_INTERVAL_MS);
+      schedulerTimer = setTimeout(poll, getBackoffInterval());
     }
-  }, POLL_INTERVAL_MS);
+  }, interval);
 }
 
 async function onBatchTimerFired(batchSize: number) {
@@ -313,7 +338,9 @@ async function migrateFromLegacy(pat: string, repo: string): Promise<SyncData | 
   if (!legacy || snapshot) return null;
 
   // Parse legacy data for the caller to encrypt and write
-  const legacyData: SyncData = JSON.parse(legacy.data);
+  const parsed = safeParseJson<SyncData>(legacy.data, 'legacy sync data');
+  if (!parsed.ok) return null;
+  const legacyData = parsed.value;
 
   // Delete legacy file
   try {
@@ -370,6 +397,13 @@ async function pruneRemoteBackups(pat: string, repo: string) {
 export async function syncNow(manual = false, pushLimit?: number): Promise<number> {
   const signal = acquireSyncLock();
   if (!signal) return -1;
+
+  // Skip network calls when offline
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+    releaseSyncLock();
+    return -1;
+  }
+
   setDirtyFlag(true);
 
   try {
@@ -416,10 +450,33 @@ export async function syncNow(manual = false, pushLimit?: number): Promise<numbe
     let changelogSha = remoteChangelogFile?.sha;
 
     if (remoteChangelogFile) {
-      remoteEntries = JSON.parse(remoteChangelogFile.data);
+      const parsed = safeParseJson<ChangeEntry[]>(remoteChangelogFile.data, 'remote changelog');
+      if (parsed.ok) {
+        remoteEntries = parsed.value;
+      }
+      // On parse failure, treat as empty — entries are safe in the snapshot
     }
 
     reportProgress('pulling', 'Fetching changes...', 0.4);
+
+    // Force compaction when changelog is oversized
+    if (remoteEntries.length > MAX_CHANGELOG_ENTRIES) {
+      const encResult = await resolveEncryptionKey();
+      if (encResult !== 'needs-password') {
+        reportProgress('compacting', 'Compacting oversized changelog...', 0.35);
+        await compactSnapshot(creds.pat, creds.repo, encResult);
+        // Re-fetch after compaction
+        const freshChangelog = await getFile(creds.pat, creds.repo, CHANGELOG_FILE, signal);
+        if (freshChangelog) {
+          const freshParsed = safeParseJson<ChangeEntry[]>(freshChangelog.data, 'remote changelog (post-compaction)');
+          remoteEntries = freshParsed.ok ? freshParsed.value : [];
+          changelogSha = freshChangelog.sha;
+        } else {
+          remoteEntries = [];
+          changelogSha = undefined;
+        }
+      }
+    }
 
     if (!remoteSnapshotFile && !remoteChangelogFile) {
       let localData = await getLocalSnapshot();
@@ -451,7 +508,13 @@ export async function syncNow(manual = false, pushLimit?: number): Promise<numbe
     // If snapshot exists but we have no local data, bootstrap from remote
     if (remoteSnapshotFile && !remoteChangelogFile) {
       // Snapshot exists but no changelog — apply snapshot then create empty changelog
-      let snapshot: SyncData = JSON.parse(remoteSnapshotFile.data);
+      const snapshotParsed = safeParseJson<SyncData>(remoteSnapshotFile.data, 'remote snapshot (bootstrap)');
+      if (!snapshotParsed.ok) {
+        reportProgress('error', 'Remote data corrupted', 0);
+        toast('Remote data corrupted — cannot sync', 'error');
+        return -1;
+      }
+      let snapshot = snapshotParsed.value;
 
       // Decrypt (encryption is always required for sync)
       const encKey = await resolveEncryptionKey(snapshot.encryptionSalt);
@@ -492,7 +555,13 @@ export async function syncNow(manual = false, pushLimit?: number): Promise<numbe
     let remoteVersion: number | undefined;
     let remoteWipedAt: number | undefined;
     if (remoteSnapshotFile) {
-      const snapshotData: SyncData = JSON.parse(remoteSnapshotFile.data);
+      const versionParsed = safeParseJson<SyncData>(remoteSnapshotFile.data, 'remote snapshot (version check)');
+      if (!versionParsed.ok) {
+        reportProgress('error', 'Remote data corrupted', 0);
+        toast('Remote data corrupted — cannot sync', 'error');
+        return -1;
+      }
+      const snapshotData = versionParsed.value;
       remoteVersion = snapshotData.syncVersion;
       remoteSalt = snapshotData.encryptionSalt;
       remoteWipedAt = snapshotData.wipedAt;
@@ -518,9 +587,9 @@ export async function syncNow(manual = false, pushLimit?: number): Promise<numbe
 
         // Verify password
         if (remoteSalt) {
-          const snapshotData: SyncData = JSON.parse(remoteSnapshotFile.data);
-          if (snapshotData.encryptionVerifier) {
-            const ok = await checkVerifier(encKey, snapshotData.encryptionVerifier);
+          const snapshotData = safeParseJson<SyncData>(remoteSnapshotFile.data, 'remote snapshot (wipedAt verifier)');
+          if (snapshotData.ok && snapshotData.value.encryptionVerifier) {
+            const ok = await checkVerifier(encKey, snapshotData.value.encryptionVerifier);
             if (!ok) {
               await db.localSettings.update('local', { encryptionPassword: undefined });
               clearEncryptionKey();
@@ -530,7 +599,12 @@ export async function syncNow(manual = false, pushLimit?: number): Promise<numbe
           }
         }
 
-        let snapshot: SyncData = JSON.parse(remoteSnapshotFile.data);
+        const wipeParsed = safeParseJson<SyncData>(remoteSnapshotFile.data, 'remote snapshot (wipedAt bootstrap)');
+        if (!wipeParsed.ok) {
+          reportProgress('error', 'Remote data corrupted', 0);
+          return -1;
+        }
+        let snapshot = wipeParsed.value;
         if (remoteSalt) {
           snapshot = await decryptSyncData(encKey, snapshot);
         }
@@ -572,9 +646,9 @@ export async function syncNow(manual = false, pushLimit?: number): Promise<numbe
 
     // Verify password against remote verifier
     if (remoteSalt && remoteSnapshotFile) {
-      const snapshotData: SyncData = JSON.parse(remoteSnapshotFile.data);
-      if (snapshotData.encryptionVerifier) {
-        const ok = await checkVerifier(encKey, snapshotData.encryptionVerifier);
+      const verifierParsed = safeParseJson<SyncData>(remoteSnapshotFile.data, 'remote snapshot (verifier)');
+      if (verifierParsed.ok && verifierParsed.value.encryptionVerifier) {
+        const ok = await checkVerifier(encKey, verifierParsed.value.encryptionVerifier);
         if (!ok) {
           // Saved password is wrong — clear it and prompt
           await db.localSettings.update('local', { encryptionPassword: undefined });
@@ -590,7 +664,12 @@ export async function syncNow(manual = false, pushLimit?: number): Promise<numbe
       reportProgress('applying', 'Migrating data...', 0.45);
       await backupRemoteSnapshot(creds.pat, creds.repo, remoteSnapshotFile.data, remoteVersion ?? 0);
       // Decrypt → migrate → re-encrypt → write
-      let snapshotData: SyncData = JSON.parse(remoteSnapshotFile.data);
+      const migParsed = safeParseJson<SyncData>(remoteSnapshotFile.data, 'remote snapshot (migration)');
+      if (!migParsed.ok) {
+        reportProgress('error', 'Remote data corrupted', 0);
+        return -1;
+      }
+      let snapshotData = migParsed.value;
       if (remoteSalt) {
         snapshotData = await decryptSyncData(encKey, snapshotData);
       }
@@ -664,7 +743,8 @@ export async function syncNow(manual = false, pushLimit?: number): Promise<numbe
             // Re-fetch changelog and merge
             const fresh = await getFile(creds.pat, creds.repo, CHANGELOG_FILE, signal);
             if (fresh) {
-              const freshEntries: ChangeEntry[] = JSON.parse(fresh.data);
+              const freshParsed = safeParseJson<ChangeEntry[]>(fresh.data, 'remote changelog (conflict retry)');
+              const freshEntries = freshParsed.ok ? freshParsed.value : [];
               currentSha = fresh.sha;
               // Apply any new foreign entries (decrypt them)
               let newForeign = freshEntries.filter(
@@ -694,8 +774,8 @@ export async function syncNow(manual = false, pushLimit?: number): Promise<numbe
                 // Will loop and retry
               }
             }
-            // Backoff
-            await new Promise((r) => setTimeout(r, 500 * retries));
+            // Backoff with jitter to avoid thundering herd
+            await new Promise((r) => setTimeout(r, 500 * retries + Math.random() * 500));
           } else {
             throw err;
           }
@@ -744,6 +824,9 @@ export async function syncNow(manual = false, pushLimit?: number): Promise<numbe
     cachedChangelogSha = finalChangelogSha;
     cachedRemoteEntries = finalRemoteEntries;
 
+    // Reset error backoff on success
+    consecutiveErrors = 0;
+
     setDirtyFlag(false);
     reportProgress('done', 'Sync complete', 1.0, foreignEntries.length, pendingEntries.length);
     if (manual) toast('Sync complete', 'success');
@@ -754,10 +837,42 @@ export async function syncNow(manual = false, pushLimit?: number): Promise<numbe
     return remaining;
   } catch (err) {
     if (err instanceof DOMException && err.name === 'AbortError') return -1;
+
+    // Rate limit handling — pause scheduler until reset
+    if (err instanceof RateLimitError) {
+      const waitMs = Math.max(0, err.resetAtMs - Date.now());
+      const waitMin = Math.ceil(waitMs / 60_000);
+      reportProgress('error', `Rate limited — retrying in ${waitMin}m`, 0);
+      toast(`Rate limited — retrying in ${waitMin}m`, 'error');
+      clearSchedulerTimer();
+      schedulerState = 'idle'; // pause polling
+      if (rateLimitTimer) clearTimeout(rateLimitTimer);
+      rateLimitTimer = setTimeout(() => {
+        rateLimitTimer = null;
+        if (schedulerState !== 'stopped') {
+          syncNow().then(() => startIdlePoll());
+        }
+      }, waitMs + 1000); // 1s buffer
+      return -1;
+    }
+
+    consecutiveErrors++;
     console.error('Sync failed:', err);
+
+    // Server error backoff (5xx) — double interval, cap at 5min, throttle toasts
     const msg = err instanceof Error ? err.message : 'Sync failed';
+    const isServerError = msg.includes('5');
+    if (isServerError && consecutiveErrors > 1) {
+      // Throttle error toasts: only show once per outage window
+      if (Date.now() - lastErrorToastAt > 120_000) {
+        toast('GitHub unavailable — will keep retrying', 'error');
+        lastErrorToastAt = Date.now();
+      }
+    } else {
+      toast('Sync failed', 'error');
+    }
+
     reportProgress('error', msg, 0);
-    toast('Sync failed', 'error');
     return -1;
   } finally {
     releaseSyncLock();
@@ -775,7 +890,9 @@ async function compactSnapshot(pat: string, repo: string, encKey: CryptoKey) {
     let savedWipedAt: number | undefined;
 
     if (snapshotFile) {
-      snapshot = JSON.parse(snapshotFile.data);
+      const parsed = safeParseJson<SyncData>(snapshotFile.data, 'snapshot (compaction)');
+      if (!parsed.ok) return; // Abort compaction on corrupted snapshot
+      snapshot = parsed.value;
       savedSalt = snapshot.encryptionSalt;
       savedVerifier = snapshot.encryptionVerifier;
       savedWipedAt = snapshot.wipedAt;
@@ -791,8 +908,11 @@ async function compactSnapshot(pat: string, repo: string, encKey: CryptoKey) {
     const changelogFile = await getFile(pat, repo, CHANGELOG_FILE);
     if (!changelogFile) return;
 
-    let entries: ChangeEntry[] = JSON.parse(changelogFile.data);
+    const changelogParsed = safeParseJson<ChangeEntry[]>(changelogFile.data, 'changelog (compaction)');
+    if (!changelogParsed.ok) return; // Abort compaction on corrupted changelog
+    let entries = changelogParsed.value;
     if (entries.length === 0) return;
+    const initialChangelogSha = changelogFile.sha;
 
     // Decrypt changelog entries for merging
     entries = await decryptChangeEntries(encKey, entries);
@@ -843,9 +963,16 @@ async function compactSnapshot(pat: string, repo: string, encKey: CryptoKey) {
     const snapshotContent = JSON.stringify(snapshot);
     await putFile(pat, repo, SNAPSHOT_FILE, snapshotContent, snapshotSha);
 
-    // Clear changelog (if 409, abort — new entries will be in next compaction)
+    // Compaction lock: re-fetch changelog SHA before clearing.
+    // If another device pushed entries between our read and write,
+    // skip the clear to avoid losing those entries.
     try {
-      await putFile(pat, repo, CHANGELOG_FILE, '[]', changelogFile.sha);
+      const freshChangelog = await getFile(pat, repo, CHANGELOG_FILE);
+      if (!freshChangelog || freshChangelog.sha !== initialChangelogSha) {
+        // SHA changed — another device pushed entries. Skip clear; next compaction absorbs them.
+        return;
+      }
+      await putFile(pat, repo, CHANGELOG_FILE, '[]', freshChangelog.sha);
     } catch {
       // Non-critical, next compaction will handle it
     }
@@ -870,8 +997,10 @@ export async function forcePush() {
 
     // Backup current remote snapshot before overwriting
     if (existing) {
-      const existingData: SyncData = JSON.parse(existing.data);
-      await backupRemoteSnapshot(creds.pat, creds.repo, existing.data, existingData.syncVersion ?? SYNC_VERSION);
+      const existingParsed = safeParseJson<SyncData>(existing.data, 'existing snapshot (force push backup)');
+      if (existingParsed.ok) {
+        await backupRemoteSnapshot(creds.pat, creds.repo, existing.data, existingParsed.value.syncVersion ?? SYNC_VERSION);
+      }
     }
 
     // If key is already cached (e.g. password was just changed), use it directly.
@@ -880,7 +1009,11 @@ export async function forcePush() {
     if (hasEncryptionKey()) {
       encKey = getCachedEncryptionKey()!;
     } else {
-      const existingSalt = existing ? (JSON.parse(existing.data) as SyncData).encryptionSalt : undefined;
+      let existingSalt: string | undefined;
+      if (existing) {
+        const p = safeParseJson<SyncData>(existing.data, 'existing snapshot (force push salt)');
+        existingSalt = p.ok ? p.value.encryptionSalt : undefined;
+      }
       const encResult = await resolveEncryptionKey(existingSalt);
       if (encResult === 'needs-password') return;
       encKey = encResult;
@@ -946,7 +1079,13 @@ export async function forcePull() {
 
     reportProgress('pulling', 'Fetching data...', 0.4);
 
-    let snapshot: SyncData = JSON.parse(snapshotFile.data);
+    const pullParsed = safeParseJson<SyncData>(snapshotFile.data, 'remote snapshot (force pull)');
+    if (!pullParsed.ok) {
+      toast('Remote data corrupted', 'error');
+      reportProgress('error', 'Remote data corrupted', 0);
+      return;
+    }
+    let snapshot = pullParsed.value;
 
     if (!isCompatibleVersion(snapshot.syncVersion)) {
       notifyVersionIncompatible();
@@ -985,7 +1124,8 @@ export async function forcePull() {
     // Apply changelog entries on top
     const changelogFile = await getFile(creds.pat, creds.repo, CHANGELOG_FILE, signal);
     if (changelogFile) {
-      let entries: ChangeEntry[] = JSON.parse(changelogFile.data);
+      const clParsed = safeParseJson<ChangeEntry[]>(changelogFile.data, 'changelog (force pull)');
+      let entries = clParsed.ok ? clParsed.value : [];
       entries = await decryptChangeEntries(encKey, entries);
       if (entries.length > 0) {
         await applyRemoteEntries(entries);
@@ -1147,6 +1287,9 @@ export function __resetForTesting() {
   cachedChangelogSha = undefined;
   cachedRemoteEntries = [];
   cachedCreds = null;
+  consecutiveErrors = 0;
+  if (rateLimitTimer) { clearTimeout(rateLimitTimer); rateLimitTimer = null; }
+  lastErrorToastAt = 0;
   versionIncompatibleListeners.clear();
   passwordNeededListeners.clear();
   onSyncProgress = null;
@@ -1179,7 +1322,12 @@ export async function restoreFromBackup(tier: BackupTier) {
     }
 
     // Decrypt backup
-    let backupData: SyncData = JSON.parse(backupFile.data);
+    const backupParsed = safeParseJson<SyncData>(backupFile.data, 'backup file');
+    if (!backupParsed.ok) {
+      toast('Backup data corrupted', 'error');
+      return;
+    }
+    let backupData = backupParsed.value;
     if (backupData.encryptionSalt) {
       const ok = await checkVerifier(encKey, backupData.encryptionVerifier ?? '');
       if (!ok) {

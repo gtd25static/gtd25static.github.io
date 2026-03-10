@@ -5,12 +5,16 @@ import type { SyncData, ChangeEntry } from '../../db/models';
 import { newId } from '../../lib/id';
 
 // Mock github-api
-vi.mock('../../sync/github-api', () => ({
-  getFile: vi.fn(),
-  putFile: vi.fn(),
-  deleteFile: vi.fn(),
-  testConnection: vi.fn(),
-}));
+vi.mock('../../sync/github-api', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../sync/github-api')>();
+  return {
+    ...actual,
+    getFile: vi.fn(),
+    putFile: vi.fn(),
+    deleteFile: vi.fn(),
+    testConnection: vi.fn(),
+  };
+});
 
 // Mock toast
 vi.mock('../../components/ui/Toast', () => ({

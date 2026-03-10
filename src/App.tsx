@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
 import { AppShell } from './components/layout/AppShell';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import { ensureDefaults } from './db';
 import { useKeyboard } from './hooks/use-keyboard';
 import { useTheme } from './components/settings/ThemeSettings';
@@ -12,5 +13,9 @@ export default function App() {
   useTheme();
   useKeyboard();
 
-  return <AppShell />;
+  return (
+    <ErrorBoundary>
+      <AppShell />
+    </ErrorBoundary>
+  );
 }

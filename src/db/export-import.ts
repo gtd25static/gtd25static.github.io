@@ -8,8 +8,10 @@ export interface ImportData {
   settings?: Settings;
 }
 
+const CURRENT_EXPORT_VERSION = 1;
+
 interface ExportPayload {
-  exportVersion: 1;
+  exportVersion: number;
   exportedAt: number;
   taskLists: TaskList[];
   tasks: Task[];
@@ -29,7 +31,7 @@ export async function exportToZip(): Promise<Blob> {
   };
 
   const payload: ExportPayload = {
-    exportVersion: 1,
+    exportVersion: CURRENT_EXPORT_VERSION,
     exportedAt: Date.now(),
     taskLists,
     tasks,
@@ -62,6 +64,10 @@ export async function parseImportZip(file: File): Promise<ImportData> {
 
   if (!parsed.exportVersion) {
     throw new Error('Invalid backup: missing exportVersion');
+  }
+
+  if (parsed.exportVersion > CURRENT_EXPORT_VERSION) {
+    throw new Error('This backup was created by a newer version of the app');
   }
 
   if (!Array.isArray(parsed.taskLists) || !Array.isArray(parsed.tasks) || !Array.isArray(parsed.subtasks)) {

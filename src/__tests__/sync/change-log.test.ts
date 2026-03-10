@@ -322,3 +322,84 @@ describe('applyRemoteEntries — ordering', () => {
     expect(sub!.title).toBe('Remote Sub');
   });
 });
+
+describe('applyRemoteEntries — entity shape validation', () => {
+  it('skips entry with missing required fields', async () => {
+    const now = Date.now();
+    await applyRemoteEntries([{
+      id: 'e1', deviceId: 'remote', timestamp: now,
+      entityType: 'task', entityId: 'bad-task', operation: 'upsert',
+      data: { id: 'bad-task', title: 'Missing listId' }, // Missing listId, status, order, etc.
+    }]);
+    const task = await db.tasks.get('bad-task');
+    expect(task).toBeUndefined();
+  });
+
+  it('skips entry with undefined data', async () => {
+    const now = Date.now();
+    await applyRemoteEntries([{
+      id: 'e1', deviceId: 'remote', timestamp: now,
+      entityType: 'task', entityId: 'no-data', operation: 'upsert',
+      // data is undefined
+    }]);
+    const task = await db.tasks.get('no-data');
+    expect(task).toBeUndefined();
+  });
+
+  it('accepts entry with extra unknown fields', async () => {
+    const taskId = newId();
+    const now = Date.now();
+    await applyRemoteEntries([{
+      id: 'e1', deviceId: 'remote', timestamp: now,
+      entityType: 'task', entityId: taskId, operation: 'upsert',
+      data: {
+        id: taskId, listId: 'list-1', title: 'Task', status: 'todo', order: 0,
+        createdAt: now, updatedAt: now,
+        futureField: 'some-value', anotherNewField: 42, // Unknown fields
+      },
+    }]);
+    const task = await db.tasks.get(taskId);
+    expect(task).toBeTruthy();
+    expect(task!.title).toBe('Task');
+  });
+
+  it('validates taskList shape', async () => {
+    const now = Date.now();
+    await applyRemoteEntries([{
+      id: 'e1', deviceId: 'remote', timestamp: now,
+      entityType: 'taskList', entityId: 'bad-list', operation: 'upsert',
+      data: { id: 'bad-list' }, // Missing name, order, etc.
+    }]);
+    const list = await db.taskLists.get('bad-list');
+    expect(list).toBeUndefined();
+  });
+
+  it('validates subtask shape', async () => {
+    const now = Date.now();
+    await applyRemoteEntries([{
+      id: 'e1', deviceId: 'remote', timestamp: now,
+      entityType: 'subtask', entityId: 'bad-sub', operation: 'upsert',
+      data: { id: 'bad-sub', title: 'Sub' }, // Missing taskId, status, order, etc.
+    }]);
+    const sub = await db.subtasks.get('bad-sub');
+    expect(sub).toBeUndefined();
+  });
+
+  it('does not validate shape for delete operations', async () => {
+    const taskId = newId();
+    const now = Date.now();
+    // First create the task
+    await db.tasks.add({
+      id: taskId, listId: 'list-1', title: 'To Delete', status: 'todo', order: 0,
+      createdAt: now, updatedAt: now,
+    });
+    // Delete should work without data validation
+    await applyRemoteEntries([{
+      id: 'e1', deviceId: 'remote', timestamp: now + 100,
+      entityType: 'task', entityId: taskId, operation: 'delete',
+      // No data field for delete
+    }]);
+    const task = await db.tasks.get(taskId);
+    expect(task!.deletedAt).toBe(now + 100);
+  });
+});

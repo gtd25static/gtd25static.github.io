@@ -1,6 +1,10 @@
-interface GitHubFileResponse {
-  content: string;
-  sha: string;
+export class RateLimitError extends Error {
+  resetAtMs: number;
+  constructor(resetAtMs: number) {
+    super('GitHub API rate limit exceeded');
+    this.name = 'RateLimitError';
+    this.resetAtMs = resetAtMs;
+  }
 }
 
 async function githubFetch(
@@ -30,6 +34,17 @@ async function githubFetch(
       ...options?.headers,
     },
   });
+
+  // Detect rate limiting on 403
+  if (resp.status === 403) {
+    const remaining = resp.headers.get('X-RateLimit-Remaining');
+    const resetHeader = resp.headers.get('X-RateLimit-Reset');
+    if (remaining === '0' && resetHeader) {
+      const resetAtMs = parseInt(resetHeader, 10) * 1000;
+      throw new RateLimitError(resetAtMs);
+    }
+  }
+
   return resp;
 }
 
@@ -68,8 +83,19 @@ export async function getFile(
   if (resp.status === 404) return null;
   if (!resp.ok) throw new Error(`GitHub API error: ${resp.status}`);
 
-  const json: GitHubFileResponse = await resp.json();
-  const data = base64ToUtf8(json.content);
+  const json = await resp.json();
+
+  // Validate response shape — GitHub may return HTML error pages or malformed JSON
+  if (!json || typeof json.content !== 'string' || typeof json.sha !== 'string') {
+    throw new Error(`Malformed GitHub response for ${path}: missing content or sha`);
+  }
+
+  let data: string;
+  try {
+    data = base64ToUtf8(json.content);
+  } catch (err) {
+    throw new Error(`Failed to decode base64 content for ${path}: ${err instanceof Error ? err.message : err}`);
+  }
   return { data, sha: json.sha };
 }
 

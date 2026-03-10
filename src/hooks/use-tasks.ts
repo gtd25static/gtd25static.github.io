@@ -2,7 +2,7 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../db';
 import type { Task, TaskStatus } from '../db/models';
 import { newId } from '../lib/id';
-import { recordChange, recordChangeBatch } from '../sync/change-log';
+import { recordChangeInTx, recordChangeBatchInTx, ensureDeviceId } from '../sync/change-log';
 import { scheduleSyncDebounced } from '../sync/sync-engine';
 
 export function useTasks(listId: string | null) {
@@ -43,18 +43,24 @@ export async function createTask(
     createdAt: now,
     updatedAt: now,
   };
-  await db.tasks.add(task);
-  await recordChange('task', task.id, 'upsert', task as unknown as Record<string, unknown>);
+  await ensureDeviceId();
+  await db.transaction('rw', [db.tasks, db.changeLog], async () => {
+    await db.tasks.add(task);
+    await recordChangeInTx('task', task.id, 'upsert', task as unknown as Record<string, unknown>);
+  });
   scheduleSyncDebounced();
   return task;
 }
 
 export async function updateTask(id: string, updates: Partial<Task>) {
-  await db.tasks.update(id, { ...updates, updatedAt: Date.now() });
-  const updated = await db.tasks.get(id);
-  if (updated) {
-    await recordChange('task', id, 'upsert', updated as unknown as Record<string, unknown>);
-  }
+  await ensureDeviceId();
+  await db.transaction('rw', [db.tasks, db.changeLog], async () => {
+    await db.tasks.update(id, { ...updates, updatedAt: Date.now() });
+    const updated = await db.tasks.get(id);
+    if (updated) {
+      await recordChangeInTx('task', id, 'upsert', updated as unknown as Record<string, unknown>);
+    }
+  });
   scheduleSyncDebounced();
 }
 
@@ -66,7 +72,8 @@ export async function deleteTask(id: string) {
   const now = Date.now();
   const batch: Array<{ entityType: 'task' | 'subtask'; entityId: string; operation: 'delete' }> = [];
 
-  await db.transaction('rw', [db.tasks, db.subtasks], async () => {
+  await ensureDeviceId();
+  await db.transaction('rw', [db.tasks, db.subtasks, db.changeLog], async () => {
     await db.tasks.update(id, { deletedAt: now, updatedAt: now });
     batch.push({ entityType: 'task', entityId: id, operation: 'delete' });
 
@@ -75,53 +82,61 @@ export async function deleteTask(id: string) {
       await db.subtasks.update(sub.id, { deletedAt: now, updatedAt: now });
       batch.push({ entityType: 'subtask', entityId: sub.id, operation: 'delete' });
     }
+
+    await recordChangeBatchInTx(batch);
   });
 
-  await recordChangeBatch(batch);
   scheduleSyncDebounced();
 }
 
 export async function restoreTask(id: string) {
   const now = Date.now();
-  await db.transaction('rw', [db.tasks, db.subtasks], async () => {
+  await ensureDeviceId();
+  await db.transaction('rw', [db.tasks, db.subtasks, db.changeLog], async () => {
     await db.tasks.update(id, { deletedAt: undefined, updatedAt: now });
     await db.subtasks.where('taskId').equals(id).modify({ deletedAt: undefined, updatedAt: now });
+
+    const batch: Array<{ entityType: 'task' | 'subtask'; entityId: string; operation: 'upsert'; data: Record<string, unknown> }> = [];
+    const task = await db.tasks.get(id);
+    if (task) batch.push({ entityType: 'task', entityId: id, operation: 'upsert', data: task as unknown as Record<string, unknown> });
+    const subtasks = await db.subtasks.where('taskId').equals(id).toArray();
+    for (const sub of subtasks) {
+      batch.push({ entityType: 'subtask', entityId: sub.id, operation: 'upsert', data: sub as unknown as Record<string, unknown> });
+    }
+    await recordChangeBatchInTx(batch);
   });
 
-  const batch: Array<{ entityType: 'task' | 'subtask'; entityId: string; operation: 'upsert'; data: Record<string, unknown> }> = [];
-  const task = await db.tasks.get(id);
-  if (task) batch.push({ entityType: 'task', entityId: id, operation: 'upsert', data: task as unknown as Record<string, unknown> });
-  const subtasks = await db.subtasks.where('taskId').equals(id).toArray();
-  for (const sub of subtasks) {
-    batch.push({ entityType: 'subtask', entityId: sub.id, operation: 'upsert', data: sub as unknown as Record<string, unknown> });
-  }
-  await recordChangeBatch(batch);
   scheduleSyncDebounced();
 }
 
 export async function moveTaskToList(taskId: string, targetListId: string) {
   const count = await db.tasks.where('listId').equals(targetListId).count();
-  await db.tasks.update(taskId, { listId: targetListId, order: count, updatedAt: Date.now() });
-  const updated = await db.tasks.get(taskId);
-  if (updated) {
-    await recordChange('task', taskId, 'upsert', updated as unknown as Record<string, unknown>);
-  }
+  await ensureDeviceId();
+  await db.transaction('rw', [db.tasks, db.changeLog], async () => {
+    await db.tasks.update(taskId, { listId: targetListId, order: count, updatedAt: Date.now() });
+    const updated = await db.tasks.get(taskId);
+    if (updated) {
+      await recordChangeInTx('task', taskId, 'upsert', updated as unknown as Record<string, unknown>);
+    }
+  });
   scheduleSyncDebounced();
 }
 
 export async function reorderTasks(orderedIds: string[]) {
   const now = Date.now();
-  await db.transaction('rw', db.tasks, async () => {
+  await ensureDeviceId();
+  await db.transaction('rw', [db.tasks, db.changeLog], async () => {
     for (let i = 0; i < orderedIds.length; i++) {
       await db.tasks.update(orderedIds[i], { order: i, updatedAt: now });
     }
+
+    const batch: Array<{ entityType: 'task'; entityId: string; operation: 'upsert'; data: Record<string, unknown> }> = [];
+    for (const id of orderedIds) {
+      const task = await db.tasks.get(id);
+      if (task) batch.push({ entityType: 'task', entityId: id, operation: 'upsert', data: task as unknown as Record<string, unknown> });
+    }
+    await recordChangeBatchInTx(batch);
   });
 
-  const batch: Array<{ entityType: 'task'; entityId: string; operation: 'upsert'; data: Record<string, unknown> }> = [];
-  for (const id of orderedIds) {
-    const task = await db.tasks.get(id);
-    if (task) batch.push({ entityType: 'task', entityId: id, operation: 'upsert', data: task as unknown as Record<string, unknown> });
-  }
-  await recordChangeBatch(batch);
   scheduleSyncDebounced();
 }
