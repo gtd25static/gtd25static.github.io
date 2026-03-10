@@ -208,6 +208,8 @@ function notifyLocalChange() {
 }
 
 export function scheduleSyncDebounced() {
+  // Mark pending immediately so UI shows "Pending" before sync starts
+  db.syncMeta.update('sync-meta', { pendingChanges: true });
   notifyLocalChange();
 }
 
