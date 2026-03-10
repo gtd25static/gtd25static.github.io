@@ -81,6 +81,7 @@ export interface ChangeEntry {
 
 export interface SyncData {
   syncVersion?: number;
+  wipedAt?: number;
   encryptionSalt?: string;
   encryptionVerifier?: string;
   taskLists: TaskList[];

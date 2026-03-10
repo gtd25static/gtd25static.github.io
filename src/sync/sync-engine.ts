@@ -1,11 +1,14 @@
 import { db } from '../db';
 import type { SyncData, Settings, ChangeEntry } from '../db/models';
+import type { ImportData } from '../db/export-import';
 import { getFile, putFile, deleteFile } from './github-api';
 import { cleanupSoftDeletes } from './conflict-resolution';
 import { applyRemoteEntries, getPendingEntries, clearPendingEntries, clearEntriesByIds, pendingEntryCount } from './change-log';
 import { toast } from '../components/ui/Toast';
 import { SYNC_VERSION, isCompatibleVersion, needsMigration } from './version';
 import { runRemoteMigrations } from './migrations';
+import { maybeCreateBackups, BACKUP_FILES } from './remote-backups';
+import type { BackupTier } from './remote-backups';
 import {
   deriveKey,
   generateSalt,
@@ -22,8 +25,8 @@ import {
   clearEncryptionKey,
 } from './crypto';
 
-const SNAPSHOT_FILE = 'gtd25-snapshot.json';
-const CHANGELOG_FILE = 'gtd25-changelog.json';
+export const SNAPSHOT_FILE = 'gtd25-snapshot.json';
+export const CHANGELOG_FILE = 'gtd25-changelog.json';
 const LEGACY_FILE = 'gtd25-data.json';
 const COMPACTION_THRESHOLD = 30;
 const MAX_RETRIES = 3;
@@ -238,7 +241,7 @@ async function getCredentials() {
   return { pat: local.githubPat, repo: local.githubRepo, deviceId: local.deviceId ?? 'unknown' };
 }
 
-async function getLocalSnapshot(): Promise<SyncData> {
+export async function getLocalSnapshot(): Promise<SyncData> {
   const [taskLists, tasks, subtasks] = await Promise.all([
     db.taskLists.toArray(),
     db.tasks.toArray(),
@@ -487,10 +490,12 @@ export async function syncNow(manual = false, pushLimit?: number): Promise<numbe
     // --- Version check on remote snapshot ---
     let remoteSalt: string | undefined;
     let remoteVersion: number | undefined;
+    let remoteWipedAt: number | undefined;
     if (remoteSnapshotFile) {
       const snapshotData: SyncData = JSON.parse(remoteSnapshotFile.data);
       remoteVersion = snapshotData.syncVersion;
       remoteSalt = snapshotData.encryptionSalt;
+      remoteWipedAt = snapshotData.wipedAt;
 
       if (!isCompatibleVersion(remoteVersion)) {
         // Remote is ahead — block sync, notify UI
@@ -498,6 +503,65 @@ export async function syncNow(manual = false, pushLimit?: number): Promise<numbe
         reportProgress('error', 'Update required', 0);
         if (manual) toast('Remote data requires a newer app version', 'error');
         return -1;
+      }
+    }
+
+    // --- wipedAt guard: force bootstrap if a wipe happened since our last pull ---
+    if (remoteWipedAt && remoteSnapshotFile) {
+      const syncMeta = await db.syncMeta.get('sync-meta');
+      const lastPulledAt = syncMeta?.lastPulledAt;
+      if (!lastPulledAt || remoteWipedAt > lastPulledAt) {
+        // This device hasn't seen the wipe yet — force bootstrap
+        const encResult = await resolveEncryptionKey(remoteSalt);
+        if (encResult === 'needs-password') return -1;
+        const encKey = encResult;
+
+        // Verify password
+        if (remoteSalt) {
+          const snapshotData: SyncData = JSON.parse(remoteSnapshotFile.data);
+          if (snapshotData.encryptionVerifier) {
+            const ok = await checkVerifier(encKey, snapshotData.encryptionVerifier);
+            if (!ok) {
+              await db.localSettings.update('local', { encryptionPassword: undefined });
+              clearEncryptionKey();
+              notifyPasswordNeeded(remoteSalt);
+              return -1;
+            }
+          }
+        }
+
+        let snapshot: SyncData = JSON.parse(remoteSnapshotFile.data);
+        if (remoteSalt) {
+          snapshot = await decryptSyncData(encKey, snapshot);
+        }
+
+        await db.transaction('rw', [db.taskLists, db.tasks, db.subtasks], async () => {
+          await db.taskLists.clear();
+          await db.tasks.clear();
+          await db.subtasks.clear();
+          await db.taskLists.bulkPut(snapshot.taskLists);
+          await db.tasks.bulkPut(snapshot.tasks);
+          await db.subtasks.bulkPut(snapshot.subtasks);
+        });
+        await clearPendingEntries();
+
+        // Clear any stale changelog so other devices don't re-apply old entries
+        if (changelogSha) {
+          try {
+            await putFile(creds.pat, creds.repo, CHANGELOG_FILE, '[]', changelogSha, signal);
+          } catch {
+            // Non-critical — next sync will handle it
+          }
+        }
+
+        await db.syncMeta.update('sync-meta', {
+          lastPulledAt: Date.now(),
+          lastPushedAt: Date.now(),
+          pendingChanges: false,
+        });
+        setDirtyFlag(false);
+        reportProgress('done', 'Sync complete', 1.0);
+        return 0;
       }
     }
 
@@ -683,6 +747,10 @@ export async function syncNow(manual = false, pushLimit?: number): Promise<numbe
     setDirtyFlag(false);
     reportProgress('done', 'Sync complete', 1.0, foreignEntries.length, pendingEntries.length);
     if (manual) toast('Sync complete', 'success');
+
+    // Fire-and-forget: attempt backup creation (15-min gate makes this instant 99% of the time)
+    maybeCreateBackups(creds.pat, creds.repo, encKey).catch(() => {});
+
     return remaining;
   } catch (err) {
     if (err instanceof DOMException && err.name === 'AbortError') return -1;
@@ -704,11 +772,13 @@ async function compactSnapshot(pat: string, repo: string, encKey: CryptoKey) {
     let snapshotSha = snapshotFile?.sha;
     let savedSalt: string | undefined;
     let savedVerifier: string | undefined;
+    let savedWipedAt: number | undefined;
 
     if (snapshotFile) {
       snapshot = JSON.parse(snapshotFile.data);
       savedSalt = snapshot.encryptionSalt;
       savedVerifier = snapshot.encryptionVerifier;
+      savedWipedAt = snapshot.wipedAt;
       // Decrypt snapshot for merging
       if (savedSalt) {
         snapshot = await decryptSyncData(encKey, snapshot);
@@ -757,6 +827,14 @@ async function compactSnapshot(pat: string, repo: string, encKey: CryptoKey) {
 
     // Stamp version and re-encrypt
     snapshot.syncVersion = SYNC_VERSION;
+    // Preserve wipedAt unless changelog has entries after it (wipe fully absorbed)
+    if (savedWipedAt) {
+      const newestEntry = sorted.length > 0 ? sorted[sorted.length - 1].timestamp : 0;
+      if (newestEntry <= savedWipedAt) {
+        snapshot.wipedAt = savedWipedAt;
+      }
+      // else: entries exist after wipe — all devices have absorbed it, let wipedAt fall off
+    }
     snapshot.encryptionSalt = savedSalt ?? getCachedSalt()!;
     snapshot.encryptionVerifier = savedVerifier ?? await createVerifier(encKey);
     snapshot = await encryptSyncData(encKey, snapshot);
@@ -958,6 +1036,7 @@ export async function wipeAllData() {
 
       let emptySnapshot: SyncData = {
         syncVersion: SYNC_VERSION,
+        wipedAt: Date.now(),
         taskLists: [],
         tasks: [],
         subtasks: [],
@@ -988,6 +1067,168 @@ export async function wipeAllData() {
     if (err instanceof DOMException && err.name === 'AbortError') return;
     console.error('Wipe failed:', err);
     toast('Wipe failed', 'error');
+  } finally {
+    releaseSyncLock();
+  }
+}
+
+export async function importData(data: ImportData) {
+  const signal = acquireSyncLock();
+  if (!signal) return;
+
+  try {
+    // Replace local data
+    await db.transaction('rw', [db.taskLists, db.tasks, db.subtasks], async () => {
+      await db.taskLists.clear();
+      await db.tasks.clear();
+      await db.subtasks.clear();
+      await db.taskLists.bulkPut(data.taskLists);
+      await db.tasks.bulkPut(data.tasks);
+      await db.subtasks.bulkPut(data.subtasks);
+    });
+
+    await clearPendingEntries();
+
+    // Push to remote if sync is configured
+    const creds = await getCredentials();
+    if (creds && hasEncryptionKey()) {
+      const encKey = getCachedEncryptionKey()!;
+      const salt = getCachedSalt()!;
+
+      const theme = data.settings?.theme ?? (localStorage.getItem('gtd25-theme') as Settings['theme']) ?? 'system';
+      let snapshot: SyncData = {
+        syncVersion: SYNC_VERSION,
+        wipedAt: Date.now(),
+        taskLists: data.taskLists,
+        tasks: data.tasks,
+        subtasks: data.subtasks,
+        settings: { theme },
+        encryptionSalt: salt,
+        encryptionVerifier: await createVerifier(encKey),
+      };
+      snapshot = await encryptSyncData(encKey, snapshot);
+
+      const existing = await getFile(creds.pat, creds.repo, SNAPSHOT_FILE, signal);
+      await putFile(creds.pat, creds.repo, SNAPSHOT_FILE, JSON.stringify(snapshot), existing?.sha, signal);
+
+      // Delete changelog so other devices bootstrap from the imported snapshot
+      const changelog = await getFile(creds.pat, creds.repo, CHANGELOG_FILE, signal);
+      if (changelog) {
+        await deleteFile(creds.pat, creds.repo, CHANGELOG_FILE, changelog.sha);
+      }
+    }
+
+    await db.syncMeta.update('sync-meta', {
+      lastPulledAt: Date.now(),
+      lastPushedAt: Date.now(),
+      pendingChanges: false,
+    });
+
+    // Apply theme from imported settings
+    if (data.settings?.theme) {
+      localStorage.setItem('gtd25-theme', data.settings.theme);
+    }
+
+    toast('Backup imported successfully', 'success');
+  } catch (err) {
+    if (err instanceof DOMException && err.name === 'AbortError') return;
+    console.error('Import failed:', err);
+    toast('Import failed', 'error');
+  } finally {
+    releaseSyncLock();
+  }
+}
+
+export async function restoreFromBackup(tier: BackupTier) {
+  const signal = acquireSyncLock();
+  if (!signal) return;
+
+  try {
+    const creds = await getCredentials();
+    if (!creds) {
+      toast('Sync not configured', 'error');
+      return;
+    }
+
+    // Resolve encryption key
+    const encResult = await resolveEncryptionKey();
+    if (encResult === 'needs-password') {
+      toast('Encryption password required', 'error');
+      return;
+    }
+    const encKey = encResult;
+
+    // Fetch backup file
+    const backupFile = await getFile(creds.pat, creds.repo, BACKUP_FILES[tier], signal);
+    if (!backupFile) {
+      toast('Backup file not found', 'error');
+      return;
+    }
+
+    // Decrypt backup
+    let backupData: SyncData = JSON.parse(backupFile.data);
+    if (backupData.encryptionSalt) {
+      const ok = await checkVerifier(encKey, backupData.encryptionVerifier ?? '');
+      if (!ok) {
+        toast('Wrong encryption password for this backup', 'error');
+        return;
+      }
+      backupData = await decryptSyncData(encKey, backupData);
+    }
+
+    // Replace local data
+    await db.transaction('rw', [db.taskLists, db.tasks, db.subtasks], async () => {
+      await db.taskLists.clear();
+      await db.tasks.clear();
+      await db.subtasks.clear();
+      await db.taskLists.bulkPut(backupData.taskLists);
+      await db.tasks.bulkPut(backupData.tasks);
+      await db.subtasks.bulkPut(backupData.subtasks);
+    });
+
+    await clearPendingEntries();
+
+    // Push as new snapshot with wipedAt so other devices bootstrap from restored data
+    const salt = getCachedSalt()!;
+    let snapshot: SyncData = {
+      syncVersion: SYNC_VERSION,
+      wipedAt: Date.now(),
+      taskLists: backupData.taskLists,
+      tasks: backupData.tasks,
+      subtasks: backupData.subtasks,
+      settings: backupData.settings ?? {
+        theme: (localStorage.getItem('gtd25-theme') as Settings['theme']) ?? 'system',
+      },
+      encryptionSalt: salt,
+      encryptionVerifier: await createVerifier(encKey),
+    };
+    snapshot = await encryptSyncData(encKey, snapshot);
+
+    const existing = await getFile(creds.pat, creds.repo, SNAPSHOT_FILE, signal);
+    await putFile(creds.pat, creds.repo, SNAPSHOT_FILE, JSON.stringify(snapshot), existing?.sha, signal);
+
+    // Delete changelog so other devices bootstrap from the restored snapshot
+    const changelog = await getFile(creds.pat, creds.repo, CHANGELOG_FILE, signal);
+    if (changelog) {
+      await deleteFile(creds.pat, creds.repo, CHANGELOG_FILE, changelog.sha);
+    }
+
+    await db.syncMeta.update('sync-meta', {
+      lastPulledAt: Date.now(),
+      lastPushedAt: Date.now(),
+      pendingChanges: false,
+    });
+
+    // Apply theme from backup settings
+    if (backupData.settings?.theme) {
+      localStorage.setItem('gtd25-theme', backupData.settings.theme);
+    }
+
+    toast('Backup restored successfully', 'success');
+  } catch (err) {
+    if (err instanceof DOMException && err.name === 'AbortError') return;
+    console.error('Restore failed:', err);
+    toast('Restore failed', 'error');
   } finally {
     releaseSyncLock();
   }

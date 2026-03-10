@@ -3,19 +3,18 @@ import type { Task, PingCooldown } from '../../db/models';
 import { updateTask, deleteTask, restoreTask } from '../../hooks/use-tasks';
 import { toast } from '../ui/Toast';
 import { useAppState } from '../../stores/app-state';
-import { isInCooldown } from '../../hooks/use-follow-ups';
+import { isInCooldown, cooldownRemaining, formatCooldown } from '../../hooks/use-follow-ups';
 import { PingCooldownBadge } from './PingCooldownBadge';
 import { DropdownMenu } from '../ui/DropdownMenu';
 import { formatDate, dueDateColor } from '../../lib/date-utils';
 import { extractHostname } from '../../lib/link-utils';
 import { TaskForm } from '../tasks/TaskForm';
 
-const COOLDOWN_OPTIONS: { value: PingCooldown; label: string }[] = [
+const SNOOZE_OPTIONS: { value: PingCooldown; label: string }[] = [
   { value: '12h', label: '12 hours' },
   { value: '1week', label: '1 week' },
   { value: '1month', label: '1 month' },
-  { value: '3months', label: '3 months' },
-  { value: 'custom', label: 'Custom...' },
+  { value: 'custom', label: 'Pick a date...' },
 ];
 
 interface Props {
@@ -30,8 +29,8 @@ export function FollowUpCard({ task, index }: Props) {
   const [editingTitle, setEditingTitle] = useState(false);
   const [editedTitle, setEditedTitle] = useState('');
   const inCooldown = isInCooldown(task);
-  const [showCooldownPicker, setShowCooldownPicker] = useState(false);
-  const [customDays, setCustomDays] = useState('');
+  const [showSnoozePicker, setShowSnoozePicker] = useState(false);
+  const [showDatePicker, setShowDatePicker] = useState(false);
   const pickerRef = useRef<HTMLDivElement>(null);
 
   // React to keyboard-triggered editing
@@ -44,48 +43,53 @@ export function FollowUpCard({ task, index }: Props) {
 
   // Close picker on outside click
   useEffect(() => {
-    if (!showCooldownPicker) return;
+    if (!showSnoozePicker) return;
     function handleClick(e: MouseEvent) {
       if (pickerRef.current && !pickerRef.current.contains(e.target as Node)) {
-        setShowCooldownPicker(false);
+        setShowSnoozePicker(false);
+        setShowDatePicker(false);
       }
     }
     document.addEventListener('mousedown', handleClick);
     return () => document.removeEventListener('mousedown', handleClick);
-  }, [showCooldownPicker]);
+  }, [showSnoozePicker]);
 
-  async function handlePing() {
-    if (inCooldown) {
-      await updateTask(task.id, { pingedAt: undefined });
-      return;
-    }
-    const cooldown = task.pingCooldown ?? '12h';
-    await updateTask(task.id, {
-      pingedAt: Date.now(),
-      pingCooldown: cooldown,
-    });
-  }
-
-  async function handleDone() {
+  async function handleArchive() {
     await updateTask(task.id, { archived: !task.archived });
   }
 
-  async function setCooldown(cd: PingCooldown) {
-    if (cd === 'custom') return; // handled by custom input
-    await updateTask(task.id, { pingCooldown: cd });
-    setShowCooldownPicker(false);
+  async function handleSnooze(cd: PingCooldown) {
+    await updateTask(task.id, {
+      pingedAt: Date.now(),
+      pingCooldown: cd,
+    });
+    setShowSnoozePicker(false);
+    setShowDatePicker(false);
   }
 
-  async function setCustomCooldown() {
-    const days = parseInt(customDays, 10);
-    if (!days || days <= 0) return;
+  async function handleSnoozeUntilDate(dateStr: string) {
+    const target = new Date(dateStr);
+    // Set to end of day in local timezone
+    target.setHours(23, 59, 59, 999);
+    const ms = target.getTime() - Date.now();
+    if (ms <= 0) return;
     await updateTask(task.id, {
+      pingedAt: Date.now(),
       pingCooldown: 'custom',
-      pingCooldownCustomMs: days * 24 * 60 * 60 * 1000,
+      pingCooldownCustomMs: ms,
     });
-    setCustomDays('');
-    setShowCooldownPicker(false);
+    setShowSnoozePicker(false);
+    setShowDatePicker(false);
   }
+
+  async function handleWake() {
+    await updateTask(task.id, { pingedAt: undefined });
+  }
+
+  // Minimum date for the date picker: tomorrow
+  const tomorrow = new Date();
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  const minDate = tomorrow.toISOString().split('T')[0];
 
   return (
     <div data-focus-id={task.id} className={`group mb-2 flex items-start gap-3 rounded-lg border px-3 py-3 shadow-sm transition-shadow hover:shadow-md ${
@@ -95,21 +99,23 @@ export function FollowUpCard({ task, index }: Props) {
     } ${inCooldown ? 'opacity-40' : ''} ${
       index !== undefined && index % 2 === 1 ? 'bg-zinc-50/70 dark:bg-zinc-800/30' : 'bg-white dark:bg-zinc-900/50'
     }`}>
-      {/* Ping button as the "checkbox" */}
+      {/* Archive button (clock icon) */}
       <button
-        onClick={handlePing}
+        onClick={handleArchive}
         className="mt-0.5 shrink-0"
-        title={inCooldown ? 'Unping' : 'Ping'}
+        title={task.archived ? 'Restore' : 'Archive'}
       >
-        <svg width="20" height="20" viewBox="0 0 20 20" className={inCooldown ? 'text-zinc-300 hover:text-zinc-400 dark:text-zinc-600 dark:hover:text-zinc-500' : 'text-orange-400 hover:text-orange-500'}>
-          <circle cx="10" cy="10" r="9" fill="none" stroke="currentColor" strokeWidth="1.5" />
-          {!inCooldown && (
+        {task.archived ? (
+          <svg width="20" height="20" viewBox="0 0 20 20" className="text-green-500 hover:text-green-600 dark:text-green-400 dark:hover:text-green-500">
+            <circle cx="10" cy="10" r="9" fill="none" stroke="currentColor" strokeWidth="1.5" />
+            <path d="M6.5 10l2.5 2.5 4.5-5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" fill="none" />
+          </svg>
+        ) : (
+          <svg width="20" height="20" viewBox="0 0 20 20" className="text-orange-400 hover:text-orange-500">
+            <circle cx="10" cy="10" r="9" fill="none" stroke="currentColor" strokeWidth="1.5" />
             <path d="M10 6v4l2.5 1.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" fill="none" />
-          )}
-          {inCooldown && (
-            <path d="M7 10h6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-          )}
-        </svg>
+          </svg>
+        )}
       </button>
 
       <div className="flex-1 min-w-0">
@@ -172,73 +178,60 @@ export function FollowUpCard({ task, index }: Props) {
         </div>
       </div>
 
-      {/* Done / Restore button — always visible */}
-      <button
-        onClick={handleDone}
-        className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-medium ${
-          task.archived
-            ? 'bg-zinc-100 text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-400 dark:hover:bg-zinc-700'
-            : 'bg-green-50 text-green-600 hover:bg-green-100 dark:bg-green-900/30 dark:text-green-400 dark:hover:bg-green-800/40'
-        }`}
-        title={task.archived ? 'Restore' : 'Mark done & archive'}
-      >
-        {task.archived ? 'Restore' : 'Done'}
-      </button>
-
-      {/* Cooldown selector — always visible */}
-      <div className="relative shrink-0" ref={pickerRef}>
-        <button
-          onClick={() => setShowCooldownPicker(!showCooldownPicker)}
-          className="rounded-full px-2 py-1 text-xs text-zinc-400 hover:bg-zinc-100 dark:text-zinc-500 dark:hover:bg-zinc-800"
-          title="Set cooldown period"
-        >
-          {task.pingCooldown === 'custom' && task.pingCooldownCustomMs
-            ? `${Math.round(task.pingCooldownCustomMs / (24 * 60 * 60 * 1000))}d`
-            : task.pingCooldown ?? '12h'}
-        </button>
-        {showCooldownPicker && (
-          <div className="absolute right-0 z-50 mt-1 min-w-[140px] rounded-xl border border-zinc-200 bg-white py-1 shadow-lg dark:border-zinc-700 dark:bg-zinc-900">
-            {COOLDOWN_OPTIONS.map((opt) => (
-              <button
-                key={opt.value}
-                onClick={() => {
-                  if (opt.value === 'custom') {
-                    // Don't close — show the custom input instead
-                    setCustomDays('');
-                  } else {
-                    setCooldown(opt.value);
-                  }
-                }}
-                className={`block w-full px-3 py-1.5 text-left text-xs hover:bg-zinc-100 dark:hover:bg-zinc-800 ${
-                  task.pingCooldown === opt.value ? 'font-medium text-accent-600' : ''
-                }`}
-              >
-                {opt.label}
-              </button>
-            ))}
-            {/* Custom days input */}
-            <div className="border-t border-zinc-100 px-3 py-2 dark:border-zinc-800">
-              <div className="flex items-center gap-1">
-                <input
-                  type="number"
-                  min="1"
-                  placeholder="days"
-                  value={customDays}
-                  onChange={(e) => setCustomDays(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === 'Enter') setCustomCooldown(); }}
-                  className="w-16 rounded border border-zinc-300 bg-white px-2 py-1 text-xs outline-none focus:border-accent-500 dark:border-zinc-700 dark:bg-zinc-800"
-                />
+      {/* Snooze / Wake button */}
+      {!task.archived && (
+        <div className="relative shrink-0" ref={pickerRef}>
+          {inCooldown ? (
+            <button
+              onClick={handleWake}
+              className="shrink-0 rounded-full px-2.5 py-1 text-xs font-medium bg-zinc-100 text-zinc-500 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-400 dark:hover:bg-zinc-700"
+              title="Wake — remove snooze"
+            >
+              {formatCooldown(cooldownRemaining(task))} left
+            </button>
+          ) : (
+            <button
+              onClick={() => setShowSnoozePicker(!showSnoozePicker)}
+              className="shrink-0 rounded-full px-2.5 py-1 text-xs font-medium bg-indigo-50 text-indigo-600 hover:bg-indigo-100 dark:bg-indigo-900/30 dark:text-indigo-400 dark:hover:bg-indigo-800/40"
+              title="Snooze this follow-up"
+            >
+              Snooze
+            </button>
+          )}
+          {showSnoozePicker && (
+            <div className="absolute right-0 z-50 mt-1 min-w-[160px] rounded-xl border border-zinc-200 bg-white py-1 shadow-lg dark:border-zinc-700 dark:bg-zinc-900">
+              {SNOOZE_OPTIONS.map((opt) => (
                 <button
-                  onClick={setCustomCooldown}
-                  className="rounded px-2 py-1 text-xs font-medium text-accent-600 hover:bg-accent-50 dark:text-accent-400 dark:hover:bg-accent-900/30"
+                  key={opt.value}
+                  onClick={() => {
+                    if (opt.value === 'custom') {
+                      setShowDatePicker(true);
+                    } else {
+                      handleSnooze(opt.value);
+                    }
+                  }}
+                  className="block w-full px-3 py-1.5 text-left text-xs hover:bg-zinc-100 dark:hover:bg-zinc-800"
                 >
-                  Set
+                  {opt.label}
                 </button>
-              </div>
+              ))}
+              {showDatePicker && (
+                <div className="border-t border-zinc-100 px-3 py-2 dark:border-zinc-800">
+                  <input
+                    type="date"
+                    min={minDate}
+                    onChange={(e) => {
+                      if (e.target.value) handleSnoozeUntilDate(e.target.value);
+                    }}
+                    className="w-full rounded border border-zinc-300 bg-white px-2 py-1 text-xs outline-none focus:border-accent-500 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200"
+                    autoFocus
+                  />
+                </div>
+              )}
             </div>
-          </div>
-        )}
-      </div>
+          )}
+        </div>
+      )}
 
       {/* Hover actions: edit/delete */}
       <div className="flex items-center gap-1 md:opacity-0 md:group-hover:opacity-100 shrink-0">

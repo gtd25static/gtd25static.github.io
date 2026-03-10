@@ -12,11 +12,9 @@ export function PingCooldownBadge({ task }: Props) {
   const inCooldown = isInCooldown(task);
   const remaining = cooldownRemaining(task);
 
-  if (!inCooldown) {
-    return <Badge color="orange">Ready to ping</Badge>;
-  }
+  if (!inCooldown) return null;
 
   return (
-    <Badge color="zinc">{formatCooldown(remaining)} left</Badge>
+    <Badge color="zinc">Snoozed · {formatCooldown(remaining)} left</Badge>
   );
 }
