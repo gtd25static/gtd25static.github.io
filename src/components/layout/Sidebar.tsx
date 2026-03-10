@@ -25,6 +25,7 @@ import { db } from '../../db';
 import type { ListType } from '../../db/models';
 import { SyncIndicator } from './SyncIndicator';
 import { GIT_COMMIT } from '../../lib/constants';
+import { useSpecialList } from '../../hooks/use-special-list';
 
 function useTaskCount(listId: string) {
   return useLiveQuery(async () => {
@@ -166,6 +167,8 @@ export function Sidebar() {
   const searchRef = useRef<HTMLInputElement>(null);
 
   const { focusedItemId, focusZone } = useAppState();
+  const { warningCount, blockedCount, recurringCount } = useSpecialList();
+  const specialTotal = warningCount + blockedCount + recurringCount;
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
@@ -335,6 +338,39 @@ export function Sidebar() {
           </button>
         )}
       </div>
+
+      {/* Special list counter */}
+      {specialTotal > 0 && (
+        <div className="px-2 pb-1">
+          <button
+            onClick={() => {
+              selectList('__special__');
+              setSidebarOpen(false);
+            }}
+            className={`flex w-full items-center gap-3 rounded-full px-3 py-3.5 md:py-2 text-sm transition-colors ${
+              selectedListId === '__special__'
+                ? 'bg-amber-50 text-amber-700 font-medium dark:bg-amber-900/20 dark:text-amber-300'
+                : 'text-zinc-700 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800'
+            }`}
+          >
+            <svg width="20" height="20" viewBox="0 0 20 20" fill="none" className={selectedListId === '__special__' ? 'text-amber-500' : 'text-zinc-400'}>
+              <path d="M10 2l2.5 5 5.5.8-4 3.9.9 5.5L10 14.7l-4.9 2.5.9-5.5-4-3.9 5.5-.8z" fill="currentColor" />
+            </svg>
+            <span className="flex-1 text-left">Attention</span>
+            <span className="flex items-center gap-1.5 text-xs">
+              {warningCount > 0 && (
+                <span className="text-amber-500">{warningCount}</span>
+              )}
+              {blockedCount > 0 && (
+                <span className="text-red-500">{blockedCount}</span>
+              )}
+              {recurringCount > 0 && (
+                <span className="text-violet-500">{recurringCount}</span>
+              )}
+            </span>
+          </button>
+        </div>
+      )}
 
       <nav className="flex-1 overflow-y-auto px-2 pt-1 scrollbar-thin">
         {/* Task lists section */}

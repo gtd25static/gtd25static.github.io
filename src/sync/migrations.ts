@@ -17,6 +17,11 @@ const migrations: RemoteMigration[] = [
     toVersion: 2,
     migrate: (data) => ({ ...data, syncVersion: 2 }),
   },
+  {
+    fromVersion: 2,
+    toVersion: 3,
+    migrate: (data) => ({ ...data, syncVersion: 3 }),
+  },
 ];
 
 export function runRemoteMigrations(data: SyncData, from: number, to: number): SyncData {

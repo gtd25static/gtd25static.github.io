@@ -3,10 +3,9 @@ import { useAppState } from '../../stores/app-state';
 import { useTaskLists } from '../../hooks/use-task-lists';
 import { Sidebar } from './Sidebar';
 import { UpdateBanner } from '../banners/UpdateBanner';
-import { WorkingOnBanner } from '../banners/WorkingOnBanner';
-import { DueSoonBanner } from '../banners/DueSoonBanner';
-import { BlockedBanner } from '../banners/BlockedBanner';
+import { TopBanner } from '../banners/TopBanner';
 import { TaskListView } from '../tasks/TaskListView';
+import { SpecialListView } from '../tasks/SpecialListView';
 import { SearchResults } from '../tasks/SearchResults';
 import { SettingsModal } from '../settings/SettingsModal';
 import { EncryptionPasswordModal } from '../settings/EncryptionPasswordModal';
@@ -97,10 +96,8 @@ export function AppShell() {
         </div>
 
         <UpdateBanner />
-        <WorkingOnBanner />
-        <DueSoonBanner />
-        <BlockedBanner />
-        {searchQuery ? <SearchResults /> : <TaskListView />}
+        <TopBanner />
+        {searchQuery ? <SearchResults /> : selectedListId === '__special__' ? <SpecialListView /> : <TaskListView />}
       </div>
 
       <SettingsModal />

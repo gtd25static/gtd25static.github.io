@@ -1,9 +1,10 @@
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../db';
-import type { Task, TaskStatus } from '../db/models';
+import type { Task, TaskStatus, TaskLink } from '../db/models';
 import { newId } from '../lib/id';
 import { recordChangeInTx, recordChangeBatchInTx, ensureDeviceId } from '../sync/change-log';
 import { scheduleSyncDebounced } from '../sync/sync-engine';
+import { computeNextOccurrence } from './use-recurring';
 
 export function useTasks(listId: string | null) {
   return useLiveQuery(
@@ -65,7 +66,40 @@ export async function updateTask(id: string, updates: Partial<Task>) {
 }
 
 export async function setTaskStatus(id: string, status: TaskStatus) {
-  await updateTask(id, { status });
+  const task = await db.tasks.get(id);
+  const updates: Partial<Task> = { status };
+
+  // Track blockedAt
+  if (status === 'blocked' && task?.status !== 'blocked') {
+    updates.blockedAt = Date.now();
+  } else if (status !== 'blocked' && task?.status === 'blocked') {
+    updates.blockedAt = undefined;
+  }
+
+  // Recurrence: when marking a recurring task done
+  if (status === 'done' && task?.recurrenceType && task.recurrenceInterval && task.recurrenceUnit) {
+    updates.lastCompletedAt = Date.now();
+    if (task.recurrenceType === 'time-based') {
+      updates.nextOccurrence = computeNextOccurrence(Date.now(), task.recurrenceInterval, task.recurrenceUnit);
+    }
+  }
+
+  await updateTask(id, updates);
+}
+
+export async function addTaskLink(taskId: string, url: string, title?: string) {
+  const task = await db.tasks.get(taskId);
+  if (!task) return;
+  const links: TaskLink[] = [...(task.links ?? []), { url, title }];
+  await updateTask(taskId, { links });
+}
+
+export async function removeTaskLink(taskId: string, index: number) {
+  const task = await db.tasks.get(taskId);
+  if (!task) return;
+  const links = [...(task.links ?? [])];
+  links.splice(index, 1);
+  await updateTask(taskId, { links: links.length > 0 ? links : undefined });
 }
 
 export async function deleteTask(id: string) {

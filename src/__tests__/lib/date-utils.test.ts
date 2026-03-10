@@ -39,13 +39,13 @@ describe('isDueSoon', () => {
     expect(isDueSoon(undefined)).toBe(false);
   });
 
-  it('returns true for dates within 10 days', () => {
-    const soon = new Date('2026-03-18T00:00:00').getTime(); // 10 days
+  it('returns true for dates within 14 days', () => {
+    const soon = new Date('2026-03-22T00:00:00').getTime(); // 14 days
     expect(isDueSoon(soon)).toBe(true);
   });
 
-  it('returns false for dates beyond 10 days', () => {
-    const far = new Date('2026-03-19T00:00:00').getTime(); // 11 days
+  it('returns false for dates beyond 14 days', () => {
+    const far = new Date('2026-03-23T00:00:00').getTime(); // 15 days
     expect(isDueSoon(far)).toBe(false);
   });
 });
@@ -62,13 +62,13 @@ describe('dueDateColor', () => {
     expect(dueDateColor(threeDays)).toBe('text-orange-500');
   });
 
-  it('returns yellow for 4-10 days', () => {
+  it('returns yellow for 4-14 days', () => {
     const fiveDays = new Date('2026-03-13T00:00:00').getTime();
     expect(dueDateColor(fiveDays)).toBe('text-yellow-500');
   });
 
-  it('returns zinc for >10 days', () => {
-    const far = new Date('2026-03-19T00:00:00').getTime();
+  it('returns zinc for >14 days', () => {
+    const far = new Date('2026-03-23T00:00:00').getTime();
     expect(dueDateColor(far)).toBe('text-zinc-400');
   });
 });

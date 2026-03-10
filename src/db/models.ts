@@ -13,6 +13,11 @@ export interface TaskList {
   deletedAt?: number;
 }
 
+export interface TaskLink {
+  url: string;
+  title?: string;
+}
+
 export interface Task {
   id: string;
   listId: string;
@@ -31,6 +36,18 @@ export interface Task {
   pingCooldown?: PingCooldown;
   pingCooldownCustomMs?: number;
   archived?: boolean;
+  // Warning
+  hasWarning?: boolean;
+  warningAt?: number;
+  blockedAt?: number;
+  // Additional links
+  links?: TaskLink[];
+  // Recurrence
+  recurrenceType?: 'time-based' | 'date-based';
+  recurrenceInterval?: number;
+  recurrenceUnit?: 'hours' | 'days' | 'weeks' | 'months';
+  lastCompletedAt?: number;
+  nextOccurrence?: number;
 }
 
 export interface Subtask {
@@ -45,6 +62,12 @@ export interface Subtask {
   createdAt: number;
   updatedAt: number;
   deletedAt?: number;
+  // Warning
+  hasWarning?: boolean;
+  warningAt?: number;
+  blockedAt?: number;
+  // Additional links
+  links?: TaskLink[];
 }
 
 export interface Settings {

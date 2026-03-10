@@ -3,13 +3,14 @@ import type { Subtask } from '../../db/models';
 import { setSubtaskStatus, deleteSubtask, restoreSubtask, updateSubtask, convertSubtaskToTask } from '../../hooks/use-subtasks';
 import { toast } from '../ui/Toast';
 import { startWorkingOn } from '../../hooks/use-working-on';
+import { toggleWarning } from '../../hooks/use-warning';
 import { useTaskLists } from '../../hooks/use-task-lists';
 import { useAppState } from '../../stores/app-state';
 import { SubtaskForm } from './SubtaskForm';
 import { formatDate, dueDateColor } from '../../lib/date-utils';
-import { extractHostname } from '../../lib/link-utils';
 import { ContextMenu, type MenuItem } from '../ui/ContextMenu';
 import { DropdownMenu } from '../ui/DropdownMenu';
+import { LinksList } from '../shared/LinksList';
 
 interface Props {
   subtask: Subtask;
@@ -100,19 +101,17 @@ export function SubtaskItem({ subtask }: Props) {
           </span>
         )}
         <div className="flex items-center gap-2">
+          {subtask.hasWarning && (
+            <svg width="12" height="12" viewBox="0 0 16 16" fill="#f59e0b" className="shrink-0">
+              <path d="M8 1l7 13H1L8 1z" />
+              <rect x="7.2" y="6" width="1.6" height="4" rx="0.8" fill="white" />
+              <circle cx="8" cy="12" r="0.9" fill="white" />
+            </svg>
+          )}
           {subtask.dueDate && (
             <span className={`text-xs ${dueDateColor(subtask.dueDate)}`}>{formatDate(subtask.dueDate)}</span>
           )}
-          {subtask.link && (
-            <a
-              href={subtask.link}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-xs text-accent-600 hover:underline dark:text-accent-400"
-            >
-              {subtask.linkTitle || extractHostname(subtask.link)}
-            </a>
-          )}
+          <LinksList primaryLink={subtask.link} primaryTitle={subtask.linkTitle} links={subtask.links} />
         </div>
       </div>
 
@@ -137,6 +136,7 @@ export function SubtaskItem({ subtask }: Props) {
           }
           items={[
             { label: subtask.status === 'blocked' ? 'Unblock' : 'Block', onClick: () => setSubtaskStatus(subtask.id, subtask.status === 'blocked' ? 'todo' : 'blocked') },
+            { label: subtask.hasWarning ? 'Clear warning' : 'Warn', onClick: () => toggleWarning('subtask', subtask.id) },
             { label: 'Edit', onClick: () => setEditing(true) },
             { label: 'Delete', onClick: () => {
               if (!confirm('Delete this subtask?')) return;
@@ -154,6 +154,13 @@ export function SubtaskItem({ subtask }: Props) {
           title={subtask.status === 'blocked' ? 'Unblock' : 'Mark blocked'}
         >
           {subtask.status === 'blocked' ? 'Unblock' : 'Block'}
+        </button>
+        <button
+          onClick={() => toggleWarning('subtask', subtask.id)}
+          className={`rounded px-1.5 py-0.5 text-xs ${subtask.hasWarning ? 'text-amber-500 hover:bg-amber-50 dark:hover:bg-amber-900/20' : 'text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800'}`}
+          title={subtask.hasWarning ? 'Clear warning' : 'Add warning'}
+        >
+          {subtask.hasWarning ? 'Unwarn' : 'Warn'}
         </button>
         <button
           onClick={() => setEditing(true)}

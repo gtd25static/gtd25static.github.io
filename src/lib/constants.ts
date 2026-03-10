@@ -3,7 +3,7 @@ declare const __GIT_COMMIT__: string;
 export const APP_VERSION: string = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '0.0.0';
 export const GIT_COMMIT: string = typeof __GIT_COMMIT__ !== 'undefined' ? __GIT_COMMIT__ : 'dev';
 
-export const DUE_SOON_DAYS = 10;
+export const DUE_SOON_DAYS = 14;
 export const SOFT_DELETE_CLEANUP_DAYS = 30;
 export const DEFAULT_SYNC_INTERVAL_MS = 300_000;
 

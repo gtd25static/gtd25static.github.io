@@ -1,9 +1,10 @@
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../db';
-import type { Subtask, SubtaskStatus } from '../db/models';
+import type { Subtask, SubtaskStatus, TaskLink } from '../db/models';
 import { newId } from '../lib/id';
 import { recordChangeInTx, recordChangeBatchInTx, ensureDeviceId } from '../sync/change-log';
 import { scheduleSyncDebounced } from '../sync/sync-engine';
+import { computeNextOccurrence } from './use-recurring';
 
 export function useSubtasks(taskId: string | undefined) {
   return useLiveQuery(
@@ -94,27 +95,66 @@ export async function setSubtaskStatus(id: string, status: SubtaskStatus) {
     scheduleSyncDebounced();
     return;
   }
-  await updateSubtask(id, { status });
+
+  // Track blockedAt
+  const subtask = await db.subtasks.get(id);
+  const updates: Partial<Subtask> = { status };
+  if (status === 'blocked' && subtask?.status !== 'blocked') {
+    updates.blockedAt = Date.now();
+  } else if (status !== 'blocked' && subtask?.status === 'blocked') {
+    updates.blockedAt = undefined;
+  }
+  await updateSubtask(id, updates);
 
   // Auto-complete parent task when all subtasks are done
   if (status === 'done') {
-    const subtask = await db.subtasks.get(id);
-    if (subtask) {
-      const siblings = await db.subtasks.where('taskId').equals(subtask.taskId).toArray();
+    const sub = await db.subtasks.get(id);
+    if (sub) {
+      const siblings = await db.subtasks.where('taskId').equals(sub.taskId).toArray();
       const live = siblings.filter((s) => !s.deletedAt);
       if (live.length > 0 && live.every((s) => s.status === 'done')) {
+        const parentTask = await db.tasks.get(sub.taskId);
+        const taskUpdates: Record<string, unknown> = { status: 'done', updatedAt: Date.now() };
+
+        // Recurrence on auto-complete
+        if (parentTask?.recurrenceType && parentTask.recurrenceInterval && parentTask.recurrenceUnit) {
+          taskUpdates.lastCompletedAt = Date.now();
+          if (parentTask.recurrenceType === 'time-based') {
+            taskUpdates.nextOccurrence = computeNextOccurrence(
+              Date.now(),
+              parentTask.recurrenceInterval,
+              parentTask.recurrenceUnit,
+            );
+          }
+        }
+
         await ensureDeviceId();
         await db.transaction('rw', [db.tasks, db.changeLog], async () => {
-          await db.tasks.update(subtask.taskId, { status: 'done', updatedAt: Date.now() });
-          const updatedTask = await db.tasks.get(subtask.taskId);
+          await db.tasks.update(sub.taskId, taskUpdates);
+          const updatedTask = await db.tasks.get(sub.taskId);
           if (updatedTask) {
-            await recordChangeInTx('task', subtask.taskId, 'upsert', updatedTask as unknown as Record<string, unknown>);
+            await recordChangeInTx('task', sub.taskId, 'upsert', updatedTask as unknown as Record<string, unknown>);
           }
         });
         scheduleSyncDebounced();
       }
     }
   }
+}
+
+export async function addSubtaskLink(subtaskId: string, url: string, title?: string) {
+  const subtask = await db.subtasks.get(subtaskId);
+  if (!subtask) return;
+  const links: TaskLink[] = [...(subtask.links ?? []), { url, title }];
+  await updateSubtask(subtaskId, { links });
+}
+
+export async function removeSubtaskLink(subtaskId: string, index: number) {
+  const subtask = await db.subtasks.get(subtaskId);
+  if (!subtask) return;
+  const links = [...(subtask.links ?? [])];
+  links.splice(index, 1);
+  await updateSubtask(subtaskId, { links: links.length > 0 ? links : undefined });
 }
 
 export async function deleteSubtask(id: string) {

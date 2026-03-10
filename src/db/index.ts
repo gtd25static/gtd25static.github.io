@@ -28,6 +28,10 @@ export class Gtd25DB extends Dexie {
     this.version(3).stores({
       changeLog: 'id, deviceId, timestamp',
     });
+    this.version(4).stores({
+      tasks: 'id, listId, status, order, dueDate, deletedAt, createdAt, hasWarning, nextOccurrence',
+      subtasks: 'id, taskId, status, order, deletedAt, hasWarning',
+    });
   }
 }
 

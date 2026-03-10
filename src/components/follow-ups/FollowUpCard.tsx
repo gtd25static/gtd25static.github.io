@@ -4,6 +4,7 @@ import { updateTask, deleteTask, restoreTask } from '../../hooks/use-tasks';
 import { toast } from '../ui/Toast';
 import { useAppState } from '../../stores/app-state';
 import { isInCooldown, cooldownRemaining, formatCooldown } from '../../hooks/use-follow-ups';
+import { toggleWarning } from '../../hooks/use-warning';
 import { PingCooldownBadge } from './PingCooldownBadge';
 import { DropdownMenu } from '../ui/DropdownMenu';
 import { formatDate, dueDateColor } from '../../lib/date-utils';
@@ -137,6 +138,13 @@ export function FollowUpCard({ task, index, dragHandleProps }: Props) {
       </button>
 
       <div className="flex-1 min-w-0">
+        {task.hasWarning && (
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="#f59e0b" className="inline-block mr-1 -mt-0.5">
+            <path d="M8 1l7 13H1L8 1z" />
+            <rect x="7.2" y="6" width="1.6" height="4" rx="0.8" fill="white" />
+            <circle cx="8" cy="12" r="0.9" fill="white" />
+          </svg>
+        )}
         {editingTitle ? (
           <input
             className="text-sm bg-transparent border-b border-accent-500 outline-none w-full"
@@ -262,6 +270,7 @@ export function FollowUpCard({ task, index, dragHandleProps }: Props) {
             </svg>
           }
           items={[
+            { label: task.hasWarning ? 'Clear warning' : 'Warn', onClick: () => toggleWarning('task', task.id) },
             { label: 'Edit', onClick: () => setEditing(true) },
             { label: 'Delete', onClick: () => {
               if (!confirm('Delete this follow-up?')) return;

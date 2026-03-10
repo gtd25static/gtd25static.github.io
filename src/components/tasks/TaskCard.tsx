@@ -1,17 +1,18 @@
 import { useState, useCallback, useEffect } from 'react';
 import type { Task } from '../../db/models';
 import { formatDate, daysUntil } from '../../lib/date-utils';
-import { extractHostname } from '../../lib/link-utils';
 import { setTaskStatus, deleteTask, restoreTask, updateTask, moveTaskToList } from '../../hooks/use-tasks';
 import { toast } from '../ui/Toast';
 import { useAppState } from '../../stores/app-state';
 import { useSubtasks } from '../../hooks/use-subtasks';
 import { useTaskLists } from '../../hooks/use-task-lists';
 import { startWorkingOn, startWorkingOnTask } from '../../hooks/use-working-on';
+import { toggleWarning } from '../../hooks/use-warning';
 import { SubtaskJourney } from '../subtasks/SubtaskJourney';
 import { TaskForm } from './TaskForm';
 import { ContextMenu, type MenuItem } from '../ui/ContextMenu';
 import { DropdownMenu } from '../ui/DropdownMenu';
+import { LinksList } from '../shared/LinksList';
 
 interface Props {
   task: Task;
@@ -176,18 +177,21 @@ export function TaskCard({ task, index, dragHandleProps }: Props) {
           )}
 
           {/* Inline metadata */}
-          {task.status !== 'done' && task.dueDate && <DueDateBadge dueDate={task.dueDate} />}
-          {task.link && (
-            <a
-              href={task.link}
-              target="_blank"
-              rel="noopener noreferrer"
-              onClick={(e) => e.stopPropagation()}
-              className="shrink-0 text-xs text-accent-600 hover:underline dark:text-accent-400"
-            >
-              {task.linkTitle || extractHostname(task.link)}
-            </a>
+          {task.hasWarning && (
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="#f59e0b" className="shrink-0">
+              <path d="M8 1l7 13H1L8 1z" />
+              <rect x="7.2" y="6" width="1.6" height="4" rx="0.8" fill="white" />
+              <circle cx="8" cy="12" r="0.9" fill="white" />
+            </svg>
           )}
+          {task.recurrenceType && (
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="#8b5cf6" strokeWidth="1.5" className="shrink-0 opacity-70">
+              <path d="M1 8a7 7 0 0113.6-2.3M15 8a7 7 0 01-13.6 2.3" strokeLinecap="round" />
+              <path d="M14.6 2v3.7h-3.7M1.4 14v-3.7h3.7" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          )}
+          {task.status !== 'done' && task.dueDate && <DueDateBadge dueDate={task.dueDate} />}
+          <LinksList primaryLink={task.link} primaryTitle={task.linkTitle} links={task.links} />
         </div>
 
         {/* Mobile dropdown */}
@@ -212,6 +216,7 @@ export function TaskCard({ task, index, dragHandleProps }: Props) {
                 },
               }] : []),
               { label: task.status === 'blocked' ? 'Unblock' : 'Block', onClick: () => setTaskStatus(task.id, task.status === 'blocked' ? 'todo' : 'blocked') },
+              { label: task.hasWarning ? 'Clear warning' : 'Warn', onClick: () => toggleWarning('task', task.id) },
               { label: 'Edit', onClick: () => setEditing(true) },
               { label: 'Delete', onClick: () => {
                 if (!confirm('Delete this task?')) return;
@@ -245,6 +250,13 @@ export function TaskCard({ task, index, dragHandleProps }: Props) {
             title={task.status === 'blocked' ? 'Unblock' : 'Mark blocked'}
           >
             {task.status === 'blocked' ? 'Unblock' : 'Block'}
+          </button>
+          <button
+            onClick={() => toggleWarning('task', task.id)}
+            className={`rounded px-1.5 py-0.5 text-xs ${task.hasWarning ? 'text-amber-500 hover:bg-amber-50 dark:hover:bg-amber-900/20' : 'text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800'}`}
+            title={task.hasWarning ? 'Clear warning' : 'Add warning'}
+          >
+            {task.hasWarning ? 'Unwarn' : 'Warn'}
           </button>
           <button
             onClick={() => setEditing(true)}

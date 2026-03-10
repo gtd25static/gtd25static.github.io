@@ -7,13 +7,13 @@ interface LocalMigration {
 }
 
 const localMigrations: LocalMigration[] = [
-  // Empty for now — add entries when SYNC_VERSION bumps with data changes.
-  // Example:
-  // { fromVersion: 2, toVersion: 3, migrate: async (db) => {
-  //     const entries = await db.changeLog.toArray();
-  //     // transform entries...
-  //   }
-  // },
+  {
+    fromVersion: 2,
+    toVersion: 3,
+    migrate: async () => {
+      // No-op: new fields (hasWarning, warningAt, blockedAt, links, recurrence) are optional
+    },
+  },
 ];
 
 export async function runLocalMigrations(database: Gtd25DB, from: number, to: number): Promise<void> {
