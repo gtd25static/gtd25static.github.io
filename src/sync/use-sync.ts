@@ -17,7 +17,11 @@ export function useSync() {
     setSyncProgressCallback((progress) => {
       setSyncProgress(progress);
       if (progress.phase === 'done' && progress.pulled != null && progress.pushed != null) {
-        setLastSyncStats({ pulled: progress.pulled, pushed: progress.pushed });
+        // Keep last non-zero counts — pushed is common (don't clear on 0), pulled shows on startup/cross-device
+        setLastSyncStats((prev) => ({
+          pulled: progress.pulled! > 0 ? progress.pulled! : (prev?.pulled ?? 0),
+          pushed: progress.pushed! > 0 ? progress.pushed! : (prev?.pushed ?? 0),
+        }));
         setLastError(null);
       }
       if (progress.phase === 'error') {
