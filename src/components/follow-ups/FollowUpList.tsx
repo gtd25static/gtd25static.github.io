@@ -1,10 +1,46 @@
 import { useState, useEffect } from 'react';
+import {
+  DndContext,
+  closestCenter,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from '@dnd-kit/core';
+import {
+  SortableContext,
+  sortableKeyboardCoordinates,
+  useSortable,
+  verticalListSortingStrategy,
+} from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
 import { useFollowUps } from '../../hooks/use-follow-ups';
-import { createTask } from '../../hooks/use-tasks';
+import { createTask, reorderTasks } from '../../hooks/use-tasks';
 import { useAppState } from '../../stores/app-state';
+import type { Task } from '../../db/models';
 import { FollowUpCard } from './FollowUpCard';
 import { InlineTaskForm } from '../tasks/InlineTaskForm';
 import { DropdownMenu } from '../ui/DropdownMenu';
+
+function SortableFollowUpItem({ task, index }: { task: Task; index: number }) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id: task.id,
+  });
+
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.5 : 1,
+    zIndex: isDragging ? 10 : undefined,
+  };
+
+  return (
+    <div ref={setNodeRef} style={style}>
+      <FollowUpCard task={task} index={index} dragHandleProps={{ ...attributes, ...listeners }} />
+    </div>
+  );
+}
 
 interface Props {
   listId: string;
@@ -35,6 +71,23 @@ export function FollowUpList({ listId, listName }: Props) {
     }
     setNavigateToTaskId(null);
   }, [navigateToTaskId, archived]);
+
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  );
+
+  function handleDragEnd(event: DragEndEvent) {
+    const { active: dragActive, over } = event;
+    if (!over || dragActive.id === over.id) return;
+
+    const oldIndex = active.findIndex((t) => t.id === dragActive.id);
+    const newIndex = active.findIndex((t) => t.id === over.id);
+    const newOrder = [...active];
+    const [moved] = newOrder.splice(oldIndex, 1);
+    newOrder.splice(newIndex, 0, moved);
+    reorderTasks(newOrder.map((t) => t.id));
+  }
 
   return (
     <div className="flex flex-1 flex-col overflow-hidden">
@@ -82,11 +135,15 @@ export function FollowUpList({ listId, listName }: Props) {
               <p className="text-sm">No follow-ups yet</p>
             </div>
           ) : (
-            <div>
-              {active.map((task, i) => (
-                <FollowUpCard key={task.id} task={task} index={i} />
-              ))}
-            </div>
+            <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+              <SortableContext items={active.map((t) => t.id)} strategy={verticalListSortingStrategy}>
+                <div>
+                  {active.map((task, i) => (
+                    <SortableFollowUpItem key={task.id} task={task} index={i} />
+                  ))}
+                </div>
+              </SortableContext>
+            </DndContext>
           )}
 
           {archived.length > 0 && (

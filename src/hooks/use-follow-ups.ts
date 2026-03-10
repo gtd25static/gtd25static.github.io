@@ -10,11 +10,6 @@ export function useFollowUps(listId: string | null) {
       const all = await db.tasks.where('listId').equals(listId).sortBy('order');
       const live = all.filter((t) => !t.deletedAt);
       const active = live.filter((t) => !t.archived);
-      active.sort((a, b) => {
-        const aCool = isInCooldown(a) ? 1 : 0;
-        const bCool = isInCooldown(b) ? 1 : 0;
-        return aCool - bCool;
-      });
       return {
         active,
         archived: live.filter((t) => t.archived),

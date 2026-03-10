@@ -20,9 +20,10 @@ const SNOOZE_OPTIONS: { value: PingCooldown; label: string }[] = [
 interface Props {
   task: Task;
   index?: number;
+  dragHandleProps?: Record<string, unknown>;
 }
 
-export function FollowUpCard({ task, index }: Props) {
+export function FollowUpCard({ task, index, dragHandleProps }: Props) {
   const { focusedItemId, focusZone, editingItemId, setEditingItemId } = useAppState();
   const focused = focusedItemId === task.id && focusZone === 'main';
   const [editing, setEditing] = useState(false);
@@ -99,6 +100,23 @@ export function FollowUpCard({ task, index }: Props) {
     } ${inCooldown ? 'opacity-40' : ''} ${
       index !== undefined && index % 2 === 1 ? 'bg-zinc-50/70 dark:bg-zinc-800/30' : 'bg-white dark:bg-zinc-900/50'
     }`}>
+      {/* Drag handle */}
+      {dragHandleProps && (
+        <div
+          className="shrink-0 cursor-grab touch-none active:cursor-grabbing mt-0.5"
+          {...dragHandleProps}
+        >
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" className="text-zinc-300 dark:text-zinc-500">
+            <circle cx="5.5" cy="4" r="1.2" />
+            <circle cx="10.5" cy="4" r="1.2" />
+            <circle cx="5.5" cy="8" r="1.2" />
+            <circle cx="10.5" cy="8" r="1.2" />
+            <circle cx="5.5" cy="12" r="1.2" />
+            <circle cx="10.5" cy="12" r="1.2" />
+          </svg>
+        </div>
+      )}
+
       {/* Archive button (clock icon) */}
       <button
         onClick={handleArchive}
