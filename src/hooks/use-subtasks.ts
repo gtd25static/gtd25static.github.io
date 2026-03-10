@@ -114,7 +114,7 @@ export async function setSubtaskStatus(id: string, status: SubtaskStatus) {
       const live = siblings.filter((s) => !s.deletedAt);
       if (live.length > 0 && live.every((s) => s.status === 'done')) {
         const parentTask = await db.tasks.get(sub.taskId);
-        const taskUpdates: Record<string, unknown> = { status: 'done', updatedAt: Date.now() };
+        const taskUpdates: Partial<import('../db/models').Task> = { status: 'done', updatedAt: Date.now() };
 
         // Recurrence on auto-complete
         if (parentTask?.recurrenceType && parentTask.recurrenceInterval && parentTask.recurrenceUnit) {
