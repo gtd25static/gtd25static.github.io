@@ -48,7 +48,7 @@ function safeParseJson<T>(raw: string, label: string): { ok: true; value: T } | 
 
 let syncStartedAt: number | null = null;
 let syncAbort: AbortController | null = null;
-let legacyChecked = false;
+let legacyChecked = localStorage.getItem('gtd25-legacy-checked') === '1';
 
 // --- Cached sync state for flushOnHide ---
 let cachedChangelogSha: string | undefined;
@@ -448,6 +448,7 @@ export async function syncNow(manual = false, pushLimit?: number): Promise<numbe
     if (!legacyChecked) {
       legacyData = await migrateFromLegacy(creds.pat, creds.repo);
       legacyChecked = true;
+      localStorage.setItem('gtd25-legacy-checked', '1');
     }
     if (legacyData) {
       // Encrypt and write as new snapshot
