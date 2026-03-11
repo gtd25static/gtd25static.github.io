@@ -69,12 +69,16 @@ export function InlineTaskForm({ onSubmit, onCancel }: Props) {
   return (
     <form onSubmit={handleSubmit} className="space-y-2 py-3">
       <div className="flex gap-2">
-        <Input
+        <textarea
           placeholder="Task title"
           value={title}
-          onChange={(e) => setTitle(e.target.value)}
+          onChange={(e) => { setTitle(e.target.value); e.target.style.height = 'auto'; e.target.style.height = e.target.scrollHeight + 'px'; }}
           autoFocus
-          className="flex-1"
+          rows={1}
+          className="flex-1 resize-none overflow-hidden rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm text-zinc-900 placeholder:text-zinc-400
+            focus:border-accent-500 focus:outline-none focus:ring-1 focus:ring-accent-500
+            dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100 dark:placeholder:text-zinc-500"
+          onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); e.currentTarget.form?.requestSubmit(); } }}
         />
         <Button type="submit" size="sm">Add</Button>
         <Button type="button" variant="ghost" size="sm" onClick={onCancel}>Cancel</Button>

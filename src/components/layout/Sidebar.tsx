@@ -434,7 +434,7 @@ export function Sidebar() {
                     key={list.id}
                     list={list}
                     selected={selectedListId === list.id}
-                    onSelect={() => selectList(list.id)}
+                    onSelect={() => { selectList(list.id); setSidebarOpen(false); }}
                     highlight={searchQuery}
                     focused={focusedItemId === list.id && focusZone === 'sidebar'}
                     count={taskCounts.get(list.id) ?? 0}
@@ -458,7 +458,7 @@ export function Sidebar() {
                     key={list.id}
                     list={list}
                     selected={selectedListId === list.id}
-                    onSelect={() => selectList(list.id)}
+                    onSelect={() => { selectList(list.id); setSidebarOpen(false); }}
                     highlight={searchQuery}
                     focused={focusedItemId === list.id && focusZone === 'sidebar'}
                     count={taskCounts.get(list.id) ?? 0}
