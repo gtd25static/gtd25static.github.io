@@ -182,7 +182,7 @@ describe('batch timer', () => {
 });
 
 describe('handleVisibilityChange', () => {
-  it('visible → triggers syncNow after 3s debounce', async () => {
+  it('visible → triggers syncNow immediately', async () => {
     await startAndWaitForInitialSync();
     // Advance past the 10s MIN_RESYNC_INTERVAL so visibility triggers sync
     await vi.advanceTimersByTimeAsync(11_000);
@@ -191,12 +191,7 @@ describe('handleVisibilityChange', () => {
     Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
     document.dispatchEvent(new Event('visibilitychange'));
 
-    // Should NOT have synced yet (within 3s debounce)
-    await vi.advanceTimersByTimeAsync(2_000);
-    expect(mockGetFile).not.toHaveBeenCalled();
-
-    // After 3s debounce fires
-    await vi.advanceTimersByTimeAsync(1_500);
+    // Should sync immediately (no debounce)
     await vi.advanceTimersByTimeAsync(200);
     expect(mockGetFile).toHaveBeenCalled();
   });
@@ -210,25 +205,6 @@ describe('handleVisibilityChange', () => {
     document.dispatchEvent(new Event('visibilitychange'));
     await vi.advanceTimersByTimeAsync(5_000);
 
-    expect(mockGetFile).not.toHaveBeenCalled();
-  });
-
-  it('visible then hidden within 3s → cancels debounce, no sync', async () => {
-    await startAndWaitForInitialSync();
-    await vi.advanceTimersByTimeAsync(11_000);
-    mockGetFile.mockClear();
-
-    // Go visible
-    Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
-    document.dispatchEvent(new Event('visibilitychange'));
-    await vi.advanceTimersByTimeAsync(1_000);
-
-    // Go hidden before 3s debounce fires
-    Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true });
-    document.dispatchEvent(new Event('visibilitychange'));
-
-    // Wait well past debounce — should never fire
-    await vi.advanceTimersByTimeAsync(5_000);
     expect(mockGetFile).not.toHaveBeenCalled();
   });
 

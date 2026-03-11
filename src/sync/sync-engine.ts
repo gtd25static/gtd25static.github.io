@@ -62,14 +62,12 @@ const BATCH_INTERVAL_MS = 30_000;
 const FIRST_BATCH_SIZE = 5;
 const BATCH_SIZE = 10;
 const MIN_RESYNC_INTERVAL_MS = 10_000;
-const VISIBILITY_DEBOUNCE_MS = 3_000;
 
 // --- Scheduler state machine ---
 type SchedulerState = 'stopped' | 'idle' | 'first-wait' | 'batching';
 let schedulerState: SchedulerState = 'stopped';
 let schedulerTimer: ReturnType<typeof setTimeout> | null = null;
 let lastSyncCompletedAt = 0;
-let visibilityDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 
 // --- Error backoff state ---
 let consecutiveErrors = 0;
@@ -252,7 +250,6 @@ function handleVisibilityChange() {
   if (schedulerState === 'stopped') return;
   if (document.visibilityState === 'hidden') {
     clearSchedulerTimer();
-    if (visibilityDebounceTimer) { clearTimeout(visibilityDebounceTimer); visibilityDebounceTimer = null; }
     schedulerState = 'idle';
     flushOnHide(); // single keepalive PUT, no GETs needed
   } else {
@@ -261,12 +258,7 @@ function handleVisibilityChange() {
       startIdlePoll();
       return;
     }
-    // Debounce: wait before syncing to avoid rapid focus/blur cycles
-    if (visibilityDebounceTimer) clearTimeout(visibilityDebounceTimer);
-    visibilityDebounceTimer = setTimeout(() => {
-      visibilityDebounceTimer = null;
-      syncNow().then(() => startIdlePoll());
-    }, VISIBILITY_DEBOUNCE_MS);
+    syncNow().then(() => startIdlePoll());
   }
 }
 
@@ -1333,7 +1325,6 @@ export function __resetForTesting() {
   if (rateLimitTimer) { clearTimeout(rateLimitTimer); rateLimitTimer = null; }
   lastErrorToastAt = 0;
   lastSyncCompletedAt = 0;
-  if (visibilityDebounceTimer) { clearTimeout(visibilityDebounceTimer); visibilityDebounceTimer = null; }
   versionIncompatibleListeners.clear();
   syncSuccessListeners.clear();
   passwordNeededListeners.clear();
