@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { useShallow } from 'zustand/react/shallow';
 import { useAppState } from '../../stores/app-state';
 import { useTaskLists } from '../../hooks/use-task-lists';
 import { Sidebar } from './Sidebar';
@@ -16,7 +17,7 @@ import { ToastContainer } from '../ui/Toast';
 import { useSpecialList } from '../../hooks/use-special-list';
 
 export function AppShell() {
-  const { sidebarOpen, setSidebarOpen, setSettingsOpen, searchQuery, selectedListId, selectList } = useAppState();
+  const { sidebarOpen, setSidebarOpen, setSettingsOpen, searchQuery, selectedListId, selectList } = useAppState(useShallow(s => ({ sidebarOpen: s.sidebarOpen, setSidebarOpen: s.setSidebarOpen, setSettingsOpen: s.setSettingsOpen, searchQuery: s.searchQuery, selectedListId: s.selectedListId, selectList: s.selectList })));
   const lists = useTaskLists();
   const { warningCount, blockedCount } = useSpecialList();
 

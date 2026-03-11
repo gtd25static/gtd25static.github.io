@@ -18,6 +18,7 @@ import { CSS } from '@dnd-kit/utilities';
 import { useFollowUps } from '../../hooks/use-follow-ups';
 import { createTask, reorderTasks } from '../../hooks/use-tasks';
 import { useAppState } from '../../stores/app-state';
+import { useShallow } from 'zustand/react/shallow';
 import type { Task } from '../../db/models';
 import { FollowUpCard } from './FollowUpCard';
 import { InlineTaskForm } from '../tasks/InlineTaskForm';
@@ -49,7 +50,7 @@ interface Props {
 
 export function FollowUpList({ listId, listName }: Props) {
   const { active, archived } = useFollowUps(listId);
-  const { navigateToTaskId, setNavigateToTaskId, creatingTask, setCreatingTask, focusedItemId, focusZone } = useAppState();
+  const { navigateToTaskId, setNavigateToTaskId, creatingTask, setCreatingTask, focusedItemId, focusZone } = useAppState(useShallow(s => ({ navigateToTaskId: s.navigateToTaskId, setNavigateToTaskId: s.setNavigateToTaskId, creatingTask: s.creatingTask, setCreatingTask: s.setCreatingTask, focusedItemId: s.focusedItemId, focusZone: s.focusZone })));
   const [creating, setCreating] = useState(false);
 
   // React to keyboard-triggered task creation (n key) and cancellation (Esc)

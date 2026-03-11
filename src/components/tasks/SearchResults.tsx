@@ -1,4 +1,5 @@
 import { useSearch, type SearchResult } from '../../hooks/use-search';
+import { useShallow } from 'zustand/react/shallow';
 import { useAppState } from '../../stores/app-state';
 
 function HighlightedText({ text, query }: { text: string; query: string }) {
@@ -91,7 +92,7 @@ function ResultItem({ result, query, onNavigate }: { result: SearchResult; query
 }
 
 export function SearchResults() {
-  const { searchQuery, selectList, toggleTaskExpanded, setSearchQuery, expandedTaskIds, setNavigateToTaskId } = useAppState();
+  const { searchQuery, selectList, toggleTaskExpanded, setSearchQuery, expandedTaskIds, setNavigateToTaskId } = useAppState(useShallow(s => ({ searchQuery: s.searchQuery, selectList: s.selectList, toggleTaskExpanded: s.toggleTaskExpanded, setSearchQuery: s.setSearchQuery, expandedTaskIds: s.expandedTaskIds, setNavigateToTaskId: s.setNavigateToTaskId })));
   const results = useSearch(searchQuery);
 
   function handleNavigate(result: SearchResult) {

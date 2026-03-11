@@ -3,6 +3,7 @@ import type { Task, PingCooldown } from '../../db/models';
 import { updateTask, deleteTask, restoreTask } from '../../hooks/use-tasks';
 import { toast } from '../ui/Toast';
 import { useAppState } from '../../stores/app-state';
+import { useShallow } from 'zustand/react/shallow';
 import { isInCooldown, cooldownRemaining, formatCooldown } from '../../hooks/use-follow-ups';
 import { toggleWarning } from '../../hooks/use-warning';
 import { PingCooldownBadge } from './PingCooldownBadge';
@@ -25,7 +26,7 @@ interface Props {
 }
 
 export function FollowUpCard({ task, index, dragHandleProps }: Props) {
-  const { focusedItemId, focusZone, editingItemId, setEditingItemId } = useAppState();
+  const { focusedItemId, focusZone, editingItemId, setEditingItemId } = useAppState(useShallow(s => ({ focusedItemId: s.focusedItemId, focusZone: s.focusZone, editingItemId: s.editingItemId, setEditingItemId: s.setEditingItemId })));
   const focused = focusedItemId === task.id && focusZone === 'main';
   const [editing, setEditing] = useState(false);
   const [editingTitle, setEditingTitle] = useState(false);

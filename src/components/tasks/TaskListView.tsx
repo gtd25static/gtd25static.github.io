@@ -16,6 +16,7 @@ import {
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { useTasks, createTask, reorderTasks } from '../../hooks/use-tasks';
+import { useShallow } from 'zustand/react/shallow';
 import { useAppState } from '../../stores/app-state';
 import { useTaskLists } from '../../hooks/use-task-lists';
 import type { Task } from '../../db/models';
@@ -44,7 +45,7 @@ function SortableTaskItem({ task, index }: { task: Task; index: number }) {
 }
 
 export function TaskListView() {
-  const { selectedListId, navigateToTaskId, setNavigateToTaskId, creatingTask, setCreatingTask, focusedItemId, focusZone } = useAppState();
+  const { selectedListId, navigateToTaskId, setNavigateToTaskId, creatingTask, setCreatingTask, focusedItemId, focusZone } = useAppState(useShallow(s => ({ selectedListId: s.selectedListId, navigateToTaskId: s.navigateToTaskId, setNavigateToTaskId: s.setNavigateToTaskId, creatingTask: s.creatingTask, setCreatingTask: s.setCreatingTask, focusedItemId: s.focusedItemId, focusZone: s.focusZone })));
   const lists = useTaskLists();
   const tasks = useTasks(selectedListId);
   const [creating, setCreating] = useState(false);

@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useAppState } from '../../stores/app-state';
+import { useShallow } from 'zustand/react/shallow';
 import { Modal } from '../ui/Modal';
 import { ThemeSettings } from './ThemeSettings';
 import { GitHubSettings } from './GitHubSettings';
@@ -9,7 +10,7 @@ import { BackupsSettings } from './BackupsSettings';
 type SettingsTab = 'general' | 'backups';
 
 export function SettingsModal() {
-  const { settingsOpen, setSettingsOpen } = useAppState();
+  const { settingsOpen, setSettingsOpen } = useAppState(useShallow(s => ({ settingsOpen: s.settingsOpen, setSettingsOpen: s.setSettingsOpen })));
   const [activeTab, setActiveTab] = useState<SettingsTab>('general');
 
   return (

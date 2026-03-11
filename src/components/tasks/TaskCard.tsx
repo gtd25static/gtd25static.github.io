@@ -3,6 +3,7 @@ import type { Task } from '../../db/models';
 import { formatDate, daysUntil, formatTimeRemaining } from '../../lib/date-utils';
 import { setTaskStatus, deleteTask, restoreTask, updateTask, moveTaskToList } from '../../hooks/use-tasks';
 import { toast } from '../ui/Toast';
+import { useShallow } from 'zustand/react/shallow';
 import { useAppState } from '../../stores/app-state';
 import { useSubtasks } from '../../hooks/use-subtasks';
 import { useTaskLists } from '../../hooks/use-task-lists';
@@ -21,7 +22,7 @@ interface Props {
 }
 
 export function TaskCard({ task, index, dragHandleProps }: Props) {
-  const { expandedTaskIds, toggleTaskExpanded, focusedItemId, focusZone, editingItemId, setEditingItemId } = useAppState();
+  const { expandedTaskIds, toggleTaskExpanded, focusedItemId, focusZone, editingItemId, setEditingItemId } = useAppState(useShallow(s => ({ expandedTaskIds: s.expandedTaskIds, toggleTaskExpanded: s.toggleTaskExpanded, focusedItemId: s.focusedItemId, focusZone: s.focusZone, editingItemId: s.editingItemId, setEditingItemId: s.setEditingItemId })));
   const subtasks = useSubtasks(task.id);
   const expanded = expandedTaskIds.has(task.id);
   const focused = focusedItemId === task.id && focusZone === 'main';

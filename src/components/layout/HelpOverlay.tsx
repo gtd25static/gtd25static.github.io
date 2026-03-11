@@ -1,9 +1,10 @@
+import { useShallow } from 'zustand/react/shallow';
 import { useAppState } from '../../stores/app-state';
 import { DEFAULT_KEYBOARD_SHORTCUTS } from '../../lib/constants';
 import { Modal } from '../ui/Modal';
 
 export function HelpOverlay() {
-  const { helpOpen, setHelpOpen } = useAppState();
+  const { helpOpen, setHelpOpen } = useAppState(useShallow(s => ({ helpOpen: s.helpOpen, setHelpOpen: s.setHelpOpen })));
 
   const shortcuts = [
     { key: DEFAULT_KEYBOARD_SHORTCUTS.navigateDown, desc: 'Navigate down' },

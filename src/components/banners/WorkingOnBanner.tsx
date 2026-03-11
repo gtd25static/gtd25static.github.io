@@ -1,9 +1,10 @@
 import { useWorkingOn, markWorkingDone, markWorkingBlocked, stopWorking } from '../../hooks/use-working-on';
 import { useAppState } from '../../stores/app-state';
+import { useShallow } from 'zustand/react/shallow';
 
 export function WorkingOnBanner() {
   const { task, subtask, isWorking } = useWorkingOn();
-  const { selectList, toggleTaskExpanded, focusedItemId, focusZone, bannerFocusIndex } = useAppState();
+  const { selectList, toggleTaskExpanded, focusedItemId, focusZone, bannerFocusIndex } = useAppState(useShallow(s => ({ selectList: s.selectList, toggleTaskExpanded: s.toggleTaskExpanded, focusedItemId: s.focusedItemId, focusZone: s.focusZone, bannerFocusIndex: s.bannerFocusIndex })));
   const focused = focusedItemId === 'banner-working' && focusZone === 'main';
 
   if (!isWorking || !task) return null;

@@ -6,6 +6,7 @@ import { startWorkingOn } from '../../hooks/use-working-on';
 import { toggleWarning } from '../../hooks/use-warning';
 import { useTaskLists } from '../../hooks/use-task-lists';
 import { useAppState } from '../../stores/app-state';
+import { useShallow } from 'zustand/react/shallow';
 import { SubtaskForm } from './SubtaskForm';
 import { formatDate, dueDateColor } from '../../lib/date-utils';
 import { ContextMenu, type MenuItem } from '../ui/ContextMenu';
@@ -18,7 +19,7 @@ interface Props {
 
 export function SubtaskItem({ subtask }: Props) {
   const lists = useTaskLists();
-  const { focusedItemId, focusZone, editingItemId, setEditingItemId } = useAppState();
+  const { focusedItemId, focusZone, editingItemId, setEditingItemId } = useAppState(useShallow(s => ({ focusedItemId: s.focusedItemId, focusZone: s.focusZone, editingItemId: s.editingItemId, setEditingItemId: s.setEditingItemId })));
   const focused = focusedItemId === subtask.id && focusZone === 'main';
   const [editing, setEditing] = useState(false);
   const [editingTitle, setEditingTitle] = useState(false);

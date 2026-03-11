@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useSubtasks, createSubtask, reorderSubtasks } from '../../hooks/use-subtasks';
 import { useAppState } from '../../stores/app-state';
+import { useShallow } from 'zustand/react/shallow';
 import { SubtaskForm } from './SubtaskForm';
 import { SortableSubtaskList } from './SortableSubtaskList';
 
@@ -10,7 +11,7 @@ interface Props {
 
 export function SubtaskJourney({ taskId }: Props) {
   const subtasks = useSubtasks(taskId);
-  const { addingSubtaskToTaskId, setAddingSubtaskToTaskId, focusedItemId, focusZone } = useAppState();
+  const { addingSubtaskToTaskId, setAddingSubtaskToTaskId, focusedItemId, focusZone } = useAppState(useShallow(s => ({ addingSubtaskToTaskId: s.addingSubtaskToTaskId, setAddingSubtaskToTaskId: s.setAddingSubtaskToTaskId, focusedItemId: s.focusedItemId, focusZone: s.focusZone })));
   const addBtnFocused = focusedItemId === `add-subtask-${taskId}` && focusZone === 'main';
   const [adding, setAdding] = useState(false);
 

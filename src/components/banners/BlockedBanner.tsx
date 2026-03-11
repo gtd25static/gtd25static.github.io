@@ -1,9 +1,10 @@
 import { useBlocked } from '../../hooks/use-blocked';
 import { useAppState } from '../../stores/app-state';
+import { useShallow } from 'zustand/react/shallow';
 
 export function BlockedBanner() {
   const items = useBlocked();
-  const { selectList, toggleTaskExpanded, focusedItemId, focusZone } = useAppState();
+  const { selectList, toggleTaskExpanded, focusedItemId, focusZone } = useAppState(useShallow(s => ({ selectList: s.selectList, toggleTaskExpanded: s.toggleTaskExpanded, focusedItemId: s.focusedItemId, focusZone: s.focusZone })));
 
   if (items.length === 0) return null;
 

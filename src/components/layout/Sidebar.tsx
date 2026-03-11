@@ -18,6 +18,7 @@ import {
 import { CSS } from '@dnd-kit/utilities';
 import { useTaskLists, createTaskList, updateTaskList, deleteTaskList, restoreTaskList, reorderTaskLists } from '../../hooks/use-task-lists';
 import { toast } from '../ui/Toast';
+import { useShallow } from 'zustand/react/shallow';
 import { useAppState } from '../../stores/app-state';
 import { Input } from '../ui/Input';
 import { DropdownMenu } from '../ui/DropdownMenu';
@@ -181,13 +182,13 @@ function SortableListItem({ list, selected, onSelect, highlight, focused }: {
 
 export function Sidebar() {
   const lists = useTaskLists();
-  const { selectedListId, selectList, setSidebarOpen, setSettingsOpen, setTrashOpen, searchQuery, setSearchQuery } = useAppState();
+  const { selectedListId, selectList, setSidebarOpen, setSettingsOpen, setTrashOpen, searchQuery, setSearchQuery } = useAppState(useShallow(s => ({ selectedListId: s.selectedListId, selectList: s.selectList, setSidebarOpen: s.setSidebarOpen, setSettingsOpen: s.setSettingsOpen, setTrashOpen: s.setTrashOpen, searchQuery: s.searchQuery, setSearchQuery: s.setSearchQuery })));
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState('');
   const [newType, setNewType] = useState<ListType>('tasks');
   const searchRef = useRef<HTMLInputElement>(null);
 
-  const { focusedItemId, focusZone } = useAppState();
+  const { focusedItemId, focusZone } = useAppState(useShallow(s => ({ focusedItemId: s.focusedItemId, focusZone: s.focusZone })));
   const { warningCount, blockedCount, recurringCount } = useSpecialList();
   const specialTotal = warningCount + blockedCount + recurringCount;
 

@@ -2,11 +2,12 @@ import { useDueSoon } from '../../hooks/use-due-soon';
 import { daysUntil, dueDateColor } from '../../lib/date-utils';
 import { startWorkingOn } from '../../hooks/use-working-on';
 import { useAppState } from '../../stores/app-state';
+import { useShallow } from 'zustand/react/shallow';
 import { db } from '../../db';
 
 export function DueSoonBanner() {
   const items = useDueSoon();
-  const { selectList, toggleTaskExpanded } = useAppState();
+  const { selectList, toggleTaskExpanded } = useAppState(useShallow(s => ({ selectList: s.selectList, toggleTaskExpanded: s.toggleTaskExpanded })));
 
   if (items.length === 0) return null;
 

@@ -1,4 +1,5 @@
 import { useSpecialList, type SpecialItem } from '../../hooks/use-special-list';
+import { useShallow } from 'zustand/react/shallow';
 import { useAppState } from '../../stores/app-state';
 import { setTaskStatus } from '../../hooks/use-tasks';
 import { setSubtaskStatus } from '../../hooks/use-subtasks';
@@ -16,7 +17,7 @@ function timeSince(timestamp: number): string {
 }
 
 function SpecialItemRow({ item }: { item: SpecialItem }) {
-  const { selectList, toggleTaskExpanded } = useAppState();
+  const { selectList, toggleTaskExpanded } = useAppState(useShallow(s => ({ selectList: s.selectList, toggleTaskExpanded: s.toggleTaskExpanded })));
 
   function navigateToSource() {
     selectList(item.listId);

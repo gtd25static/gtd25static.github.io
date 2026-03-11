@@ -3,13 +3,14 @@ import { useWorkingOn, markWorkingDone, markWorkingBlocked, stopWorking } from '
 import { useSuggestion } from '../../hooks/use-suggestion';
 import { useDueSoon } from '../../hooks/use-due-soon';
 import { useAppState } from '../../stores/app-state';
+import { useShallow } from 'zustand/react/shallow';
 import { daysUntil } from '../../lib/date-utils';
 import { startWorkingOn, startWorkingOnTask } from '../../hooks/use-working-on';
 import { db } from '../../db';
 
 function WorkingSection() {
   const { task, subtask, isWorking } = useWorkingOn();
-  const { selectList, toggleTaskExpanded } = useAppState();
+  const { selectList, toggleTaskExpanded } = useAppState(useShallow(s => ({ selectList: s.selectList, toggleTaskExpanded: s.toggleTaskExpanded })));
 
   if (!isWorking || !task) return null;
 
@@ -56,7 +57,7 @@ function WorkingSection() {
 function SuggestionSection() {
   const { isWorking } = useWorkingOn();
   const { suggestion, rollAgain } = useSuggestion();
-  const { selectList, toggleTaskExpanded } = useAppState();
+  const { selectList, toggleTaskExpanded } = useAppState(useShallow(s => ({ selectList: s.selectList, toggleTaskExpanded: s.toggleTaskExpanded })));
 
   // Don't show suggestion while working on something
   if (isWorking) return null;
@@ -120,7 +121,7 @@ interface DueBucket {
 
 function DueSoonSection() {
   const items = useDueSoon();
-  const { selectList, toggleTaskExpanded } = useAppState();
+  const { selectList, toggleTaskExpanded } = useAppState(useShallow(s => ({ selectList: s.selectList, toggleTaskExpanded: s.toggleTaskExpanded })));
   const [, setRefreshKey] = useState(0);
 
   // Auto-refresh at midnight

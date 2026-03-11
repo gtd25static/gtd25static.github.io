@@ -1,6 +1,7 @@
 import { Modal } from '../ui/Modal';
 import { useTrash, restoreFromTrash, permanentlyDelete, type TrashItem } from '../../hooks/use-trash';
 import { useAppState } from '../../stores/app-state';
+import { useShallow } from 'zustand/react/shallow';
 
 const typeLabels: Record<TrashItem['type'], string> = {
   list: 'List',
@@ -26,7 +27,7 @@ function timeAgo(timestamp: number): string {
 }
 
 export function TrashModal() {
-  const { trashOpen, setTrashOpen } = useAppState();
+  const { trashOpen, setTrashOpen } = useAppState(useShallow(s => ({ trashOpen: s.trashOpen, setTrashOpen: s.setTrashOpen })));
 
   if (!trashOpen) return null;
 
