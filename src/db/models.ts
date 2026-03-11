@@ -77,6 +77,7 @@ export interface Settings {
 export interface SyncMeta {
   id: string; // always 'sync-meta'
   remoteSha?: string;
+  lastSnapshotSha?: string;
   lastPulledAt?: number;
   lastPushedAt?: number;
   pendingChanges: boolean;

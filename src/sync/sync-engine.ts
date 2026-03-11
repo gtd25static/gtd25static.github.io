@@ -754,13 +754,18 @@ export async function syncNow(manual = false, pushLimit?: number): Promise<numbe
 
     // Reconcile with snapshot on first sync of session to catch entities
     // absorbed by compaction while this device was offline.
+    // Skip if snapshot SHA unchanged since last reconcile (no compaction happened).
     if (lastSyncCompletedAt === 0 && remoteSnapshotFile) {
-      const reconParsed = safeParseJson<SyncData>(remoteSnapshotFile.data, 'snapshot (reconcile)');
-      if (reconParsed.ok) {
-        const snapshotData = remoteSalt
-          ? await decryptSyncData(encKey, reconParsed.value)
-          : reconParsed.value;
-        await reconcileFromSnapshot(snapshotData);
+      const syncMeta = await db.syncMeta.get('sync-meta');
+      if (remoteSnapshotFile.sha !== syncMeta?.lastSnapshotSha) {
+        const reconParsed = safeParseJson<SyncData>(remoteSnapshotFile.data, 'snapshot (reconcile)');
+        if (reconParsed.ok) {
+          const snapshotData = remoteSalt
+            ? await decryptSyncData(encKey, reconParsed.value)
+            : reconParsed.value;
+          await reconcileFromSnapshot(snapshotData);
+        }
+        await db.syncMeta.update('sync-meta', { lastSnapshotSha: remoteSnapshotFile.sha });
       }
     }
 
