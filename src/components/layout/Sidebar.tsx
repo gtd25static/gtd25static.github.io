@@ -58,13 +58,19 @@ function ListItem({ list, selected, onSelect, highlight, focused }: {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState('');
 
+  const handleSave = () => {
+    if (editName.trim() && editName.trim() !== list.name) {
+      updateTaskList(list.id, { name: editName.trim() });
+    }
+    setEditingId(null);
+  };
+
   if (editingId === list.id) {
     return (
       <form
         onSubmit={(e) => {
           e.preventDefault();
-          if (editName.trim()) updateTaskList(list.id, { name: editName.trim() });
-          setEditingId(null);
+          handleSave();
         }}
         className="flex items-center gap-1 px-3 py-1"
       >
@@ -73,8 +79,8 @@ function ListItem({ list, selected, onSelect, highlight, focused }: {
           onChange={(e) => setEditName(e.target.value)}
           className="flex-1 text-sm"
           autoFocus
-          onBlur={() => setEditingId(null)}
-          onKeyDown={(e) => { if (e.key === 'Escape') setEditingId(null); }}
+          onBlur={handleSave}
+          onKeyDown={(e) => { if (e.key === 'Escape') { setEditName(list.name); setEditingId(null); } }}
         />
       </form>
     );

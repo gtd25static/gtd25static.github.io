@@ -2,6 +2,7 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../db';
 import type { Task, Subtask } from '../db/models';
 import { setSubtaskStatus } from './use-subtasks';
+import { setTaskStatus } from './use-tasks';
 import { recordChangeInTx, recordChangeBatchInTx, ensureDeviceId } from '../sync/change-log';
 import { scheduleSyncDebounced } from '../sync/sync-engine';
 
@@ -97,7 +98,15 @@ export async function stopWorking() {
 export async function markWorkingDone() {
   const working = await db.subtasks.where('status').equals('working').toArray();
   const active = working.find((s) => !s.deletedAt);
-  if (!active) return;
+  if (!active) {
+    // No working subtask — check for working task
+    const workingTasks = await db.tasks.where('status').equals('working').toArray();
+    const activeTask = workingTasks.find((t) => !t.deletedAt);
+    if (activeTask) {
+      await setTaskStatus(activeTask.id, 'done');
+    }
+    return;
+  }
 
   const now = Date.now();
   await ensureDeviceId();
@@ -134,7 +143,15 @@ export async function markWorkingDone() {
 export async function markWorkingBlocked() {
   const working = await db.subtasks.where('status').equals('working').toArray();
   const active = working.find((s) => !s.deletedAt);
-  if (!active) return;
+  if (!active) {
+    // No working subtask — check for working task
+    const workingTasks = await db.tasks.where('status').equals('working').toArray();
+    const activeTask = workingTasks.find((t) => !t.deletedAt);
+    if (activeTask) {
+      await setTaskStatus(activeTask.id, 'blocked');
+    }
+    return;
+  }
 
   await ensureDeviceId();
   await db.transaction('rw', [db.subtasks, db.changeLog], async () => {
