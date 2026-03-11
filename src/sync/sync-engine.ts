@@ -61,11 +61,15 @@ const FIRST_BATCH_DELAY_MS = 15_000;
 const BATCH_INTERVAL_MS = 30_000;
 const FIRST_BATCH_SIZE = 5;
 const BATCH_SIZE = 10;
+const MIN_RESYNC_INTERVAL_MS = 10_000;
+const VISIBILITY_DEBOUNCE_MS = 3_000;
 
 // --- Scheduler state machine ---
 type SchedulerState = 'stopped' | 'idle' | 'first-wait' | 'batching';
 let schedulerState: SchedulerState = 'stopped';
 let schedulerTimer: ReturnType<typeof setTimeout> | null = null;
+let lastSyncCompletedAt = 0;
+let visibilityDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 
 // --- Error backoff state ---
 let consecutiveErrors = 0;
@@ -248,11 +252,21 @@ function handleVisibilityChange() {
   if (schedulerState === 'stopped') return;
   if (document.visibilityState === 'hidden') {
     clearSchedulerTimer();
+    if (visibilityDebounceTimer) { clearTimeout(visibilityDebounceTimer); visibilityDebounceTimer = null; }
     schedulerState = 'idle';
     flushOnHide(); // single keepalive PUT, no GETs needed
   } else {
-    // Visible — immediate pull then restart idle polling
-    syncNow().then(() => startIdlePoll());
+    // Visible — skip sync if we synced recently
+    if (Date.now() - lastSyncCompletedAt < MIN_RESYNC_INTERVAL_MS) {
+      startIdlePoll();
+      return;
+    }
+    // Debounce: wait before syncing to avoid rapid focus/blur cycles
+    if (visibilityDebounceTimer) clearTimeout(visibilityDebounceTimer);
+    visibilityDebounceTimer = setTimeout(() => {
+      visibilityDebounceTimer = null;
+      syncNow().then(() => startIdlePoll());
+    }, VISIBILITY_DEBOUNCE_MS);
   }
 }
 
@@ -452,6 +466,7 @@ export async function syncNow(manual = false, pushLimit?: number): Promise<numbe
         lastPushedAt: Date.now(),
         pendingChanges: false,
       });
+      lastSyncCompletedAt = Date.now();
       setDirtyFlag(false);
       reportProgress('done', 'Sync complete', 1.0);
       toast('Migrated sync data to new format', 'success');
@@ -516,6 +531,7 @@ export async function syncNow(manual = false, pushLimit?: number): Promise<numbe
         lastPushedAt: Date.now(),
         pendingChanges: false,
       });
+      lastSyncCompletedAt = Date.now();
       setDirtyFlag(false);
       reportProgress('done', 'Sync complete', 1.0);
       if (manual) toast('Initial sync complete', 'success');
@@ -561,6 +577,7 @@ export async function syncNow(manual = false, pushLimit?: number): Promise<numbe
         lastPulledAt: Date.now(),
         pendingChanges: false,
       });
+      lastSyncCompletedAt = Date.now();
       setDirtyFlag(false);
       reportProgress('done', 'Sync complete', 1.0);
       if (manual) toast('Synced from remote', 'success');
@@ -650,6 +667,7 @@ export async function syncNow(manual = false, pushLimit?: number): Promise<numbe
           lastPushedAt: Date.now(),
           pendingChanges: false,
         });
+        lastSyncCompletedAt = Date.now();
         setDirtyFlag(false);
         reportProgress('done', 'Sync complete', 1.0);
         return 0;
@@ -844,6 +862,7 @@ export async function syncNow(manual = false, pushLimit?: number): Promise<numbe
     // Reset error backoff on success
     consecutiveErrors = 0;
 
+    lastSyncCompletedAt = Date.now();
     setDirtyFlag(false);
     reportProgress('done', 'Sync complete', 1.0, foreignEntries.length, pendingEntries.length);
     notifySyncSuccess();
@@ -1065,6 +1084,7 @@ export async function forcePush() {
       lastPushedAt: Date.now(),
       pendingChanges: false,
     });
+    lastSyncCompletedAt = Date.now();
     reportProgress('done', 'Sync complete', 1.0);
     notifySyncSuccess();
     toast('Force push complete', 'success');
@@ -1162,6 +1182,7 @@ export async function forcePull() {
       lastPulledAt: Date.now(),
       pendingChanges: false,
     });
+    lastSyncCompletedAt = Date.now();
     reportProgress('done', 'Sync complete', 1.0);
     notifySyncSuccess();
     toast('Force pull complete', 'success');
@@ -1310,6 +1331,8 @@ export function __resetForTesting() {
   consecutiveErrors = 0;
   if (rateLimitTimer) { clearTimeout(rateLimitTimer); rateLimitTimer = null; }
   lastErrorToastAt = 0;
+  lastSyncCompletedAt = 0;
+  if (visibilityDebounceTimer) { clearTimeout(visibilityDebounceTimer); visibilityDebounceTimer = null; }
   versionIncompatibleListeners.clear();
   syncSuccessListeners.clear();
   passwordNeededListeners.clear();
