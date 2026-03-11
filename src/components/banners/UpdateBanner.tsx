@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { onVersionIncompatible, offVersionIncompatible } from '../../sync/sync-engine';
+import { onVersionIncompatible, offVersionIncompatible, onSyncSuccess, offSyncSuccess } from '../../sync/sync-engine';
 import { useServiceWorker } from '../../hooks/use-service-worker';
 
 export function UpdateBanner() {
@@ -13,6 +13,11 @@ export function UpdateBanner() {
     };
     onVersionIncompatible(handler);
     return () => offVersionIncompatible(handler);
+  }, [checkForUpdate]);
+
+  useEffect(() => {
+    onSyncSuccess(checkForUpdate);
+    return () => offSyncSuccess(checkForUpdate);
   }, [checkForUpdate]);
 
   if (!syncIncompat && !needRefresh) return null;

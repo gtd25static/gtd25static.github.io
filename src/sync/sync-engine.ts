@@ -88,6 +88,21 @@ function notifyVersionIncompatible() {
   for (const cb of versionIncompatibleListeners) cb();
 }
 
+// --- Sync success callbacks ---
+const syncSuccessListeners: Set<() => void> = new Set();
+
+export function onSyncSuccess(cb: () => void) {
+  syncSuccessListeners.add(cb);
+}
+
+export function offSyncSuccess(cb: () => void) {
+  syncSuccessListeners.delete(cb);
+}
+
+function notifySyncSuccess() {
+  for (const cb of syncSuccessListeners) cb();
+}
+
 // --- Encryption password callbacks ---
 type PasswordNeededCallback = (salt: string) => void;
 const passwordNeededListeners: Set<PasswordNeededCallback> = new Set();
@@ -831,6 +846,7 @@ export async function syncNow(manual = false, pushLimit?: number): Promise<numbe
 
     setDirtyFlag(false);
     reportProgress('done', 'Sync complete', 1.0, foreignEntries.length, pendingEntries.length);
+    notifySyncSuccess();
     if (manual) toast('Sync complete', 'success');
 
     // Fire-and-forget: attempt backup creation (15-min gate makes this instant 99% of the time)
@@ -1050,6 +1066,7 @@ export async function forcePush() {
       pendingChanges: false,
     });
     reportProgress('done', 'Sync complete', 1.0);
+    notifySyncSuccess();
     toast('Force push complete', 'success');
   } catch (err) {
     if (err instanceof DOMException && err.name === 'AbortError') return;
@@ -1146,6 +1163,7 @@ export async function forcePull() {
       pendingChanges: false,
     });
     reportProgress('done', 'Sync complete', 1.0);
+    notifySyncSuccess();
     toast('Force pull complete', 'success');
   } catch (err) {
     if (err instanceof DOMException && err.name === 'AbortError') return;
@@ -1293,6 +1311,7 @@ export function __resetForTesting() {
   if (rateLimitTimer) { clearTimeout(rateLimitTimer); rateLimitTimer = null; }
   lastErrorToastAt = 0;
   versionIncompatibleListeners.clear();
+  syncSuccessListeners.clear();
   passwordNeededListeners.clear();
   onSyncProgress = null;
 }

@@ -4,6 +4,8 @@ import { useRegisterSW } from 'virtual:pwa-register/react';
 const UPDATE_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
 
 export function useServiceWorker() {
+  const registrationRef = useRef<ServiceWorkerRegistration | undefined>(undefined);
+
   const {
     needRefresh: [needRefresh],
     updateServiceWorker,
@@ -12,8 +14,6 @@ export function useServiceWorker() {
       registrationRef.current = registration;
     },
   });
-
-  const registrationRef = useRef<ServiceWorkerRegistration | undefined>(undefined);
 
   const checkForUpdate = useCallback(() => {
     registrationRef.current?.update();
