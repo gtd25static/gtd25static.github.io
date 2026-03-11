@@ -34,6 +34,41 @@ const MAX_RETRIES = 3;
 const MAX_REMOTE_BACKUPS = 2;
 const SYNC_TIMEOUT_MS = 45_000;
 
+// --- Snapshot reconciliation (catches compaction gaps) ---
+async function reconcileFromSnapshot(snapshot: SyncData) {
+  await db.transaction('rw', [db.taskLists, db.tasks, db.subtasks], async () => {
+    // TaskLists
+    const localLists = new Map(
+      (await db.taskLists.toArray()).map(l => [l.id, l.updatedAt])
+    );
+    const listsToUpsert = snapshot.taskLists.filter(l => {
+      const localTs = localLists.get(l.id);
+      return localTs === undefined || l.updatedAt > localTs;
+    });
+    if (listsToUpsert.length > 0) await db.taskLists.bulkPut(listsToUpsert);
+
+    // Tasks
+    const localTasks = new Map(
+      (await db.tasks.toArray()).map(t => [t.id, t.updatedAt])
+    );
+    const tasksToUpsert = snapshot.tasks.filter(t => {
+      const localTs = localTasks.get(t.id);
+      return localTs === undefined || t.updatedAt > localTs;
+    });
+    if (tasksToUpsert.length > 0) await db.tasks.bulkPut(tasksToUpsert);
+
+    // Subtasks
+    const localSubs = new Map(
+      (await db.subtasks.toArray()).map(s => [s.id, s.updatedAt])
+    );
+    const subsToUpsert = snapshot.subtasks.filter(s => {
+      const localTs = localSubs.get(s.id);
+      return localTs === undefined || s.updatedAt > localTs;
+    });
+    if (subsToUpsert.length > 0) await db.subtasks.bulkPut(subsToUpsert);
+  });
+}
+
 // --- Safe JSON parsing ---
 function safeParseJson<T>(raw: string, label: string): { ok: true; value: T } | { ok: false; error: string } {
   try {
@@ -715,6 +750,18 @@ export async function syncNow(manual = false, pushLimit?: number): Promise<numbe
     foreignEntries = await decryptChangeEntries(encKey, foreignEntries);
     if (foreignEntries.length > 0) {
       await applyRemoteEntries(foreignEntries);
+    }
+
+    // Reconcile with snapshot on first sync of session to catch entities
+    // absorbed by compaction while this device was offline.
+    if (lastSyncCompletedAt === 0 && remoteSnapshotFile) {
+      const reconParsed = safeParseJson<SyncData>(remoteSnapshotFile.data, 'snapshot (reconcile)');
+      if (reconParsed.ok) {
+        const snapshotData = remoteSalt
+          ? await decryptSyncData(encKey, reconParsed.value)
+          : reconParsed.value;
+        await reconcileFromSnapshot(snapshotData);
+      }
     }
 
     // Get our pending local changes (optionally limited for batch pushes)
