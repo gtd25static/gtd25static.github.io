@@ -8,6 +8,20 @@ interface LocalMigration {
 
 const localMigrations: LocalMigration[] = [
   {
+    fromVersion: 0,
+    toVersion: 2,
+    migrate: async () => {
+      // No-op: versions 0–1 predate the local migration system; Dexie handles schema changes
+    },
+  },
+  {
+    fromVersion: 1,
+    toVersion: 2,
+    migrate: async () => {
+      // No-op: version 1 predates the local migration system
+    },
+  },
+  {
     fromVersion: 2,
     toVersion: 3,
     migrate: async () => {
