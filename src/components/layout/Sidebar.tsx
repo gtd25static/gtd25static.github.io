@@ -91,7 +91,11 @@ function ListItem({ list, selected, onSelect, highlight, focused }: {
           className="flex-1 min-w-0 bg-transparent text-sm text-zinc-900 outline-none border-b border-accent-500 dark:text-zinc-100"
           autoFocus
           onBlur={handleSave}
-          onKeyDown={(e) => { if (e.key === 'Escape') { setEditName(list.name); setEditingId(null); } }}
+          onKeyDown={(e) => {
+            // Stop propagation to prevent dnd-kit keyboard sensor from triggering a drag on Enter/Space
+            e.stopPropagation();
+            if (e.key === 'Escape') { setEditName(list.name); setEditingId(null); }
+          }}
         />
       </form>
     );
