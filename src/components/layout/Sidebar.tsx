@@ -72,12 +72,23 @@ function ListItem({ list, selected, onSelect, highlight, focused }: {
           e.preventDefault();
           handleSave();
         }}
-        className="flex items-center gap-1 px-3 py-1"
+        className="flex items-center gap-3 px-3 py-3.5 md:py-2"
       >
-        <Input
+        {list.type === 'follow-ups' ? (
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none" className="shrink-0 text-zinc-400">
+            <circle cx="10" cy="10" r="7" stroke="currentColor" strokeWidth="1.5" />
+            <path d="M10 6.5v4l2.5 1.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        ) : (
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none" className="shrink-0 text-zinc-400">
+            <rect x="3" y="3" width="14" height="14" rx="2" stroke="currentColor" strokeWidth="1.5" fill="currentColor" fillOpacity={0.15} />
+            <path d="M6 10l2.5 2.5L14 7" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        )}
+        <input
           value={editName}
           onChange={(e) => setEditName(e.target.value)}
-          className="flex-1 text-sm"
+          className="flex-1 min-w-0 bg-transparent text-sm text-zinc-900 outline-none border-b border-accent-500 dark:text-zinc-100"
           autoFocus
           onBlur={handleSave}
           onKeyDown={(e) => { if (e.key === 'Escape') { setEditName(list.name); setEditingId(null); } }}
