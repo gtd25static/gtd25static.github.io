@@ -5,6 +5,8 @@ import { ensureDefaults } from './db';
 import { useKeyboard } from './hooks/use-keyboard';
 import { useTheme } from './components/settings/ThemeSettings';
 import { checkRecurringTasks } from './hooks/use-recurring';
+import { SpecialListProvider } from './hooks/use-special-list';
+import { SyncProvider } from './sync/use-sync';
 
 export default function App() {
   useEffect(() => {
@@ -23,7 +25,11 @@ export default function App() {
 
   return (
     <ErrorBoundary>
-      <AppShell />
+      <SyncProvider>
+        <SpecialListProvider>
+          <AppShell />
+        </SpecialListProvider>
+      </SyncProvider>
     </ErrorBoundary>
   );
 }

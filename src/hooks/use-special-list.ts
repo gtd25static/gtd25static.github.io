@@ -1,3 +1,4 @@
+import { createContext, useContext, type ReactNode } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../db';
 
@@ -12,7 +13,27 @@ export interface SpecialItem {
   entityType: 'task' | 'subtask';
 }
 
-export function useSpecialList() {
+export interface SpecialListData {
+  items: SpecialItem[];
+  warningCount: number;
+  blockedCount: number;
+  recurringCount: number;
+}
+
+const defaultData: SpecialListData = { items: [], warningCount: 0, blockedCount: 0, recurringCount: 0 };
+
+const SpecialListContext = createContext<SpecialListData>(defaultData);
+
+export function SpecialListProvider({ children }: { children: ReactNode }) {
+  const data = useSpecialList();
+  return <SpecialListContext.Provider value={data}>{children}</SpecialListContext.Provider>;
+}
+
+export function useSpecialListContext(): SpecialListData {
+  return useContext(SpecialListContext);
+}
+
+function useSpecialList() {
   const data = useLiveQuery(async () => {
     const now = Date.now();
     const items: SpecialItem[] = [];

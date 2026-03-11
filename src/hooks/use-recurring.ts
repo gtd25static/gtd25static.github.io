@@ -27,13 +27,12 @@ export function computeNextOccurrence(
 
 export async function checkRecurringTasks() {
   const now = Date.now();
-  const allTasks = await db.tasks.toArray();
+  // Use indexed query on nextOccurrence instead of full table scan
+  const dueTasks = await db.tasks.where('nextOccurrence').belowOrEqual(now).toArray();
 
   // Find tasks that need to be reset
-  const tasksToReset = allTasks.filter((t) => {
+  const tasksToReset = dueTasks.filter((t) => {
     if (t.deletedAt || !t.recurrenceType || !t.recurrenceInterval || !t.recurrenceUnit) return false;
-    if (!t.nextOccurrence) return false;
-    if (now < t.nextOccurrence) return false;
 
     if (t.recurrenceType === 'time-based') {
       // Only reset if currently done

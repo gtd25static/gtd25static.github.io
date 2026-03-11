@@ -1,4 +1,4 @@
-import { useSync } from '../../sync/use-sync';
+import { useSyncContext } from '../../sync/use-sync';
 
 function friendlyError(msg: string): string {
   const lower = msg.toLowerCase();
@@ -25,7 +25,7 @@ function SyncCounts({ pulled, pushed }: { pulled: number; pushed: number }) {
 }
 
 export function SyncIndicator() {
-  const { syncEnabled, pendingChanges, syncProgress, lastSyncStats, lastError, triggerSync } = useSync();
+  const { syncEnabled, pendingChanges, syncProgress, lastSyncStats, lastError, triggerSync } = useSyncContext();
 
   if (!syncEnabled) return null;
 

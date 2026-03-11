@@ -1,4 +1,4 @@
-import { useSpecialList, type SpecialItem } from '../../hooks/use-special-list';
+import { useSpecialListContext, type SpecialItem } from '../../hooks/use-special-list';
 import { useShallow } from 'zustand/react/shallow';
 import { useAppState } from '../../stores/app-state';
 import { setTaskStatus } from '../../hooks/use-tasks';
@@ -123,7 +123,7 @@ function SpecialItemRow({ item }: { item: SpecialItem }) {
 }
 
 export function SpecialListView() {
-  const { items, warningCount, blockedCount, recurringCount } = useSpecialList();
+  const { items, warningCount, blockedCount, recurringCount } = useSpecialListContext();
 
   const warnings = items.filter((i) => i.type === 'warning');
   const blocked = items.filter((i) => i.type === 'blocked');

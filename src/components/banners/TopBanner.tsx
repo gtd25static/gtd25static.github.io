@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useDeferredValue } from 'react';
 import { useWorkingOn, markWorkingDone, markWorkingBlocked, stopWorking } from '../../hooks/use-working-on';
 import { useSuggestion } from '../../hooks/use-suggestion';
 import { useDueSoon } from '../../hooks/use-due-soon';
@@ -120,7 +120,8 @@ interface DueBucket {
 }
 
 function DueSoonSection() {
-  const items = useDueSoon();
+  const rawItems = useDueSoon();
+  const items = useDeferredValue(rawItems);
   const { selectList, toggleTaskExpanded } = useAppState(useShallow(s => ({ selectList: s.selectList, toggleTaskExpanded: s.toggleTaskExpanded })));
   const [, setRefreshKey] = useState(0);
 

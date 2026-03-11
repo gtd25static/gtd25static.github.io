@@ -26,7 +26,7 @@ import { db } from '../../db';
 import type { ListType } from '../../db/models';
 import { SyncIndicator } from './SyncIndicator';
 import { GIT_COMMIT } from '../../lib/constants';
-import { useSpecialList } from '../../hooks/use-special-list';
+import { useSpecialListContext } from '../../hooks/use-special-list';
 
 function useAllTaskCounts(listIds: string[]): Map<string, number> {
   const key = listIds.join(',');
@@ -197,7 +197,7 @@ export function Sidebar() {
 
   const { focusedItemId, focusZone } = useAppState(useShallow(s => ({ focusedItemId: s.focusedItemId, focusZone: s.focusZone })));
   const taskCounts = useAllTaskCounts(lists.map((l) => l.id));
-  const { warningCount, blockedCount, recurringCount } = useSpecialList();
+  const { warningCount, blockedCount, recurringCount } = useSpecialListContext();
   const specialTotal = warningCount + blockedCount + recurringCount;
 
   const sensors = useSensors(

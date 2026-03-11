@@ -14,12 +14,12 @@ import { TrashModal } from '../trash/TrashModal';
 import { HelpOverlay } from './HelpOverlay';
 import { SyncIndicator } from './SyncIndicator';
 import { ToastContainer } from '../ui/Toast';
-import { useSpecialList } from '../../hooks/use-special-list';
+import { useSpecialListContext } from '../../hooks/use-special-list';
 
 export function AppShell() {
   const { sidebarOpen, setSidebarOpen, setSettingsOpen, searchQuery, selectedListId, selectList } = useAppState(useShallow(s => ({ sidebarOpen: s.sidebarOpen, setSidebarOpen: s.setSidebarOpen, setSettingsOpen: s.setSettingsOpen, searchQuery: s.searchQuery, selectedListId: s.selectedListId, selectList: s.selectList })));
   const lists = useTaskLists();
-  const { warningCount, blockedCount } = useSpecialList();
+  const { warningCount, blockedCount } = useSpecialListContext();
 
   // Swipe to open/close sidebar on mobile
   const touchRef = useRef<{ x: number; y: number } | null>(null);
