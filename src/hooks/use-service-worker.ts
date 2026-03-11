@@ -31,11 +31,15 @@ export function useServiceWorker() {
     };
     document.addEventListener('visibilitychange', onVisibilityChange);
 
+    // Check on window focus (covers standalone PWA restore, where visibilitychange may not fire)
+    window.addEventListener('focus', checkForUpdate);
+
     // Check every 30 minutes
     const interval = setInterval(checkForUpdate, UPDATE_INTERVAL_MS);
 
     return () => {
       document.removeEventListener('visibilitychange', onVisibilityChange);
+      window.removeEventListener('focus', checkForUpdate);
       clearInterval(interval);
     };
   }, [checkForUpdate]);
