@@ -6,6 +6,8 @@ import { clientsClaim } from 'workbox-core';
 declare let self: ServiceWorkerGlobalScope;
 
 // --- Lifecycle diagnostics ---
+console.debug('[SW] script evaluated at', new Date().toISOString());
+
 self.addEventListener('install', () => {
   console.debug('[SW] install event fired at', new Date().toISOString());
 });
@@ -21,8 +23,15 @@ self.addEventListener('fetch', (event) => {
   }
 });
 
-// --- Workbox setup (equivalent to previous generateSW output) ---
-self.skipWaiting();
+// Message-based skipWaiting for registerType: 'prompt'
+self.addEventListener('message', (event) => {
+  if (event.data && event.data.type === 'SKIP_WAITING') {
+    console.debug('[SW] SKIP_WAITING message received');
+    self.skipWaiting();
+  }
+});
+
+// --- Workbox setup ---
 clientsClaim();
 precacheAndRoute(self.__WB_MANIFEST);
 cleanupOutdatedCaches();

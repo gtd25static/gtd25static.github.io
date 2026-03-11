@@ -2,9 +2,11 @@ import { useEffect, useCallback, useRef } from 'react';
 import { useRegisterSW } from 'virtual:pwa-register/react';
 
 const UPDATE_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
+const MIN_UPDATE_CHECK_MS = 10 * 60 * 1000; // 10 minutes — debounce visibility checks
 
 export function useServiceWorker() {
   const registrationRef = useRef<ServiceWorkerRegistration | undefined>(undefined);
+  const lastCheckRef = useRef(0);
 
   const {
     needRefresh: [needRefresh],
@@ -16,11 +18,14 @@ export function useServiceWorker() {
   });
 
   const checkForUpdate = useCallback(() => {
+    const now = Date.now();
+    if (now - lastCheckRef.current < MIN_UPDATE_CHECK_MS) return;
+    lastCheckRef.current = now;
     registrationRef.current?.update();
   }, []);
 
   useEffect(() => {
-    // Check on tab focus
+    // Check on tab focus (debounced to at most once per 10 minutes)
     const onVisibilityChange = () => {
       if (document.visibilityState === 'visible') checkForUpdate();
     };
