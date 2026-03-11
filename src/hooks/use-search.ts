@@ -1,3 +1,4 @@
+import { useState, useEffect } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../db';
 import type { Task, TaskList, ListType } from '../db/models';
@@ -17,11 +18,22 @@ export interface SearchResult {
 }
 
 export function useSearch(query: string): SearchResult[] {
+  // Debounce the query to avoid scanning on every keystroke
+  const [debouncedQuery, setDebouncedQuery] = useState(query);
+  useEffect(() => {
+    if (!query) {
+      setDebouncedQuery('');
+      return;
+    }
+    const timer = setTimeout(() => setDebouncedQuery(query), 250);
+    return () => clearTimeout(timer);
+  }, [query]);
+
   return useLiveQuery(
     async () => {
-      if (!query || query.length < 1) return [];
+      if (!debouncedQuery || debouncedQuery.length < 1) return [];
 
-      const q = query.toLowerCase();
+      const q = debouncedQuery.toLowerCase();
 
       const lists = await db.taskLists.toArray();
       const liveLists = lists.filter((l) => !l.deletedAt);
@@ -74,7 +86,7 @@ export function useSearch(query: string): SearchResult[] {
 
       return results;
     },
-    [query],
+    [debouncedQuery],
     [],
   );
 }

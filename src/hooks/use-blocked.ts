@@ -12,21 +12,37 @@ interface BlockedItem {
 export function useBlocked(): BlockedItem[] {
   const items = useLiveQuery(async () => {
     const result: BlockedItem[] = [];
-    const tasks = await db.tasks.toArray();
-    const subtasks = await db.subtasks.toArray();
 
-    for (const t of tasks) {
+    // Use indexed queries instead of full table scans
+    const [blockedTasks, blockedSubs] = await Promise.all([
+      db.tasks.where('status').equals('blocked').toArray(),
+      db.subtasks.where('status').equals('blocked').toArray(),
+    ]);
+
+    // Blocked tasks (direct)
+    for (const t of blockedTasks) {
       if (t.deletedAt || t.status === 'done' || t.archived) continue;
+      result.push({ id: t.id, listId: t.listId, title: t.title, reason: 'task' });
+    }
 
-      if (t.status === 'blocked') {
-        result.push({ id: t.id, listId: t.listId, title: t.title, reason: 'task' });
-        continue;
-      }
+    // Group blocked subtasks by taskId
+    const blockedByTask = new Map<string, number>();
+    for (const s of blockedSubs) {
+      if (s.deletedAt) continue;
+      blockedByTask.set(s.taskId, (blockedByTask.get(s.taskId) || 0) + 1);
+    }
 
-      const taskSubtasks = subtasks.filter((s) => s.taskId === t.id && !s.deletedAt);
-      const blockedCount = taskSubtasks.filter((s) => s.status === 'blocked').length;
-      if (blockedCount > 0) {
-        result.push({ id: t.id, listId: t.listId, title: t.title, reason: 'subtask', blockedSubtaskCount: blockedCount });
+    // Skip tasks already added as directly blocked
+    const directlyBlocked = new Set(blockedTasks.map((t) => t.id));
+
+    // Look up parent tasks for subtask-blocked entries
+    const parentIds = [...blockedByTask.keys()].filter((id) => !directlyBlocked.has(id));
+    if (parentIds.length > 0) {
+      const parents = await db.tasks.bulkGet(parentIds);
+      for (const parent of parents) {
+        if (!parent || parent.deletedAt || parent.status === 'done' || parent.archived) continue;
+        const count = blockedByTask.get(parent.id)!;
+        result.push({ id: parent.id, listId: parent.listId, title: parent.title, reason: 'subtask', blockedSubtaskCount: count });
       }
     }
 

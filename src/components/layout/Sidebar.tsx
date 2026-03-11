@@ -28,11 +28,17 @@ import { SyncIndicator } from './SyncIndicator';
 import { GIT_COMMIT } from '../../lib/constants';
 import { useSpecialList } from '../../hooks/use-special-list';
 
-function useTaskCount(listId: string) {
-  return useLiveQuery(async () => {
-    const tasks = await db.tasks.where('listId').equals(listId).toArray();
-    return tasks.filter((t) => !t.deletedAt && t.status !== 'done').length;
-  }, [listId], 0);
+function useAllTaskCounts(listIds: string[]): Map<string, number> {
+  const key = listIds.join(',');
+  const counts = useLiveQuery(async () => {
+    const map = new Map<string, number>();
+    await Promise.all(listIds.map(async (id) => {
+      const tasks = await db.tasks.where('listId').equals(id).toArray();
+      map.set(id, tasks.filter((t) => !t.deletedAt && t.status !== 'done').length);
+    }));
+    return map;
+  }, [key]);
+  return counts ?? new Map();
 }
 
 function HighlightedName({ name, highlight }: { name: string; highlight: string }) {
@@ -48,14 +54,14 @@ function HighlightedName({ name, highlight }: { name: string; highlight: string 
   );
 }
 
-function ListItem({ list, selected, onSelect, highlight, focused }: {
+function ListItem({ list, selected, onSelect, highlight, focused, count }: {
   list: { id: string; name: string; type: ListType };
   selected: boolean;
   onSelect: () => void;
   highlight?: string;
   focused?: boolean;
+  count: number;
 }) {
-  const count = useTaskCount(list.id);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState('');
 
@@ -155,12 +161,13 @@ function ListItem({ list, selected, onSelect, highlight, focused }: {
   );
 }
 
-function SortableListItem({ list, selected, onSelect, highlight, focused }: {
+function SortableListItem({ list, selected, onSelect, highlight, focused, count }: {
   list: { id: string; name: string; type: ListType };
   selected: boolean;
   onSelect: () => void;
   highlight?: string;
   focused?: boolean;
+  count: number;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: list.id,
@@ -175,7 +182,7 @@ function SortableListItem({ list, selected, onSelect, highlight, focused }: {
 
   return (
     <div ref={setNodeRef} style={style} {...attributes} {...listeners}>
-      <ListItem list={list} selected={selected} onSelect={onSelect} highlight={highlight} focused={focused} />
+      <ListItem list={list} selected={selected} onSelect={onSelect} highlight={highlight} focused={focused} count={count} />
     </div>
   );
 }
@@ -189,6 +196,7 @@ export function Sidebar() {
   const searchRef = useRef<HTMLInputElement>(null);
 
   const { focusedItemId, focusZone } = useAppState(useShallow(s => ({ focusedItemId: s.focusedItemId, focusZone: s.focusZone })));
+  const taskCounts = useAllTaskCounts(lists.map((l) => l.id));
   const { warningCount, blockedCount, recurringCount } = useSpecialList();
   const specialTotal = warningCount + blockedCount + recurringCount;
 
@@ -429,6 +437,7 @@ export function Sidebar() {
                     onSelect={() => selectList(list.id)}
                     highlight={searchQuery}
                     focused={focusedItemId === list.id && focusZone === 'sidebar'}
+                    count={taskCounts.get(list.id) ?? 0}
                   />
                 ))}
               </SortableContext>
@@ -452,6 +461,7 @@ export function Sidebar() {
                     onSelect={() => selectList(list.id)}
                     highlight={searchQuery}
                     focused={focusedItemId === list.id && focusZone === 'sidebar'}
+                    count={taskCounts.get(list.id) ?? 0}
                   />
                 ))}
               </SortableContext>

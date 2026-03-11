@@ -47,40 +47,66 @@ export function useKeyboard() {
     async (): Promise<NavItem[]> => {
       if (!selectedListId) return [];
 
-      const allTasks = await db.tasks.toArray();
-      const allSubs = await db.subtasks.toArray();
       const items: NavItem[] = [];
 
-      // Working-on banner (if something is being worked on)
-      const workingTask = allTasks.find((t) => t.status === 'working' && !t.deletedAt);
-      const workingSub = allSubs.find((s) => s.status === 'working' && !s.deletedAt);
+      // Working-on banner — use indexed status queries
+      const [workingTasks, workingSubs] = await Promise.all([
+        db.tasks.where('status').equals('working').toArray(),
+        db.subtasks.where('status').equals('working').toArray(),
+      ]);
+      const workingTask = workingTasks.find((t) => !t.deletedAt);
+      const workingSub = workingSubs.find((s) => !s.deletedAt);
       if (workingTask || workingSub) {
         items.push({ id: 'banner-working', type: 'banner' });
       }
 
-      // Blocked banner items (up to 5)
+      // Blocked banner items (up to 5) — use indexed queries
+      const [blockedTasks, blockedSubs] = await Promise.all([
+        db.tasks.where('status').equals('blocked').toArray(),
+        db.subtasks.where('status').equals('blocked').toArray(),
+      ]);
+
+      // Build set of task IDs that have blocked subtasks
+      const tasksWithBlockedSubs = new Set<string>();
+      for (const s of blockedSubs) {
+        if (!s.deletedAt) tasksWithBlockedSubs.add(s.taskId);
+      }
+
+      // Directly blocked tasks
+      const blockedTaskIds = new Set<string>();
       let blockedCount = 0;
-      for (const t of allTasks) {
+      for (const t of blockedTasks) {
         if (blockedCount >= 5) break;
         if (t.deletedAt || t.status === 'done' || t.archived) continue;
-        const isBlocked = t.status === 'blocked' ||
-          allSubs.some((s) => s.taskId === t.id && !s.deletedAt && s.status === 'blocked');
-        if (isBlocked) {
-          items.push({ id: `banner-blocked-${t.id}`, type: 'banner-blocked', taskId: t.id });
-          blockedCount++;
+        items.push({ id: `banner-blocked-${t.id}`, type: 'banner-blocked', taskId: t.id });
+        blockedTaskIds.add(t.id);
+        blockedCount++;
+      }
+
+      // Tasks with blocked subtasks (not already listed)
+      if (blockedCount < 5 && tasksWithBlockedSubs.size > 0) {
+        const parentIds = [...tasksWithBlockedSubs].filter((id) => !blockedTaskIds.has(id));
+        if (parentIds.length > 0) {
+          const parents = await db.tasks.bulkGet(parentIds);
+          for (const t of parents) {
+            if (blockedCount >= 5) break;
+            if (!t || t.deletedAt || t.status === 'done' || t.archived) continue;
+            items.push({ id: `banner-blocked-${t.id}`, type: 'banner-blocked', taskId: t.id });
+            blockedCount++;
+          }
         }
       }
 
       // Create task/follow-up button
       items.push({ id: 'create-task', type: 'create' });
 
-      // List-specific tasks
-      const selectedList = await db.taskLists.get(selectedListId);
+      // List-specific tasks — use listId index
+      const [selectedList, listTasks] = await Promise.all([
+        db.taskLists.get(selectedListId),
+        db.tasks.where('listId').equals(selectedListId).sortBy('order'),
+      ]);
       const isTasksList = selectedList?.type === 'tasks';
       const isFollowUps = selectedList?.type === 'follow-ups';
-      const listTasks = allTasks
-        .filter((t) => t.listId === selectedListId)
-        .sort((a, b) => a.order - b.order);
       const live = listTasks.filter((t) => {
         if (t.deletedAt || t.archived) return false;
         // Follow-ups show all non-archived; task lists hide done
@@ -96,12 +122,23 @@ export function useKeyboard() {
         });
       }
 
+      // Load subtasks only for expanded tasks — use taskId index
+      const expandedTaskIdsArr = [...expandedTaskIds].filter((id) => live.some((t) => t.id === id));
+      const expandedSubs = expandedTaskIdsArr.length > 0
+        ? await db.subtasks.where('taskId').anyOf(expandedTaskIdsArr).toArray()
+        : [];
+      const subsByTask = new Map<string, typeof expandedSubs>();
+      for (const s of expandedSubs) {
+        if (s.deletedAt) continue;
+        const arr = subsByTask.get(s.taskId) ?? [];
+        arr.push(s);
+        subsByTask.set(s.taskId, arr);
+      }
+
       for (const task of live) {
         items.push({ id: task.id, type: 'task' });
         if (expandedTaskIds.has(task.id)) {
-          const subs = allSubs
-            .filter((s) => s.taskId === task.id && !s.deletedAt)
-            .sort((a, b) => a.order - b.order);
+          const subs = (subsByTask.get(task.id) ?? []).sort((a, b) => a.order - b.order);
           for (const sub of subs) {
             items.push({ id: sub.id, type: 'subtask', taskId: task.id });
           }

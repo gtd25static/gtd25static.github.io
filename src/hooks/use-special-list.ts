@@ -14,78 +14,99 @@ export interface SpecialItem {
 
 export function useSpecialList() {
   const data = useLiveQuery(async () => {
-    const items: SpecialItem[] = [];
-    const tasks = await db.tasks.toArray();
-    const subtasks = await db.subtasks.toArray();
     const now = Date.now();
+    const items: SpecialItem[] = [];
 
-    for (const t of tasks) {
+    // Use indexed queries instead of full table scans
+    const [warningTasks, blockedTasks, recurringTasks, warningSubs, blockedSubs] = await Promise.all([
+      db.tasks.where('hasWarning').equals(1).toArray(),
+      db.tasks.where('status').equals('blocked').toArray(),
+      db.tasks.where('nextOccurrence').belowOrEqual(now).toArray(),
+      db.subtasks.where('hasWarning').equals(1).toArray(),
+      db.subtasks.where('status').equals('blocked').toArray(),
+    ]);
+
+    for (const t of warningTasks) {
       if (t.deletedAt || t.status === 'done' || t.archived) continue;
-
-      if (t.hasWarning) {
-        items.push({
-          id: t.id,
-          listId: t.listId,
-          title: t.title,
-          type: 'warning',
-          stateDate: t.warningAt ?? t.updatedAt,
-          entityType: 'task',
-        });
-      }
-
-      if (t.status === 'blocked') {
-        items.push({
-          id: t.id,
-          listId: t.listId,
-          title: t.title,
-          type: 'blocked',
-          stateDate: t.blockedAt ?? t.updatedAt,
-          entityType: 'task',
-        });
-      }
-
-      if (t.recurrenceType && t.nextOccurrence && t.nextOccurrence <= now && t.status !== 'blocked') {
-        items.push({
-          id: t.id,
-          listId: t.listId,
-          title: t.title,
-          type: 'recurring',
-          stateDate: t.nextOccurrence,
-          entityType: 'task',
-        });
-      }
+      items.push({
+        id: t.id,
+        listId: t.listId,
+        title: t.title,
+        type: 'warning',
+        stateDate: t.warningAt ?? t.updatedAt,
+        entityType: 'task',
+      });
     }
 
-    for (const s of subtasks) {
+    for (const t of blockedTasks) {
+      if (t.deletedAt || t.status === 'done' || t.archived) continue;
+      items.push({
+        id: t.id,
+        listId: t.listId,
+        title: t.title,
+        type: 'blocked',
+        stateDate: t.blockedAt ?? t.updatedAt,
+        entityType: 'task',
+      });
+    }
+
+    for (const t of recurringTasks) {
+      if (t.deletedAt || t.status === 'done' || t.archived || t.status === 'blocked') continue;
+      if (!t.recurrenceType || !t.nextOccurrence) continue;
+      items.push({
+        id: t.id,
+        listId: t.listId,
+        title: t.title,
+        type: 'recurring',
+        stateDate: t.nextOccurrence,
+        entityType: 'task',
+      });
+    }
+
+    // Collect unique parent task IDs for subtask lookups
+    const parentIds = new Set<string>();
+    for (const s of warningSubs) {
+      if (!s.deletedAt && s.status !== 'done') parentIds.add(s.taskId);
+    }
+    for (const s of blockedSubs) {
+      if (!s.deletedAt && s.status !== 'done') parentIds.add(s.taskId);
+    }
+
+    const parents = parentIds.size > 0
+      ? await db.tasks.bulkGet([...parentIds])
+      : [];
+    const parentMap = new Map(parents.filter(Boolean).map((p) => [p!.id, p!]));
+
+    for (const s of warningSubs) {
       if (s.deletedAt || s.status === 'done') continue;
-      const parent = tasks.find((t) => t.id === s.taskId);
+      const parent = parentMap.get(s.taskId);
       if (!parent || parent.deletedAt || parent.archived) continue;
+      items.push({
+        id: s.id,
+        taskId: s.taskId,
+        listId: parent.listId,
+        title: s.title,
+        parentTitle: parent.title,
+        type: 'warning',
+        stateDate: s.warningAt ?? s.updatedAt,
+        entityType: 'subtask',
+      });
+    }
 
-      if (s.hasWarning) {
-        items.push({
-          id: s.id,
-          taskId: s.taskId,
-          listId: parent.listId,
-          title: s.title,
-          parentTitle: parent.title,
-          type: 'warning',
-          stateDate: s.warningAt ?? s.updatedAt,
-          entityType: 'subtask',
-        });
-      }
-
-      if (s.status === 'blocked') {
-        items.push({
-          id: s.id,
-          taskId: s.taskId,
-          listId: parent.listId,
-          title: s.title,
-          parentTitle: parent.title,
-          type: 'blocked',
-          stateDate: s.blockedAt ?? s.updatedAt,
-          entityType: 'subtask',
-        });
-      }
+    for (const s of blockedSubs) {
+      if (s.deletedAt || s.status === 'done') continue;
+      const parent = parentMap.get(s.taskId);
+      if (!parent || parent.deletedAt || parent.archived) continue;
+      items.push({
+        id: s.id,
+        taskId: s.taskId,
+        listId: parent.listId,
+        title: s.title,
+        parentTitle: parent.title,
+        type: 'blocked',
+        stateDate: s.blockedAt ?? s.updatedAt,
+        entityType: 'subtask',
+      });
     }
 
     // Sort: warnings by warningAt asc, blocked by blockedAt asc, recurring by nextOccurrence asc
