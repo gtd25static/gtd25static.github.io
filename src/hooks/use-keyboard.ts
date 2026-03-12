@@ -153,7 +153,7 @@ export function useKeyboard() {
     [],
   );
 
-  const sidebarItems: NavItem[] = (lists ?? []).map((l) => ({ id: l.id, type: 'task' as const }));
+  const sidebarItems: NavItem[] = [...(lists ?? []).filter((l) => l.type === 'tasks'), ...(lists ?? []).filter((l) => l.type === 'follow-ups')].map((l) => ({ id: l.id, type: 'task' as const }));
 
   // Store refs so the event handler always has current values
   const listsRef = useRef(sidebarItems);
