@@ -45,10 +45,11 @@ export function useSuggestion() {
       const now = Date.now();
       const rng = mulberry32(seed);
 
-      // Weighted random selection
+      // Weighted random selection: age-based with 3x boost for previously-worked tasks
       const weights = eligible.map((t) => {
         const ageDays = (now - t.createdAt) / (1000 * 60 * 60 * 24);
-        return Math.sqrt(ageDays + 1);
+        const base = Math.sqrt(ageDays + 1);
+        return t.workedAt ? base * 3 : base;
       });
       const totalWeight = weights.reduce((a, b) => a + b, 0);
       let pick = rng() * totalWeight;

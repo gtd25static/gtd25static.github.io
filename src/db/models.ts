@@ -40,6 +40,8 @@ export interface Task {
   hasWarning?: boolean;
   warningAt?: number;
   blockedAt?: number;
+  // Work tracking
+  workedAt?: number;
   // Additional links
   links?: TaskLink[];
   // Recurrence

@@ -41,6 +41,17 @@ describe('startWorkingOn', () => {
     expect(s2?.status).toBe('working');
   });
 
+  it('sets workedAt on parent task', async () => {
+    const task = await createTask(listId, { title: 'Task' });
+    const sub = await createSubtask(task.id, { title: 'Sub' });
+
+    await startWorkingOn(sub.id);
+
+    const t = await db.tasks.get(task.id);
+    expect(t?.workedAt).toBeDefined();
+    expect(typeof t?.workedAt).toBe('number');
+  });
+
   it('clears working task', async () => {
     const task = await createTask(listId, { title: 'Task' });
     await startWorkingOnTask(task.id);
@@ -59,6 +70,28 @@ describe('startWorkingOnTask', () => {
     await startWorkingOnTask(task.id);
     const t = await db.tasks.get(task.id);
     expect(t?.status).toBe('working');
+  });
+
+  it('sets workedAt on first work start', async () => {
+    const task = await createTask(listId, { title: 'Task' });
+    expect((await db.tasks.get(task.id))?.workedAt).toBeUndefined();
+
+    await startWorkingOnTask(task.id);
+    const t = await db.tasks.get(task.id);
+    expect(t?.workedAt).toBeDefined();
+    expect(typeof t?.workedAt).toBe('number');
+  });
+
+  it('does not overwrite workedAt on subsequent starts', async () => {
+    const task = await createTask(listId, { title: 'Task' });
+    await startWorkingOnTask(task.id);
+    const firstWorkedAt = (await db.tasks.get(task.id))?.workedAt;
+
+    await stopWorking();
+    await startWorkingOnTask(task.id);
+    const secondWorkedAt = (await db.tasks.get(task.id))?.workedAt;
+
+    expect(secondWorkedAt).toBe(firstWorkedAt);
   });
 
   it('clears working subtask', async () => {
@@ -156,6 +189,8 @@ describe('markWorkingBlocked', () => {
 describe('switchTask', () => {
   it('stops current and finds oldest task with undone subtask', async () => {
     const task1 = await createTask(listId, { title: 'Older' });
+    // Ensure task1 has a definitively earlier createdAt
+    await db.tasks.update(task1.id, { createdAt: task1.createdAt - 1000 });
     const s1 = await createSubtask(task1.id, { title: 'Sub 1' });
     const task2 = await createTask(listId, { title: 'Newer' });
     await createSubtask(task2.id, { title: 'Sub 2' });
