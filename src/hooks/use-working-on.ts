@@ -60,11 +60,8 @@ export async function startWorkingOnTask(taskId: string) {
   await ensureDeviceId();
   await db.transaction('rw', [db.tasks, db.changeLog], async () => {
     const task = await db.tasks.get(taskId);
-    const updates: Record<string, unknown> = { status: 'working', updatedAt: now };
-    if (!task?.workedAt) {
-      updates.workedAt = now;
-    }
-    await db.tasks.update(taskId, updates);
+    const workedAt = task?.workedAt ?? now;
+    await db.tasks.update(taskId, { status: 'working' as const, updatedAt: now, workedAt });
     const updated = await db.tasks.get(taskId);
     if (updated) {
       await recordChangeInTx('task', taskId, 'upsert', updated as unknown as Record<string, unknown>);
