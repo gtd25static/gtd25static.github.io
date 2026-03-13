@@ -104,6 +104,12 @@ export async function setSubtaskStatus(id: string, status: SubtaskStatus) {
   } else if (status !== 'blocked' && subtask?.status === 'blocked') {
     updates.blockedAt = undefined;
   }
+  // Track completedAt
+  if (status === 'done') {
+    updates.completedAt = Date.now();
+  } else if (subtask?.status === 'done') {
+    updates.completedAt = undefined;
+  }
   await updateSubtask(id, updates);
 
   // Auto-complete parent task when all subtasks are done
@@ -114,7 +120,7 @@ export async function setSubtaskStatus(id: string, status: SubtaskStatus) {
       const live = siblings.filter((s) => !s.deletedAt);
       if (live.length > 0 && live.every((s) => s.status === 'done')) {
         const parentTask = await db.tasks.get(sub.taskId);
-        const taskUpdates: Partial<import('../db/models').Task> = { status: 'done', updatedAt: Date.now() };
+        const taskUpdates: Partial<import('../db/models').Task> = { status: 'done', updatedAt: Date.now(), completedAt: Date.now() };
 
         // Recurrence on auto-complete
         if (parentTask?.recurrenceType && parentTask.recurrenceInterval && parentTask.recurrenceUnit) {

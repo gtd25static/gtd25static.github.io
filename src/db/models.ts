@@ -40,6 +40,7 @@ export interface Task {
   hasWarning?: boolean;
   warningAt?: number;
   blockedAt?: number;
+  completedAt?: number;
   // Work tracking
   workedAt?: number;
   // Additional links
@@ -68,6 +69,7 @@ export interface Subtask {
   hasWarning?: boolean;
   warningAt?: number;
   blockedAt?: number;
+  completedAt?: number;
   // Additional links
   links?: TaskLink[];
 }

@@ -130,7 +130,7 @@ export async function markWorkingDone() {
   const now = Date.now();
   await ensureDeviceId();
   await db.transaction('rw', [db.subtasks, db.tasks, db.changeLog], async () => {
-    await db.subtasks.update(active.id, { status: 'done', updatedAt: now });
+    await db.subtasks.update(active.id, { status: 'done', updatedAt: now, completedAt: now });
     const batch: Array<{ entityType: 'task' | 'subtask'; entityId: string; operation: 'upsert'; data: Record<string, unknown> }> = [];
 
     const updatedActive = await db.subtasks.get(active.id);
@@ -147,7 +147,7 @@ export async function markWorkingDone() {
       // All subtasks done — mark parent task done
       const task = await db.tasks.get(active.taskId);
       if (task) {
-        await db.tasks.update(task.id, { status: 'done', updatedAt: now });
+        await db.tasks.update(task.id, { status: 'done', updatedAt: now, completedAt: now });
         const updatedTask = await db.tasks.get(task.id);
         if (updatedTask) batch.push({ entityType: 'task', entityId: task.id, operation: 'upsert', data: updatedTask as unknown as Record<string, unknown> });
       }

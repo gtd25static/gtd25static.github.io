@@ -7,6 +7,7 @@ import { useShallow } from 'zustand/react/shallow';
 import { daysUntil } from '../../lib/date-utils';
 import { startWorkingOn, startWorkingOnTask } from '../../hooks/use-working-on';
 import { db } from '../../db';
+import { MotivationBanner } from './MotivationBanner';
 
 function WorkingSection() {
   const { task, subtask, isWorking } = useWorkingOn();
@@ -227,6 +228,7 @@ export function TopBanner() {
       <WorkingSection />
       <SuggestionSection />
       <DueSoonSection />
+      <MotivationBanner />
     </>
   );
 }

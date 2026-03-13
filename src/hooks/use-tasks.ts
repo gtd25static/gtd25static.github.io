@@ -94,6 +94,13 @@ export async function setTaskStatus(id: string, status: TaskStatus) {
     updates.blockedAt = undefined;
   }
 
+  // Track completedAt
+  if (status === 'done') {
+    updates.completedAt = Date.now();
+  } else if (task?.status === 'done') {
+    updates.completedAt = undefined;
+  }
+
   // Recurrence: when marking a recurring task done
   if (status === 'done' && task?.recurrenceType && task.recurrenceInterval && task.recurrenceUnit) {
     updates.lastCompletedAt = Date.now();
