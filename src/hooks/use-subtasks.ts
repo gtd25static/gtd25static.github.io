@@ -68,109 +68,121 @@ export async function updateSubtask(id: string, updates: Partial<Subtask>) {
 }
 
 export async function setSubtaskStatus(id: string, status: SubtaskStatus) {
-  if (status === 'working') {
-    const allWorkingSubs = await db.subtasks.where('status').equals('working').toArray();
-    const allWorkingTasks = await db.tasks.where('status').equals('working').toArray();
-    const now = Date.now();
+  try {
+    if (status === 'working') {
+      const allWorkingSubs = await db.subtasks.where('status').equals('working').toArray();
+      const allWorkingTasks = await db.tasks.where('status').equals('working').toArray();
+      const now = Date.now();
 
-    await ensureDeviceId();
-    await db.transaction('rw', [db.subtasks, db.tasks, db.changeLog], async () => {
-      for (const s of allWorkingSubs) {
-        if (s.id !== id) {
-          await db.subtasks.update(s.id, { status: 'todo', updatedAt: now });
-        }
-      }
-      for (const t of allWorkingTasks) {
-        await db.tasks.update(t.id, { status: 'todo', updatedAt: now });
-      }
-      await db.subtasks.update(id, { status, updatedAt: now });
-
-      // Record changes for all modified entities
-      const batch: Array<{ entityType: 'task' | 'subtask'; entityId: string; operation: 'upsert'; data: Record<string, unknown> }> = [];
-      for (const s of allWorkingSubs) {
-        if (s.id !== id) {
-          const updated = await db.subtasks.get(s.id);
-          if (updated) batch.push({ entityType: 'subtask', entityId: s.id, operation: 'upsert', data: updated as unknown as Record<string, unknown> });
-        }
-      }
-      for (const t of allWorkingTasks) {
-        const updated = await db.tasks.get(t.id);
-        if (updated) batch.push({ entityType: 'task', entityId: t.id, operation: 'upsert', data: updated as unknown as Record<string, unknown> });
-      }
-      const updatedSelf = await db.subtasks.get(id);
-      if (updatedSelf) batch.push({ entityType: 'subtask', entityId: id, operation: 'upsert', data: updatedSelf as unknown as Record<string, unknown> });
-      await recordChangeBatchInTx(batch);
-    });
-
-    scheduleSyncDebounced();
-    return;
-  }
-
-  // Track blockedAt
-  const subtask = await db.subtasks.get(id);
-  const updates: Partial<Subtask> = { status };
-  if (status === 'blocked' && subtask?.status !== 'blocked') {
-    updates.blockedAt = Date.now();
-  } else if (status !== 'blocked' && subtask?.status === 'blocked') {
-    updates.blockedAt = undefined;
-  }
-  // Track completedAt
-  if (status === 'done') {
-    updates.completedAt = Date.now();
-  } else if (subtask?.status === 'done') {
-    updates.completedAt = undefined;
-  }
-  await updateSubtask(id, updates);
-
-  // Auto-complete parent task when all subtasks are done
-  if (status === 'done') {
-    const sub = await db.subtasks.get(id);
-    if (sub) {
-      const siblings = await db.subtasks.where('taskId').equals(sub.taskId).toArray();
-      const live = siblings.filter((s) => !s.deletedAt);
-      if (live.length > 0 && live.every((s) => s.status === 'done')) {
-        const parentTask = await db.tasks.get(sub.taskId);
-        const taskUpdates: Partial<import('../db/models').Task> = { status: 'done', updatedAt: Date.now(), completedAt: Date.now() };
-
-        // Recurrence on auto-complete
-        if (parentTask?.recurrenceType && parentTask.recurrenceInterval && parentTask.recurrenceUnit) {
-          taskUpdates.lastCompletedAt = Date.now();
-          if (parentTask.recurrenceType === 'time-based') {
-            taskUpdates.nextOccurrence = computeNextOccurrence(
-              Date.now(),
-              parentTask.recurrenceInterval,
-              parentTask.recurrenceUnit,
-            );
+      await ensureDeviceId();
+      await db.transaction('rw', [db.subtasks, db.tasks, db.changeLog], async () => {
+        for (const s of allWorkingSubs) {
+          if (s.id !== id) {
+            await db.subtasks.update(s.id, { status: 'todo', updatedAt: now });
           }
         }
+        for (const t of allWorkingTasks) {
+          await db.tasks.update(t.id, { status: 'todo', updatedAt: now });
+        }
+        await db.subtasks.update(id, { status, updatedAt: now });
 
-        await ensureDeviceId();
-        await db.transaction('rw', [db.tasks, db.changeLog], async () => {
-          await db.tasks.update(sub.taskId, taskUpdates);
-          const updatedTask = await db.tasks.get(sub.taskId);
-          if (updatedTask) {
-            await recordChangeInTx('task', sub.taskId, 'upsert', updatedTask as unknown as Record<string, unknown>);
+        // Record changes for all modified entities
+        const batch: Array<{ entityType: 'task' | 'subtask'; entityId: string; operation: 'upsert'; data: Record<string, unknown> }> = [];
+        for (const s of allWorkingSubs) {
+          if (s.id !== id) {
+            const updated = await db.subtasks.get(s.id);
+            if (updated) batch.push({ entityType: 'subtask', entityId: s.id, operation: 'upsert', data: updated as unknown as Record<string, unknown> });
           }
-        });
-        scheduleSyncDebounced();
+        }
+        for (const t of allWorkingTasks) {
+          const updated = await db.tasks.get(t.id);
+          if (updated) batch.push({ entityType: 'task', entityId: t.id, operation: 'upsert', data: updated as unknown as Record<string, unknown> });
+        }
+        const updatedSelf = await db.subtasks.get(id);
+        if (updatedSelf) batch.push({ entityType: 'subtask', entityId: id, operation: 'upsert', data: updatedSelf as unknown as Record<string, unknown> });
+        await recordChangeBatchInTx(batch);
+      });
+
+      scheduleSyncDebounced();
+      return;
+    }
+
+    // Track blockedAt
+    const subtask = await db.subtasks.get(id);
+    const updates: Partial<Subtask> = { status };
+    if (status === 'blocked' && subtask?.status !== 'blocked') {
+      updates.blockedAt = Date.now();
+    } else if (status !== 'blocked' && subtask?.status === 'blocked') {
+      updates.blockedAt = undefined;
+    }
+    // Track completedAt
+    if (status === 'done') {
+      updates.completedAt = Date.now();
+    } else if (subtask?.status === 'done') {
+      updates.completedAt = undefined;
+    }
+    await updateSubtask(id, updates);
+
+    // Auto-complete parent task when all subtasks are done
+    if (status === 'done') {
+      const sub = await db.subtasks.get(id);
+      if (sub) {
+        const siblings = await db.subtasks.where('taskId').equals(sub.taskId).toArray();
+        const live = siblings.filter((s) => !s.deletedAt);
+        if (live.length > 0 && live.every((s) => s.status === 'done')) {
+          const parentTask = await db.tasks.get(sub.taskId);
+          const taskUpdates: Partial<import('../db/models').Task> = { status: 'done', updatedAt: Date.now(), completedAt: Date.now() };
+
+          // Recurrence on auto-complete
+          if (parentTask?.recurrenceType && parentTask.recurrenceInterval && parentTask.recurrenceUnit) {
+            taskUpdates.lastCompletedAt = Date.now();
+            if (parentTask.recurrenceType === 'time-based') {
+              taskUpdates.nextOccurrence = computeNextOccurrence(
+                Date.now(),
+                parentTask.recurrenceInterval,
+                parentTask.recurrenceUnit,
+              );
+            }
+          }
+
+          await ensureDeviceId();
+          await db.transaction('rw', [db.tasks, db.changeLog], async () => {
+            await db.tasks.update(sub.taskId, taskUpdates);
+            const updatedTask = await db.tasks.get(sub.taskId);
+            if (updatedTask) {
+              await recordChangeInTx('task', sub.taskId, 'upsert', updatedTask as unknown as Record<string, unknown>);
+            }
+          });
+          scheduleSyncDebounced();
+        }
       }
     }
+  } catch (error) {
+    handleDbError(error, 'set subtask status');
   }
 }
 
 export async function addSubtaskLink(subtaskId: string, url: string, title?: string) {
-  const subtask = await db.subtasks.get(subtaskId);
-  if (!subtask) return;
-  const links: TaskLink[] = [...(subtask.links ?? []), { url, title }];
-  await updateSubtask(subtaskId, { links });
+  try {
+    const subtask = await db.subtasks.get(subtaskId);
+    if (!subtask) return;
+    const links: TaskLink[] = [...(subtask.links ?? []), { url, title }];
+    await updateSubtask(subtaskId, { links });
+  } catch (error) {
+    handleDbError(error, 'add subtask link');
+  }
 }
 
 export async function removeSubtaskLink(subtaskId: string, index: number) {
-  const subtask = await db.subtasks.get(subtaskId);
-  if (!subtask) return;
-  const links = [...(subtask.links ?? [])];
-  links.splice(index, 1);
-  await updateSubtask(subtaskId, { links: links.length > 0 ? links : undefined });
+  try {
+    const subtask = await db.subtasks.get(subtaskId);
+    if (!subtask) return;
+    const links = [...(subtask.links ?? [])];
+    links.splice(index, 1);
+    await updateSubtask(subtaskId, { links: links.length > 0 ? links : undefined });
+  } catch (error) {
+    handleDbError(error, 'remove subtask link');
+  }
 }
 
 export async function deleteSubtask(id: string) {

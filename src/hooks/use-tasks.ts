@@ -94,47 +94,59 @@ export async function updateTask(id: string, updates: Partial<Task>) {
 }
 
 export async function setTaskStatus(id: string, status: TaskStatus) {
-  const task = await db.tasks.get(id);
-  const updates: Partial<Task> = { status };
+  try {
+    const task = await db.tasks.get(id);
+    const updates: Partial<Task> = { status };
 
-  // Track blockedAt
-  if (status === 'blocked' && task?.status !== 'blocked') {
-    updates.blockedAt = Date.now();
-  } else if (status !== 'blocked' && task?.status === 'blocked') {
-    updates.blockedAt = undefined;
-  }
-
-  // Track completedAt
-  if (status === 'done') {
-    updates.completedAt = Date.now();
-  } else if (task?.status === 'done') {
-    updates.completedAt = undefined;
-  }
-
-  // Recurrence: when marking a recurring task done
-  if (status === 'done' && task?.recurrenceType && task.recurrenceInterval && task.recurrenceUnit) {
-    updates.lastCompletedAt = Date.now();
-    if (task.recurrenceType === 'time-based') {
-      updates.nextOccurrence = computeNextOccurrence(Date.now(), task.recurrenceInterval, task.recurrenceUnit);
+    // Track blockedAt
+    if (status === 'blocked' && task?.status !== 'blocked') {
+      updates.blockedAt = Date.now();
+    } else if (status !== 'blocked' && task?.status === 'blocked') {
+      updates.blockedAt = undefined;
     }
-  }
 
-  await updateTask(id, updates);
+    // Track completedAt
+    if (status === 'done') {
+      updates.completedAt = Date.now();
+    } else if (task?.status === 'done') {
+      updates.completedAt = undefined;
+    }
+
+    // Recurrence: when marking a recurring task done
+    if (status === 'done' && task?.recurrenceType && task.recurrenceInterval && task.recurrenceUnit) {
+      updates.lastCompletedAt = Date.now();
+      if (task.recurrenceType === 'time-based') {
+        updates.nextOccurrence = computeNextOccurrence(Date.now(), task.recurrenceInterval, task.recurrenceUnit);
+      }
+    }
+
+    await updateTask(id, updates);
+  } catch (error) {
+    handleDbError(error, 'set task status');
+  }
 }
 
 export async function addTaskLink(taskId: string, url: string, title?: string) {
-  const task = await db.tasks.get(taskId);
-  if (!task) return;
-  const links: TaskLink[] = [...(task.links ?? []), { url, title }];
-  await updateTask(taskId, { links });
+  try {
+    const task = await db.tasks.get(taskId);
+    if (!task) return;
+    const links: TaskLink[] = [...(task.links ?? []), { url, title }];
+    await updateTask(taskId, { links });
+  } catch (error) {
+    handleDbError(error, 'add task link');
+  }
 }
 
 export async function removeTaskLink(taskId: string, index: number) {
-  const task = await db.tasks.get(taskId);
-  if (!task) return;
-  const links = [...(task.links ?? [])];
-  links.splice(index, 1);
-  await updateTask(taskId, { links: links.length > 0 ? links : undefined });
+  try {
+    const task = await db.tasks.get(taskId);
+    if (!task) return;
+    const links = [...(task.links ?? [])];
+    links.splice(index, 1);
+    await updateTask(taskId, { links: links.length > 0 ? links : undefined });
+  } catch (error) {
+    handleDbError(error, 'remove task link');
+  }
 }
 
 export async function deleteTask(id: string) {

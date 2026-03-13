@@ -5,6 +5,7 @@ import { setSubtaskStatus } from './use-subtasks';
 import { setTaskStatus } from './use-tasks';
 import { recordChangeInTx, recordChangeBatchInTx, ensureDeviceId } from '../sync/change-log';
 import { scheduleSyncDebounced } from '../sync/sync-engine';
+import { handleDbError } from '../lib/db-error';
 
 interface WorkingOnState {
   task?: Task;
@@ -32,42 +33,50 @@ export function useWorkingOn(): WorkingOnState {
 }
 
 export async function startWorkingOn(subtaskId: string) {
-  await clearWorkingTasks();
-  await setSubtaskStatus(subtaskId, 'working');
-  // Set workedAt on parent task if not already set
-  const subtask = await db.subtasks.get(subtaskId);
-  if (subtask) {
-    const parentTask = await db.tasks.get(subtask.taskId);
-    if (parentTask && !parentTask.workedAt) {
-      const now = Date.now();
-      await ensureDeviceId();
-      await db.transaction('rw', [db.tasks, db.changeLog], async () => {
-        await db.tasks.update(parentTask.id, { workedAt: now, updatedAt: now });
-        const updated = await db.tasks.get(parentTask.id);
-        if (updated) {
-          await recordChangeInTx('task', parentTask.id, 'upsert', updated as unknown as Record<string, unknown>);
-        }
-      });
-      scheduleSyncDebounced();
+  try {
+    await clearWorkingTasks();
+    await setSubtaskStatus(subtaskId, 'working');
+    // Set workedAt on parent task if not already set
+    const subtask = await db.subtasks.get(subtaskId);
+    if (subtask) {
+      const parentTask = await db.tasks.get(subtask.taskId);
+      if (parentTask && !parentTask.workedAt) {
+        const now = Date.now();
+        await ensureDeviceId();
+        await db.transaction('rw', [db.tasks, db.changeLog], async () => {
+          await db.tasks.update(parentTask.id, { workedAt: now, updatedAt: now });
+          const updated = await db.tasks.get(parentTask.id);
+          if (updated) {
+            await recordChangeInTx('task', parentTask.id, 'upsert', updated as unknown as Record<string, unknown>);
+          }
+        });
+        scheduleSyncDebounced();
+      }
     }
+  } catch (error) {
+    handleDbError(error, 'start working on subtask');
   }
 }
 
 export async function startWorkingOnTask(taskId: string) {
-  await stopWorking();
-  await clearWorkingTasks();
-  const now = Date.now();
-  await ensureDeviceId();
-  await db.transaction('rw', [db.tasks, db.changeLog], async () => {
-    const task = await db.tasks.get(taskId);
-    const workedAt = task?.workedAt ?? now;
-    await db.tasks.update(taskId, { status: 'working' as const, updatedAt: now, workedAt });
-    const updated = await db.tasks.get(taskId);
-    if (updated) {
-      await recordChangeInTx('task', taskId, 'upsert', updated as unknown as Record<string, unknown>);
-    }
-  });
-  scheduleSyncDebounced();
+  try {
+    await stopWorking();
+    await clearWorkingTasks();
+    const now = Date.now();
+    await ensureDeviceId();
+    await db.transaction('rw', [db.tasks, db.changeLog], async () => {
+      const task = await db.tasks.get(taskId);
+      const workedAt = task?.workedAt ?? now;
+      await db.tasks.update(taskId, { status: 'working' as const, updatedAt: now, workedAt });
+      const updated = await db.tasks.get(taskId);
+      if (updated) {
+        await recordChangeInTx('task', taskId, 'upsert', updated as unknown as Record<string, unknown>);
+      }
+    });
+    scheduleSyncDebounced();
+  } catch (error) {
+    handleDbError(error, 'start working on task');
+  }
 }
 
 async function clearWorkingTasks() {
