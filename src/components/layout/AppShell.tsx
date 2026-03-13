@@ -139,7 +139,7 @@ export function AppShell() {
       {/* Mobile quick capture FAB */}
       <button
         onClick={() => setQuickCaptureOpen(true)}
-        className="fixed bottom-6 right-6 z-[80] flex h-14 w-14 items-center justify-center rounded-full bg-accent-600 text-white shadow-lg hover:bg-accent-700 active:scale-95 transition-transform md:hidden"
+        className="fixed bottom-6 right-6 z-[80] flex h-14 w-14 md:h-12 md:w-12 items-center justify-center rounded-full bg-accent-600 text-white shadow-lg hover:bg-accent-700 active:scale-95 transition-transform"
         aria-label="Quick capture"
       >
         <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">

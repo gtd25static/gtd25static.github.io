@@ -14,6 +14,10 @@ export const MAX_LIST_NAME_LENGTH = 100;
 
 export const INBOX_LIST_NAME = 'Inbox';
 
+export function isInboxList(list: { name: string; type: string }): boolean {
+  return list.name === INBOX_LIST_NAME && list.type === 'tasks';
+}
+
 export const PING_COOLDOWN_MS: Record<string, number> = {
   '12h': 12 * 60 * 60 * 1000,
   '1week': 7 * 24 * 60 * 60 * 1000,

@@ -25,6 +25,8 @@ import { InlineTaskForm } from './InlineTaskForm';
 import { DropdownMenu } from '../ui/DropdownMenu';
 import { FollowUpList } from '../follow-ups/FollowUpList';
 import { BulkActionBar } from './BulkActionBar';
+import { InboxListView } from './InboxListView';
+import { isInboxList } from '../../lib/constants';
 
 function SortableTaskItem({ task, index }: { task: Task; index: number }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
@@ -129,6 +131,10 @@ export function TaskListView() {
         <p className="text-sm">Select or create a list to get started</p>
       </div>
     );
+  }
+
+  if (isInboxList(selectedList)) {
+    return <InboxListView listId={selectedListId} />;
   }
 
   if (selectedList.type === 'follow-ups') {

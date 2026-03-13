@@ -25,7 +25,8 @@ import { DropdownMenu } from '../ui/DropdownMenu';
 import { db } from '../../db';
 import type { ListType } from '../../db/models';
 import { SyncIndicator } from './SyncIndicator';
-import { GIT_COMMIT, MAX_LIST_NAME_LENGTH } from '../../lib/constants';
+import { GIT_COMMIT, MAX_LIST_NAME_LENGTH, isInboxList } from '../../lib/constants';
+import { moveTaskToList } from '../../hooks/use-tasks';
 import { useSpecialListContext } from '../../hooks/use-special-list';
 import { useReviewData } from '../../hooks/use-review-data';
 
@@ -65,16 +66,18 @@ function HighlightedName({ name, highlight }: { name: string; highlight: string 
   );
 }
 
-function ListItem({ list, selected, onSelect, highlight, focused, count }: {
+function ListItem({ list, selected, onSelect, highlight, focused, count, allLists }: {
   list: { id: string; name: string; type: ListType };
   selected: boolean;
   onSelect: () => void;
   highlight?: string;
   focused?: boolean;
   count: number;
+  allLists?: { id: string; name: string; type: ListType }[];
 }) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState('');
+  const [dropHighlight, setDropHighlight] = useState(false);
 
   const handleSave = () => {
     if (editName.trim() && editName.trim() !== list.name) {
@@ -120,8 +123,47 @@ function ListItem({ list, selected, onSelect, highlight, focused, count }: {
     );
   }
 
+  function handleDrop(e: React.DragEvent) {
+    e.preventDefault();
+    setDropHighlight(false);
+    const singleTaskId = e.dataTransfer.getData('application/x-inbox-task');
+    const inboxListId = e.dataTransfer.getData('application/x-inbox-all');
+    if (singleTaskId) {
+      moveTaskToList(singleTaskId, list.id);
+      toast(`Moved to ${list.name}`, 'success');
+    } else if (inboxListId && allLists) {
+      // Move all inbox tasks to this list
+      const inboxList = allLists.find((l) => l.id === inboxListId);
+      if (inboxList) {
+        db.tasks.where('listId').equals(inboxListId).toArray().then((tasks) => {
+          const live = tasks.filter((t) => !t.deletedAt && t.status !== 'done');
+          live.forEach((t) => moveTaskToList(t.id, list.id));
+          toast(`Moved ${live.length} item${live.length !== 1 ? 's' : ''} to ${list.name}`, 'success');
+        });
+      }
+    }
+  }
+
+  function handleDragOver(e: React.DragEvent) {
+    if (e.dataTransfer.types.includes('application/x-inbox-task') || e.dataTransfer.types.includes('application/x-inbox-all')) {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+    }
+  }
+
   return (
-    <div data-focus-id={list.id} className="group flex items-center">
+    <div
+      data-focus-id={list.id}
+      className={`group flex items-center ${dropHighlight ? 'ring-2 ring-accent-500 rounded-lg' : ''}`}
+      onDragOver={handleDragOver}
+      onDragEnter={(e) => {
+        if (e.dataTransfer.types.includes('application/x-inbox-task') || e.dataTransfer.types.includes('application/x-inbox-all')) {
+          setDropHighlight(true);
+        }
+      }}
+      onDragLeave={() => setDropHighlight(false)}
+      onDrop={handleDrop}
+    >
       <button
         onClick={onSelect}
         className={`flex flex-1 min-w-0 items-center gap-3 rounded-full px-3 py-3.5 md:py-2 text-sm transition-colors ${
@@ -173,13 +215,14 @@ function ListItem({ list, selected, onSelect, highlight, focused, count }: {
   );
 }
 
-function SortableListItem({ list, selected, onSelect, highlight, focused, count }: {
+function SortableListItem({ list, selected, onSelect, highlight, focused, count, allLists }: {
   list: { id: string; name: string; type: ListType };
   selected: boolean;
   onSelect: () => void;
   highlight?: string;
   focused?: boolean;
   count: number;
+  allLists?: { id: string; name: string; type: ListType }[];
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: list.id,
@@ -194,7 +237,7 @@ function SortableListItem({ list, selected, onSelect, highlight, focused, count 
 
   return (
     <div ref={setNodeRef} style={style} {...attributes} {...listeners}>
-      <ListItem list={list} selected={selected} onSelect={onSelect} highlight={highlight} focused={focused} count={count} />
+      <ListItem list={list} selected={selected} onSelect={onSelect} highlight={highlight} focused={focused} count={count} allLists={allLists} />
     </div>
   );
 }
@@ -222,8 +265,10 @@ export function Sidebar() {
     ? lists.filter((l) => l.name.toLowerCase().includes(searchQuery.toLowerCase()))
     : lists;
 
-  const taskLists = filteredLists.filter((l) => l.type === 'tasks');
+  const inboxList = filteredLists.find((l) => isInboxList(l));
+  const taskLists = filteredLists.filter((l) => l.type === 'tasks' && !isInboxList(l));
   const followUpLists = filteredLists.filter((l) => l.type === 'follow-ups');
+  const inboxCount = inboxList ? (taskCounts.get(inboxList.id) ?? 0) : 0;
 
   function handleDragEnd(group: 'tasks' | 'follow-ups') {
     return (event: DragEndEvent) => {
@@ -392,6 +437,38 @@ export function Sidebar() {
         )}
       </div>
 
+      {/* Inbox row (visible when items pending) */}
+      {inboxList && inboxCount > 0 && (
+        <div className="px-2 pb-1">
+          <button
+            draggable="true"
+            onDragStart={(e) => {
+              e.dataTransfer.setData('application/x-inbox-all', inboxList.id);
+              e.dataTransfer.effectAllowed = 'move';
+            }}
+            onClick={() => {
+              selectList(inboxList.id);
+              setSidebarOpen(false);
+            }}
+            className={`flex w-full items-center gap-3 rounded-full px-3 py-3.5 md:py-2 text-sm transition-colors cursor-grab active:cursor-grabbing ${
+              selectedListId === inboxList.id
+                ? 'bg-accent-50 text-accent-700 font-medium dark:bg-accent-900/20 dark:text-accent-300'
+                : 'bg-accent-50/50 text-accent-700 hover:bg-accent-100 dark:bg-accent-900/10 dark:text-accent-300 dark:hover:bg-accent-900/20'
+            }`}
+          >
+            {/* Inbox tray icon */}
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="text-accent-500">
+              <path d="M22 12h-6l-2 3H10l-2-3H2" />
+              <path d="M5.45 5.11L2 12v6a2 2 0 002 2h16a2 2 0 002-2v-6l-3.45-6.89A2 2 0 0016.76 4H7.24a2 2 0 00-1.79 1.11z" />
+            </svg>
+            <span className="flex-1 text-left">Inbox</span>
+            <span className="flex h-5 min-w-[20px] items-center justify-center rounded-full bg-accent-500 px-1.5 text-xs font-medium text-white">
+              {inboxCount}
+            </span>
+          </button>
+        </div>
+      )}
+
       {/* Special list counter */}
       {specialTotal > 0 && (
         <div className="px-2 pb-1">
@@ -452,6 +529,7 @@ export function Sidebar() {
                     highlight={searchQuery}
                     focused={focusedItemId === list.id && focusZone === 'sidebar'}
                     count={taskCounts.get(list.id) ?? 0}
+                    allLists={lists}
                   />
                 ))}
               </SortableContext>
@@ -476,6 +554,7 @@ export function Sidebar() {
                     highlight={searchQuery}
                     focused={focusedItemId === list.id && focusZone === 'sidebar'}
                     count={taskCounts.get(list.id) ?? 0}
+                    allLists={lists}
                   />
                 ))}
               </SortableContext>
