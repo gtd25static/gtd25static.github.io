@@ -115,7 +115,7 @@ describe('error handling', () => {
     // Close db to force an error
     db.close();
     const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-    const result = await createTaskList('Fail');
+    await createTaskList('Fail');
     expect(consoleSpy).toHaveBeenCalled();
     consoleSpy.mockRestore();
     // Re-open for cleanup
