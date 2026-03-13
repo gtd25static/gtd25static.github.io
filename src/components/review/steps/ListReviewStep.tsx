@@ -1,5 +1,5 @@
 import type { Task, TaskList } from '../../../db/models';
-import { setTaskStatus, deleteTask, restoreTask, updateTask } from '../../../hooks/use-tasks';
+import { setTaskStatus, deleteTask, restoreTask } from '../../../hooks/use-tasks';
 import { toggleWarning } from '../../../hooks/use-warning';
 import { toast } from '../../ui/Toast';
 import { ReviewStep } from '../ReviewStep';

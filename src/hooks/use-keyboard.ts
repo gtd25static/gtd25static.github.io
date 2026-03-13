@@ -7,7 +7,7 @@ import { setSubtaskStatus } from './use-subtasks';
 import { startWorkingOn, startWorkingOnTask, markWorkingDone, markWorkingBlocked, stopWorking } from './use-working-on';
 import { updateTask, restoreTask } from './use-tasks';
 import { isInCooldown } from './use-follow-ups';
-import { deleteTasksBatch, setTaskStatusBatch } from './use-bulk-operations';
+import { deleteTasksBatch } from './use-bulk-operations';
 import { toast } from '../components/ui/Toast';
 import type { ListType } from '../db/models';
 

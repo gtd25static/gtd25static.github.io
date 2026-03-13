@@ -1,5 +1,5 @@
 import { db } from '../db';
-import type { TaskStatus } from '../db/models';
+import type { Task, TaskStatus } from '../db/models';
 import { recordChangeBatchInTx, ensureDeviceId } from '../sync/change-log';
 import { scheduleSyncDebounced } from '../sync/sync-engine';
 import { handleDbError } from '../lib/db-error';
@@ -39,7 +39,7 @@ export async function setTaskStatusBatch(ids: string[], status: TaskStatus) {
       for (const id of ids) {
         const task = await db.tasks.get(id);
         if (!task) continue;
-        const updates: Record<string, unknown> = { status, updatedAt: now };
+        const updates: Partial<Task> = { status, updatedAt: now };
         if (status === 'blocked' && task.status !== 'blocked') {
           updates.blockedAt = now;
         } else if (status !== 'blocked' && task.status === 'blocked') {

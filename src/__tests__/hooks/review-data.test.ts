@@ -1,7 +1,7 @@
 import { db } from '../../db';
 import { resetDb, assertDefined } from '../helpers/db-helpers';
 import { createTaskList } from '../../hooks/use-task-lists';
-import { createTask, setTaskStatus, updateTask } from '../../hooks/use-tasks';
+import { createTask, setTaskStatus } from '../../hooks/use-tasks';
 import { createSubtask, setSubtaskStatus } from '../../hooks/use-subtasks';
 import { setLastReviewedAt } from '../../hooks/use-review-data';
 import { INBOX_LIST_NAME } from '../../lib/constants';
@@ -147,7 +147,8 @@ describe('setLastReviewedAt', () => {
   it('persists lastReviewedAt timestamp', async () => {
     await setLastReviewedAt();
     const local = await db.localSettings.get('local');
-    expect((local as Record<string, unknown>)?.lastReviewedAt).toBeDefined();
-    expect(typeof (local as Record<string, unknown>)?.lastReviewedAt).toBe('number');
+    const record = local as unknown as Record<string, unknown>;
+    expect(record?.lastReviewedAt).toBeDefined();
+    expect(typeof record?.lastReviewedAt).toBe('number');
   });
 });

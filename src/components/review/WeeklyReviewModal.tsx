@@ -50,7 +50,7 @@ export function WeeklyReviewModal() {
     if (phaseIdx > 0) {
       setPhase(PHASES[phaseIdx - 1]);
       // When going back to 'lists', go to last list
-      if (PHASES[phaseIdx - 1] === 'lists' && data.listsWithTasks.length > 0) {
+      if (PHASES[phaseIdx - 1] === 'lists' && data && data.listsWithTasks.length > 0) {
         setListIndex(data.listsWithTasks.length - 1);
       }
     }
