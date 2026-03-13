@@ -22,6 +22,20 @@ const categories: MessageCategory[] = [
     ],
   },
   {
+    id: 'weekend',
+    match: (s) => s.isWeekend && s.completedToday === 0,
+    templates: [
+      'It\'s the weekend. Enjoy the downtime.',
+      'Weekend mode. Recharge for next week.',
+      'No pressure today. It\'s the weekend.',
+      'Take it easy — you\'ve earned the break.',
+      'Weekends are for recovery. Or not. Your call.',
+      'Off the clock. Relax.',
+      'Nothing to prove on a weekend.',
+      'Rest is productive too.',
+    ],
+  },
+  {
     id: 'under_pressure',
     match: (s) => s.overdueCount >= 3,
     templates: [
@@ -123,7 +137,7 @@ const categories: MessageCategory[] = [
   },
   {
     id: 'idle_nudge',
-    match: (s) => s.completedToday === 0 && s.timeOfDay !== 'morning',
+    match: (s) => !s.isWeekend && s.completedToday === 0 && s.timeOfDay !== 'morning',
     templates: [
       'Your task list is waiting. Even one small win counts.',
       'Nothing done yet today. Pick the easiest one.',
@@ -137,7 +151,7 @@ const categories: MessageCategory[] = [
   },
   {
     id: 'fresh_start',
-    match: (s) => s.completedToday === 0 && s.timeOfDay === 'morning',
+    match: (s) => !s.isWeekend && s.completedToday === 0 && s.timeOfDay === 'morning',
     templates: [
       'Fresh day ahead. What\'s first?',
       'Good morning. Your tasks are ready when you are.',

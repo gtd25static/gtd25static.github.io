@@ -13,6 +13,7 @@ export interface MotivationStats {
   blockedCount: number;
   totalActive: number;
   isCurrentlyWorking: boolean;
+  isWeekend: boolean;
   timeOfDay: TimeOfDay;
 }
 
@@ -45,7 +46,21 @@ function startOfMonth(date: Date): number {
   return d.getTime();
 }
 
-function computeStreak(completionDates: number[]): number {
+export function isWeekend(date: Date): boolean {
+  const day = date.getDay();
+  return day === 0 || day === 6;
+}
+
+function prevWeekday(ts: number): number {
+  const oneDayMs = 24 * 60 * 60 * 1000;
+  let cur = ts - oneDayMs;
+  while (isWeekend(new Date(cur))) {
+    cur -= oneDayMs;
+  }
+  return cur;
+}
+
+export function computeStreak(completionDates: number[]): number {
   if (completionDates.length === 0) return 0;
 
   // Get unique days with completions (as start-of-day timestamps)
@@ -54,20 +69,25 @@ function computeStreak(completionDates: number[]): number {
     daySet.add(startOfDay(new Date(ts)));
   }
 
-  const today = startOfDay(new Date());
   const oneDayMs = 24 * 60 * 60 * 1000;
+  let today = startOfDay(new Date());
 
-  // Start counting from today or yesterday
+  // If today is a weekend, start from the most recent Friday
+  while (isWeekend(new Date(today))) {
+    today -= oneDayMs;
+  }
+
+  // Start counting from today (or most recent weekday) or the previous weekday
   let current = today;
   if (!daySet.has(current)) {
-    current = today - oneDayMs;
+    current = prevWeekday(current);
     if (!daySet.has(current)) return 0;
   }
 
   let streak = 0;
   while (daySet.has(current)) {
     streak++;
-    current -= oneDayMs;
+    current = prevWeekday(current);
   }
   return streak;
 }
@@ -159,6 +179,7 @@ export function useMotivationStats(): MotivationStats | undefined {
       blockedCount,
       totalActive,
       isCurrentlyWorking,
+      isWeekend: isWeekend(now),
       timeOfDay,
     };
   }, [timeOfDay]);
