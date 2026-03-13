@@ -43,29 +43,31 @@ export async function createTask(
   },
 ) {
   try {
-    const count = await db.tasks.where('listId').equals(listId).count();
     const now = Date.now();
-    const task: Task = {
-      id: newId(),
-      listId,
-      title: data.title,
-      description: data.description,
-      link: data.link,
-      linkTitle: data.linkTitle,
-      dueDate: data.dueDate,
-      links: data.links,
-      recurrenceType: data.recurrenceType,
-      recurrenceInterval: data.recurrenceInterval,
-      recurrenceUnit: data.recurrenceUnit,
-      nextOccurrence: data.nextOccurrence,
-      status: data.skipFirst ? 'done' : 'todo',
-      lastCompletedAt: data.skipFirst ? now : undefined,
-      order: count,
-      createdAt: now,
-      updatedAt: now,
-    };
+    const id = newId();
     await ensureDeviceId();
+    let task!: Task;
     await db.transaction('rw', [db.tasks, db.changeLog], async () => {
+      const count = await db.tasks.where('listId').equals(listId).count();
+      task = {
+        id,
+        listId,
+        title: data.title,
+        description: data.description,
+        link: data.link,
+        linkTitle: data.linkTitle,
+        dueDate: data.dueDate,
+        links: data.links,
+        recurrenceType: data.recurrenceType,
+        recurrenceInterval: data.recurrenceInterval,
+        recurrenceUnit: data.recurrenceUnit,
+        nextOccurrence: data.nextOccurrence,
+        status: data.skipFirst ? 'done' : 'todo',
+        lastCompletedAt: data.skipFirst ? now : undefined,
+        order: count,
+        createdAt: now,
+        updatedAt: now,
+      };
       await db.tasks.add(task);
       await recordChangeInTx('task', task.id, 'upsert', task as unknown as Record<string, unknown>);
     });

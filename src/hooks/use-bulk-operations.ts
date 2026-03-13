@@ -68,9 +68,9 @@ export async function moveTasksToListBatch(ids: string[], targetListId: string) 
   if (ids.length === 0) return;
   try {
     const now = Date.now();
-    const existingCount = await db.tasks.where('listId').equals(targetListId).count();
     await ensureDeviceId();
     await db.transaction('rw', [db.tasks, db.changeLog], async () => {
+      const existingCount = await db.tasks.where('listId').equals(targetListId).count();
       const batch: Array<{ entityType: 'task'; entityId: string; operation: 'upsert'; data: Record<string, unknown> }> = [];
       for (let i = 0; i < ids.length; i++) {
         await db.tasks.update(ids[i], { listId: targetListId, order: existingCount + i, updatedAt: now });

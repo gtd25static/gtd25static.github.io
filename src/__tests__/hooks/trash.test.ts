@@ -92,3 +92,25 @@ describe('restoreFromTrash', () => {
     expect(entries.some((e) => e.entityType === 'subtask' && e.operation === 'upsert')).toBe(true);
   });
 });
+
+describe('error handling', () => {
+  it('permanentlyDelete handles db errors gracefully', async () => {
+    db.close();
+    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const item: TrashItem = { id: 'nonexistent', type: 'task', title: 'X', deletedAt: Date.now() };
+    await permanentlyDelete(item);
+    expect(consoleSpy).toHaveBeenCalled();
+    consoleSpy.mockRestore();
+    await db.open();
+  });
+
+  it('restoreFromTrash handles db errors gracefully', async () => {
+    db.close();
+    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const item: TrashItem = { id: 'nonexistent', type: 'subtask', title: 'X', deletedAt: Date.now() };
+    await restoreFromTrash(item);
+    expect(consoleSpy).toHaveBeenCalled();
+    consoleSpy.mockRestore();
+    await db.open();
+  });
+});

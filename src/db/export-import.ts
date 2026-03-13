@@ -109,14 +109,33 @@ export async function parseImportZip(file: File): Promise<ImportData> {
     return true;
   });
 
+  // FK validation: tasks must reference existing lists, subtasks must reference existing tasks
+  const validListIds = new Set(validLists.map((l) => l.id));
+  const fkValidTasks = validTasks.filter((t) => {
+    if (!validListIds.has(t.listId)) {
+      warnings.push(`Skipped task ${t.id}: references non-existent list ${t.listId}`);
+      return false;
+    }
+    return true;
+  });
+
+  const validTaskIds = new Set(fkValidTasks.map((t) => t.id));
+  const fkValidSubtasks = validSubtasks.filter((s) => {
+    if (!validTaskIds.has(s.taskId)) {
+      warnings.push(`Skipped subtask ${s.id}: references non-existent task ${s.taskId}`);
+      return false;
+    }
+    return true;
+  });
+
   if (warnings.length > 0) {
     console.warn('Import validation warnings:', warnings);
   }
 
   return {
     taskLists: validLists,
-    tasks: validTasks,
-    subtasks: validSubtasks,
+    tasks: fkValidTasks,
+    subtasks: fkValidSubtasks,
     settings: parsed.settings,
   };
 }

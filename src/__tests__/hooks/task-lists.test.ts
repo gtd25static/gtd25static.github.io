@@ -1,6 +1,6 @@
 import { db } from '../../db';
 import { resetDb, assertDefined } from '../helpers/db-helpers';
-import { createTaskList, deleteTaskList, restoreTaskList, reorderTaskLists } from '../../hooks/use-task-lists';
+import { createTaskList, deleteTaskList, updateTaskList, restoreTaskList, reorderTaskLists } from '../../hooks/use-task-lists';
 import { createTask } from '../../hooks/use-tasks';
 import { createSubtask } from '../../hooks/use-subtasks';
 
@@ -95,5 +95,39 @@ describe('reorderTaskLists', () => {
     expect(lists[0].order).toBe(0);
     expect(lists[1].order).toBe(1);
     expect(lists[2].order).toBe(2);
+  });
+});
+
+describe('updateTaskList', () => {
+  it('updates name and updatedAt', async () => {
+    const list = await createTaskList('Original');
+    const before = list.updatedAt;
+    await new Promise((r) => setTimeout(r, 10));
+    await updateTaskList(list.id, { name: 'Renamed' });
+    const updated = await db.taskLists.get(list.id);
+    expect(updated?.name).toBe('Renamed');
+    expect(updated!.updatedAt).toBeGreaterThan(before);
+  });
+});
+
+describe('error handling', () => {
+  it('createTaskList handles db errors gracefully', async () => {
+    // Close db to force an error
+    db.close();
+    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const result = await createTaskList('Fail');
+    expect(consoleSpy).toHaveBeenCalled();
+    consoleSpy.mockRestore();
+    // Re-open for cleanup
+    await db.open();
+  });
+
+  it('deleteTaskList handles db errors gracefully', async () => {
+    db.close();
+    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    await deleteTaskList('nonexistent');
+    expect(consoleSpy).toHaveBeenCalled();
+    consoleSpy.mockRestore();
+    await db.open();
   });
 });

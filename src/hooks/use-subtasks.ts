@@ -24,22 +24,24 @@ export async function createSubtask(
   data: { title: string; link?: string; linkTitle?: string; dueDate?: number },
 ) {
   try {
-    const count = await db.subtasks.where('taskId').equals(taskId).count();
     const now = Date.now();
-    const subtask: Subtask = {
-      id: newId(),
-      taskId,
-      title: data.title,
-      link: data.link,
-      linkTitle: data.linkTitle,
-      dueDate: data.dueDate,
-      status: 'todo',
-      order: count,
-      createdAt: now,
-      updatedAt: now,
-    };
+    const id = newId();
     await ensureDeviceId();
+    let subtask!: Subtask;
     await db.transaction('rw', [db.subtasks, db.changeLog], async () => {
+      const count = await db.subtasks.where('taskId').equals(taskId).count();
+      subtask = {
+        id,
+        taskId,
+        title: data.title,
+        link: data.link,
+        linkTitle: data.linkTitle,
+        dueDate: data.dueDate,
+        status: 'todo',
+        order: count,
+        createdAt: now,
+        updatedAt: now,
+      };
       await db.subtasks.add(subtask);
       await recordChangeInTx('subtask', subtask.id, 'upsert', subtask as unknown as Record<string, unknown>);
     });
@@ -219,11 +221,11 @@ export async function convertSubtaskToTask(subtaskId: string, targetListId: stri
   try {
     const subtask = await db.subtasks.get(subtaskId);
     if (!subtask) return;
-    const count = await db.tasks.where('listId').equals(targetListId).count();
     const now = Date.now();
     const newTaskId = newId();
     await ensureDeviceId();
     await db.transaction('rw', [db.subtasks, db.tasks, db.changeLog], async () => {
+      const count = await db.tasks.where('listId').equals(targetListId).count();
       await db.subtasks.update(subtaskId, { deletedAt: now, updatedAt: now });
       await db.tasks.add({
         id: newTaskId,

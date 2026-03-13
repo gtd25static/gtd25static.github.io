@@ -329,11 +329,15 @@ async function getCredentials() {
 }
 
 export async function getLocalSnapshot(): Promise<SyncData> {
-  const [taskLists, tasks, subtasks] = await Promise.all([
-    db.taskLists.toArray(),
-    db.tasks.toArray(),
-    db.subtasks.toArray(),
-  ]);
+  const { taskLists, tasks, subtasks } = await db.transaction(
+    'r',
+    [db.taskLists, db.tasks, db.subtasks],
+    async () => ({
+      taskLists: await db.taskLists.toArray(),
+      tasks: await db.tasks.toArray(),
+      subtasks: await db.subtasks.toArray(),
+    }),
+  );
   const settings: Settings = {
     theme: (localStorage.getItem('gtd25-theme') as Settings['theme']) ?? 'system',
   };
@@ -1315,14 +1319,26 @@ export async function importData(data: ImportData) {
   if (!signal) return;
 
   try {
+    // FK validation: skip orphaned records
+    const validListIds = new Set(data.taskLists.map((l) => l.id));
+    const validTasks = data.tasks.filter((t) => validListIds.has(t.listId));
+    const validTaskIds = new Set(validTasks.map((t) => t.id));
+    const validSubtasks = data.subtasks.filter((s) => validTaskIds.has(s.taskId));
+
+    const skippedTasks = data.tasks.length - validTasks.length;
+    const skippedSubtasks = data.subtasks.length - validSubtasks.length;
+    if (skippedTasks > 0 || skippedSubtasks > 0) {
+      console.warn(`Import FK validation: skipped ${skippedTasks} task(s), ${skippedSubtasks} subtask(s) with broken references`);
+    }
+
     // Replace local data
     await db.transaction('rw', [db.taskLists, db.tasks, db.subtasks], async () => {
       await db.taskLists.clear();
       await db.tasks.clear();
       await db.subtasks.clear();
       await db.taskLists.bulkPut(data.taskLists);
-      await db.tasks.bulkPut(data.tasks);
-      await db.subtasks.bulkPut(data.subtasks);
+      await db.tasks.bulkPut(validTasks);
+      await db.subtasks.bulkPut(validSubtasks);
     });
 
     await clearPendingEntries();
@@ -1338,8 +1354,8 @@ export async function importData(data: ImportData) {
         syncVersion: SYNC_VERSION,
         wipedAt: Date.now(),
         taskLists: data.taskLists,
-        tasks: data.tasks,
-        subtasks: data.subtasks,
+        tasks: validTasks,
+        subtasks: validSubtasks,
         settings: { theme },
         encryptionSalt: salt,
         encryptionVerifier: await createVerifier(encKey),

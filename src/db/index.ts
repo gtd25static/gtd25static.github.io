@@ -39,6 +39,46 @@ export class Gtd25DB extends Dexie {
 
 export const db = new Gtd25DB();
 
+export async function cleanOrphans() {
+  const now = Date.now();
+  let orphanedSubtasks = 0;
+  let orphanedTasks = 0;
+
+  await db.transaction('rw', [db.taskLists, db.tasks, db.subtasks], async () => {
+    // Find subtasks whose parent task doesn't exist
+    const taskIds = new Set((await db.tasks.toArray()).map((t) => t.id));
+    const allSubtasks = await db.subtasks.toArray();
+    for (const sub of allSubtasks) {
+      if (!taskIds.has(sub.taskId) && !sub.deletedAt) {
+        await db.subtasks.update(sub.id, { deletedAt: now, updatedAt: now });
+        orphanedSubtasks++;
+      }
+    }
+
+    // Find tasks whose parent list doesn't exist → move to Inbox or soft-delete
+    const listIds = new Set((await db.taskLists.toArray()).map((l) => l.id));
+    const allTasks = await db.tasks.toArray();
+    const inbox = allTasks.length > 0
+      ? (await db.taskLists.toArray()).find((l) => !l.deletedAt && l.name === 'Inbox' && l.type === 'tasks')
+      : undefined;
+
+    for (const task of allTasks) {
+      if (!listIds.has(task.listId) && !task.deletedAt) {
+        if (inbox) {
+          await db.tasks.update(task.id, { listId: inbox.id, updatedAt: now });
+        } else {
+          await db.tasks.update(task.id, { deletedAt: now, updatedAt: now });
+        }
+        orphanedTasks++;
+      }
+    }
+  });
+
+  if (orphanedSubtasks > 0 || orphanedTasks > 0) {
+    console.warn(`Orphan cleanup: ${orphanedSubtasks} subtask(s), ${orphanedTasks} task(s)`);
+  }
+}
+
 export async function ensureDefaults() {
   await db.transaction('rw', [db.localSettings, db.syncMeta], async () => {
     const local = await db.localSettings.get('local');
@@ -61,6 +101,9 @@ export async function ensureDefaults() {
       });
     }
   });
+
+  // Clean orphaned records
+  await cleanOrphans();
 
   // Purge soft-deleted items older than 30 days at startup
   await purgeOldTrashItems();
