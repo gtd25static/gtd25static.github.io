@@ -16,6 +16,11 @@ interface AppState {
   searchQuery: string;
   navigateToTaskId: string | null;
   quickCaptureOpen: boolean;
+  // Bulk operations
+  bulkMode: boolean;
+  selectedTaskIds: Set<string>;
+  // Weekly review
+  weeklyReviewOpen: boolean;
 
   selectList: (id: string | null) => void;
   toggleTaskExpanded: (id: string) => void;
@@ -33,6 +38,13 @@ interface AppState {
   setSearchQuery: (query: string) => void;
   setNavigateToTaskId: (id: string | null) => void;
   setQuickCaptureOpen: (open: boolean) => void;
+  // Bulk operations
+  setBulkMode: (on: boolean) => void;
+  toggleTaskSelected: (id: string) => void;
+  selectAllTasks: (ids: string[]) => void;
+  clearSelection: () => void;
+  // Weekly review
+  setWeeklyReviewOpen: (open: boolean) => void;
 }
 
 export const useAppState = create<AppState>((set) => ({
@@ -51,8 +63,11 @@ export const useAppState = create<AppState>((set) => ({
   searchQuery: '',
   navigateToTaskId: null,
   quickCaptureOpen: false,
+  bulkMode: false,
+  selectedTaskIds: new Set(),
+  weeklyReviewOpen: false,
 
-  selectList: (id) => set({ selectedListId: id, searchQuery: '' }),
+  selectList: (id) => set({ selectedListId: id, searchQuery: '', bulkMode: false, selectedTaskIds: new Set() }),
   toggleTaskExpanded: (id) =>
     set((state) => {
       const next = new Set(state.expandedTaskIds);
@@ -80,4 +95,15 @@ export const useAppState = create<AppState>((set) => ({
   setSearchQuery: (query) => set({ searchQuery: query }),
   setNavigateToTaskId: (id) => set({ navigateToTaskId: id }),
   setQuickCaptureOpen: (open) => set({ quickCaptureOpen: open }),
+  setBulkMode: (on) => set({ bulkMode: on, selectedTaskIds: on ? new Set() : new Set() }),
+  toggleTaskSelected: (id) =>
+    set((state) => {
+      const next = new Set(state.selectedTaskIds);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return { selectedTaskIds: next };
+    }),
+  selectAllTasks: (ids) => set({ selectedTaskIds: new Set(ids) }),
+  clearSelection: () => set({ selectedTaskIds: new Set(), bulkMode: false }),
+  setWeeklyReviewOpen: (open) => set({ weeklyReviewOpen: open }),
 }));

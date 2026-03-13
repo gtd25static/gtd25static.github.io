@@ -15,6 +15,7 @@ import { HelpOverlay } from './HelpOverlay';
 import { SyncIndicator } from './SyncIndicator';
 import { ToastContainer } from '../ui/Toast';
 import { QuickCapture } from '../tasks/QuickCapture';
+import { WeeklyReviewModal } from '../review/WeeklyReviewModal';
 import { useSpecialListContext } from '../../hooks/use-special-list';
 
 export function AppShell() {
@@ -132,6 +133,7 @@ export function AppShell() {
       <SettingsModal />
       <EncryptionPasswordModal />
       <TrashModal />
+      <WeeklyReviewModal />
       <HelpOverlay />
 
       {/* Mobile quick capture FAB */}

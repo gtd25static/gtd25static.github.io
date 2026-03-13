@@ -5,8 +5,10 @@ import { useAppState } from '../stores/app-state';
 import { setTaskStatus } from './use-tasks';
 import { setSubtaskStatus } from './use-subtasks';
 import { startWorkingOn, startWorkingOnTask, markWorkingDone, markWorkingBlocked, stopWorking } from './use-working-on';
-import { updateTask } from './use-tasks';
+import { updateTask, restoreTask } from './use-tasks';
 import { isInCooldown } from './use-follow-ups';
+import { deleteTasksBatch, setTaskStatusBatch } from './use-bulk-operations';
+import { toast } from '../components/ui/Toast';
 import type { ListType } from '../db/models';
 
 interface NavItem {
@@ -188,10 +190,11 @@ export function useKeyboard() {
         return; // Let QuickCapture handle its own keys
       }
 
-      if (s.settingsOpen || s.trashOpen) {
+      if (s.settingsOpen || s.trashOpen || s.weeklyReviewOpen) {
         if (e.key === 'Escape') {
           s.setSettingsOpen(false);
           s.setTrashOpen(false);
+          s.setWeeklyReviewOpen(false);
         }
         return;
       }
@@ -231,18 +234,25 @@ export function useKeyboard() {
 
       switch (e.key) {
         // --- Navigation ---
-        case 'j': {
+        case 'j':
+        case 'J': {
           e.preventDefault();
           if (items.length === 0) break;
           let newIdx: number;
           if (idx === -1) newIdx = 0;
           else if (idx < items.length - 1) newIdx = idx + 1;
           else break;
-          s.setFocusedItem(items[newIdx].id);
-          if (items[newIdx].id !== 'banner-working') s.setBannerFocusIndex(0);
+          const newItem = items[newIdx];
+          s.setFocusedItem(newItem.id);
+          if (newItem.id !== 'banner-working') s.setBannerFocusIndex(0);
+          // Shift+J in bulk mode: extend selection
+          if (e.shiftKey && s.bulkMode && s.focusZone === 'main' && newItem.type === 'task') {
+            s.toggleTaskSelected(newItem.id);
+          }
           break;
         }
-        case 'k': {
+        case 'k':
+        case 'K': {
           e.preventDefault();
           if (items.length === 0) break;
           if (idx === 0 && s.focusZone === 'sidebar') {
@@ -254,8 +264,13 @@ export function useKeyboard() {
           if (idx === -1) newIdx = items.length - 1;
           else if (idx > 0) newIdx = idx - 1;
           else break;
-          s.setFocusedItem(items[newIdx].id);
-          if (items[newIdx].id !== 'banner-working') s.setBannerFocusIndex(0);
+          const newItem = items[newIdx];
+          s.setFocusedItem(newItem.id);
+          if (newItem.id !== 'banner-working') s.setBannerFocusIndex(0);
+          // Shift+K in bulk mode: extend selection
+          if (e.shiftKey && s.bulkMode && s.focusZone === 'main' && newItem.type === 'task') {
+            s.toggleTaskSelected(newItem.id);
+          }
           break;
         }
         case 'h': {
@@ -375,12 +390,20 @@ export function useKeyboard() {
         }
 
         case ' ': {
-          // Space: edit focused item title
           e.preventDefault();
           if (s.focusedItemId && s.focusZone === 'main') {
-            const item = mainRef.current.find((i) => i.id === s.focusedItemId);
-            if (item && !isActionItem(item)) {
-              s.setEditingItemId(s.focusedItemId);
+            // In bulk mode: toggle selection
+            if (s.bulkMode) {
+              const item = mainRef.current.find((i) => i.id === s.focusedItemId);
+              if (item && item.type === 'task') {
+                s.toggleTaskSelected(s.focusedItemId);
+              }
+            } else {
+              // Normal: edit focused item title
+              const item = mainRef.current.find((i) => i.id === s.focusedItemId);
+              if (item && !isActionItem(item)) {
+                s.setEditingItemId(s.focusedItemId);
+              }
             }
           }
           break;
@@ -410,9 +433,19 @@ export function useKeyboard() {
         }
 
         case 'd': {
+          e.preventDefault();
+          // Bulk mode: delete selected tasks
+          if (s.bulkMode && s.selectedTaskIds.size > 0) {
+            const ids = [...s.selectedTaskIds];
+            s.clearSelection();
+            await deleteTasksBatch(ids);
+            toast(`${ids.length} task${ids.length > 1 ? 's' : ''} deleted`, 'info', async () => {
+              for (const id of ids) await restoreTask(id);
+            });
+            break;
+          }
           // Toggle done — look up directly from DB so it works even after
           // the item has been filtered out of the nav list (e.g. just marked done)
-          e.preventDefault();
           if (s.focusZone !== 'main' || !s.focusedItemId) break;
           const dItem = mainRef.current.find((i) => i.id === s.focusedItemId);
           if (dItem && isActionItem(dItem)) break;
@@ -477,9 +510,27 @@ export function useKeyboard() {
           break;
         }
 
+        case 'v': {
+          // Toggle bulk selection mode
+          e.preventDefault();
+          if (s.focusZone === 'main') {
+            s.setBulkMode(!s.bulkMode);
+          }
+          break;
+        }
+
+        case 'r': {
+          // Open weekly review
+          e.preventDefault();
+          s.setWeeklyReviewOpen(true);
+          break;
+        }
+
         case 'Escape': {
           e.preventDefault();
-          if (s.helpOpen) {
+          if (s.bulkMode) {
+            s.clearSelection();
+          } else if (s.helpOpen) {
             s.setHelpOpen(false);
           } else if (s.searchQuery) {
             s.setSearchQuery('');

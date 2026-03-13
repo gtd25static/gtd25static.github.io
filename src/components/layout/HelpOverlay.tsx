@@ -22,6 +22,8 @@ export function HelpOverlay() {
     { key: DEFAULT_KEYBOARD_SHORTCUTS.workOn, desc: 'Start working on' },
     { key: DEFAULT_KEYBOARD_SHORTCUTS.search, desc: 'Focus search' },
     { key: 'Ctrl+n', desc: 'Quick capture to Inbox' },
+    { key: 'v', desc: 'Toggle bulk select mode' },
+    { key: 'r', desc: 'Weekly review' },
     { key: DEFAULT_KEYBOARD_SHORTCUTS.help, desc: 'Toggle this help' },
   ];
 

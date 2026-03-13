@@ -27,6 +27,17 @@ import type { ListType } from '../../db/models';
 import { SyncIndicator } from './SyncIndicator';
 import { GIT_COMMIT, MAX_LIST_NAME_LENGTH } from '../../lib/constants';
 import { useSpecialListContext } from '../../hooks/use-special-list';
+import { useReviewData } from '../../hooks/use-review-data';
+
+function formatLastReviewed(ts: number): string {
+  const diff = Date.now() - ts;
+  const hours = Math.floor(diff / (1000 * 60 * 60));
+  if (hours < 1) return 'just now';
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  if (days === 1) return '1d ago';
+  return `${days}d ago`;
+}
 
 function useAllTaskCounts(listIds: string[]): Map<string, number> {
   const key = listIds.join(',');
@@ -190,7 +201,7 @@ function SortableListItem({ list, selected, onSelect, highlight, focused, count 
 
 export function Sidebar() {
   const lists = useTaskLists();
-  const { selectedListId, selectList, setSidebarOpen, setSettingsOpen, setTrashOpen, searchQuery, setSearchQuery } = useAppState(useShallow(s => ({ selectedListId: s.selectedListId, selectList: s.selectList, setSidebarOpen: s.setSidebarOpen, setSettingsOpen: s.setSettingsOpen, setTrashOpen: s.setTrashOpen, searchQuery: s.searchQuery, setSearchQuery: s.setSearchQuery })));
+  const { selectedListId, selectList, setSidebarOpen, setSettingsOpen, setTrashOpen, setWeeklyReviewOpen, searchQuery, setSearchQuery } = useAppState(useShallow(s => ({ selectedListId: s.selectedListId, selectList: s.selectList, setSidebarOpen: s.setSidebarOpen, setSettingsOpen: s.setSettingsOpen, setTrashOpen: s.setTrashOpen, setWeeklyReviewOpen: s.setWeeklyReviewOpen, searchQuery: s.searchQuery, setSearchQuery: s.setSearchQuery })));
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState('');
   const [newType, setNewType] = useState<ListType>('tasks');
@@ -200,6 +211,7 @@ export function Sidebar() {
   const taskCounts = useAllTaskCounts(lists.map((l) => l.id));
   const { warningCount, blockedCount, recurringCount } = useSpecialListContext();
   const specialTotal = warningCount + blockedCount + recurringCount;
+  const reviewData = useReviewData();
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
@@ -474,6 +486,19 @@ export function Sidebar() {
 
       {/* Bottom actions */}
       <div className="border-t border-zinc-200 px-2 py-2 dark:border-zinc-800">
+        <button
+          onClick={() => { setWeeklyReviewOpen(true); setSidebarOpen(false); }}
+          className="flex w-full items-center gap-3 rounded-full px-3 py-3.5 md:py-2 text-sm text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800"
+        >
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+            <path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" strokeLinecap="round" />
+            <path d="M9 12l2 2 4-4" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+          <span className="flex-1 text-left">Weekly Review</span>
+          {reviewData?.lastReviewedAt && (
+            <span className="text-[10px] text-zinc-400">{formatLastReviewed(reviewData.lastReviewedAt)}</span>
+          )}
+        </button>
         <button
           onClick={() => setTrashOpen(true)}
           className="flex w-full items-center gap-3 rounded-full px-3 py-3.5 md:py-2 text-sm text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800"

@@ -24,6 +24,7 @@ import { TaskCard } from './TaskCard';
 import { InlineTaskForm } from './InlineTaskForm';
 import { DropdownMenu } from '../ui/DropdownMenu';
 import { FollowUpList } from '../follow-ups/FollowUpList';
+import { BulkActionBar } from './BulkActionBar';
 
 function SortableTaskItem({ task, index }: { task: Task; index: number }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
@@ -45,7 +46,7 @@ function SortableTaskItem({ task, index }: { task: Task; index: number }) {
 }
 
 export function TaskListView() {
-  const { selectedListId, navigateToTaskId, setNavigateToTaskId, creatingTask, setCreatingTask, focusedItemId, focusZone } = useAppState(useShallow(s => ({ selectedListId: s.selectedListId, navigateToTaskId: s.navigateToTaskId, setNavigateToTaskId: s.setNavigateToTaskId, creatingTask: s.creatingTask, setCreatingTask: s.setCreatingTask, focusedItemId: s.focusedItemId, focusZone: s.focusZone })));
+  const { selectedListId, navigateToTaskId, setNavigateToTaskId, creatingTask, setCreatingTask, focusedItemId, focusZone, bulkMode, setBulkMode } = useAppState(useShallow(s => ({ selectedListId: s.selectedListId, navigateToTaskId: s.navigateToTaskId, setNavigateToTaskId: s.setNavigateToTaskId, creatingTask: s.creatingTask, setCreatingTask: s.setCreatingTask, focusedItemId: s.focusedItemId, focusZone: s.focusZone, bulkMode: s.bulkMode, setBulkMode: s.setBulkMode })));
   const lists = useTaskLists();
   const tasks = useTasks(selectedListId);
   const [creating, setCreating] = useState(false);
@@ -165,6 +166,7 @@ export function TaskListView() {
                 </svg>
               }
               items={[
+                { label: bulkMode ? 'Cancel selection' : 'Select', onClick: () => setBulkMode(!bulkMode) },
                 { label: 'Sort by date', onClick: () => {} },
                 { label: 'Sort by name', onClick: () => {} },
               ]}
@@ -191,10 +193,21 @@ export function TaskListView() {
             </button>
           )}
 
+          {/* Bulk action bar */}
+          {bulkMode && selectedListId && (
+            <BulkActionBar activeTaskIds={activeTasks.map((t) => t.id)} currentListId={selectedListId} />
+          )}
+
           {/* Active tasks */}
           {activeTasks.length === 0 && completedTasks.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-16 text-zinc-400">
               <p className="text-sm">No tasks yet</p>
+            </div>
+          ) : bulkMode ? (
+            <div>
+              {activeTasks.map((task, i) => (
+                <TaskCard key={task.id} task={task} index={i} />
+              ))}
             </div>
           ) : (
             <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>

@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import type { Task } from '../../db/models';
 import { formatDate, daysUntil, formatTimeRemaining } from '../../lib/date-utils';
 import { setTaskStatus, deleteTask, restoreTask, updateTask, moveTaskToList, duplicateTask } from '../../hooks/use-tasks';
@@ -22,7 +22,24 @@ interface Props {
 }
 
 export function TaskCard({ task, index, dragHandleProps }: Props) {
-  const { expandedTaskIds, toggleTaskExpanded, focusedItemId, focusZone, editingItemId, setEditingItemId } = useAppState(useShallow(s => ({ expandedTaskIds: s.expandedTaskIds, toggleTaskExpanded: s.toggleTaskExpanded, focusedItemId: s.focusedItemId, focusZone: s.focusZone, editingItemId: s.editingItemId, setEditingItemId: s.setEditingItemId })));
+  const { expandedTaskIds, toggleTaskExpanded, focusedItemId, focusZone, editingItemId, setEditingItemId, bulkMode, selectedTaskIds, toggleTaskSelected, setBulkMode } = useAppState(useShallow(s => ({ expandedTaskIds: s.expandedTaskIds, toggleTaskExpanded: s.toggleTaskExpanded, focusedItemId: s.focusedItemId, focusZone: s.focusZone, editingItemId: s.editingItemId, setEditingItemId: s.setEditingItemId, bulkMode: s.bulkMode, selectedTaskIds: s.selectedTaskIds, toggleTaskSelected: s.toggleTaskSelected, setBulkMode: s.setBulkMode })));
+  const isSelected = selectedTaskIds.has(task.id);
+  const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  function handleTouchStart() {
+    if (bulkMode) return;
+    longPressTimer.current = setTimeout(() => {
+      setBulkMode(true);
+      toggleTaskSelected(task.id);
+    }, 500);
+  }
+
+  function handleTouchEnd() {
+    if (longPressTimer.current) {
+      clearTimeout(longPressTimer.current);
+      longPressTimer.current = null;
+    }
+  }
   const subtasks = useSubtasks(task.id);
   const expanded = expandedTaskIds.has(task.id);
   const focused = focusedItemId === task.id && focusZone === 'main';
@@ -60,38 +77,53 @@ export function TaskCard({ task, index, dragHandleProps }: Props) {
   }
 
   return (
-    <div data-task-id={task.id} data-focus-id={task.id} className={`mb-1.5 rounded-lg ${focused ? 'relative z-10 ring-2 ring-accent-500 dark:ring-accent-400' : ''}`} onContextMenu={handleContextMenu}>
+    <div data-task-id={task.id} data-focus-id={task.id} className={`mb-1.5 rounded-lg ${focused ? 'relative z-10 ring-2 ring-accent-500 dark:ring-accent-400' : ''} ${bulkMode && isSelected ? 'ring-2 ring-accent-500/40' : ''}`} onContextMenu={bulkMode ? undefined : handleContextMenu} onTouchStart={handleTouchStart} onTouchEnd={handleTouchEnd} onTouchMove={handleTouchEnd}>
       <div
         className={`group flex items-center gap-2 rounded-t-lg px-2 py-3 md:py-1.5 cursor-pointer border transition-shadow ${
           focused
             ? 'border-accent-500/60 dark:border-accent-400/50'
             : 'border-zinc-200 dark:border-zinc-700/60'
         } ${
-          expanded ? 'rounded-b-none border-b-0 bg-zinc-100/80 dark:bg-zinc-800/60' : 'rounded-b-lg shadow-sm'
+          expanded && !bulkMode ? 'rounded-b-none border-b-0 bg-zinc-100/80 dark:bg-zinc-800/60' : 'rounded-b-lg shadow-sm'
         } ${
           !expanded && !focused && (index !== undefined && index % 2 === 1
             ? 'bg-zinc-50/70 dark:bg-zinc-800/30'
             : 'bg-white dark:bg-zinc-900/50')
         } hover:shadow-md`}
-        onClick={() => toggleTaskExpanded(task.id)}
+        onClick={() => bulkMode ? toggleTaskSelected(task.id) : toggleTaskExpanded(task.id)}
       >
-        {/* Expand/collapse chevron + drag handle */}
-        <div
-          className="shrink-0 cursor-grab touch-none active:cursor-grabbing"
-          {...dragHandleProps}
-        >
-          <svg
-            width="14"
-            height="14"
-            viewBox="0 0 16 16"
-            fill="currentColor"
-            className={`text-zinc-300 transition-transform dark:text-zinc-500 ${expanded ? 'rotate-180' : ''}`}
+        {/* Expand/collapse chevron + drag handle (hidden in bulk mode) */}
+        {!bulkMode && (
+          <div
+            className="shrink-0 cursor-grab touch-none active:cursor-grabbing"
+            {...dragHandleProps}
           >
-            <path d="M3 6l5 5 5-5z" />
-          </svg>
-        </div>
+            <svg
+              width="14"
+              height="14"
+              viewBox="0 0 16 16"
+              fill="currentColor"
+              className={`text-zinc-300 transition-transform dark:text-zinc-500 ${expanded ? 'rotate-180' : ''}`}
+            >
+              <path d="M3 6l5 5 5-5z" />
+            </svg>
+          </div>
+        )}
 
-        {/* Square checkbox with subtask count */}
+        {/* Selection checkbox in bulk mode / Square checkbox otherwise */}
+        {bulkMode ? (
+          <button
+            onClick={(e) => { e.stopPropagation(); toggleTaskSelected(task.id); }}
+            className="shrink-0 flex h-7 w-7 md:h-6 md:w-6 items-center justify-center rounded border-[1.5px] border-zinc-300 dark:border-zinc-600"
+            aria-label={isSelected ? 'Deselect' : 'Select'}
+          >
+            {isSelected && (
+              <svg width="14" height="14" viewBox="0 0 12 12" fill="none">
+                <path d="M2.5 6l2.5 3L9.5 3" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="text-accent-600 dark:text-accent-400" />
+              </svg>
+            )}
+          </button>
+        ) : (
         <button
           onClick={handleCheck}
           className="shrink-0 flex items-center justify-center relative"
@@ -141,6 +173,7 @@ export function TaskCard({ task, index, dragHandleProps }: Props) {
             <div className="h-7 w-7 md:h-6 md:w-6 rounded border-[1.5px] border-zinc-300 hover:border-zinc-400 dark:border-zinc-600 dark:hover:border-zinc-500" />
           )}
         </button>
+        )}
 
         <div className="flex-1 min-w-0 flex items-center gap-2">
           {editingTitle ? (
@@ -198,8 +231,8 @@ export function TaskCard({ task, index, dragHandleProps }: Props) {
           <LinksList primaryLink={task.link} primaryTitle={task.linkTitle} links={task.links} />
         </div>
 
-        {/* Mobile dropdown */}
-        <div className="md:hidden shrink-0" onClick={(e) => e.stopPropagation()}>
+        {/* Mobile dropdown (hidden in bulk mode) */}
+        {!bulkMode && <div className="md:hidden shrink-0" onClick={(e) => e.stopPropagation()}>
           <DropdownMenu
             trigger={
               <svg width="18" height="18" viewBox="0 0 20 20" fill="currentColor" className="text-zinc-400">
@@ -233,9 +266,9 @@ export function TaskCard({ task, index, dragHandleProps }: Props) {
               }, danger: true },
             ]}
           />
-        </div>
-        {/* Desktop inline actions */}
-        <div className="hidden md:flex items-center gap-1 md:opacity-0 md:group-hover:opacity-100 shrink-0" onClick={(e) => e.stopPropagation()}>
+        </div>}
+        {/* Desktop inline actions (hidden in bulk mode) */}
+        {!bulkMode && <div className="hidden md:flex items-center gap-1 md:opacity-0 md:group-hover:opacity-100 shrink-0" onClick={(e) => e.stopPropagation()}>
           {task.status !== 'working' && !hasWorkingSubtask && task.status !== 'done' && (
             <button
               onClick={() => {
@@ -292,11 +325,11 @@ export function TaskCard({ task, index, dragHandleProps }: Props) {
           >
             Del
           </button>
-        </div>
+        </div>}
       </div>
 
-      {/* Expanded content */}
-      {expanded && (
+      {/* Expanded content (hidden in bulk mode) */}
+      {expanded && !bulkMode && (
         <div className={`-mt-px rounded-b-lg border border-t-0 px-2 pb-2 pt-1 shadow-sm ${
           focused
             ? 'border-accent-500/60 dark:border-accent-400/50'
