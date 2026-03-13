@@ -32,14 +32,15 @@ export function QuickCapture() {
       toast('Captured to Inbox', 'success');
     }
     setTitle('');
-    setOpen(false);
+    // Stay open for the next item
+    requestAnimationFrame(() => inputRef.current?.focus());
   }
 
   return (
     <>
       {/* Backdrop */}
       <div
-        className="fixed inset-0 z-[90] bg-black/30"
+        className="fixed inset-0 z-[90] bg-black/50 backdrop-blur-sm"
         onClick={() => setOpen(false)}
       />
       {/* Floating input */}
@@ -71,7 +72,7 @@ export function QuickCapture() {
           </button>
         </form>
         <p className="mt-2 text-center text-xs text-zinc-400 dark:text-zinc-500">
-          Press Enter to save, Esc to cancel
+          Enter to save &amp; continue, Esc to close
         </p>
       </div>
     </>
