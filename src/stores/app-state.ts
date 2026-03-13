@@ -15,6 +15,7 @@ interface AppState {
   trashOpen: boolean;
   searchQuery: string;
   navigateToTaskId: string | null;
+  quickCaptureOpen: boolean;
 
   selectList: (id: string | null) => void;
   toggleTaskExpanded: (id: string) => void;
@@ -31,6 +32,7 @@ interface AppState {
   setTrashOpen: (open: boolean) => void;
   setSearchQuery: (query: string) => void;
   setNavigateToTaskId: (id: string | null) => void;
+  setQuickCaptureOpen: (open: boolean) => void;
 }
 
 export const useAppState = create<AppState>((set) => ({
@@ -48,6 +50,7 @@ export const useAppState = create<AppState>((set) => ({
   trashOpen: false,
   searchQuery: '',
   navigateToTaskId: null,
+  quickCaptureOpen: false,
 
   selectList: (id) => set({ selectedListId: id, searchQuery: '' }),
   toggleTaskExpanded: (id) =>
@@ -76,4 +79,5 @@ export const useAppState = create<AppState>((set) => ({
   setTrashOpen: (open) => set({ trashOpen: open }),
   setSearchQuery: (query) => set({ searchQuery: query }),
   setNavigateToTaskId: (id) => set({ navigateToTaskId: id }),
+  setQuickCaptureOpen: (open) => set({ quickCaptureOpen: open }),
 }));

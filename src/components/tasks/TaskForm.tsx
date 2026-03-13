@@ -7,6 +7,7 @@ import { fromInputDate, toInputDate } from '../../lib/date-utils';
 import type { Task, TaskLink } from '../../db/models';
 import { AddLinkForm } from '../shared/AddLinkForm';
 import { computeNextOccurrence } from '../../hooks/use-recurring';
+import { MAX_TITLE_LENGTH, MAX_DESCRIPTION_LENGTH } from '../../lib/constants';
 
 interface Props {
   open: boolean;
@@ -86,17 +87,26 @@ export function TaskForm({ open, onClose, onSubmit, initial }: Props) {
   return (
     <Modal open={open} onClose={onClose} title={initial ? 'Edit Task' : 'New Task'}>
       <form onSubmit={handleSubmit} className="space-y-3">
-        <Input label="Title" value={title} onChange={(e) => setTitle(e.target.value)} autoFocus required />
+        <div>
+          <Input label="Title" value={title} onChange={(e) => setTitle(e.target.value.slice(0, MAX_TITLE_LENGTH))} autoFocus required maxLength={MAX_TITLE_LENGTH} />
+          {title.length > MAX_TITLE_LENGTH * 0.9 && (
+            <span className="text-[10px] text-zinc-400 mt-0.5 block text-right">{title.length}/{MAX_TITLE_LENGTH}</span>
+          )}
+        </div>
         <div className="flex flex-col gap-1">
           <label className="text-xs font-medium text-zinc-500 dark:text-zinc-400">Description</label>
           <textarea
             value={description}
-            onChange={(e) => setDescription(e.target.value)}
+            onChange={(e) => setDescription(e.target.value.slice(0, MAX_DESCRIPTION_LENGTH))}
             rows={3}
-            className="rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm text-zinc-900 placeholder:text-zinc-400
+            maxLength={MAX_DESCRIPTION_LENGTH}
+            className="rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-base md:text-sm text-zinc-900 placeholder:text-zinc-400
               focus:border-accent-500 focus:outline-none focus:ring-1 focus:ring-accent-500
               dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100 dark:placeholder:text-zinc-500"
           />
+          {description.length > MAX_DESCRIPTION_LENGTH * 0.9 && (
+            <span className="text-[10px] text-zinc-400 text-right">{description.length}/{MAX_DESCRIPTION_LENGTH}</span>
+          )}
         </div>
         <Input label="Link" type="url" value={link} onChange={(e) => setLink(e.target.value)} placeholder="https://..." />
         {/* Due date — hidden when recurring */}

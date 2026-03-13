@@ -6,6 +6,7 @@ import { fromInputDate } from '../../lib/date-utils';
 import { computeNextOccurrence } from '../../hooks/use-recurring';
 import { AddLinkForm } from '../shared/AddLinkForm';
 import type { TaskLink } from '../../db/models';
+import { MAX_TITLE_LENGTH, MAX_DESCRIPTION_LENGTH } from '../../lib/constants';
 
 interface Props {
   onSubmit: (data: {
@@ -72,10 +73,11 @@ export function InlineTaskForm({ onSubmit, onCancel }: Props) {
         <textarea
           placeholder="Task title"
           value={title}
-          onChange={(e) => { setTitle(e.target.value); e.target.style.height = 'auto'; e.target.style.height = e.target.scrollHeight + 'px'; }}
+          onChange={(e) => { setTitle(e.target.value.slice(0, MAX_TITLE_LENGTH)); e.target.style.height = 'auto'; e.target.style.height = e.target.scrollHeight + 'px'; }}
           autoFocus
           rows={1}
-          className="flex-1 resize-none overflow-hidden rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm text-zinc-900 placeholder:text-zinc-400
+          maxLength={MAX_TITLE_LENGTH}
+          className="flex-1 resize-none overflow-hidden rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-base md:text-sm text-zinc-900 placeholder:text-zinc-400
             focus:border-accent-500 focus:outline-none focus:ring-1 focus:ring-accent-500
             dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100 dark:placeholder:text-zinc-500"
           onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); e.currentTarget.form?.requestSubmit(); } }}
@@ -93,10 +95,11 @@ export function InlineTaskForm({ onSubmit, onCancel }: Props) {
           <div className="flex flex-col gap-1">
             <textarea
               value={description}
-              onChange={(e) => setDescription(e.target.value)}
+              onChange={(e) => setDescription(e.target.value.slice(0, MAX_DESCRIPTION_LENGTH))}
               rows={2}
+              maxLength={MAX_DESCRIPTION_LENGTH}
               placeholder="Description"
-              className="rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm text-zinc-900 placeholder:text-zinc-400
+              className="rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-base md:text-sm text-zinc-900 placeholder:text-zinc-400
                 focus:border-accent-500 focus:outline-none focus:ring-1 focus:ring-accent-500
                 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100 dark:placeholder:text-zinc-500"
             />

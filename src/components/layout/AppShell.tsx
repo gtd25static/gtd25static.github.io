@@ -14,10 +14,11 @@ import { TrashModal } from '../trash/TrashModal';
 import { HelpOverlay } from './HelpOverlay';
 import { SyncIndicator } from './SyncIndicator';
 import { ToastContainer } from '../ui/Toast';
+import { QuickCapture } from '../tasks/QuickCapture';
 import { useSpecialListContext } from '../../hooks/use-special-list';
 
 export function AppShell() {
-  const { sidebarOpen, setSidebarOpen, setSettingsOpen, searchQuery, selectedListId, selectList } = useAppState(useShallow(s => ({ sidebarOpen: s.sidebarOpen, setSidebarOpen: s.setSidebarOpen, setSettingsOpen: s.setSettingsOpen, searchQuery: s.searchQuery, selectedListId: s.selectedListId, selectList: s.selectList })));
+  const { sidebarOpen, setSidebarOpen, setSettingsOpen, searchQuery, selectedListId, selectList, setQuickCaptureOpen } = useAppState(useShallow(s => ({ sidebarOpen: s.sidebarOpen, setSidebarOpen: s.setSidebarOpen, setSettingsOpen: s.setSettingsOpen, searchQuery: s.searchQuery, selectedListId: s.selectedListId, selectList: s.selectList, setQuickCaptureOpen: s.setQuickCaptureOpen })));
   const lists = useTaskLists();
   const { warningCount, blockedCount } = useSpecialListContext();
 
@@ -132,6 +133,19 @@ export function AppShell() {
       <EncryptionPasswordModal />
       <TrashModal />
       <HelpOverlay />
+
+      {/* Mobile quick capture FAB */}
+      <button
+        onClick={() => setQuickCaptureOpen(true)}
+        className="fixed bottom-6 right-6 z-[80] flex h-14 w-14 items-center justify-center rounded-full bg-accent-600 text-white shadow-lg hover:bg-accent-700 active:scale-95 transition-transform md:hidden"
+        aria-label="Quick capture"
+      >
+        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+          <path d="M12 5v14M5 12h14" />
+        </svg>
+      </button>
+
+      <QuickCapture />
       <ToastContainer />
     </div>
   );

@@ -4,6 +4,7 @@ import type { TaskList, ListType } from '../db/models';
 import { newId } from '../lib/id';
 import { recordChangeInTx, recordChangeBatchInTx, ensureDeviceId } from '../sync/change-log';
 import { scheduleSyncDebounced } from '../sync/sync-engine';
+import { INBOX_LIST_NAME } from '../lib/constants';
 
 export function useTaskLists() {
   const allLists = useLiveQuery(
@@ -120,4 +121,12 @@ export async function reorderTaskLists(orderedIds: string[]) {
   });
 
   scheduleSyncDebounced();
+}
+
+export async function getOrCreateInbox(): Promise<string> {
+  const all = await db.taskLists.toArray();
+  const inbox = all.find((l) => !l.deletedAt && l.name === INBOX_LIST_NAME && l.type === 'tasks');
+  if (inbox) return inbox.id;
+  const list = await createTaskList(INBOX_LIST_NAME, 'tasks');
+  return list.id;
 }

@@ -118,14 +118,39 @@ describe('parseImportZip — validation', () => {
     await expect(parseImportZip(file)).rejects.toThrow('Invalid backup: missing taskLists, tasks, or subtasks arrays');
   });
 
-  it('throws on item without id', async () => {
+  it('skips items without valid id', async () => {
     const file = await makeTestZip(JSON.stringify({
       exportVersion: 1,
       taskLists: [{ name: 'No ID' }],
-      tasks: [],
+      tasks: [{ title: 'No ID Task' }],
       subtasks: [],
     }));
-    await expect(parseImportZip(file)).rejects.toThrow('Invalid backup: found item without id field');
+    const result = await parseImportZip(file);
+    expect(result.taskLists).toHaveLength(0);
+    expect(result.tasks).toHaveLength(0);
+  });
+
+  it('skips items with invalid status', async () => {
+    const now = Date.now();
+    const file = await makeTestZip(JSON.stringify({
+      exportVersion: 1,
+      taskLists: [],
+      tasks: [{ id: 't1', listId: 'l1', title: 'Bad Status', status: 'invalid', order: 0, createdAt: now, updatedAt: now }],
+      subtasks: [],
+    }));
+    const result = await parseImportZip(file);
+    expect(result.tasks).toHaveLength(0);
+  });
+
+  it('skips items with invalid timestamps', async () => {
+    const file = await makeTestZip(JSON.stringify({
+      exportVersion: 1,
+      taskLists: [],
+      tasks: [{ id: 't1', listId: 'l1', title: 'Bad Timestamps', status: 'todo', order: 0, createdAt: 'not-a-number', updatedAt: null }],
+      subtasks: [],
+    }));
+    const result = await parseImportZip(file);
+    expect(result.tasks).toHaveLength(0);
   });
 
   it('rejects future exportVersion with clear error', async () => {

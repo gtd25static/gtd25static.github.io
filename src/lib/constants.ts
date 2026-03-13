@@ -7,6 +7,13 @@ export const DUE_SOON_DAYS = 14;
 export const SOFT_DELETE_CLEANUP_DAYS = 30;
 export const DEFAULT_SYNC_INTERVAL_MS = 300_000;
 
+// Input length limits
+export const MAX_TITLE_LENGTH = 500;
+export const MAX_DESCRIPTION_LENGTH = 5000;
+export const MAX_LIST_NAME_LENGTH = 100;
+
+export const INBOX_LIST_NAME = 'Inbox';
+
 export const PING_COOLDOWN_MS: Record<string, number> = {
   '12h': 12 * 60 * 60 * 1000,
   '1week': 7 * 24 * 60 * 60 * 1000,

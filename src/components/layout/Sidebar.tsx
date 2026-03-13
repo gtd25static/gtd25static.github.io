@@ -25,7 +25,7 @@ import { DropdownMenu } from '../ui/DropdownMenu';
 import { db } from '../../db';
 import type { ListType } from '../../db/models';
 import { SyncIndicator } from './SyncIndicator';
-import { GIT_COMMIT } from '../../lib/constants';
+import { GIT_COMMIT, MAX_LIST_NAME_LENGTH } from '../../lib/constants';
 import { useSpecialListContext } from '../../hooks/use-special-list';
 
 function useAllTaskCounts(listIds: string[]): Map<string, number> {
@@ -67,7 +67,7 @@ function ListItem({ list, selected, onSelect, highlight, focused, count }: {
 
   const handleSave = () => {
     if (editName.trim() && editName.trim() !== list.name) {
-      updateTaskList(list.id, { name: editName.trim() });
+      updateTaskList(list.id, { name: editName.trim().slice(0, MAX_LIST_NAME_LENGTH) });
     }
     setEditingId(null);
   };
@@ -94,8 +94,9 @@ function ListItem({ list, selected, onSelect, highlight, focused, count }: {
         )}
         <input
           value={editName}
-          onChange={(e) => setEditName(e.target.value)}
-          className="flex-1 min-w-0 bg-transparent text-sm text-zinc-900 outline-none border-b border-accent-500 dark:text-zinc-100"
+          onChange={(e) => setEditName(e.target.value.slice(0, MAX_LIST_NAME_LENGTH))}
+          maxLength={MAX_LIST_NAME_LENGTH}
+          className="flex-1 min-w-0 bg-transparent text-base md:text-sm text-zinc-900 outline-none border-b border-accent-500 dark:text-zinc-100"
           autoFocus
           onBlur={handleSave}
           onKeyDown={(e) => {
@@ -237,7 +238,7 @@ export function Sidebar() {
 
   async function handleCreate() {
     if (!newName.trim()) return;
-    const list = await createTaskList(newName.trim(), newType);
+    const list = await createTaskList(newName.trim().slice(0, MAX_LIST_NAME_LENGTH), newType);
     selectList(list.id);
     setNewName('');
     setNewType('tasks');
@@ -333,7 +334,8 @@ export function Sidebar() {
             <Input
               placeholder="List name"
               value={newName}
-              onChange={(e) => setNewName(e.target.value)}
+              onChange={(e) => setNewName(e.target.value.slice(0, MAX_LIST_NAME_LENGTH))}
+              maxLength={MAX_LIST_NAME_LENGTH}
               autoFocus
             />
             <div className="flex gap-2">

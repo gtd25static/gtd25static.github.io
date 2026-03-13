@@ -176,7 +176,18 @@ export function useKeyboard() {
     const handler = async (e: KeyboardEvent) => {
       const s = useAppState.getState();
 
+      // Ctrl+N / Cmd+N: Quick capture (works globally, even in inputs)
+      if ((e.ctrlKey || e.metaKey) && e.key === 'n') {
+        e.preventDefault();
+        s.setQuickCaptureOpen(!s.quickCaptureOpen);
+        return;
+      }
+
       // Skip if modal is open (except Escape to close)
+      if (s.quickCaptureOpen) {
+        return; // Let QuickCapture handle its own keys
+      }
+
       if (s.settingsOpen || s.trashOpen) {
         if (e.key === 'Escape') {
           s.setSettingsOpen(false);

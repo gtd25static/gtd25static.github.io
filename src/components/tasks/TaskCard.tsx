@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect } from 'react';
 import type { Task } from '../../db/models';
 import { formatDate, daysUntil, formatTimeRemaining } from '../../lib/date-utils';
-import { setTaskStatus, deleteTask, restoreTask, updateTask, moveTaskToList } from '../../hooks/use-tasks';
+import { setTaskStatus, deleteTask, restoreTask, updateTask, moveTaskToList, duplicateTask } from '../../hooks/use-tasks';
 import { toast } from '../ui/Toast';
 import { useShallow } from 'zustand/react/shallow';
 import { useAppState } from '../../stores/app-state';
@@ -222,6 +222,10 @@ export function TaskCard({ task, index, dragHandleProps }: Props) {
               { label: task.status === 'blocked' ? 'Unblock' : 'Block', onClick: () => setTaskStatus(task.id, task.status === 'blocked' ? 'todo' : 'blocked') },
               { label: task.hasWarning ? 'Clear warning' : 'Warn', onClick: () => toggleWarning('task', task.id) },
               { label: 'Edit', onClick: () => setEditing(true) },
+              { label: 'Duplicate', onClick: async () => {
+                const dup = await duplicateTask(task.id);
+                if (dup) toast('Task duplicated', 'success');
+              }},
               { label: 'Delete', onClick: () => {
                 if (!confirm('Delete this task?')) return;
                 deleteTask(task.id);
@@ -267,6 +271,16 @@ export function TaskCard({ task, index, dragHandleProps }: Props) {
             className="rounded px-1.5 py-0.5 text-xs text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800"
           >
             Edit
+          </button>
+          <button
+            onClick={async () => {
+              const dup = await duplicateTask(task.id);
+              if (dup) toast('Task duplicated', 'success');
+            }}
+            className="rounded px-1.5 py-0.5 text-xs text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+            title="Duplicate task"
+          >
+            Dup
           </button>
           <button
             onClick={() => {

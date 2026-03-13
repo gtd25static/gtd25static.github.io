@@ -5,6 +5,7 @@ import { newId } from '../lib/id';
 import { recordChangeInTx, recordChangeBatchInTx, ensureDeviceId } from '../sync/change-log';
 import { scheduleSyncDebounced } from '../sync/sync-engine';
 import { computeNextOccurrence } from './use-recurring';
+import { handleDbError } from '../lib/db-error';
 
 export function useTasks(listId: string | null) {
   return useLiveQuery(
@@ -41,46 +42,55 @@ export async function createTask(
     skipFirst?: boolean;
   },
 ) {
-  const count = await db.tasks.where('listId').equals(listId).count();
-  const now = Date.now();
-  const task: Task = {
-    id: newId(),
-    listId,
-    title: data.title,
-    description: data.description,
-    link: data.link,
-    linkTitle: data.linkTitle,
-    dueDate: data.dueDate,
-    links: data.links,
-    recurrenceType: data.recurrenceType,
-    recurrenceInterval: data.recurrenceInterval,
-    recurrenceUnit: data.recurrenceUnit,
-    nextOccurrence: data.nextOccurrence,
-    status: data.skipFirst ? 'done' : 'todo',
-    lastCompletedAt: data.skipFirst ? now : undefined,
-    order: count,
-    createdAt: now,
-    updatedAt: now,
-  };
-  await ensureDeviceId();
-  await db.transaction('rw', [db.tasks, db.changeLog], async () => {
-    await db.tasks.add(task);
-    await recordChangeInTx('task', task.id, 'upsert', task as unknown as Record<string, unknown>);
-  });
-  scheduleSyncDebounced();
-  return task;
+  try {
+    const count = await db.tasks.where('listId').equals(listId).count();
+    const now = Date.now();
+    const task: Task = {
+      id: newId(),
+      listId,
+      title: data.title,
+      description: data.description,
+      link: data.link,
+      linkTitle: data.linkTitle,
+      dueDate: data.dueDate,
+      links: data.links,
+      recurrenceType: data.recurrenceType,
+      recurrenceInterval: data.recurrenceInterval,
+      recurrenceUnit: data.recurrenceUnit,
+      nextOccurrence: data.nextOccurrence,
+      status: data.skipFirst ? 'done' : 'todo',
+      lastCompletedAt: data.skipFirst ? now : undefined,
+      order: count,
+      createdAt: now,
+      updatedAt: now,
+    };
+    await ensureDeviceId();
+    await db.transaction('rw', [db.tasks, db.changeLog], async () => {
+      await db.tasks.add(task);
+      await recordChangeInTx('task', task.id, 'upsert', task as unknown as Record<string, unknown>);
+    });
+    scheduleSyncDebounced();
+    return task;
+  } catch (error) {
+    handleDbError(error, 'create task');
+    return undefined;
+  }
 }
 
 export async function updateTask(id: string, updates: Partial<Task>) {
-  await ensureDeviceId();
-  await db.transaction('rw', [db.tasks, db.changeLog], async () => {
-    await db.tasks.update(id, { ...updates, updatedAt: Date.now() });
-    const updated = await db.tasks.get(id);
-    if (updated) {
-      await recordChangeInTx('task', id, 'upsert', updated as unknown as Record<string, unknown>);
-    }
-  });
-  scheduleSyncDebounced();
+  try {
+    await ensureDeviceId();
+    await db.transaction('rw', [db.tasks, db.changeLog], async () => {
+      await db.tasks.update(id, { ...updates, updatedAt: Date.now() });
+      const updated = await db.tasks.get(id);
+      if (updated) {
+        await recordChangeInTx('task', id, 'upsert', updated as unknown as Record<string, unknown>);
+      }
+    });
+    scheduleSyncDebounced();
+  } catch (error) {
+    handleDbError(error, 'update task');
+  }
 }
 
 export async function setTaskStatus(id: string, status: TaskStatus) {
@@ -128,74 +138,149 @@ export async function removeTaskLink(taskId: string, index: number) {
 }
 
 export async function deleteTask(id: string) {
-  const now = Date.now();
-  const batch: Array<{ entityType: 'task' | 'subtask'; entityId: string; operation: 'delete' }> = [];
+  try {
+    const now = Date.now();
+    const batch: Array<{ entityType: 'task' | 'subtask'; entityId: string; operation: 'delete' }> = [];
 
-  await ensureDeviceId();
-  await db.transaction('rw', [db.tasks, db.subtasks, db.changeLog], async () => {
-    await db.tasks.update(id, { deletedAt: now, updatedAt: now });
-    batch.push({ entityType: 'task', entityId: id, operation: 'delete' });
+    await ensureDeviceId();
+    await db.transaction('rw', [db.tasks, db.subtasks, db.changeLog], async () => {
+      await db.tasks.update(id, { deletedAt: now, updatedAt: now });
+      batch.push({ entityType: 'task', entityId: id, operation: 'delete' });
 
-    const subtasks = await db.subtasks.where('taskId').equals(id).toArray();
-    for (const sub of subtasks) {
-      await db.subtasks.update(sub.id, { deletedAt: now, updatedAt: now });
-      batch.push({ entityType: 'subtask', entityId: sub.id, operation: 'delete' });
-    }
+      const subtasks = await db.subtasks.where('taskId').equals(id).toArray();
+      for (const sub of subtasks) {
+        await db.subtasks.update(sub.id, { deletedAt: now, updatedAt: now });
+        batch.push({ entityType: 'subtask', entityId: sub.id, operation: 'delete' });
+      }
 
-    await recordChangeBatchInTx(batch);
-  });
+      await recordChangeBatchInTx(batch);
+    });
 
-  scheduleSyncDebounced();
+    scheduleSyncDebounced();
+  } catch (error) {
+    handleDbError(error, 'delete task');
+  }
 }
 
 export async function restoreTask(id: string) {
-  const now = Date.now();
-  await ensureDeviceId();
-  await db.transaction('rw', [db.tasks, db.subtasks, db.changeLog], async () => {
-    await db.tasks.update(id, { deletedAt: undefined, updatedAt: now });
-    await db.subtasks.where('taskId').equals(id).modify({ deletedAt: undefined, updatedAt: now });
+  try {
+    const now = Date.now();
+    await ensureDeviceId();
+    await db.transaction('rw', [db.tasks, db.subtasks, db.changeLog], async () => {
+      await db.tasks.update(id, { deletedAt: undefined, updatedAt: now });
+      await db.subtasks.where('taskId').equals(id).modify({ deletedAt: undefined, updatedAt: now });
 
-    const batch: Array<{ entityType: 'task' | 'subtask'; entityId: string; operation: 'upsert'; data: Record<string, unknown> }> = [];
-    const task = await db.tasks.get(id);
-    if (task) batch.push({ entityType: 'task', entityId: id, operation: 'upsert', data: task as unknown as Record<string, unknown> });
-    const subtasks = await db.subtasks.where('taskId').equals(id).toArray();
-    for (const sub of subtasks) {
-      batch.push({ entityType: 'subtask', entityId: sub.id, operation: 'upsert', data: sub as unknown as Record<string, unknown> });
-    }
-    await recordChangeBatchInTx(batch);
-  });
+      const batch: Array<{ entityType: 'task' | 'subtask'; entityId: string; operation: 'upsert'; data: Record<string, unknown> }> = [];
+      const task = await db.tasks.get(id);
+      if (task) batch.push({ entityType: 'task', entityId: id, operation: 'upsert', data: task as unknown as Record<string, unknown> });
+      const subtasks = await db.subtasks.where('taskId').equals(id).toArray();
+      for (const sub of subtasks) {
+        batch.push({ entityType: 'subtask', entityId: sub.id, operation: 'upsert', data: sub as unknown as Record<string, unknown> });
+      }
+      await recordChangeBatchInTx(batch);
+    });
 
-  scheduleSyncDebounced();
+    scheduleSyncDebounced();
+  } catch (error) {
+    handleDbError(error, 'restore task');
+  }
 }
 
 export async function moveTaskToList(taskId: string, targetListId: string) {
-  const count = await db.tasks.where('listId').equals(targetListId).count();
-  await ensureDeviceId();
-  await db.transaction('rw', [db.tasks, db.changeLog], async () => {
-    await db.tasks.update(taskId, { listId: targetListId, order: count, updatedAt: Date.now() });
-    const updated = await db.tasks.get(taskId);
-    if (updated) {
-      await recordChangeInTx('task', taskId, 'upsert', updated as unknown as Record<string, unknown>);
-    }
-  });
-  scheduleSyncDebounced();
+  try {
+    const count = await db.tasks.where('listId').equals(targetListId).count();
+    await ensureDeviceId();
+    await db.transaction('rw', [db.tasks, db.changeLog], async () => {
+      await db.tasks.update(taskId, { listId: targetListId, order: count, updatedAt: Date.now() });
+      const updated = await db.tasks.get(taskId);
+      if (updated) {
+        await recordChangeInTx('task', taskId, 'upsert', updated as unknown as Record<string, unknown>);
+      }
+    });
+    scheduleSyncDebounced();
+  } catch (error) {
+    handleDbError(error, 'move task');
+  }
+}
+
+export async function duplicateTask(taskId: string) {
+  try {
+    const task = await db.tasks.get(taskId);
+    if (!task) return undefined;
+
+    // Clone subtasks
+    const subtasks = await db.subtasks.where('taskId').equals(taskId).toArray();
+    const liveSubtasks = subtasks.filter((s) => !s.deletedAt).sort((a, b) => a.order - b.order);
+
+    const count = await db.tasks.where('listId').equals(task.listId).count();
+    const now = Date.now();
+    const newTaskId = newId();
+    const newTask: Task = {
+      id: newTaskId,
+      listId: task.listId,
+      title: task.title,
+      description: task.description,
+      link: task.link,
+      linkTitle: task.linkTitle,
+      links: task.links ? [...task.links] : undefined,
+      status: 'todo',
+      order: count,
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    await ensureDeviceId();
+    await db.transaction('rw', [db.tasks, db.subtasks, db.changeLog], async () => {
+      await db.tasks.add(newTask);
+      await recordChangeInTx('task', newTaskId, 'upsert', newTask as unknown as Record<string, unknown>);
+
+      for (let i = 0; i < liveSubtasks.length; i++) {
+        const sub = liveSubtasks[i];
+        const newSubId = newId();
+        const newSub = {
+          id: newSubId,
+          taskId: newTaskId,
+          title: sub.title,
+          link: sub.link,
+          linkTitle: sub.linkTitle,
+          links: sub.links ? [...sub.links] : undefined,
+          status: 'todo' as const,
+          order: i,
+          createdAt: now,
+          updatedAt: now,
+        };
+        await db.subtasks.add(newSub);
+        await recordChangeInTx('subtask', newSubId, 'upsert', newSub as unknown as Record<string, unknown>);
+      }
+    });
+
+    scheduleSyncDebounced();
+    return newTask;
+  } catch (error) {
+    handleDbError(error, 'duplicate task');
+    return undefined;
+  }
 }
 
 export async function reorderTasks(orderedIds: string[]) {
-  const now = Date.now();
-  await ensureDeviceId();
-  await db.transaction('rw', [db.tasks, db.changeLog], async () => {
-    for (let i = 0; i < orderedIds.length; i++) {
-      await db.tasks.update(orderedIds[i], { order: i, updatedAt: now });
-    }
+  try {
+    const now = Date.now();
+    await ensureDeviceId();
+    await db.transaction('rw', [db.tasks, db.changeLog], async () => {
+      for (let i = 0; i < orderedIds.length; i++) {
+        await db.tasks.update(orderedIds[i], { order: i, updatedAt: now });
+      }
 
-    const batch: Array<{ entityType: 'task'; entityId: string; operation: 'upsert'; data: Record<string, unknown> }> = [];
-    for (const id of orderedIds) {
-      const task = await db.tasks.get(id);
-      if (task) batch.push({ entityType: 'task', entityId: id, operation: 'upsert', data: task as unknown as Record<string, unknown> });
-    }
-    await recordChangeBatchInTx(batch);
-  });
+      const batch: Array<{ entityType: 'task'; entityId: string; operation: 'upsert'; data: Record<string, unknown> }> = [];
+      for (const id of orderedIds) {
+        const task = await db.tasks.get(id);
+        if (task) batch.push({ entityType: 'task', entityId: id, operation: 'upsert', data: task as unknown as Record<string, unknown> });
+      }
+      await recordChangeBatchInTx(batch);
+    });
 
-  scheduleSyncDebounced();
+    scheduleSyncDebounced();
+  } catch (error) {
+    handleDbError(error, 'reorder tasks');
+  }
 }

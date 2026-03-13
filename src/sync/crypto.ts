@@ -13,10 +13,41 @@ const SENSITIVE_FIELDS: Record<string, string[]> = {
 // --- Key cache ---
 let cachedKey: CryptoKey | null = null;
 let cachedSalt: string | null = null;
+let idleTimer: ReturnType<typeof setTimeout> | null = null;
+const IDLE_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
+
+function resetIdleTimer() {
+  if (idleTimer) clearTimeout(idleTimer);
+  if (cachedKey) {
+    idleTimer = setTimeout(() => {
+      cachedKey = null;
+      cachedSalt = null;
+      idleTimer = null;
+    }, IDLE_TIMEOUT_MS);
+  }
+}
+
+// Clear key when tab becomes hidden
+if (typeof document !== 'undefined') {
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden' && cachedKey) {
+      // Don't clear immediately — just shorten the timeout for background tabs
+      if (idleTimer) clearTimeout(idleTimer);
+      idleTimer = setTimeout(() => {
+        cachedKey = null;
+        cachedSalt = null;
+        idleTimer = null;
+      }, 5 * 60 * 1000); // 5 min when hidden
+    } else if (document.visibilityState === 'visible') {
+      resetIdleTimer();
+    }
+  });
+}
 
 export function clearEncryptionKey() {
   cachedKey = null;
   cachedSalt = null;
+  if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
 }
 
 export function hasEncryptionKey(): boolean {
@@ -24,12 +55,14 @@ export function hasEncryptionKey(): boolean {
 }
 
 export function getCachedEncryptionKey(): CryptoKey | null {
+  resetIdleTimer();
   return cachedKey;
 }
 
 export function cacheEncryptionKey(key: CryptoKey, salt: string) {
   cachedKey = key;
   cachedSalt = salt;
+  resetIdleTimer();
 }
 
 export function getCachedSalt(): string | null {

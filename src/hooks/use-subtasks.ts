@@ -5,6 +5,7 @@ import { newId } from '../lib/id';
 import { recordChangeInTx, recordChangeBatchInTx, ensureDeviceId } from '../sync/change-log';
 import { scheduleSyncDebounced } from '../sync/sync-engine';
 import { computeNextOccurrence } from './use-recurring';
+import { handleDbError } from '../lib/db-error';
 
 export function useSubtasks(taskId: string | undefined) {
   return useLiveQuery(
@@ -22,39 +23,48 @@ export async function createSubtask(
   taskId: string,
   data: { title: string; link?: string; linkTitle?: string; dueDate?: number },
 ) {
-  const count = await db.subtasks.where('taskId').equals(taskId).count();
-  const now = Date.now();
-  const subtask: Subtask = {
-    id: newId(),
-    taskId,
-    title: data.title,
-    link: data.link,
-    linkTitle: data.linkTitle,
-    dueDate: data.dueDate,
-    status: 'todo',
-    order: count,
-    createdAt: now,
-    updatedAt: now,
-  };
-  await ensureDeviceId();
-  await db.transaction('rw', [db.subtasks, db.changeLog], async () => {
-    await db.subtasks.add(subtask);
-    await recordChangeInTx('subtask', subtask.id, 'upsert', subtask as unknown as Record<string, unknown>);
-  });
-  scheduleSyncDebounced();
-  return subtask;
+  try {
+    const count = await db.subtasks.where('taskId').equals(taskId).count();
+    const now = Date.now();
+    const subtask: Subtask = {
+      id: newId(),
+      taskId,
+      title: data.title,
+      link: data.link,
+      linkTitle: data.linkTitle,
+      dueDate: data.dueDate,
+      status: 'todo',
+      order: count,
+      createdAt: now,
+      updatedAt: now,
+    };
+    await ensureDeviceId();
+    await db.transaction('rw', [db.subtasks, db.changeLog], async () => {
+      await db.subtasks.add(subtask);
+      await recordChangeInTx('subtask', subtask.id, 'upsert', subtask as unknown as Record<string, unknown>);
+    });
+    scheduleSyncDebounced();
+    return subtask;
+  } catch (error) {
+    handleDbError(error, 'create subtask');
+    return undefined;
+  }
 }
 
 export async function updateSubtask(id: string, updates: Partial<Subtask>) {
-  await ensureDeviceId();
-  await db.transaction('rw', [db.subtasks, db.changeLog], async () => {
-    await db.subtasks.update(id, { ...updates, updatedAt: Date.now() });
-    const updated = await db.subtasks.get(id);
-    if (updated) {
-      await recordChangeInTx('subtask', id, 'upsert', updated as unknown as Record<string, unknown>);
-    }
-  });
-  scheduleSyncDebounced();
+  try {
+    await ensureDeviceId();
+    await db.transaction('rw', [db.subtasks, db.changeLog], async () => {
+      await db.subtasks.update(id, { ...updates, updatedAt: Date.now() });
+      const updated = await db.subtasks.get(id);
+      if (updated) {
+        await recordChangeInTx('subtask', id, 'upsert', updated as unknown as Record<string, unknown>);
+      }
+    });
+    scheduleSyncDebounced();
+  } catch (error) {
+    handleDbError(error, 'update subtask');
+  }
 }
 
 export async function setSubtaskStatus(id: string, status: SubtaskStatus) {
@@ -164,74 +174,90 @@ export async function removeSubtaskLink(subtaskId: string, index: number) {
 }
 
 export async function deleteSubtask(id: string) {
-  const now = Date.now();
-  await ensureDeviceId();
-  await db.transaction('rw', [db.subtasks, db.changeLog], async () => {
-    await db.subtasks.update(id, { deletedAt: now, updatedAt: now });
-    await recordChangeInTx('subtask', id, 'delete');
-  });
-  scheduleSyncDebounced();
+  try {
+    const now = Date.now();
+    await ensureDeviceId();
+    await db.transaction('rw', [db.subtasks, db.changeLog], async () => {
+      await db.subtasks.update(id, { deletedAt: now, updatedAt: now });
+      await recordChangeInTx('subtask', id, 'delete');
+    });
+    scheduleSyncDebounced();
+  } catch (error) {
+    handleDbError(error, 'delete subtask');
+  }
 }
 
 export async function restoreSubtask(id: string) {
-  await ensureDeviceId();
-  await db.transaction('rw', [db.subtasks, db.changeLog], async () => {
-    await db.subtasks.update(id, { deletedAt: undefined, updatedAt: Date.now() });
-    const updated = await db.subtasks.get(id);
-    if (updated) {
-      await recordChangeInTx('subtask', id, 'upsert', updated as unknown as Record<string, unknown>);
-    }
-  });
-  scheduleSyncDebounced();
+  try {
+    await ensureDeviceId();
+    await db.transaction('rw', [db.subtasks, db.changeLog], async () => {
+      await db.subtasks.update(id, { deletedAt: undefined, updatedAt: Date.now() });
+      const updated = await db.subtasks.get(id);
+      if (updated) {
+        await recordChangeInTx('subtask', id, 'upsert', updated as unknown as Record<string, unknown>);
+      }
+    });
+    scheduleSyncDebounced();
+  } catch (error) {
+    handleDbError(error, 'restore subtask');
+  }
 }
 
 export async function convertSubtaskToTask(subtaskId: string, targetListId: string) {
-  const subtask = await db.subtasks.get(subtaskId);
-  if (!subtask) return;
-  const count = await db.tasks.where('listId').equals(targetListId).count();
-  const now = Date.now();
-  const newTaskId = newId();
-  await ensureDeviceId();
-  await db.transaction('rw', [db.subtasks, db.tasks, db.changeLog], async () => {
-    await db.subtasks.update(subtaskId, { deletedAt: now, updatedAt: now });
-    await db.tasks.add({
-      id: newTaskId,
-      listId: targetListId,
-      title: subtask.title,
-      link: subtask.link,
-      linkTitle: subtask.linkTitle,
-      dueDate: subtask.dueDate,
-      status: subtask.status === 'working' ? 'todo' : subtask.status,
-      order: count,
-      createdAt: now,
-      updatedAt: now,
+  try {
+    const subtask = await db.subtasks.get(subtaskId);
+    if (!subtask) return;
+    const count = await db.tasks.where('listId').equals(targetListId).count();
+    const now = Date.now();
+    const newTaskId = newId();
+    await ensureDeviceId();
+    await db.transaction('rw', [db.subtasks, db.tasks, db.changeLog], async () => {
+      await db.subtasks.update(subtaskId, { deletedAt: now, updatedAt: now });
+      await db.tasks.add({
+        id: newTaskId,
+        listId: targetListId,
+        title: subtask.title,
+        link: subtask.link,
+        linkTitle: subtask.linkTitle,
+        dueDate: subtask.dueDate,
+        status: subtask.status === 'working' ? 'todo' : subtask.status,
+        order: count,
+        createdAt: now,
+        updatedAt: now,
+      });
+
+      await recordChangeInTx('subtask', subtaskId, 'delete');
+      const newTask = await db.tasks.get(newTaskId);
+      if (newTask) {
+        await recordChangeInTx('task', newTaskId, 'upsert', newTask as unknown as Record<string, unknown>);
+      }
     });
 
-    await recordChangeInTx('subtask', subtaskId, 'delete');
-    const newTask = await db.tasks.get(newTaskId);
-    if (newTask) {
-      await recordChangeInTx('task', newTaskId, 'upsert', newTask as unknown as Record<string, unknown>);
-    }
-  });
-
-  scheduleSyncDebounced();
+    scheduleSyncDebounced();
+  } catch (error) {
+    handleDbError(error, 'convert subtask');
+  }
 }
 
 export async function reorderSubtasks(orderedIds: string[]) {
-  const now = Date.now();
-  await ensureDeviceId();
-  await db.transaction('rw', [db.subtasks, db.changeLog], async () => {
-    for (let i = 0; i < orderedIds.length; i++) {
-      await db.subtasks.update(orderedIds[i], { order: i, updatedAt: now });
-    }
+  try {
+    const now = Date.now();
+    await ensureDeviceId();
+    await db.transaction('rw', [db.subtasks, db.changeLog], async () => {
+      for (let i = 0; i < orderedIds.length; i++) {
+        await db.subtasks.update(orderedIds[i], { order: i, updatedAt: now });
+      }
 
-    const batch: Array<{ entityType: 'subtask'; entityId: string; operation: 'upsert'; data: Record<string, unknown> }> = [];
-    for (const id of orderedIds) {
-      const sub = await db.subtasks.get(id);
-      if (sub) batch.push({ entityType: 'subtask', entityId: id, operation: 'upsert', data: sub as unknown as Record<string, unknown> });
-    }
-    await recordChangeBatchInTx(batch);
-  });
+      const batch: Array<{ entityType: 'subtask'; entityId: string; operation: 'upsert'; data: Record<string, unknown> }> = [];
+      for (const id of orderedIds) {
+        const sub = await db.subtasks.get(id);
+        if (sub) batch.push({ entityType: 'subtask', entityId: id, operation: 'upsert', data: sub as unknown as Record<string, unknown> });
+      }
+      await recordChangeBatchInTx(batch);
+    });
 
-  scheduleSyncDebounced();
+    scheduleSyncDebounced();
+  } catch (error) {
+    handleDbError(error, 'reorder subtasks');
+  }
 }
