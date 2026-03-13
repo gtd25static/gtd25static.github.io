@@ -1,5 +1,5 @@
 import { db } from '../../db';
-import { resetDb } from '../helpers/db-helpers';
+import { resetDb, assertDefined } from '../helpers/db-helpers';
 import { createTaskList } from '../../hooks/use-task-lists';
 import { createTask, updateTask, setTaskStatus, deleteTask, restoreTask, moveTaskToList, reorderTasks } from '../../hooks/use-tasks';
 import { createSubtask } from '../../hooks/use-subtasks';
@@ -14,7 +14,7 @@ beforeEach(async () => {
 
 describe('createTask', () => {
   it('creates a task with correct fields', async () => {
-    const task = await createTask(listId, { title: 'My Task', description: 'Desc', link: 'https://x.com' });
+    const task = assertDefined(await createTask(listId, { title: 'My Task', description: 'Desc', link: 'https://x.com' }));
     expect(task.title).toBe('My Task');
     expect(task.description).toBe('Desc');
     expect(task.link).toBe('https://x.com');
@@ -24,8 +24,8 @@ describe('createTask', () => {
   });
 
   it('auto-increments order within list', async () => {
-    const t1 = await createTask(listId, { title: 'First' });
-    const t2 = await createTask(listId, { title: 'Second' });
+    const t1 = assertDefined(await createTask(listId, { title: 'First' }));
+    const t2 = assertDefined(await createTask(listId, { title: 'Second' }));
     expect(t1.order).toBe(0);
     expect(t2.order).toBe(1);
   });
@@ -40,7 +40,7 @@ describe('createTask', () => {
 
 describe('updateTask', () => {
   it('updates fields and updatedAt', async () => {
-    const task = await createTask(listId, { title: 'Original' });
+    const task = assertDefined(await createTask(listId, { title: 'Original' }));
     const before = task.updatedAt;
     await new Promise((r) => setTimeout(r, 10));
     await updateTask(task.id, { title: 'Updated' });
@@ -50,7 +50,7 @@ describe('updateTask', () => {
   });
 
   it('preserves unspecified fields', async () => {
-    const task = await createTask(listId, { title: 'Keep', description: 'Keep this' });
+    const task = assertDefined(await createTask(listId, { title: 'Keep', description: 'Keep this' }));
     await updateTask(task.id, { title: 'Changed' });
     const updated = await db.tasks.get(task.id);
     expect(updated?.description).toBe('Keep this');
@@ -59,7 +59,7 @@ describe('updateTask', () => {
 
 describe('setTaskStatus', () => {
   it('changes status', async () => {
-    const task = await createTask(listId, { title: 'Test' });
+    const task = assertDefined(await createTask(listId, { title: 'Test' }));
     await setTaskStatus(task.id, 'done');
     const updated = await db.tasks.get(task.id);
     expect(updated?.status).toBe('done');
@@ -68,7 +68,7 @@ describe('setTaskStatus', () => {
 
 describe('deleteTask', () => {
   it('soft-deletes task and cascades to subtasks', async () => {
-    const task = await createTask(listId, { title: 'Doomed' });
+    const task = assertDefined(await createTask(listId, { title: 'Doomed' }));
     await createSubtask(task.id, { title: 'Sub' });
     await deleteTask(task.id);
     const deleted = await db.tasks.get(task.id);
@@ -80,7 +80,7 @@ describe('deleteTask', () => {
 
 describe('restoreTask', () => {
   it('restores task and cascades to subtasks', async () => {
-    const task = await createTask(listId, { title: 'Restore' });
+    const task = assertDefined(await createTask(listId, { title: 'Restore' }));
     await createSubtask(task.id, { title: 'Sub' });
     await deleteTask(task.id);
     await restoreTask(task.id);
@@ -95,7 +95,7 @@ describe('moveTaskToList', () => {
   it('changes listId and appends to end', async () => {
     const list2 = await createTaskList('Other List');
     await createTask(list2.id, { title: 'Existing' });
-    const task = await createTask(listId, { title: 'Moving' });
+    const task = assertDefined(await createTask(listId, { title: 'Moving' }));
 
     await moveTaskToList(task.id, list2.id);
 
@@ -107,9 +107,9 @@ describe('moveTaskToList', () => {
 
 describe('reorderTasks', () => {
   it('assigns sequential order', async () => {
-    const a = await createTask(listId, { title: 'A' });
-    const b = await createTask(listId, { title: 'B' });
-    const c = await createTask(listId, { title: 'C' });
+    const a = assertDefined(await createTask(listId, { title: 'A' }));
+    const b = assertDefined(await createTask(listId, { title: 'B' }));
+    const c = assertDefined(await createTask(listId, { title: 'C' }));
 
     await reorderTasks([c.id, a.id, b.id]);
 

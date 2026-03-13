@@ -2,6 +2,8 @@ import Dexie, { type Table } from 'dexie';
 import type { TaskList, Task, Subtask, SyncMeta, LocalSettings, ChangeEntry } from './models';
 import { newId } from '../lib/id';
 import { createLocalBackup } from './backup';
+import { purgeOldTrashItems } from './purge';
+import { pruneChangelogIfSyncDisabled } from '../sync/change-log';
 import { SYNC_VERSION } from '../sync/version';
 import { runLocalMigrations } from '../sync/local-migrations';
 
@@ -38,27 +40,36 @@ export class Gtd25DB extends Dexie {
 export const db = new Gtd25DB();
 
 export async function ensureDefaults() {
-  const local = await db.localSettings.get('local');
-  if (!local) {
-    await db.localSettings.put({
-      id: 'local',
-      syncEnabled: false,
-      syncIntervalMs: 300_000,
-      deviceId: newId(),
-      appliedSyncVersion: SYNC_VERSION,
-    });
-  } else if (!local.deviceId) {
-    await db.localSettings.update('local', { deviceId: newId() });
-  }
-  const meta = await db.syncMeta.get('sync-meta');
-  if (!meta) {
-    await db.syncMeta.put({
-      id: 'sync-meta',
-      pendingChanges: false,
-    });
-  }
+  await db.transaction('rw', [db.localSettings, db.syncMeta], async () => {
+    const local = await db.localSettings.get('local');
+    if (!local) {
+      await db.localSettings.put({
+        id: 'local',
+        syncEnabled: false,
+        syncIntervalMs: 300_000,
+        deviceId: newId(),
+        appliedSyncVersion: SYNC_VERSION,
+      });
+    } else if (!local.deviceId) {
+      await db.localSettings.update('local', { deviceId: newId() });
+    }
+    const meta = await db.syncMeta.get('sync-meta');
+    if (!meta) {
+      await db.syncMeta.put({
+        id: 'sync-meta',
+        pendingChanges: false,
+      });
+    }
+  });
 
-  await createLocalBackup();
+  // Purge soft-deleted items older than 30 days at startup
+  await purgeOldTrashItems();
+
+  // Cap changelog when sync is disabled to prevent unbounded growth
+  await pruneChangelogIfSyncDisabled();
+
+  // Defer backup so it doesn't block initial render
+  setTimeout(() => createLocalBackup(), 5000);
 
   // Run local migrations if needed
   const current = await db.localSettings.get('local');

@@ -1,5 +1,5 @@
 import { db } from '../../db';
-import { resetDb } from '../helpers/db-helpers';
+import { resetDb, assertDefined } from '../helpers/db-helpers';
 import { createTaskList } from '../../hooks/use-task-lists';
 import { createTask } from '../../hooks/use-tasks';
 import {
@@ -14,13 +14,13 @@ beforeEach(async () => {
   await resetDb();
   const list = await createTaskList('List');
   listId = list.id;
-  const task = await createTask(listId, { title: 'Parent Task' });
+  const task = assertDefined(await createTask(listId, { title: 'Parent Task' }));
   taskId = task.id;
 });
 
 describe('createSubtask', () => {
   it('creates a subtask with correct fields', async () => {
-    const sub = await createSubtask(taskId, { title: 'My Sub' });
+    const sub = assertDefined(await createSubtask(taskId, { title: 'My Sub' }));
     expect(sub.title).toBe('My Sub');
     expect(sub.taskId).toBe(taskId);
     expect(sub.status).toBe('todo');
@@ -28,8 +28,8 @@ describe('createSubtask', () => {
   });
 
   it('auto-increments order', async () => {
-    const s1 = await createSubtask(taskId, { title: 'First' });
-    const s2 = await createSubtask(taskId, { title: 'Second' });
+    const s1 = assertDefined(await createSubtask(taskId, { title: 'First' }));
+    const s2 = assertDefined(await createSubtask(taskId, { title: 'Second' }));
     expect(s1.order).toBe(0);
     expect(s2.order).toBe(1);
   });
@@ -45,9 +45,9 @@ describe('createSubtask', () => {
 describe('setSubtaskStatus', () => {
   it('sets working, clears other working subtasks globally', async () => {
     const list2 = await createTaskList('Other');
-    const task2 = await createTask(list2.id, { title: 'Other Task' });
-    const sub1 = await createSubtask(taskId, { title: 'Sub 1' });
-    const sub2 = await createSubtask(task2.id, { title: 'Sub 2' });
+    const task2 = assertDefined(await createTask(list2.id, { title: 'Other Task' }));
+    const sub1 = assertDefined(await createSubtask(taskId, { title: 'Sub 1' }));
+    const sub2 = assertDefined(await createSubtask(task2.id, { title: 'Sub 2' }));
 
     await setSubtaskStatus(sub1.id, 'working');
     await setSubtaskStatus(sub2.id, 'working');
@@ -60,7 +60,7 @@ describe('setSubtaskStatus', () => {
 
   it('sets working, clears working tasks globally', async () => {
     await db.tasks.update(taskId, { status: 'working' });
-    const sub = await createSubtask(taskId, { title: 'Sub' });
+    const sub = assertDefined(await createSubtask(taskId, { title: 'Sub' }));
 
     await setSubtaskStatus(sub.id, 'working');
 
@@ -71,8 +71,8 @@ describe('setSubtaskStatus', () => {
   });
 
   it('auto-completes parent when all subtasks done', async () => {
-    const s1 = await createSubtask(taskId, { title: 'Sub 1' });
-    const s2 = await createSubtask(taskId, { title: 'Sub 2' });
+    const s1 = assertDefined(await createSubtask(taskId, { title: 'Sub 1' }));
+    const s2 = assertDefined(await createSubtask(taskId, { title: 'Sub 2' }));
 
     await setSubtaskStatus(s1.id, 'done');
     // Parent should not be done yet
@@ -85,7 +85,7 @@ describe('setSubtaskStatus', () => {
   });
 
   it('does NOT auto-complete when some subtasks are not done', async () => {
-    const s1 = await createSubtask(taskId, { title: 'Sub 1' });
+    const s1 = assertDefined(await createSubtask(taskId, { title: 'Sub 1' }));
     await createSubtask(taskId, { title: 'Sub 2' });
 
     await setSubtaskStatus(s1.id, 'done');
@@ -94,8 +94,8 @@ describe('setSubtaskStatus', () => {
   });
 
   it('ignores deleted subtasks in "all done" check', async () => {
-    const s1 = await createSubtask(taskId, { title: 'Sub 1' });
-    const s2 = await createSubtask(taskId, { title: 'Sub 2' });
+    const s1 = assertDefined(await createSubtask(taskId, { title: 'Sub 1' }));
+    const s2 = assertDefined(await createSubtask(taskId, { title: 'Sub 2' }));
 
     await deleteSubtask(s2.id);
     await setSubtaskStatus(s1.id, 'done');
@@ -107,7 +107,7 @@ describe('setSubtaskStatus', () => {
 
 describe('deleteSubtask / restoreSubtask', () => {
   it('soft-deletes and restores a subtask', async () => {
-    const sub = await createSubtask(taskId, { title: 'Test' });
+    const sub = assertDefined(await createSubtask(taskId, { title: 'Test' }));
     await deleteSubtask(sub.id);
     let s = await db.subtasks.get(sub.id);
     expect(s?.deletedAt).toBeDefined();
@@ -121,7 +121,7 @@ describe('deleteSubtask / restoreSubtask', () => {
 describe('convertSubtaskToTask', () => {
   it('soft-deletes subtask and creates task in target list', async () => {
     const list2 = await createTaskList('Target');
-    const sub = await createSubtask(taskId, { title: 'Convert Me', link: 'https://x.com' });
+    const sub = assertDefined(await createSubtask(taskId, { title: 'Convert Me', link: 'https://x.com' }));
 
     await convertSubtaskToTask(sub.id, list2.id);
 
@@ -136,7 +136,7 @@ describe('convertSubtaskToTask', () => {
 
   it('maps working status to todo', async () => {
     const list2 = await createTaskList('Target');
-    const sub = await createSubtask(taskId, { title: 'Working Sub' });
+    const sub = assertDefined(await createSubtask(taskId, { title: 'Working Sub' }));
     await setSubtaskStatus(sub.id, 'working');
 
     await convertSubtaskToTask(sub.id, list2.id);
@@ -147,7 +147,7 @@ describe('convertSubtaskToTask', () => {
 
   it('preserves other statuses', async () => {
     const list2 = await createTaskList('Target');
-    const sub = await createSubtask(taskId, { title: 'Blocked Sub' });
+    const sub = assertDefined(await createSubtask(taskId, { title: 'Blocked Sub' }));
     await setSubtaskStatus(sub.id, 'blocked');
 
     await convertSubtaskToTask(sub.id, list2.id);
@@ -159,7 +159,7 @@ describe('convertSubtaskToTask', () => {
   it('appends to end of target list', async () => {
     const list2 = await createTaskList('Target');
     await createTask(list2.id, { title: 'Existing' });
-    const sub = await createSubtask(taskId, { title: 'Converted' });
+    const sub = assertDefined(await createSubtask(taskId, { title: 'Converted' }));
 
     await convertSubtaskToTask(sub.id, list2.id);
 
@@ -171,9 +171,9 @@ describe('convertSubtaskToTask', () => {
 
 describe('reorderSubtasks', () => {
   it('assigns sequential order', async () => {
-    const a = await createSubtask(taskId, { title: 'A' });
-    const b = await createSubtask(taskId, { title: 'B' });
-    const c = await createSubtask(taskId, { title: 'C' });
+    const a = assertDefined(await createSubtask(taskId, { title: 'A' }));
+    const b = assertDefined(await createSubtask(taskId, { title: 'B' }));
+    const c = assertDefined(await createSubtask(taskId, { title: 'C' }));
 
     await reorderSubtasks([c.id, a.id, b.id]);
 

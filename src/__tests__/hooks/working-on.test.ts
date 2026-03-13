@@ -1,5 +1,5 @@
 import { db } from '../../db';
-import { resetDb } from '../helpers/db-helpers';
+import { resetDb, assertDefined } from '../helpers/db-helpers';
 import { createTaskList } from '../../hooks/use-task-lists';
 import { createTask } from '../../hooks/use-tasks';
 import { createSubtask, setSubtaskStatus } from '../../hooks/use-subtasks';
@@ -18,8 +18,8 @@ beforeEach(async () => {
 
 describe('startWorkingOn', () => {
   it('sets subtask to working', async () => {
-    const task = await createTask(listId, { title: 'Task' });
-    const sub = await createSubtask(task.id, { title: 'Sub' });
+    const task = assertDefined(await createTask(listId, { title: 'Task' }));
+    const sub = assertDefined(await createSubtask(task.id, { title: 'Sub' }));
 
     await startWorkingOn(sub.id);
 
@@ -28,9 +28,9 @@ describe('startWorkingOn', () => {
   });
 
   it('clears other working subtask', async () => {
-    const task = await createTask(listId, { title: 'Task' });
-    const sub1 = await createSubtask(task.id, { title: 'Sub 1' });
-    const sub2 = await createSubtask(task.id, { title: 'Sub 2' });
+    const task = assertDefined(await createTask(listId, { title: 'Task' }));
+    const sub1 = assertDefined(await createSubtask(task.id, { title: 'Sub 1' }));
+    const sub2 = assertDefined(await createSubtask(task.id, { title: 'Sub 2' }));
 
     await startWorkingOn(sub1.id);
     await startWorkingOn(sub2.id);
@@ -42,8 +42,8 @@ describe('startWorkingOn', () => {
   });
 
   it('sets workedAt on parent task', async () => {
-    const task = await createTask(listId, { title: 'Task' });
-    const sub = await createSubtask(task.id, { title: 'Sub' });
+    const task = assertDefined(await createTask(listId, { title: 'Task' }));
+    const sub = assertDefined(await createSubtask(task.id, { title: 'Sub' }));
 
     await startWorkingOn(sub.id);
 
@@ -53,9 +53,9 @@ describe('startWorkingOn', () => {
   });
 
   it('clears working task', async () => {
-    const task = await createTask(listId, { title: 'Task' });
+    const task = assertDefined(await createTask(listId, { title: 'Task' }));
     await startWorkingOnTask(task.id);
-    const sub = await createSubtask(task.id, { title: 'Sub' });
+    const sub = assertDefined(await createSubtask(task.id, { title: 'Sub' }));
 
     await startWorkingOn(sub.id);
 
@@ -66,14 +66,14 @@ describe('startWorkingOn', () => {
 
 describe('startWorkingOnTask', () => {
   it('sets task to working', async () => {
-    const task = await createTask(listId, { title: 'Task' });
+    const task = assertDefined(await createTask(listId, { title: 'Task' }));
     await startWorkingOnTask(task.id);
     const t = await db.tasks.get(task.id);
     expect(t?.status).toBe('working');
   });
 
   it('sets workedAt on first work start', async () => {
-    const task = await createTask(listId, { title: 'Task' });
+    const task = assertDefined(await createTask(listId, { title: 'Task' }));
     expect((await db.tasks.get(task.id))?.workedAt).toBeUndefined();
 
     await startWorkingOnTask(task.id);
@@ -83,7 +83,7 @@ describe('startWorkingOnTask', () => {
   });
 
   it('does not overwrite workedAt on subsequent starts', async () => {
-    const task = await createTask(listId, { title: 'Task' });
+    const task = assertDefined(await createTask(listId, { title: 'Task' }));
     await startWorkingOnTask(task.id);
     const firstWorkedAt = (await db.tasks.get(task.id))?.workedAt;
 
@@ -95,11 +95,11 @@ describe('startWorkingOnTask', () => {
   });
 
   it('clears working subtask', async () => {
-    const task = await createTask(listId, { title: 'Task' });
-    const sub = await createSubtask(task.id, { title: 'Sub' });
+    const task = assertDefined(await createTask(listId, { title: 'Task' }));
+    const sub = assertDefined(await createSubtask(task.id, { title: 'Sub' }));
     await startWorkingOn(sub.id);
 
-    const task2 = await createTask(listId, { title: 'Task 2' });
+    const task2 = assertDefined(await createTask(listId, { title: 'Task 2' }));
     await startWorkingOnTask(task2.id);
 
     const s = await db.subtasks.get(sub.id);
@@ -107,8 +107,8 @@ describe('startWorkingOnTask', () => {
   });
 
   it('clears other working task', async () => {
-    const task1 = await createTask(listId, { title: 'Task 1' });
-    const task2 = await createTask(listId, { title: 'Task 2' });
+    const task1 = assertDefined(await createTask(listId, { title: 'Task 1' }));
+    const task2 = assertDefined(await createTask(listId, { title: 'Task 2' }));
 
     await startWorkingOnTask(task1.id);
     await startWorkingOnTask(task2.id);
@@ -122,8 +122,8 @@ describe('startWorkingOnTask', () => {
 
 describe('stopWorking', () => {
   it('resets all working to todo', async () => {
-    const task = await createTask(listId, { title: 'Task' });
-    const sub = await createSubtask(task.id, { title: 'Sub' });
+    const task = assertDefined(await createTask(listId, { title: 'Task' }));
+    const sub = assertDefined(await createSubtask(task.id, { title: 'Sub' }));
     await startWorkingOn(sub.id);
 
     await stopWorking();
@@ -139,9 +139,9 @@ describe('stopWorking', () => {
 
 describe('markWorkingDone', () => {
   it('marks working subtask done and advances to next', async () => {
-    const task = await createTask(listId, { title: 'Task' });
-    const s1 = await createSubtask(task.id, { title: 'Sub 1' });
-    const s2 = await createSubtask(task.id, { title: 'Sub 2' });
+    const task = assertDefined(await createTask(listId, { title: 'Task' }));
+    const s1 = assertDefined(await createSubtask(task.id, { title: 'Sub 1' }));
+    const s2 = assertDefined(await createSubtask(task.id, { title: 'Sub 2' }));
 
     await startWorkingOn(s1.id);
     await markWorkingDone();
@@ -153,8 +153,8 @@ describe('markWorkingDone', () => {
   });
 
   it('completes parent when all subtasks done', async () => {
-    const task = await createTask(listId, { title: 'Task' });
-    const s1 = await createSubtask(task.id, { title: 'Only Sub' });
+    const task = assertDefined(await createTask(listId, { title: 'Task' }));
+    const s1 = assertDefined(await createSubtask(task.id, { title: 'Only Sub' }));
 
     await startWorkingOn(s1.id);
     await markWorkingDone();
@@ -171,8 +171,8 @@ describe('markWorkingDone', () => {
 
 describe('markWorkingBlocked', () => {
   it('marks working subtask blocked', async () => {
-    const task = await createTask(listId, { title: 'Task' });
-    const sub = await createSubtask(task.id, { title: 'Sub' });
+    const task = assertDefined(await createTask(listId, { title: 'Task' }));
+    const sub = assertDefined(await createSubtask(task.id, { title: 'Sub' }));
     await startWorkingOn(sub.id);
 
     await markWorkingBlocked();
@@ -188,11 +188,11 @@ describe('markWorkingBlocked', () => {
 
 describe('switchTask', () => {
   it('stops current and finds oldest task with undone subtask', async () => {
-    const task1 = await createTask(listId, { title: 'Older' });
+    const task1 = assertDefined(await createTask(listId, { title: 'Older' }));
     // Ensure task1 has a definitively earlier createdAt
     await db.tasks.update(task1.id, { createdAt: task1.createdAt - 1000 });
-    const s1 = await createSubtask(task1.id, { title: 'Sub 1' });
-    const task2 = await createTask(listId, { title: 'Newer' });
+    const s1 = assertDefined(await createSubtask(task1.id, { title: 'Sub 1' }));
+    const task2 = assertDefined(await createTask(listId, { title: 'Newer' }));
     await createSubtask(task2.id, { title: 'Sub 2' });
 
     await startWorkingOn(s1.id);
@@ -204,8 +204,8 @@ describe('switchTask', () => {
   });
 
   it('returns null when no tasks have undone subtasks', async () => {
-    const task = await createTask(listId, { title: 'Done' });
-    const sub = await createSubtask(task.id, { title: 'Sub' });
+    const task = assertDefined(await createTask(listId, { title: 'Done' }));
+    const sub = assertDefined(await createSubtask(task.id, { title: 'Sub' }));
     await setSubtaskStatus(sub.id, 'done');
 
     const result = await switchTask();

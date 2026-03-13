@@ -1,10 +1,9 @@
 import { useEffect } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../db';
+import { purgeOldTrashItems } from '../db/purge';
 import { recordChangeInTx, recordChangeBatchInTx, ensureDeviceId } from '../sync/change-log';
 import { scheduleSyncDebounced } from '../sync/sync-engine';
-
-const THIRTY_DAYS = 30 * 24 * 60 * 60 * 1000;
 
 export interface TrashItem {
   id: string;
@@ -16,7 +15,7 @@ export interface TrashItem {
 
 export function useTrash() {
   useEffect(() => {
-    purgeOldItems();
+    purgeOldTrashItems();
   }, []);
 
   return useLiveQuery(async () => {
@@ -43,20 +42,6 @@ export function useTrash() {
     items.sort((a, b) => b.deletedAt - a.deletedAt);
     return items;
   }, [], []);
-}
-
-async function purgeOldItems() {
-  const cutoff = Date.now() - THIRTY_DAYS;
-  await db.transaction('rw', [db.taskLists, db.tasks, db.subtasks], async () => {
-    const oldLists = await db.taskLists.filter((l) => !!l.deletedAt && l.deletedAt < cutoff).toArray();
-    for (const l of oldLists) await db.taskLists.delete(l.id);
-
-    const oldTasks = await db.tasks.filter((t) => !!t.deletedAt && t.deletedAt < cutoff).toArray();
-    for (const t of oldTasks) await db.tasks.delete(t.id);
-
-    const oldSubs = await db.subtasks.filter((s) => !!s.deletedAt && s.deletedAt < cutoff).toArray();
-    for (const s of oldSubs) await db.subtasks.delete(s.id);
-  });
 }
 
 export async function permanentlyDelete(item: TrashItem) {

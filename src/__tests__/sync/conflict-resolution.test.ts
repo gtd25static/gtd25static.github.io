@@ -1,4 +1,4 @@
-import { cleanupSoftDeletes } from '../../sync/conflict-resolution';
+import { cleanupSoftDeletes, archiveOldCompleted } from '../../sync/conflict-resolution';
 import type { SyncData, TaskList, Task, Subtask, Settings } from '../../db/models';
 
 function makeSettings(overrides?: Partial<Settings>): Settings {
@@ -61,5 +61,73 @@ describe('cleanupSoftDeletes', () => {
     const cleaned = cleanupSoftDeletes(data);
     expect(cleaned.taskLists).toHaveLength(1);
     expect(cleaned.tasks).toHaveLength(1);
+  });
+});
+
+describe('archiveOldCompleted', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-03-13T12:00:00'));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('archives done tasks completed >90 days ago', () => {
+    const oldCompletedAt = Date.now() - 91 * 24 * 60 * 60 * 1000;
+    const data = makeSyncData({
+      tasks: [makeTask({ id: 't1', status: 'done', completedAt: oldCompletedAt, updatedAt: oldCompletedAt })],
+    });
+    const result = archiveOldCompleted(data);
+    expect(result.tasks[0].archived).toBe(true);
+  });
+
+  it('does not archive recently completed tasks', () => {
+    const recentCompletedAt = Date.now() - 30 * 24 * 60 * 60 * 1000;
+    const data = makeSyncData({
+      tasks: [makeTask({ id: 't1', status: 'done', completedAt: recentCompletedAt, updatedAt: recentCompletedAt })],
+    });
+    const result = archiveOldCompleted(data);
+    expect(result.tasks[0].archived).toBeUndefined();
+  });
+
+  it('does not archive non-done tasks', () => {
+    const oldDate = Date.now() - 91 * 24 * 60 * 60 * 1000;
+    const data = makeSyncData({
+      tasks: [makeTask({ id: 't1', status: 'todo', updatedAt: oldDate })],
+    });
+    const result = archiveOldCompleted(data);
+    expect(result.tasks[0].archived).toBeUndefined();
+  });
+
+  it('skips already archived tasks', () => {
+    const oldCompletedAt = Date.now() - 91 * 24 * 60 * 60 * 1000;
+    const data = makeSyncData({
+      tasks: [makeTask({ id: 't1', status: 'done', archived: true, completedAt: oldCompletedAt, updatedAt: oldCompletedAt })],
+    });
+    const result = archiveOldCompleted(data);
+    // Should not change updatedAt since it was already archived
+    expect(result.tasks[0].archived).toBe(true);
+    expect(result.tasks[0].updatedAt).toBe(oldCompletedAt);
+  });
+
+  it('uses updatedAt as fallback when completedAt is missing', () => {
+    const oldUpdatedAt = Date.now() - 91 * 24 * 60 * 60 * 1000;
+    const data = makeSyncData({
+      tasks: [makeTask({ id: 't1', status: 'done', updatedAt: oldUpdatedAt })],
+    });
+    const result = archiveOldCompleted(data);
+    expect(result.tasks[0].archived).toBe(true);
+  });
+
+  it('does not touch subtasks or task lists', () => {
+    const data = makeSyncData({
+      taskLists: [makeList({ id: 'l1' })],
+      subtasks: [makeSubtask({ id: 's1' })],
+    });
+    const result = archiveOldCompleted(data);
+    expect(result.taskLists).toEqual(data.taskLists);
+    expect(result.subtasks).toEqual(data.subtasks);
   });
 });

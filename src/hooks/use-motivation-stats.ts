@@ -125,20 +125,33 @@ export function useMotivationStats(): MotivationStats | undefined {
     const monthStart = startOfMonth(now);
     const nowMs = now.getTime();
 
-    const tasks = await db.tasks.toArray();
-    const subtasks = await db.subtasks.toArray();
+    // Use indexed queries where possible to avoid full table scans
+    const [doneTasks, doneSubtasks, blockedTasks, blockedSubs, workingTasks, workingSubs] =
+      await Promise.all([
+        db.tasks.where('status').equals('done').filter((t) => !t.deletedAt && !t.archived).toArray(),
+        db.subtasks.where('status').equals('done').filter((s) => !s.deletedAt).toArray(),
+        db.tasks.where('status').equals('blocked').filter((t) => !t.deletedAt && !t.archived).count(),
+        db.subtasks.where('status').equals('blocked').filter((s) => !s.deletedAt).count(),
+        db.tasks.where('status').equals('working').filter((t) => !t.deletedAt && !t.archived).count(),
+        db.subtasks.where('status').equals('working').filter((s) => !s.deletedAt).count(),
+      ]);
 
-    const liveTasks = tasks.filter((t) => !t.deletedAt);
-    const liveSubtasks = subtasks.filter((s) => !s.deletedAt);
+    // Overdue: use dueDate index to narrow the scan
+    const [overdueTasks, overdueSubs] = await Promise.all([
+      db.tasks.where('dueDate').below(nowMs).filter((t) => !t.deletedAt && !t.archived && t.status !== 'done').count(),
+      db.subtasks.filter((s) => !s.deletedAt && s.status !== 'done' && !!s.dueDate && s.dueDate < nowMs).count(),
+    ]);
 
-    // Collect all completion timestamps (tasks + subtasks)
+    // Total active (non-done, non-deleted tasks)
+    const totalTaskCount = await db.tasks.filter((t) => !t.deletedAt && !t.archived && t.status !== 'done').count();
+
+    // Collect all completion timestamps from done tasks/subtasks
     const allCompletionDates: number[] = [];
     let completedToday = 0;
     let completedThisWeek = 0;
     let completedThisMonth = 0;
 
-    for (const t of liveTasks) {
-      if (t.status !== 'done') continue;
+    for (const t of doneTasks) {
       const completedAt = t.completedAt ?? t.updatedAt;
       allCompletionDates.push(completedAt);
       if (completedAt >= todayStart) completedToday++;
@@ -146,8 +159,7 @@ export function useMotivationStats(): MotivationStats | undefined {
       if (completedAt >= monthStart) completedThisMonth++;
     }
 
-    for (const s of liveSubtasks) {
-      if (s.status !== 'done') continue;
+    for (const s of doneSubtasks) {
       const completedAt = s.completedAt ?? s.updatedAt;
       allCompletionDates.push(completedAt);
       if (completedAt >= todayStart) completedToday++;
@@ -155,20 +167,10 @@ export function useMotivationStats(): MotivationStats | undefined {
       if (completedAt >= monthStart) completedThisMonth++;
     }
 
-    const overdueCount = liveTasks.filter(
-      (t) => t.status !== 'done' && t.dueDate && t.dueDate < nowMs,
-    ).length + liveSubtasks.filter(
-      (s) => s.status !== 'done' && s.dueDate && s.dueDate < nowMs,
-    ).length;
-
-    const blockedCount = liveTasks.filter((t) => t.status === 'blocked').length +
-      liveSubtasks.filter((s) => s.status === 'blocked').length;
-
-    const totalActive = liveTasks.filter((t) => t.status !== 'done').length;
-
-    const isCurrentlyWorking =
-      liveTasks.some((t) => t.status === 'working') ||
-      liveSubtasks.some((s) => s.status === 'working');
+    const overdueCount = overdueTasks + overdueSubs;
+    const blockedCount = blockedTasks + blockedSubs;
+    const totalActive = totalTaskCount;
+    const isCurrentlyWorking = workingTasks > 0 || workingSubs > 0;
 
     return {
       completedToday,

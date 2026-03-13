@@ -203,3 +203,23 @@ export function pendingEntryCount(): Promise<number> {
 export function hasPendingEntries(): Promise<boolean> {
   return db.changeLog.count().then((c) => c > 0);
 }
+
+const MAX_CHANGELOG_ENTRIES_OFFLINE = 10_000;
+const PRUNE_TARGET = 5_000;
+
+/**
+ * Cap changelog size when sync is disabled. Without this, the changelog
+ * grows unbounded for users who never enable sync.
+ */
+export async function pruneChangelogIfSyncDisabled(): Promise<number> {
+  const local = await db.localSettings.get('local');
+  if (local?.syncEnabled) return 0;
+
+  const count = await db.changeLog.count();
+  if (count <= MAX_CHANGELOG_ENTRIES_OFFLINE) return 0;
+
+  const toRemove = count - PRUNE_TARGET;
+  const oldest = await db.changeLog.orderBy('timestamp').limit(toRemove).toArray();
+  await db.changeLog.bulkDelete(oldest.map((e) => e.id));
+  return oldest.length;
+}

@@ -2,7 +2,7 @@ import { db } from '../db';
 import type { SyncData, Settings, ChangeEntry } from '../db/models';
 import type { ImportData } from '../db/export-import';
 import { getFile, putFile, deleteFile, RateLimitError } from './github-api';
-import { cleanupSoftDeletes } from './conflict-resolution';
+import { cleanupSoftDeletes, archiveOldCompleted } from './conflict-resolution';
 import { applyRemoteEntries, getPendingEntries, clearPendingEntries, clearEntriesByIds, pendingEntryCount } from './change-log';
 import { toast } from '../components/ui/Toast';
 import { SYNC_VERSION, isCompatibleVersion, needsMigration } from './version';
@@ -89,6 +89,7 @@ let legacyChecked = localStorage.getItem('gtd25-legacy-checked') === '1';
 let cachedChangelogSha: string | undefined;
 let cachedRemoteEntries: ChangeEntry[] = [];
 let cachedCreds: { pat: string; repo: string; deviceId: string } | null = null;
+let cachedChangelogTimestamp = 0;
 
 // --- Scheduler constants ---
 const POLL_INTERVAL_MS = 30_000;
@@ -267,6 +268,9 @@ export function scheduleSyncDebounced() {
 
 async function flushOnHide() {
   if (!cachedCreds || !cachedChangelogSha || !hasEncryptionKey()) return;
+  // Skip flush if cached state is stale (>60s since last sync).
+  // Data is safe in IndexedDB and will sync on next visibility change.
+  if (Date.now() - cachedChangelogTimestamp > 60_000) return;
   try {
     const pending = await getPendingEntries();
     if (pending.length === 0) return;
@@ -752,10 +756,9 @@ export async function syncNow(manual = false, pushLimit?: number): Promise<numbe
       await applyRemoteEntries(foreignEntries);
     }
 
-    // Reconcile with snapshot on first sync of session to catch entities
-    // absorbed by compaction while this device was offline.
-    // Skip if snapshot SHA unchanged since last reconcile (no compaction happened).
-    if (lastSyncCompletedAt === 0 && remoteSnapshotFile) {
+    // Reconcile with snapshot whenever its SHA changes to catch entities
+    // absorbed by compaction while this device was offline or between syncs.
+    if (remoteSnapshotFile) {
       const syncMeta = await db.syncMeta.get('sync-meta');
       if (remoteSnapshotFile.sha !== syncMeta?.lastSnapshotSha) {
         const reconParsed = safeParseJson<SyncData>(remoteSnapshotFile.data, 'snapshot (reconcile)');
@@ -903,6 +906,7 @@ export async function syncNow(manual = false, pushLimit?: number): Promise<numbe
     cachedCreds = creds;
     cachedChangelogSha = finalChangelogSha;
     cachedRemoteEntries = finalRemoteEntries;
+    cachedChangelogTimestamp = Date.now();
 
     // Reset error backoff on success
     consecutiveErrors = 0;
@@ -1027,6 +1031,9 @@ async function compactSnapshot(pat: string, repo: string, encKey: CryptoKey) {
     // Cleanup soft-deletes older than 30 days
     snapshot = cleanupSoftDeletes(snapshot);
 
+    // Auto-archive completed tasks older than 90 days
+    snapshot = archiveOldCompleted(snapshot);
+
     // Stamp version and re-encrypt
     snapshot.syncVersion = SYNC_VERSION;
     // Preserve wipedAt unless changelog has entries after it (wipe fully absorbed)
@@ -1048,6 +1055,11 @@ async function compactSnapshot(pat: string, repo: string, encKey: CryptoKey) {
     // Compaction lock: re-fetch changelog SHA before clearing.
     // If another device pushed entries between our read and write,
     // skip the clear to avoid losing those entries.
+    // NOTE: If two devices compact simultaneously, both may write snapshots
+    // with overlapping data. This is harmless — entities are keyed by ID,
+    // so duplicates are idempotent. The SHA check below ensures at most one
+    // device clears the changelog; the other skips, and the next compaction
+    // cycle absorbs any remaining entries.
     try {
       const freshChangelog = await getFile(pat, repo, CHANGELOG_FILE);
       if (!freshChangelog || freshChangelog.sha !== initialChangelogSha) {
@@ -1373,6 +1385,7 @@ export function __resetForTesting() {
   cachedChangelogSha = undefined;
   cachedRemoteEntries = [];
   cachedCreds = null;
+  cachedChangelogTimestamp = 0;
   consecutiveErrors = 0;
   if (rateLimitTimer) { clearTimeout(rateLimitTimer); rateLimitTimer = null; }
   lastErrorToastAt = 0;

@@ -1,5 +1,5 @@
 import { db } from '../../db';
-import { resetDb } from '../helpers/db-helpers';
+import { resetDb, assertDefined } from '../helpers/db-helpers';
 import { createTaskList } from '../../hooks/use-task-lists';
 import { createTask } from '../../hooks/use-tasks';
 import { createSubtask } from '../../hooks/use-subtasks';
@@ -21,8 +21,8 @@ describe('permanentlyDelete', () => {
 
   it('hard-deletes a task and its subtasks', async () => {
     const list = await createTaskList('List');
-    const task = await createTask(list.id, { title: 'Task' });
-    const sub = await createSubtask(task.id, { title: 'Sub' });
+    const task = assertDefined(await createTask(list.id, { title: 'Task' }));
+    const sub = assertDefined(await createSubtask(task.id, { title: 'Sub' }));
     const item: TrashItem = { id: task.id, type: 'task', title: task.title, deletedAt: Date.now() };
     await permanentlyDelete(item);
     expect(await db.tasks.get(task.id)).toBeUndefined();
@@ -31,8 +31,8 @@ describe('permanentlyDelete', () => {
 
   it('hard-deletes a subtask', async () => {
     const list = await createTaskList('List');
-    const task = await createTask(list.id, { title: 'Task' });
-    const sub = await createSubtask(task.id, { title: 'Sub' });
+    const task = assertDefined(await createTask(list.id, { title: 'Task' }));
+    const sub = assertDefined(await createSubtask(task.id, { title: 'Sub' }));
     const item: TrashItem = { id: sub.id, type: 'subtask', title: sub.title, deletedAt: Date.now() };
     await permanentlyDelete(item);
     expect(await db.subtasks.get(sub.id)).toBeUndefined();
@@ -42,8 +42,8 @@ describe('permanentlyDelete', () => {
 describe('restoreFromTrash', () => {
   it('restores a list with cascading restore', async () => {
     const list = await createTaskList('List');
-    const task = await createTask(list.id, { title: 'Task' });
-    const sub = await createSubtask(task.id, { title: 'Sub' });
+    const task = assertDefined(await createTask(list.id, { title: 'Task' }));
+    const sub = assertDefined(await createSubtask(task.id, { title: 'Sub' }));
 
     const now = Date.now();
     await db.taskLists.update(list.id, { deletedAt: now });
@@ -60,8 +60,8 @@ describe('restoreFromTrash', () => {
 
   it('restores a task with cascading restore', async () => {
     const list = await createTaskList('List');
-    const task = await createTask(list.id, { title: 'Task' });
-    const sub = await createSubtask(task.id, { title: 'Sub' });
+    const task = assertDefined(await createTask(list.id, { title: 'Task' }));
+    const sub = assertDefined(await createSubtask(task.id, { title: 'Sub' }));
 
     const now = Date.now();
     await db.tasks.update(task.id, { deletedAt: now });
@@ -76,8 +76,8 @@ describe('restoreFromTrash', () => {
 
   it('restores a subtask and marks pending', async () => {
     const list = await createTaskList('List');
-    const task = await createTask(list.id, { title: 'Task' });
-    const sub = await createSubtask(task.id, { title: 'Sub' });
+    const task = assertDefined(await createTask(list.id, { title: 'Task' }));
+    const sub = assertDefined(await createSubtask(task.id, { title: 'Sub' }));
 
     const now = Date.now();
     await db.subtasks.update(sub.id, { deletedAt: now });

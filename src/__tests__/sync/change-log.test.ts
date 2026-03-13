@@ -9,6 +9,7 @@ import {
   pendingEntryCount,
   hasPendingEntries,
   applyRemoteEntries,
+  pruneChangelogIfSyncDisabled,
 } from '../../sync/change-log';
 import { newId } from '../../lib/id';
 import { SYNC_VERSION } from '../../sync/version';
@@ -449,5 +450,51 @@ describe('applyRemoteEntries — entry migration', () => {
     const task = await db.tasks.get(taskId);
     expect(task).toBeTruthy();
     expect(task!.title).toBe('Versioned');
+  });
+});
+
+describe('pruneChangelogIfSyncDisabled', () => {
+  it('does not prune when sync is enabled', async () => {
+    await db.localSettings.update('local', { syncEnabled: true });
+
+    const now = Date.now();
+    const entries = [];
+    for (let i = 0; i < 100; i++) {
+      entries.push({
+        id: `e${i}`,
+        deviceId: 'd',
+        timestamp: now + i,
+        entityType: 'task' as const,
+        entityId: `t${i}`,
+        operation: 'upsert' as const,
+      });
+    }
+    await db.changeLog.bulkAdd(entries);
+
+    const pruned = await pruneChangelogIfSyncDisabled();
+    expect(pruned).toBe(0);
+    expect(await db.changeLog.count()).toBe(100);
+  });
+
+  it('does not prune when under the limit', async () => {
+    await db.localSettings.update('local', { syncEnabled: false });
+
+    const now = Date.now();
+    for (let i = 0; i < 5; i++) {
+      await db.changeLog.add({
+        id: `e${i}`, deviceId: 'd', timestamp: now + i,
+        entityType: 'task', entityId: `t${i}`, operation: 'upsert',
+      });
+    }
+
+    const pruned = await pruneChangelogIfSyncDisabled();
+    expect(pruned).toBe(0);
+    expect(await db.changeLog.count()).toBe(5);
+  });
+
+  it('returns 0 when no entries exist', async () => {
+    await db.localSettings.update('local', { syncEnabled: false });
+    const pruned = await pruneChangelogIfSyncDisabled();
+    expect(pruned).toBe(0);
   });
 });

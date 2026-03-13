@@ -1,5 +1,5 @@
 import { db } from '../../db';
-import { resetDb } from '../helpers/db-helpers';
+import { resetDb, assertDefined } from '../helpers/db-helpers';
 import { createTaskList, deleteTaskList, restoreTaskList, reorderTaskLists } from '../../hooks/use-task-lists';
 import { createTask } from '../../hooks/use-tasks';
 import { createSubtask } from '../../hooks/use-subtasks';
@@ -50,7 +50,7 @@ describe('deleteTaskList', () => {
 
   it('cascades to tasks and subtasks', async () => {
     const list = await createTaskList('Parent');
-    const task = await createTask(list.id, { title: 'Task' });
+    const task = assertDefined(await createTask(list.id, { title: 'Task' }));
     await createSubtask(task.id, { title: 'Sub' });
 
     await deleteTaskList(list.id);
@@ -65,7 +65,7 @@ describe('deleteTaskList', () => {
 describe('restoreTaskList', () => {
   it('restores list and cascades to children', async () => {
     const list = await createTaskList('Restore Me');
-    const task = await createTask(list.id, { title: 'Task' });
+    const task = assertDefined(await createTask(list.id, { title: 'Task' }));
     await createSubtask(task.id, { title: 'Sub' });
     await deleteTaskList(list.id);
 

@@ -3,6 +3,8 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../db';
 import type { Task, TaskList, ListType } from '../db/models';
 
+const MAX_SEARCH_RESULTS = 50;
+
 export interface SearchResult {
   type: 'task' | 'subtask';
   id: string;
@@ -51,6 +53,7 @@ export function useSearch(query: string): SearchResult[] {
       const results: SearchResult[] = [];
 
       for (const task of liveTasks) {
+        if (results.length >= MAX_SEARCH_RESULTS) break;
         if (task.title.toLowerCase().includes(q) || task.description?.toLowerCase().includes(q)) {
           const list = listMap.get(task.listId)!;
           results.push({
@@ -67,6 +70,7 @@ export function useSearch(query: string): SearchResult[] {
       }
 
       for (const sub of liveSubtasks) {
+        if (results.length >= MAX_SEARCH_RESULTS) break;
         if (sub.title.toLowerCase().includes(q)) {
           const task = taskMap.get(sub.taskId)!;
           const list = listMap.get(task.listId)!;
