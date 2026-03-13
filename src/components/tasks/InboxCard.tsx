@@ -53,8 +53,8 @@ export function InboxCard({ task, index }: Props) {
         {task.title}
       </span>
 
-      {/* Mobile: "Process to..." dropdown */}
-      <div className="md:hidden shrink-0">
+      {/* "Process to..." dropdown */}
+      <div className="shrink-0">
         <DropdownMenu
           trigger={
             <span className="rounded px-2 py-1 text-xs font-medium text-accent-600 bg-accent-50 dark:text-accent-400 dark:bg-accent-900/30">
