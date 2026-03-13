@@ -28,7 +28,11 @@ export function UpdateBanner() {
 
   const handleClick = () => {
     if (needRefresh) {
-      updateServiceWorker();
+      updateServiceWorker(true);
+      // Fallback: in standalone PWA on Windows, controllerchange may not fire,
+      // so the vite-plugin-pwa reload never triggers. Force reload after a delay
+      // to ensure skipWaiting has completed.
+      setTimeout(() => window.location.reload(), 2000);
     } else {
       window.location.reload();
     }
