@@ -26,6 +26,7 @@ export function PomodoroSettingsModal() {
   const [presetName, setPresetName] = useState('');
   const [previewingSound, setPreviewingSound] = useState<string | null>(null);
   const [previewingMix, setPreviewingMix] = useState(false);
+  const [debugOn, setDebugOn] = useState(() => audioEngine.getDynamicMixDebug());
 
   // Current sound levels (from active preset or empty)
   const [soundLevels, setSoundLevels] = useState<Record<string, SoundVolumeLevel>>({});
@@ -324,14 +325,15 @@ export function PomodoroSettingsModal() {
             </label>
             <button
               onClick={() => {
-                const next = !audioEngine.getDynamicMixDebug();
+                const next = !debugOn;
                 audioEngine.setDynamicMixDebug(next);
+                setDebugOn(next);
                 toast(next ? 'Debug traces ON (see console)' : 'Debug traces OFF', 'info');
               }}
-              className="ml-auto rounded px-1.5 py-0.5 text-[10px] text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300 border border-zinc-200 dark:border-zinc-700"
+              className={`ml-auto rounded px-1.5 py-0.5 text-[10px] border ${debugOn ? 'text-amber-500 border-amber-400 dark:text-amber-400 dark:border-amber-500' : 'text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300 border-zinc-200 dark:border-zinc-700'}`}
               title="Toggle console debug traces"
             >
-              debug
+              debug{debugOn ? ' ●' : ''}
             </button>
           </div>
 
