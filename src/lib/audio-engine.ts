@@ -251,31 +251,41 @@ class AudioEngine {
             state.active = false;
             state.target = 1.0; // drift back to full
             state.nextReevalAt = now + 120_000 + Math.random() * 60_000;
+            console.log(`[organic] ${code}: DEACTIVATED — drifting back to 1.0`);
           } else {
             state.nextReevalAt = now + 60_000 + Math.random() * 120_000;
+            console.log(`[organic] ${code}: staying active`);
           }
         } else {
           // Always activate (guarantees every track eventually varies)
           state.active = true;
           state.nextReevalAt = now + 60_000 + Math.random() * 120_000;
+          console.log(`[organic] ${code}: ACTIVATED`);
         }
       }
 
       // Only vary tracks where active === true
       if (state.active && now >= state.nextChangeAt) {
-        state.target = 0.05 + Math.random() * 0.95;
+        const newTarget = 0.05 + Math.random() * 0.95;
+        console.log(`[organic] ${code}: new target ${state.target.toFixed(3)} → ${newTarget.toFixed(3)}`);
+        state.target = newTarget;
         state.nextChangeAt = now + 30_000 + Math.random() * 90_000;
       }
 
       // Interpolate current toward target
       const diff = state.target - state.current;
+      const prev = state.current;
       if (Math.abs(diff) > 0.001) {
         state.current += Math.sign(diff) * Math.min(Math.abs(diff), 0.002);
       } else {
         state.current = state.target;
       }
 
-      active.gain.gain.value = active.baseVolume * state.current;
+      const finalVol = active.baseVolume * state.current;
+      if (Math.abs(state.current - prev) > 0.001) {
+        console.log(`[organic] ${code}: multiplier ${prev.toFixed(3)} → ${state.current.toFixed(3)} (target ${state.target.toFixed(3)}, base ${active.baseVolume.toFixed(3)}, final ${finalVol.toFixed(3)}, active=${state.active})`);
+      }
+      active.gain.gain.value = finalVol;
     }
   }
 
