@@ -86,6 +86,11 @@ class AudioEngine {
     }
   }
 
+  stopAll(): void {
+    this.stopTicking();
+    this.stopAllAmbient();
+  }
+
   setAmbientVolume(code: string, volumeLevel: SoundVolumeLevel): void {
     const volume = VOLUME_MULTIPLIERS[volumeLevel] ?? 0;
     const active = this.activeSources.get(code);

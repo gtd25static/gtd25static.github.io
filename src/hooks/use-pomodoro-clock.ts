@@ -16,6 +16,7 @@ async function startAmbientFromPreset() {
   const preset = await db.soundPresets.get(settings.activePresetId);
   if (!preset) return;
 
+  audioEngine.stopAllAmbient();
   audioEngine.setMasterVolume(settings.masterVolume);
   for (const [code, level] of Object.entries(preset.sounds)) {
     if (level !== 'off') {
@@ -63,8 +64,8 @@ export function usePomodoroClock() {
       }
 
       if (wasRunning && !isRunning) {
-        // Timer stopped (either manually or completed)
-        audioEngine.stopTicking();
+        // Timer stopped (either manually or completed) — stop all audio
+        audioEngine.stopAll();
       }
 
       prevTimerRunning.current = isRunning;

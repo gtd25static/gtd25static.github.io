@@ -19,7 +19,7 @@ export function TimerButtons() {
   const isActive = timerRunning || ambientPlaying;
 
   const pillClass =
-    'rounded-full px-2 py-0.5 text-xs font-medium transition-colors border';
+    'rounded-full px-3 py-1.5 text-sm font-medium transition-colors border';
   const defaultPill =
     'border-zinc-200 text-zinc-600 hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-400 dark:hover:bg-zinc-800';
 
@@ -61,7 +61,7 @@ export function TimerButtons() {
       {/* Settings gear */}
       <button
         onClick={() => setPomodoroSettingsOpen(true)}
-        className="rounded-full p-1 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800 dark:hover:text-zinc-300"
+        className="rounded-full p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800 dark:hover:text-zinc-300"
         title="Pomodoro settings"
       >
         <svg width="14" height="14" viewBox="0 0 20 20" fill="currentColor">

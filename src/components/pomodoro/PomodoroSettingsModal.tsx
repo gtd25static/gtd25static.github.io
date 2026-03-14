@@ -24,6 +24,7 @@ export function PomodoroSettingsModal() {
   const [importing, setImporting] = useState(false);
   const [importResult, setImportResult] = useState<ImportResult | null>(null);
   const [presetName, setPresetName] = useState('');
+  const [previewingSound, setPreviewingSound] = useState<string | null>(null);
 
   // Current sound levels (from active preset or empty)
   const [soundLevels, setSoundLevels] = useState<Record<string, SoundVolumeLevel>>({});
@@ -149,7 +150,7 @@ export function PomodoroSettingsModal() {
 
   return (
     <Modal open={open} onClose={() => close(false)} title="Pomodoro Settings">
-      <div className="space-y-6 max-h-[70vh] overflow-y-auto">
+      <div className="space-y-6 max-h-[70vh] overflow-y-auto pr-2">
         {/* Timer Sounds */}
         <section>
           <h3 className="text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-3">Timer Sounds</h3>
@@ -236,44 +237,8 @@ export function PomodoroSettingsModal() {
             </div>
           )}
 
-          {/* Sound list by category */}
-          {SOUND_CATEGORIES.map((category) => (
-            <div key={category} className="mb-2">
-              <span className="text-[10px] font-medium uppercase tracking-wider text-zinc-400 dark:text-zinc-500">
-                {category}
-              </span>
-              <div className="mt-0.5 space-y-0.5">
-                {AMBIENT_SOUNDS.filter((s) => s.category === category).map((sound) => {
-                  const available = importedIds.has(sound.code);
-                  const level = soundLevels[sound.code] ?? 'off';
-                  return (
-                    <button
-                      key={sound.code}
-                      onClick={() => available && cycleSoundLevel(sound.code)}
-                      disabled={!available}
-                      className={`flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-sm transition-colors ${
-                        available
-                          ? 'text-zinc-700 hover:bg-zinc-50 dark:text-zinc-300 dark:hover:bg-zinc-800'
-                          : 'text-zinc-300 dark:text-zinc-600 cursor-not-allowed'
-                      }`}
-                    >
-                      <span>{sound.name}</span>
-                      {available ? (
-                        <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-medium ${volumeBadge(level)}`}>
-                          {level === 'off' ? '--' : level}
-                        </span>
-                      ) : (
-                        <span className="text-[10px] text-amber-400">missing {sound.code}.m4a</span>
-                      )}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          ))}
-
           {/* Save preset */}
-          <div className="flex gap-2 mt-3">
+          <div className="flex gap-2 mb-3">
             <input
               type="text"
               placeholder="Preset name"
@@ -289,6 +254,81 @@ export function PomodoroSettingsModal() {
               Save
             </button>
           </div>
+
+          {/* Sound list by category */}
+          {SOUND_CATEGORIES.map((category) => (
+            <div key={category} className="mb-2">
+              <span className="text-[10px] font-medium uppercase tracking-wider text-zinc-400 dark:text-zinc-500">
+                {category}
+              </span>
+              <div className="mt-0.5 space-y-0.5">
+                {AMBIENT_SOUNDS.filter((s) => s.category === category).map((sound) => {
+                  const available = importedIds.has(sound.code);
+                  const level = soundLevels[sound.code] ?? 'off';
+                  const isPreviewing = previewingSound === sound.code;
+                  return (
+                    <div
+                      key={sound.code}
+                      className={`flex w-full items-center gap-1.5 rounded-lg px-2 py-1.5 text-sm transition-colors ${
+                        available
+                          ? 'text-zinc-700 dark:text-zinc-300'
+                          : 'text-zinc-300 dark:text-zinc-600'
+                      }`}
+                    >
+                      {/* Preview play/stop button */}
+                      {available && (
+                        <button
+                          onClick={() => {
+                            if (isPreviewing) {
+                              audioEngine.stopAmbientSound(sound.code);
+                              setPreviewingSound(null);
+                            } else {
+                              if (previewingSound) audioEngine.stopAmbientSound(previewingSound);
+                              audioEngine.playAmbientSound(sound.code, 'medium');
+                              setPreviewingSound(sound.code);
+                            }
+                          }}
+                          className={`shrink-0 rounded p-0.5 transition-colors ${
+                            isPreviewing
+                              ? 'text-accent-600 dark:text-accent-400'
+                              : 'text-zinc-400 hover:text-zinc-600 dark:text-zinc-500 dark:hover:text-zinc-300'
+                          }`}
+                          title={isPreviewing ? 'Stop preview' : 'Preview sound'}
+                        >
+                          {isPreviewing ? (
+                            <svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor">
+                              <rect x="3" y="3" width="8" height="8" rx="1" />
+                            </svg>
+                          ) : (
+                            <svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor">
+                              <path d="M4 2.5l8 4.5-8 4.5V2.5z" />
+                            </svg>
+                          )}
+                        </button>
+                      )}
+                      <button
+                        onClick={() => available && cycleSoundLevel(sound.code)}
+                        disabled={!available}
+                        className={`flex flex-1 items-center justify-between ${
+                          available ? 'hover:opacity-80' : 'cursor-not-allowed'
+                        }`}
+                      >
+                        <span>{sound.name}</span>
+                        {available ? (
+                          <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-medium ${volumeBadge(level)}`}>
+                            {level === 'off' ? '--' : level}
+                          </span>
+                        ) : (
+                          <span className="text-[10px] text-amber-400">missing {sound.code}.m4a</span>
+                        )}
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+
         </section>
 
         {/* Import */}

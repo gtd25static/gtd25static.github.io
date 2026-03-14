@@ -113,8 +113,10 @@ export function AppShell() {
               )}
             </span>
           )}
-          <div className="ml-auto flex items-center gap-1">
+          <div className="ml-auto">
             <MobileTimerWidget />
+          </div>
+          <div className="flex items-center gap-1">
             <SyncIndicator />
             <button
               onClick={() => setSettingsOpen(true)}
