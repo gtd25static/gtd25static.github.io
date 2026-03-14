@@ -304,23 +304,36 @@ export function PomodoroSettingsModal() {
           </div>
 
           {/* Organic mix toggle */}
-          <label className="flex items-center gap-3 text-sm text-zinc-700 dark:text-zinc-300 mb-3">
-            <input
-              type="checkbox"
-              checked={settings.dynamicMixEnabled ?? false}
-              onChange={(e) => {
-                updateSettings({ dynamicMixEnabled: e.target.checked });
-                audioEngine.setDynamicMix(e.target.checked);
-              }}
-              className="rounded accent-accent-600"
-            />
-            <span>
-              Organic mix
-              <span className="block text-[11px] text-zinc-400 dark:text-zinc-500">
-                Slowly varies each sound&apos;s volume
+          <div className="flex items-center gap-3 mb-3">
+            <label className="flex items-center gap-3 text-sm text-zinc-700 dark:text-zinc-300">
+              <input
+                type="checkbox"
+                checked={settings.dynamicMixEnabled ?? false}
+                onChange={(e) => {
+                  updateSettings({ dynamicMixEnabled: e.target.checked });
+                  audioEngine.setDynamicMix(e.target.checked);
+                }}
+                className="rounded accent-accent-600"
+              />
+              <span>
+                Organic mix
+                <span className="block text-[11px] text-zinc-400 dark:text-zinc-500">
+                  Slowly varies each sound&apos;s volume
+                </span>
               </span>
-            </span>
-          </label>
+            </label>
+            <button
+              onClick={() => {
+                const next = !audioEngine.getDynamicMixDebug();
+                audioEngine.setDynamicMixDebug(next);
+                toast(next ? 'Debug traces ON (see console)' : 'Debug traces OFF', 'info');
+              }}
+              className="ml-auto rounded px-1.5 py-0.5 text-[10px] text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300 border border-zinc-200 dark:border-zinc-700"
+              title="Toggle console debug traces"
+            >
+              debug
+            </button>
+          </div>
 
           {/* Sound list by category */}
           {SOUND_CATEGORIES.map((category) => (

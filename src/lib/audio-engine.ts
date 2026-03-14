@@ -31,6 +31,7 @@ class AudioEngine {
   private dynamicMixEnabled = false;
   private dynamicMixInterval: ReturnType<typeof setInterval> | null = null;
   private dynamicTargets = new Map<string, DynamicTrackState>();
+  private dynamicMixDebug = false;
 
   private ensureContext(): AudioContext {
     if (!this.ctx) {
@@ -203,6 +204,14 @@ class AudioEngine {
 
   // --- Dynamic mix ---
 
+  getDynamicMixDebug(): boolean {
+    return this.dynamicMixDebug;
+  }
+
+  setDynamicMixDebug(enabled: boolean): void {
+    this.dynamicMixDebug = enabled;
+  }
+
   setDynamicMix(enabled: boolean): void {
     if (enabled === this.dynamicMixEnabled) return;
     this.dynamicMixEnabled = enabled;
@@ -251,23 +260,23 @@ class AudioEngine {
             state.active = false;
             state.target = 1.0; // drift back to full
             state.nextReevalAt = now + 120_000 + Math.random() * 60_000;
-            console.log(`[organic] ${code}: DEACTIVATED — drifting back to 1.0`);
+            if (this.dynamicMixDebug) console.log(`[organic] ${code}: DEACTIVATED — drifting back to 1.0`);
           } else {
             state.nextReevalAt = now + 60_000 + Math.random() * 120_000;
-            console.log(`[organic] ${code}: staying active`);
+            if (this.dynamicMixDebug) console.log(`[organic] ${code}: staying active`);
           }
         } else {
           // Always activate (guarantees every track eventually varies)
           state.active = true;
           state.nextReevalAt = now + 60_000 + Math.random() * 120_000;
-          console.log(`[organic] ${code}: ACTIVATED`);
+          if (this.dynamicMixDebug) console.log(`[organic] ${code}: ACTIVATED`);
         }
       }
 
       // Only vary tracks where active === true
       if (state.active && now >= state.nextChangeAt) {
         const newTarget = 0.05 + Math.random() * 0.95;
-        console.log(`[organic] ${code}: new target ${state.target.toFixed(3)} → ${newTarget.toFixed(3)}`);
+        if (this.dynamicMixDebug) console.log(`[organic] ${code}: new target ${state.target.toFixed(3)} → ${newTarget.toFixed(3)}`);
         state.target = newTarget;
         state.nextChangeAt = now + 30_000 + Math.random() * 90_000;
       }
@@ -282,7 +291,7 @@ class AudioEngine {
       }
 
       const finalVol = active.baseVolume * state.current;
-      if (Math.abs(state.current - prev) > 0.001) {
+      if (this.dynamicMixDebug && Math.abs(state.current - prev) > 0.001) {
         console.log(`[organic] ${code}: multiplier ${prev.toFixed(3)} → ${state.current.toFixed(3)} (target ${state.target.toFixed(3)}, base ${active.baseVolume.toFixed(3)}, final ${finalVol.toFixed(3)}, active=${state.active})`);
       }
       active.gain.gain.value = finalVol;
