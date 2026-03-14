@@ -17,6 +17,8 @@ import { ToastContainer } from '../ui/Toast';
 import { QuickCapture } from '../tasks/QuickCapture';
 import { WeeklyReviewModal } from '../review/WeeklyReviewModal';
 import { useSpecialListContext } from '../../hooks/use-special-list';
+import { PomodoroSettingsModal } from '../pomodoro/PomodoroSettingsModal';
+import { MobileTimerWidget } from '../pomodoro/MobileTimerWidget';
 
 export function AppShell() {
   const { sidebarOpen, setSidebarOpen, setSettingsOpen, searchQuery, selectedListId, selectList, quickCaptureOpen, setQuickCaptureOpen } = useAppState(useShallow(s => ({ sidebarOpen: s.sidebarOpen, setSidebarOpen: s.setSidebarOpen, setSettingsOpen: s.setSettingsOpen, searchQuery: s.searchQuery, selectedListId: s.selectedListId, selectList: s.selectList, quickCaptureOpen: s.quickCaptureOpen, setQuickCaptureOpen: s.setQuickCaptureOpen })));
@@ -112,6 +114,7 @@ export function AppShell() {
             </span>
           )}
           <div className="ml-auto flex items-center gap-1">
+            <MobileTimerWidget />
             <SyncIndicator />
             <button
               onClick={() => setSettingsOpen(true)}
@@ -134,6 +137,7 @@ export function AppShell() {
       <EncryptionPasswordModal />
       <TrashModal />
       <WeeklyReviewModal />
+      <PomodoroSettingsModal />
       <HelpOverlay />
 
       {/* Mobile quick capture FAB */}

@@ -119,3 +119,28 @@ export interface SyncData {
   subtasks: Subtask[];
   settings: Settings;
 }
+
+// Pomodoro types
+export interface PomodoroSound {
+  id: string;         // e.g. "aa", "ticking-fast", "alarm-kitchen"
+  blob: Blob;
+  importedAt: number;
+}
+
+export type SoundVolumeLevel = 'off' | 'low' | 'medium' | 'high';
+
+export interface SoundPreset {
+  id: string;
+  name: string;
+  sounds: Record<string, SoundVolumeLevel>;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface PomodoroSettings {
+  id: string;           // always 'pomodoro'
+  masterVolume: number; // 0–1
+  tickingEnabled: boolean;
+  bellEnabled: boolean;
+  activePresetId: string | null;
+}

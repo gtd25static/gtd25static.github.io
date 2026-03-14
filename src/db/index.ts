@@ -1,5 +1,5 @@
 import Dexie, { type Table } from 'dexie';
-import type { TaskList, Task, Subtask, SyncMeta, LocalSettings, ChangeEntry } from './models';
+import type { TaskList, Task, Subtask, SyncMeta, LocalSettings, ChangeEntry, PomodoroSound, SoundPreset, PomodoroSettings } from './models';
 import { newId } from '../lib/id';
 import { createLocalBackup } from './backup';
 import { purgeOldTrashItems } from './purge';
@@ -14,6 +14,9 @@ export class Gtd25DB extends Dexie {
   syncMeta!: Table<SyncMeta, string>;
   localSettings!: Table<LocalSettings, string>;
   changeLog!: Table<ChangeEntry, string>;
+  pomodoroSounds!: Table<PomodoroSound, string>;
+  soundPresets!: Table<SoundPreset, string>;
+  pomodoroSettings!: Table<PomodoroSettings, string>;
 
   constructor() {
     super('gtd25');
@@ -33,6 +36,11 @@ export class Gtd25DB extends Dexie {
     this.version(4).stores({
       tasks: 'id, listId, status, order, dueDate, deletedAt, createdAt, hasWarning, nextOccurrence',
       subtasks: 'id, taskId, status, order, deletedAt, hasWarning',
+    });
+    this.version(5).stores({
+      pomodoroSounds: 'id',
+      soundPresets: 'id',
+      pomodoroSettings: 'id',
     });
   }
 }
@@ -80,6 +88,18 @@ export async function cleanOrphans() {
 }
 
 export async function ensureDefaults() {
+  // Seed pomodoro settings
+  const pomSettings = await db.pomodoroSettings.get('pomodoro');
+  if (!pomSettings) {
+    await db.pomodoroSettings.put({
+      id: 'pomodoro',
+      masterVolume: 0.7,
+      tickingEnabled: true,
+      bellEnabled: true,
+      activePresetId: null,
+    });
+  }
+
   await db.transaction('rw', [db.localSettings, db.syncMeta], async () => {
     const local = await db.localSettings.get('local');
     if (!local) {

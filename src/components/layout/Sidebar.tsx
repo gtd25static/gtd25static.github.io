@@ -25,6 +25,7 @@ import { DropdownMenu } from '../ui/DropdownMenu';
 import { db } from '../../db';
 import type { ListType } from '../../db/models';
 import { SyncIndicator } from './SyncIndicator';
+import { PomodoroBar } from '../pomodoro/PomodoroBar';
 import { GIT_COMMIT, MAX_LIST_NAME_LENGTH, isInboxList } from '../../lib/constants';
 import { moveTaskToList } from '../../hooks/use-tasks';
 import { useSpecialListContext } from '../../hooks/use-special-list';
@@ -326,6 +327,11 @@ export function Sidebar() {
         <div className="ml-auto">
           <SyncIndicator />
         </div>
+      </div>
+
+      {/* Pomodoro timer */}
+      <div className="px-3 pb-2">
+        <PomodoroBar />
       </div>
 
       {/* Create button + Settings cog */}

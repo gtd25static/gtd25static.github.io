@@ -7,6 +7,7 @@ import { useTheme } from './components/settings/ThemeSettings';
 import { checkRecurringTasks } from './hooks/use-recurring';
 import { SpecialListProvider } from './hooks/use-special-list';
 import { SyncProvider } from './sync/use-sync';
+import { usePomodoroClock } from './hooks/use-pomodoro-clock';
 
 export default function App() {
   useEffect(() => {
@@ -22,6 +23,7 @@ export default function App() {
 
   useTheme();
   useKeyboard();
+  usePomodoroClock();
 
   return (
     <ErrorBoundary>
