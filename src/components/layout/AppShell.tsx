@@ -97,6 +97,7 @@ export function AppShell() {
             <path d="M8 16l5 5L24 10" stroke="white" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" fill="none"/>
           </svg>
           <span className="text-lg text-zinc-700 dark:text-zinc-200">GTD25</span>
+          <MobileTimerWidget />
           {(warningCount > 0 || blockedCount > 0) && (
             <span className="flex items-center gap-1.5 text-xs">
               {warningCount > 0 && (
@@ -113,10 +114,7 @@ export function AppShell() {
               )}
             </span>
           )}
-          <div className="ml-auto">
-            <MobileTimerWidget />
-          </div>
-          <div className="flex items-center gap-1">
+          <div className="ml-auto flex items-center gap-1">
             <SyncIndicator />
             <button
               onClick={() => setSettingsOpen(true)}
