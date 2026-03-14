@@ -925,11 +925,45 @@ export async function syncNow(manual = false, pushLimit?: number): Promise<numbe
     const remaining = await pendingEntryCount();
 
     // Update sync meta
+    const syncMeta = await db.syncMeta.get('sync-meta');
     await db.syncMeta.update('sync-meta', {
       lastPulledAt: Date.now(),
       lastPushedAt: pendingEntries.length > 0 ? Date.now() : undefined,
       pendingChanges: remaining > 0,
     });
+
+    // Lightweight pomodoro push: sync pomodoro data to snapshot without waiting for compaction.
+    // Pomodoro settings/presets are stored as plaintext fields on the snapshot JSON,
+    // so we can update them without decrypting/re-encrypting the full snapshot.
+    const willCompact = !remoteSalt || (remoteEntries.length + pendingEntries.length) >= COMPACTION_THRESHOLD;
+    if (!willCompact) {
+      try {
+        const localPomSettings = await db.pomodoroSettings.get('pomodoro');
+        const localSoundPresets = await db.soundPresets.toArray();
+        const pomSyncedAt = syncMeta?.pomodoroSyncedAt ?? 0;
+        const pomChanged = (localPomSettings && localPomSettings.updatedAt > pomSyncedAt)
+          || localSoundPresets.some(p => p.updatedAt > pomSyncedAt);
+
+        if (pomChanged) {
+          const snapFile = await getFile(creds.pat, creds.repo, SNAPSHOT_FILE);
+          if (snapFile) {
+            const snapJson = JSON.parse(snapFile.data);
+            if (localPomSettings) snapJson.pomodoroSettings = localPomSettings;
+            if (localSoundPresets.length > 0) snapJson.soundPresets = localSoundPresets;
+            try {
+              await putFile(creds.pat, creds.repo, SNAPSHOT_FILE, JSON.stringify(snapJson), snapFile.sha);
+              await db.syncMeta.update('sync-meta', { pomodoroSyncedAt: Date.now() });
+            } catch (putErr) {
+              // CONFLICT (409) is expected if another device updated snapshot concurrently — next sync retries
+              if (!(putErr instanceof Error && putErr.message.includes('409'))) throw putErr;
+            }
+          }
+        }
+      } catch (pomErr) {
+        // Non-critical — next sync or compaction will push pomodoro data
+        console.warn('Pomodoro snapshot push failed:', pomErr);
+      }
+    }
 
     // First-time encryption: compact immediately to absorb all plaintext
     // changelog entries into the encrypted snapshot and clear the changelog.
@@ -1078,6 +1112,30 @@ async function compactSnapshot(pat: string, repo: string, encKey: CryptoKey) {
     // Auto-archive completed tasks older than 90 days
     snapshot = archiveOldCompleted(snapshot);
 
+    // Merge local pomodoro data into snapshot (pomodoro uses snapshot-only sync)
+    const localPomSettings = await db.pomodoroSettings.get('pomodoro');
+    if (localPomSettings) {
+      if (!snapshot.pomodoroSettings || localPomSettings.updatedAt >= (snapshot.pomodoroSettings.updatedAt ?? 0)) {
+        snapshot.pomodoroSettings = localPomSettings;
+      }
+    }
+    const localPresets = await db.soundPresets.toArray();
+    if (localPresets.length > 0 || (snapshot.soundPresets && snapshot.soundPresets.length > 0)) {
+      const merged = new Map<string, import('../db/models').SoundPreset>();
+      // Start with remote presets
+      for (const p of snapshot.soundPresets ?? []) {
+        merged.set(p.id, p);
+      }
+      // Overlay local presets (keep whichever has newer updatedAt)
+      for (const p of localPresets) {
+        const existing = merged.get(p.id);
+        if (!existing || p.updatedAt >= existing.updatedAt) {
+          merged.set(p.id, p);
+        }
+      }
+      snapshot.soundPresets = Array.from(merged.values());
+    }
+
     // Stamp version and re-encrypt
     snapshot.syncVersion = SYNC_VERSION;
     // Preserve wipedAt unless changelog has entries after it (wipe fully absorbed)
@@ -1095,6 +1153,9 @@ async function compactSnapshot(pat: string, repo: string, encKey: CryptoKey) {
     // Write updated snapshot
     const snapshotContent = JSON.stringify(snapshot);
     await putFile(pat, repo, SNAPSHOT_FILE, snapshotContent, snapshotSha);
+
+    // Mark pomodoro data as synced (compaction includes local pomodoro data)
+    await db.syncMeta.update('sync-meta', { pomodoroSyncedAt: Date.now() });
 
     // Compaction lock: re-fetch changelog SHA before clearing.
     // If another device pushed entries between our read and write,
@@ -1184,6 +1245,7 @@ export async function forcePush() {
     await db.syncMeta.update('sync-meta', {
       lastPushedAt: Date.now(),
       pendingChanges: false,
+      pomodoroSyncedAt: Date.now(),
     });
     lastSyncCompletedAt = Date.now();
     reportProgress('done', 'Sync complete', 1.0);

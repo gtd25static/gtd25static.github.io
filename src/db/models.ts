@@ -85,6 +85,7 @@ export interface SyncMeta {
   lastPulledAt?: number;
   lastPushedAt?: number;
   pendingChanges: boolean;
+  pomodoroSyncedAt?: number;
 }
 
 export interface LocalSettings {

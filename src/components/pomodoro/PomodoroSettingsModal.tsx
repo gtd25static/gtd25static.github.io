@@ -185,7 +185,7 @@ export function PomodoroSettingsModal() {
 
   return (
     <Modal open={open} onClose={() => close(false)} title="Pomodoro Settings">
-      <div className="space-y-6 max-h-[70vh] overflow-y-auto pr-2">
+      <div className="space-y-6 max-h-[70vh] overflow-y-auto pr-4">
         {/* Timer Sounds */}
         <section>
           <h3 className="text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-3">Timer Sounds</h3>
