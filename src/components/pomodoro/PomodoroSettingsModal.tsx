@@ -420,6 +420,14 @@ export function PomodoroSettingsModal() {
               )}
             </div>
           )}
+          <a
+            href="https://drive.google.com/file/d/1TkKHV5g94B1NYLGZ9uVk-Z0CDeBD65g1/view?usp=drive_link"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="mt-2 inline-block text-xs text-accent-600 hover:underline dark:text-accent-400"
+          >
+            gdrive/music/bgnoises.zip
+          </a>
         </section>
       </div>
     </Modal>
