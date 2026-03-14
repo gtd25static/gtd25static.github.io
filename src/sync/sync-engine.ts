@@ -796,6 +796,11 @@ export async function syncNow(manual = false, pushLimit?: number): Promise<numbe
     // Filter out our own entries and apply remote ones (decrypt encrypted entries)
     let foreignEntries = remoteEntries.filter((e) => e.deviceId !== creds.deviceId);
     foreignEntries = await decryptChangeEntries(encKey, foreignEntries);
+    // Count only entries not seen in the previous sync cycle
+    const previousForeignIds = new Set(
+      cachedRemoteEntries.filter((e) => e.deviceId !== creds.deviceId).map((e) => e.id),
+    );
+    const newlyPulledCount = foreignEntries.filter((e) => !previousForeignIds.has(e.id)).length;
     if (foreignEntries.length > 0) {
       await applyRemoteEntries(foreignEntries);
     }
@@ -991,7 +996,7 @@ export async function syncNow(manual = false, pushLimit?: number): Promise<numbe
 
     lastSyncCompletedAt = Date.now();
     setDirtyFlag(false);
-    reportProgress('done', 'Sync complete', 1.0, foreignEntries.length, pendingEntries.length);
+    reportProgress('done', 'Sync complete', 1.0, newlyPulledCount, pendingEntries.length);
     notifySyncSuccess();
     if (manual) toast('Sync complete', 'success');
 
