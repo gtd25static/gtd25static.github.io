@@ -56,7 +56,7 @@ export function MobileTimerWidget() {
 
       {/* Expanded popover */}
       {expanded && (
-        <div className="absolute right-0 top-full z-50 mt-1 flex gap-2 rounded-2xl border border-zinc-200 bg-white p-2 shadow-lg dark:border-zinc-700 dark:bg-zinc-900">
+        <div className="absolute left-0 top-full z-50 mt-1 flex gap-2 rounded-2xl border border-zinc-200 bg-white p-2 shadow-lg dark:border-zinc-700 dark:bg-zinc-900">
           <button onClick={() => { startPlus25(); setExpanded(false); }} className={`${btnClass} ${defaultBtn}`}>
             +25
           </button>
