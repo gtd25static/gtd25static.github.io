@@ -47,8 +47,8 @@ function useSync() {
   useEffect(() => {
     setSyncProgressCallback((progress) => {
       setSyncProgress(progress);
-      if (progress.phase === 'done' && progress.pulled != null && progress.pushed != null) {
-        setLastSyncStats({ pulled: progress.pulled!, pushed: progress.pushed! });
+      if (progress.phase === 'done') {
+        setLastSyncStats({ pulled: progress.pulled ?? 0, pushed: progress.pushed ?? 0 });
         setLastError(null);
       }
       if (progress.phase === 'error') {
