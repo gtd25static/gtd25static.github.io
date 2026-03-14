@@ -949,7 +949,7 @@ export async function syncNow(manual = false, pushLimit?: number): Promise<numbe
           if (snapFile) {
             const snapJson = JSON.parse(snapFile.data);
             if (localPomSettings) snapJson.pomodoroSettings = localPomSettings;
-            if (localSoundPresets.length > 0) snapJson.soundPresets = localSoundPresets;
+            snapJson.soundPresets = localSoundPresets;
             try {
               await putFile(creds.pat, creds.repo, SNAPSHOT_FILE, JSON.stringify(snapJson), snapFile.sha);
               await db.syncMeta.update('sync-meta', { pomodoroSyncedAt: Date.now() });

@@ -7,6 +7,7 @@ export function cleanupSoftDeletes(data: SyncData, maxAgeMs: number = 30 * 24 * 
     taskLists: data.taskLists.filter((l) => !l.deletedAt || l.deletedAt > cutoff),
     tasks: data.tasks.filter((t) => !t.deletedAt || t.deletedAt > cutoff),
     subtasks: data.subtasks.filter((s) => !s.deletedAt || s.deletedAt > cutoff),
+    soundPresets: data.soundPresets?.filter((p) => !p.deletedAt || p.deletedAt > cutoff),
   };
 }
 

@@ -138,6 +138,7 @@ export interface SoundPreset {
   sounds: Record<string, SoundVolumeLevel>;
   createdAt: number;
   updatedAt: number;
+  deletedAt?: number;
 }
 
 export interface PomodoroSettings {

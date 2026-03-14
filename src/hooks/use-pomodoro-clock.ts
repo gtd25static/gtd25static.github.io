@@ -15,7 +15,7 @@ async function startAmbientFromPreset() {
   const settings = await loadSettings();
   if (!settings?.activePresetId) return;
   const preset = await db.soundPresets.get(settings.activePresetId);
-  if (!preset) return;
+  if (!preset || preset.deletedAt) return;
 
   audioEngine.stopAllAmbient();
   audioEngine.setMasterVolume(settings.masterVolume);

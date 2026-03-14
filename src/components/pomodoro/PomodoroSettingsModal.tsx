@@ -17,7 +17,7 @@ export function PomodoroSettingsModal() {
   const close = usePomodoroStore((s) => s.setPomodoroSettingsOpen);
 
   const settings = useLiveQuery(() => db.pomodoroSettings.get('pomodoro'));
-  const presets = useLiveQuery(() => db.soundPresets.toArray()) ?? [];
+  const presets = useLiveQuery(() => db.soundPresets.filter(p => !p.deletedAt).toArray()) ?? [];
   const importedSounds = useLiveQuery(() => db.pomodoroSounds.toArray()) ?? [];
   const importedIds = new Set(importedSounds.map((s) => s.id));
 
@@ -137,7 +137,8 @@ export function PomodoroSettingsModal() {
   }
 
   async function handleDeletePreset(id: string) {
-    await db.soundPresets.delete(id);
+    const now = Date.now();
+    await db.soundPresets.update(id, { deletedAt: now, updatedAt: now });
     if (settings?.activePresetId === id) {
       await updateSettings({ activePresetId: null });
       setSoundLevels({});
