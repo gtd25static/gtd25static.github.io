@@ -158,6 +158,7 @@ export function PomodoroSettingsModal() {
       }
       audioEngine.stopAllAmbient();
       audioEngine.setMasterVolume(settings?.masterVolume ?? 0.7);
+      audioEngine.setDynamicMix(settings?.dynamicMixEnabled ?? false);
       for (const [code, level] of Object.entries(soundLevels)) {
         if (level !== 'off') {
           audioEngine.playAmbientSound(code, level as SoundVolumeLevel);
