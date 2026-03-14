@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { Modal } from '../ui/Modal';
 import { usePomodoroStore } from '../../stores/pomodoro-store';
@@ -25,6 +25,7 @@ export function PomodoroSettingsModal() {
   const [importResult, setImportResult] = useState<ImportResult | null>(null);
   const [presetName, setPresetName] = useState('');
   const [previewingSound, setPreviewingSound] = useState<string | null>(null);
+  const [previewingMix, setPreviewingMix] = useState(false);
 
   // Current sound levels (from active preset or empty)
   const [soundLevels, setSoundLevels] = useState<Record<string, SoundVolumeLevel>>({});
@@ -40,9 +41,20 @@ export function PomodoroSettingsModal() {
     });
   }, [settings?.activePresetId]);
 
+  // Cleanup previews when modal closes
+  const prevOpenRef = useRef(open);
+  useEffect(() => {
+    if (prevOpenRef.current && !open) {
+      audioEngine.stopAllAmbient();
+      setPreviewingMix(false);
+      setPreviewingSound(null);
+    }
+    prevOpenRef.current = open;
+  }, [open]);
+
   const updateSettings = useCallback(
     (patch: Record<string, unknown>) => {
-      db.pomodoroSettings.update('pomodoro', patch);
+      db.pomodoroSettings.update('pomodoro', { ...patch, updatedAt: Date.now() });
     },
     [],
   );
@@ -133,6 +145,27 @@ export function PomodoroSettingsModal() {
     toast('Preset deleted', 'info');
   }
 
+  function handlePreviewMix() {
+    if (previewingMix) {
+      audioEngine.stopAllAmbient();
+      setPreviewingMix(false);
+    } else {
+      // Stop individual preview
+      if (previewingSound) {
+        audioEngine.stopAmbientSound(previewingSound);
+        setPreviewingSound(null);
+      }
+      audioEngine.stopAllAmbient();
+      audioEngine.setMasterVolume(settings?.masterVolume ?? 0.7);
+      for (const [code, level] of Object.entries(soundLevels)) {
+        if (level !== 'off') {
+          audioEngine.playAmbientSound(code, level as SoundVolumeLevel);
+        }
+      }
+      setPreviewingMix(true);
+    }
+  }
+
   function volumeBadge(level: SoundVolumeLevel | 'off'): string {
     switch (level) {
       case 'low':
@@ -147,6 +180,8 @@ export function PomodoroSettingsModal() {
   }
 
   if (!settings) return null;
+
+  const hasConfiguredSounds = Object.values(soundLevels).some((l) => l !== 'off');
 
   return (
     <Modal open={open} onClose={() => close(false)} title="Pomodoro Settings">
@@ -237,7 +272,7 @@ export function PomodoroSettingsModal() {
             </div>
           )}
 
-          {/* Save preset */}
+          {/* Save preset + Preview */}
           <div className="flex gap-2 mb-3">
             <input
               type="text"
@@ -253,7 +288,37 @@ export function PomodoroSettingsModal() {
             >
               Save
             </button>
+            <button
+              onClick={handlePreviewMix}
+              disabled={!hasConfiguredSounds}
+              className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
+                previewingMix
+                  ? 'bg-red-600 text-white hover:bg-red-700'
+                  : 'bg-zinc-200 text-zinc-700 hover:bg-zinc-300 dark:bg-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-600'
+              } disabled:opacity-50`}
+            >
+              {previewingMix ? 'Stop' : 'Preview'}
+            </button>
           </div>
+
+          {/* Organic mix toggle */}
+          <label className="flex items-center gap-3 text-sm text-zinc-700 dark:text-zinc-300 mb-3">
+            <input
+              type="checkbox"
+              checked={settings.dynamicMixEnabled ?? false}
+              onChange={(e) => {
+                updateSettings({ dynamicMixEnabled: e.target.checked });
+                audioEngine.setDynamicMix(e.target.checked);
+              }}
+              className="rounded accent-accent-600"
+            />
+            <span>
+              Organic mix
+              <span className="block text-[11px] text-zinc-400 dark:text-zinc-500">
+                Slowly varies each sound&apos;s volume
+              </span>
+            </span>
+          </label>
 
           {/* Sound list by category */}
           {SOUND_CATEGORIES.map((category) => (
@@ -279,6 +344,11 @@ export function PomodoroSettingsModal() {
                       {available && (
                         <button
                           onClick={() => {
+                            // Stop mix preview if active
+                            if (previewingMix) {
+                              audioEngine.stopAllAmbient();
+                              setPreviewingMix(false);
+                            }
                             if (isPreviewing) {
                               audioEngine.stopAmbientSound(sound.code);
                               setPreviewingSound(null);

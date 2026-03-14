@@ -67,6 +67,27 @@ async function reconcileFromSnapshot(snapshot: SyncData) {
     });
     if (subsToUpsert.length > 0) await db.subtasks.bulkPut(subsToUpsert);
   });
+
+  // Reconcile pomodoro settings (outside entity transaction)
+  if (snapshot.pomodoroSettings) {
+    const local = await db.pomodoroSettings.get('pomodoro');
+    if (!local || (snapshot.pomodoroSettings.updatedAt ?? 0) > (local.updatedAt ?? 0)) {
+      await db.pomodoroSettings.put(snapshot.pomodoroSettings);
+    }
+  }
+
+  // Reconcile sound presets
+  if (snapshot.soundPresets && snapshot.soundPresets.length > 0) {
+    const localPresets = new Map(
+      (await db.soundPresets.toArray()).map(p => [p.id, p.updatedAt])
+    );
+    for (const preset of snapshot.soundPresets) {
+      const localTs = localPresets.get(preset.id);
+      if (localTs === undefined || preset.updatedAt > localTs) {
+        await db.soundPresets.put(preset);
+      }
+    }
+  }
 }
 
 // --- Safe JSON parsing ---
@@ -341,7 +362,12 @@ export async function getLocalSnapshot(): Promise<SyncData> {
   const settings: Settings = {
     theme: (localStorage.getItem('gtd25-theme') as Settings['theme']) ?? 'system',
   };
-  return { syncVersion: SYNC_VERSION, taskLists, tasks, subtasks, settings };
+  const pomodoroSettings = await db.pomodoroSettings.get('pomodoro') ?? undefined;
+  const soundPresets = await db.soundPresets.toArray();
+  return {
+    syncVersion: SYNC_VERSION, taskLists, tasks, subtasks, settings,
+    pomodoroSettings, soundPresets,
+  };
 }
 
 /**
@@ -607,6 +633,13 @@ export async function syncNow(manual = false, pushLimit?: number): Promise<numbe
         await db.tasks.bulkPut(snapshot.tasks);
         await db.subtasks.bulkPut(snapshot.subtasks);
       });
+      if (snapshot.pomodoroSettings) {
+        await db.pomodoroSettings.put(snapshot.pomodoroSettings);
+      }
+      if (snapshot.soundPresets && snapshot.soundPresets.length > 0) {
+        await db.soundPresets.clear();
+        await db.soundPresets.bulkPut(snapshot.soundPresets);
+      }
       await putFile(creds.pat, creds.repo, CHANGELOG_FILE, '[]', undefined, signal);
       await clearPendingEntries();
       await db.syncMeta.update('sync-meta', {
@@ -687,6 +720,13 @@ export async function syncNow(manual = false, pushLimit?: number): Promise<numbe
           await db.tasks.bulkPut(snapshot.tasks);
           await db.subtasks.bulkPut(snapshot.subtasks);
         });
+        if (snapshot.pomodoroSettings) {
+          await db.pomodoroSettings.put(snapshot.pomodoroSettings);
+        }
+        if (snapshot.soundPresets && snapshot.soundPresets.length > 0) {
+          await db.soundPresets.clear();
+          await db.soundPresets.bulkPut(snapshot.soundPresets);
+        }
         await clearPendingEntries();
 
         // Clear any stale changelog so other devices don't re-apply old entries
@@ -1220,6 +1260,13 @@ export async function forcePull() {
       await db.tasks.bulkPut(snapshot.tasks);
       await db.subtasks.bulkPut(snapshot.subtasks);
     });
+    if (snapshot.pomodoroSettings) {
+      await db.pomodoroSettings.put(snapshot.pomodoroSettings);
+    }
+    if (snapshot.soundPresets && snapshot.soundPresets.length > 0) {
+      await db.soundPresets.clear();
+      await db.soundPresets.bulkPut(snapshot.soundPresets);
+    }
 
     // Apply changelog entries on top
     const changelogFile = await getFile(creds.pat, creds.repo, CHANGELOG_FILE, signal);
@@ -1276,6 +1323,8 @@ export async function wipeAllData() {
       const encKey = getCachedEncryptionKey()!;
       const salt = getCachedSalt()!;
 
+      const currentPomSettings = await db.pomodoroSettings.get('pomodoro') ?? undefined;
+      const currentSoundPresets = await db.soundPresets.toArray();
       let emptySnapshot: SyncData = {
         syncVersion: SYNC_VERSION,
         wipedAt: Date.now(),
@@ -1283,6 +1332,8 @@ export async function wipeAllData() {
         tasks: [],
         subtasks: [],
         settings: { theme: (localStorage.getItem('gtd25-theme') as Settings['theme']) ?? 'system' },
+        pomodoroSettings: currentPomSettings,
+        soundPresets: currentSoundPresets,
         encryptionSalt: salt,
         encryptionVerifier: await createVerifier(encKey),
       };
@@ -1463,6 +1514,13 @@ export async function restoreFromBackup(tier: BackupTier) {
       await db.tasks.bulkPut(backupData.tasks);
       await db.subtasks.bulkPut(backupData.subtasks);
     });
+    if (backupData.pomodoroSettings) {
+      await db.pomodoroSettings.put(backupData.pomodoroSettings);
+    }
+    if (backupData.soundPresets && backupData.soundPresets.length > 0) {
+      await db.soundPresets.clear();
+      await db.soundPresets.bulkPut(backupData.soundPresets);
+    }
 
     await clearPendingEntries();
 
@@ -1477,6 +1535,8 @@ export async function restoreFromBackup(tier: BackupTier) {
       settings: backupData.settings ?? {
         theme: (localStorage.getItem('gtd25-theme') as Settings['theme']) ?? 'system',
       },
+      pomodoroSettings: backupData.pomodoroSettings,
+      soundPresets: backupData.soundPresets,
       encryptionSalt: salt,
       encryptionVerifier: await createVerifier(encKey),
     };

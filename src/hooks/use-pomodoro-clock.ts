@@ -5,6 +5,7 @@ import { showTimerNotification, requestNotificationPermission } from '../lib/not
 import { TICK_SOUND_CODE, BELL_SOUND_CODE } from '../lib/pomodoro-sounds';
 import { db } from '../db';
 import type { SoundVolumeLevel } from '../db/models';
+import { updateMediaSession, clearMediaSession, registerMediaSessionHandlers } from '../lib/media-session';
 
 async function loadSettings() {
   return db.pomodoroSettings.get('pomodoro');
@@ -23,11 +24,37 @@ async function startAmbientFromPreset() {
       await audioEngine.playAmbientSound(code, level as SoundVolumeLevel);
     }
   }
+  // Enable dynamic mix if configured
+  audioEngine.setDynamicMix(settings.dynamicMixEnabled ?? false);
 }
 
 export function usePomodoroClock() {
   const prevTimerRunning = useRef(false);
   const prevAmbientPlaying = useRef(false);
+
+  // Register media session handlers once
+  useEffect(() => {
+    registerMediaSessionHandlers({
+      onPlay: () => {
+        const state = usePomodoroStore.getState();
+        if (!state.ambientPlaying) {
+          usePomodoroStore.setState({ ambientPlaying: true });
+        }
+      },
+      onPause: () => {
+        audioEngine.stopAll();
+        usePomodoroStore.getState().stopTimer();
+        usePomodoroStore.setState({ ambientPlaying: false });
+        clearMediaSession();
+      },
+      onStop: () => {
+        audioEngine.stopAll();
+        usePomodoroStore.getState().stopTimer();
+        usePomodoroStore.setState({ ambientPlaying: false });
+        clearMediaSession();
+      },
+    });
+  }, []);
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -61,11 +88,13 @@ export function usePomodoroClock() {
         if (!state.ambientPlaying) {
           usePomodoroStore.setState({ ambientPlaying: true });
         }
+        updateMediaSession({ title: 'Pomodoro Timer', playing: true });
       }
 
       if (wasRunning && !isRunning) {
         // Timer stopped (either manually or completed) — stop all audio
         audioEngine.stopAll();
+        clearMediaSession();
       }
 
       prevTimerRunning.current = isRunning;
@@ -80,10 +109,17 @@ export function usePomodoroClock() {
 
       if (!wasPlaying && isPlaying) {
         startAmbientFromPreset();
+        updateMediaSession({
+          title: state.timerRunning ? 'Pomodoro Timer' : 'Ambient Sounds',
+          playing: true,
+        });
       }
 
       if (wasPlaying && !isPlaying) {
         audioEngine.stopAllAmbient();
+        if (!state.timerRunning) {
+          clearMediaSession();
+        }
       }
 
       prevAmbientPlaying.current = isPlaying;
@@ -115,6 +151,7 @@ async function handleCompletion() {
     audioEngine.playBell(BELL_SOUND_CODE);
   }
   showTimerNotification();
+  updateMediaSession({ title: 'Pomodoro Complete', playing: false });
   // Stop ambient on completion
   usePomodoroStore.setState({ ambientPlaying: false });
 }

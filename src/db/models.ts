@@ -118,6 +118,8 @@ export interface SyncData {
   tasks: Task[];
   subtasks: Subtask[];
   settings: Settings;
+  pomodoroSettings?: PomodoroSettings;
+  soundPresets?: SoundPreset[];
 }
 
 // Pomodoro types
@@ -143,4 +145,6 @@ export interface PomodoroSettings {
   tickingEnabled: boolean;
   bellEnabled: boolean;
   activePresetId: string | null;
+  updatedAt: number;
+  dynamicMixEnabled: boolean;
 }

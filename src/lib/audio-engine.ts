@@ -5,6 +5,15 @@ import type { SoundVolumeLevel } from '../db/models';
 interface ActiveSource {
   source: AudioBufferSourceNode;
   gain: GainNode;
+  baseVolume: number;
+}
+
+interface DynamicTrackState {
+  target: number;
+  current: number;
+  nextChangeAt: number;
+  active: boolean;
+  nextReevalAt: number;
 }
 
 class AudioEngine {
@@ -13,6 +22,15 @@ class AudioEngine {
   private bufferCache = new Map<string, AudioBuffer>();
   private activeSources = new Map<string, ActiveSource>();
   private tickingSource: ActiveSource | null = null;
+
+  // Generation counters to prevent stale async callbacks (fix: race on stop during load)
+  private tickingGeneration = 0;
+  private ambientGeneration = new Map<string, number>();
+
+  // Dynamic mix state
+  private dynamicMixEnabled = false;
+  private dynamicMixInterval: ReturnType<typeof setInterval> | null = null;
+  private dynamicTargets = new Map<string, DynamicTrackState>();
 
   private ensureContext(): AudioContext {
     if (!this.ctx) {
@@ -46,14 +64,18 @@ class AudioEngine {
   }
 
   async playAmbientSound(code: string, volumeLevel: SoundVolumeLevel): Promise<void> {
-    // Stop existing instance of this sound
     this.stopAmbientSound(code);
 
     const volume = VOLUME_MULTIPLIERS[volumeLevel] ?? 0;
     if (volume === 0) return;
 
+    const gen = this.nextAmbientGeneration(code);
+
     const buffer = await this.loadBuffer(code);
     if (!buffer) return;
+
+    // Abort if stop was called during the async load
+    if (gen !== (this.ambientGeneration.get(code) ?? 0)) return;
 
     const ctx = this.ensureContext();
     const source = ctx.createBufferSource();
@@ -61,16 +83,20 @@ class AudioEngine {
     source.loop = true;
 
     const gain = ctx.createGain();
-    gain.gain.value = volume;
+    const dynamicState = this.dynamicTargets.get(code);
+    const multiplier = this.dynamicMixEnabled && dynamicState ? dynamicState.current : 1.0;
+    gain.gain.value = volume * multiplier;
 
     source.connect(gain);
     gain.connect(this.getMasterGain());
     source.start();
 
-    this.activeSources.set(code, { source, gain });
+    this.activeSources.set(code, { source, gain, baseVolume: volume });
   }
 
   stopAmbientSound(code: string): void {
+    this.incrementAmbientGeneration(code);
+
     const active = this.activeSources.get(code);
     if (active) {
       active.source.stop();
@@ -78,12 +104,22 @@ class AudioEngine {
       active.gain.disconnect();
       this.activeSources.delete(code);
     }
+    this.dynamicTargets.delete(code);
   }
 
   stopAllAmbient(): void {
-    for (const code of [...this.activeSources.keys()]) {
-      this.stopAmbientSound(code);
+    // Invalidate all in-flight ambient plays (including those still loading)
+    for (const code of this.ambientGeneration.keys()) {
+      this.incrementAmbientGeneration(code);
     }
+    for (const [, active] of this.activeSources) {
+      active.source.stop();
+      active.source.disconnect();
+      active.gain.disconnect();
+    }
+    this.activeSources.clear();
+    this.dynamicTargets.clear();
+    this.stopDynamicMixLoop();
   }
 
   stopAll(): void {
@@ -98,7 +134,10 @@ class AudioEngine {
       if (volume === 0) {
         this.stopAmbientSound(code);
       } else {
-        active.gain.gain.value = volume;
+        active.baseVolume = volume;
+        const dynamicState = this.dynamicTargets.get(code);
+        const multiplier = this.dynamicMixEnabled && dynamicState ? dynamicState.current : 1.0;
+        active.gain.gain.value = volume * multiplier;
       }
     }
   }
@@ -111,8 +150,13 @@ class AudioEngine {
   async startTicking(code: string): Promise<void> {
     this.stopTicking();
 
+    const gen = ++this.tickingGeneration;
+
     const buffer = await this.loadBuffer(code);
     if (!buffer) return;
+
+    // Abort if stop was called during the async load
+    if (gen !== this.tickingGeneration) return;
 
     const ctx = this.ensureContext();
     const source = ctx.createBufferSource();
@@ -126,10 +170,12 @@ class AudioEngine {
     gain.connect(this.getMasterGain());
     source.start();
 
-    this.tickingSource = { source, gain };
+    this.tickingSource = { source, gain, baseVolume: 1.0 };
   }
 
   stopTicking(): void {
+    this.tickingGeneration++;
+
     if (this.tickingSource) {
       this.tickingSource.source.stop();
       this.tickingSource.source.disconnect();
@@ -153,6 +199,96 @@ class AudioEngine {
     source.connect(gain);
     gain.connect(this.getMasterGain());
     source.start();
+  }
+
+  // --- Dynamic mix ---
+
+  setDynamicMix(enabled: boolean): void {
+    if (enabled === this.dynamicMixEnabled) return;
+    this.dynamicMixEnabled = enabled;
+
+    if (enabled) {
+      this.dynamicMixInterval = setInterval(() => this.updateDynamicMix(), 100);
+    } else {
+      this.stopDynamicMixLoop();
+      // Reset all gains to baseVolume
+      for (const [, active] of this.activeSources) {
+        active.gain.gain.value = active.baseVolume;
+      }
+      this.dynamicTargets.clear();
+    }
+  }
+
+  private stopDynamicMixLoop(): void {
+    if (this.dynamicMixInterval !== null) {
+      clearInterval(this.dynamicMixInterval);
+      this.dynamicMixInterval = null;
+    }
+    this.dynamicMixEnabled = false;
+  }
+
+  private updateDynamicMix(): void {
+    const now = Date.now();
+
+    for (const [code, active] of this.activeSources) {
+      let state = this.dynamicTargets.get(code);
+      if (!state) {
+        state = {
+          target: 1.0,
+          current: 1.0,
+          nextChangeAt: now + 30_000 + Math.random() * 90_000,
+          active: false,
+          nextReevalAt: now + Math.random() * 60_000,
+        };
+        this.dynamicTargets.set(code, state);
+      }
+
+      // Re-evaluate whether this track should be actively varying
+      if (now >= state.nextReevalAt) {
+        if (state.active) {
+          // 50/50 chance to deactivate
+          if (Math.random() < 0.5) {
+            state.active = false;
+            state.target = 1.0; // drift back to full
+            state.nextReevalAt = now + 120_000 + Math.random() * 60_000;
+          } else {
+            state.nextReevalAt = now + 60_000 + Math.random() * 120_000;
+          }
+        } else {
+          // Always activate (guarantees every track eventually varies)
+          state.active = true;
+          state.nextReevalAt = now + 60_000 + Math.random() * 120_000;
+        }
+      }
+
+      // Only vary tracks where active === true
+      if (state.active && now >= state.nextChangeAt) {
+        state.target = 0.05 + Math.random() * 0.95;
+        state.nextChangeAt = now + 30_000 + Math.random() * 90_000;
+      }
+
+      // Interpolate current toward target
+      const diff = state.target - state.current;
+      if (Math.abs(diff) > 0.001) {
+        state.current += Math.sign(diff) * Math.min(Math.abs(diff), 0.002);
+      } else {
+        state.current = state.target;
+      }
+
+      active.gain.gain.value = active.baseVolume * state.current;
+    }
+  }
+
+  // --- Generation counter helpers ---
+
+  private nextAmbientGeneration(code: string): number {
+    const gen = (this.ambientGeneration.get(code) ?? 0) + 1;
+    this.ambientGeneration.set(code, gen);
+    return gen;
+  }
+
+  private incrementAmbientGeneration(code: string): void {
+    this.ambientGeneration.set(code, (this.ambientGeneration.get(code) ?? 0) + 1);
   }
 }
 

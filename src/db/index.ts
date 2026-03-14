@@ -97,6 +97,8 @@ export async function ensureDefaults() {
       tickingEnabled: true,
       bellEnabled: true,
       activePresetId: null,
+      updatedAt: Date.now(),
+      dynamicMixEnabled: false,
     });
   }
 
