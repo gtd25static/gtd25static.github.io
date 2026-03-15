@@ -8,6 +8,7 @@ import { checkRecurringTasks } from './hooks/use-recurring';
 import { SpecialListProvider } from './hooks/use-special-list';
 import { SyncProvider } from './sync/use-sync';
 import { usePomodoroClock } from './hooks/use-pomodoro-clock';
+import { useUrlCapture } from './hooks/use-url-capture';
 
 export default function App() {
   useEffect(() => {
@@ -24,6 +25,7 @@ export default function App() {
   useTheme();
   useKeyboard();
   usePomodoroClock();
+  useUrlCapture();
 
   return (
     <ErrorBoundary>

@@ -21,6 +21,19 @@ export function QuickCapture() {
 
   if (!open) return null;
 
+  async function handlePaste() {
+    try {
+      const text = await navigator.clipboard.readText();
+      const trimmed = text.trim().slice(0, MAX_TITLE_LENGTH);
+      if (trimmed) {
+        setTitle(trimmed);
+        inputRef.current?.focus();
+      }
+    } catch {
+      toast('Clipboard access denied', 'error');
+    }
+  }
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     const trimmed = title.trim();
@@ -63,6 +76,17 @@ export function QuickCapture() {
               }
             }}
           />
+          <button
+            type="button"
+            onClick={handlePaste}
+            title="Paste from clipboard"
+            className="rounded-lg p-1.5 text-zinc-400 hover:text-zinc-600 dark:text-zinc-500 dark:hover:text-zinc-300"
+          >
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="5" y="2" width="6" height="3" rx="0.5" />
+              <path d="M5 3.5H3.5a1 1 0 0 0-1 1v9a1 1 0 0 0 1 1h9a1 1 0 0 0 1-1v-9a1 1 0 0 0-1-1H11" />
+            </svg>
+          </button>
           <button
             type="submit"
             disabled={!title.trim()}
