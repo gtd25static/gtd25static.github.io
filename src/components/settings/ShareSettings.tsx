@@ -1,8 +1,17 @@
+import { useCallback } from 'react';
+
 export function ShareSettings() {
   const appUrl = typeof window !== 'undefined' ? window.location.origin : '';
 
-  // Bookmarklet: captures current page title + URL, opens GTD app with capture params
   const bookmarkletCode = `javascript:void(window.open('${appUrl}/?capture&title='+encodeURIComponent(document.title)+'&url='+encodeURIComponent(window.location.href)))`;
+
+  // React blocks javascript: URLs in href — set it via the DOM directly
+  const bookmarkletRef = useCallback(
+    (node: HTMLAnchorElement | null) => {
+      if (node) node.setAttribute('href', bookmarkletCode);
+    },
+    [bookmarkletCode],
+  );
 
   return (
     <div>
@@ -28,7 +37,8 @@ export function ShareSettings() {
             the page title and URL to your inbox.
           </p>
           <a
-            href={bookmarkletCode}
+            ref={bookmarkletRef}
+            href="#"
             onClick={(e) => e.preventDefault()}
             draggable
             className="mt-2 inline-block rounded-lg bg-accent-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-accent-700 cursor-grab"
