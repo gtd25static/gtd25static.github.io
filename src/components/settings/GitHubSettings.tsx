@@ -40,6 +40,8 @@ export function GitHubSettings() {
       cacheEncryptionKey(key, salt);
     }
 
+    const wasSyncEnabled = local.syncEnabled;
+
     await updateLocalSettings({
       githubPat: pat.trim() || undefined,
       githubRepo: repo.trim() || undefined,
@@ -50,7 +52,9 @@ export function GitHubSettings() {
 
     // Password change requires re-encrypting all remote data with new key.
     // Force push overwrites remote with local data encrypted using the new key.
-    if (passwordChanged && encPassword.trim() && pat.trim() && repo.trim()) {
+    // Only do this when sync was already enabled (genuine password change),
+    // NOT on initial setup — otherwise we'd overwrite remote data with an empty local DB.
+    if (wasSyncEnabled && passwordChanged && encPassword.trim() && pat.trim() && repo.trim()) {
       forcePush();
     }
   }
