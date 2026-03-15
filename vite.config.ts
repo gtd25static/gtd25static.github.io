@@ -33,7 +33,6 @@ export default defineConfig({
           { src: 'pwa-512.png', sizes: '512x512', type: 'image/png' },
           { src: 'pwa-512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
         ],
-        // @ts-expect-error share_target is valid in Web App Manifest but not in vite-plugin-pwa types
         share_target: {
           action: '/?capture',
           method: 'GET',
