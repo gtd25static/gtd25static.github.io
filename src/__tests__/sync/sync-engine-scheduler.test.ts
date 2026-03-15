@@ -85,7 +85,7 @@ describe('startScheduler', () => {
     expect(mockGetFile).toHaveBeenCalled();
   });
 
-  it('registers visibilitychange and online listeners', () => {
+  it('registers visibilitychange, online, and activity listeners', () => {
     const docSpy = vi.spyOn(document, 'addEventListener');
     const winSpy = vi.spyOn(window, 'addEventListener');
 
@@ -93,6 +93,8 @@ describe('startScheduler', () => {
 
     expect(docSpy).toHaveBeenCalledWith('visibilitychange', expect.any(Function));
     expect(winSpy).toHaveBeenCalledWith('online', expect.any(Function));
+    expect(docSpy).toHaveBeenCalledWith('pointerdown', expect.any(Function), { passive: true });
+    expect(docSpy).toHaveBeenCalledWith('keydown', expect.any(Function), { passive: true });
 
     docSpy.mockRestore();
     winSpy.mockRestore();
@@ -109,6 +111,8 @@ describe('stopScheduler', () => {
 
     expect(docRemoveSpy).toHaveBeenCalledWith('visibilitychange', expect.any(Function));
     expect(winRemoveSpy).toHaveBeenCalledWith('online', expect.any(Function));
+    expect(docRemoveSpy).toHaveBeenCalledWith('pointerdown', expect.any(Function));
+    expect(docRemoveSpy).toHaveBeenCalledWith('keydown', expect.any(Function));
 
     docRemoveSpy.mockRestore();
     winRemoveSpy.mockRestore();
@@ -125,7 +129,7 @@ describe('stopScheduler', () => {
 });
 
 describe('notifyLocalChange (via scheduleSyncDebounced)', () => {
-  it('from idle → first-wait, schedules batch after 15s', async () => {
+  it('from idle → first-wait, syncs after idle threshold (3s)', async () => {
     await startAndWaitForInitialSync();
     mockGetFile.mockClear();
 
@@ -134,8 +138,8 @@ describe('notifyLocalChange (via scheduleSyncDebounced)', () => {
     // Should not sync immediately
     expect(mockGetFile).not.toHaveBeenCalled();
 
-    // After 15s — first batch should fire
-    await vi.advanceTimersByTimeAsync(15_000);
+    // After 3s of inactivity — idle threshold fires sync
+    await vi.advanceTimersByTimeAsync(3_000);
     // Let the batch syncNow complete
     await vi.advanceTimersByTimeAsync(200);
     expect(mockGetFile).toHaveBeenCalled();
@@ -157,10 +161,44 @@ describe('notifyLocalChange (via scheduleSyncDebounced)', () => {
     scheduleSyncDebounced();
     scheduleSyncDebounced(); // second call while in first-wait
 
-    await vi.advanceTimersByTimeAsync(15_000);
+    // After idle threshold (3s from last activity) — sync fires once
+    await vi.advanceTimersByTimeAsync(3_000);
     await vi.advanceTimersByTimeAsync(200);
     const callCount = mockGetFile.mock.calls.length;
     expect(callCount).toBeGreaterThan(0);
+  });
+
+  it('respects hard deadline when user is active', async () => {
+    await startAndWaitForInitialSync();
+    mockGetFile.mockClear();
+
+    scheduleSyncDebounced();
+
+    // Simulate continuous activity every 2s — keeps lastActivityAt fresh
+    for (let i = 0; i < 6; i++) {
+      await vi.advanceTimersByTimeAsync(2_000);
+      scheduleSyncDebounced(); // activity resets idle timer
+    }
+
+    // 12s elapsed — should NOT have synced yet (idle threshold never reached, deadline not hit)
+    expect(mockGetFile).not.toHaveBeenCalled();
+
+    // Advance to hit the 15s hard deadline
+    await vi.advanceTimersByTimeAsync(3_000);
+    await vi.advanceTimersByTimeAsync(200);
+    expect(mockGetFile).toHaveBeenCalled();
+  });
+
+  it('syncs at idle threshold after last activity', async () => {
+    await startAndWaitForInitialSync();
+    mockGetFile.mockClear();
+
+    scheduleSyncDebounced();
+
+    // Advance 5s with no further activity — exceeds 3s idle threshold
+    await vi.advanceTimersByTimeAsync(5_000);
+    await vi.advanceTimersByTimeAsync(200);
+    expect(mockGetFile).toHaveBeenCalled();
   });
 });
 
@@ -170,7 +208,7 @@ describe('batch timer', () => {
     mockGetFile.mockClear();
 
     scheduleSyncDebounced();
-    await vi.advanceTimersByTimeAsync(15_000); // first batch fires
+    await vi.advanceTimersByTimeAsync(3_000); // first batch fires (idle threshold)
     await vi.advanceTimersByTimeAsync(500); // let batch syncNow complete
     mockGetFile.mockClear();
 

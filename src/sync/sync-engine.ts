@@ -115,6 +115,7 @@ let cachedChangelogTimestamp = 0;
 // --- Scheduler constants ---
 const POLL_INTERVAL_MS = 30_000;
 const FIRST_BATCH_DELAY_MS = 15_000;
+const IDLE_THRESHOLD_MS = 3_000; // Sync after 3s of user inactivity
 const BATCH_INTERVAL_MS = 30_000;
 const FIRST_BATCH_SIZE = 5;
 const BATCH_SIZE = 10;
@@ -128,6 +129,10 @@ let lastSyncCompletedAt = 0;
 
 // --- Batch accumulator: accumulates pulled/pushed counts across a batch cycle ---
 let batchAccum: { pulled: number; pushed: number } | null = null;
+
+// --- Idle-aware sync state ---
+let lastActivityAt = Date.now();
+let batchDeadline: number | null = null;
 
 // --- Error backoff state ---
 let consecutiveErrors = 0;
@@ -251,6 +256,7 @@ function getBackoffInterval(): number {
 function startIdlePoll() {
   clearSchedulerTimer();
   batchAccum = null;
+  batchDeadline = null;
   schedulerState = 'idle';
   const interval = getBackoffInterval();
   schedulerTimer = setTimeout(async function poll() {
@@ -275,15 +281,34 @@ async function onBatchTimerFired(batchSize: number) {
   }
 }
 
+function scheduleIdleCheck() {
+  clearSchedulerTimer();
+  const now = Date.now();
+  const idleSince = now - lastActivityAt;
+  const deadline = batchDeadline!;
+
+  if (idleSince >= IDLE_THRESHOLD_MS || now >= deadline) {
+    batchDeadline = null;
+    onBatchTimerFired(FIRST_BATCH_SIZE);
+    return;
+  }
+
+  const nextIdleAt = lastActivityAt + IDLE_THRESHOLD_MS;
+  const delay = Math.min(nextIdleAt - now, deadline - now);
+  schedulerTimer = setTimeout(scheduleIdleCheck, delay);
+}
+
 function notifyLocalChange() {
   if (schedulerState === 'stopped') return;
+  lastActivityAt = Date.now();
   if (schedulerState === 'idle') {
     clearSchedulerTimer();
     batchAccum = { pulled: 0, pushed: 0 };
     schedulerState = 'first-wait';
-    schedulerTimer = setTimeout(() => onBatchTimerFired(FIRST_BATCH_SIZE), FIRST_BATCH_DELAY_MS);
+    batchDeadline = Date.now() + FIRST_BATCH_DELAY_MS;
+    scheduleIdleCheck();
   }
-  // If already in first-wait or batching, let the current timer handle it
+  // If already in first-wait or batching, activity timestamp is updated above
 }
 
 export function scheduleSyncDebounced() {
@@ -334,11 +359,17 @@ function handleOnline() {
   });
 }
 
+function onUserActivity() {
+  lastActivityAt = Date.now();
+}
+
 export function startScheduler() {
   syncNow(); // initial pull on startup
   startIdlePoll();
   document.addEventListener('visibilitychange', handleVisibilityChange);
   window.addEventListener('online', handleOnline);
+  document.addEventListener('pointerdown', onUserActivity, { passive: true });
+  document.addEventListener('keydown', onUserActivity, { passive: true });
 }
 
 export function stopScheduler() {
@@ -346,6 +377,8 @@ export function stopScheduler() {
   schedulerState = 'stopped';
   document.removeEventListener('visibilitychange', handleVisibilityChange);
   window.removeEventListener('online', handleOnline);
+  document.removeEventListener('pointerdown', onUserActivity);
+  document.removeEventListener('keydown', onUserActivity);
 }
 
 async function getCredentials() {
@@ -1561,6 +1594,8 @@ export function __resetForTesting() {
   if (rateLimitTimer) { clearTimeout(rateLimitTimer); rateLimitTimer = null; }
   lastErrorToastAt = 0;
   lastSyncCompletedAt = 0;
+  lastActivityAt = Date.now();
+  batchDeadline = null;
   versionIncompatibleListeners.clear();
   syncSuccessListeners.clear();
   passwordNeededListeners.clear();
