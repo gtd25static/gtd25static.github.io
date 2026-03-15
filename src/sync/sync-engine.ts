@@ -126,6 +126,9 @@ let schedulerState: SchedulerState = 'stopped';
 let schedulerTimer: ReturnType<typeof setTimeout> | null = null;
 let lastSyncCompletedAt = 0;
 
+// --- Batch accumulator: accumulates pulled/pushed counts across a batch cycle ---
+let batchAccum: { pulled: number; pushed: number } | null = null;
+
 // --- Error backoff state ---
 let consecutiveErrors = 0;
 let rateLimitTimer: ReturnType<typeof setTimeout> | null = null;
@@ -247,6 +250,7 @@ function getBackoffInterval(): number {
 
 function startIdlePoll() {
   clearSchedulerTimer();
+  batchAccum = null;
   schedulerState = 'idle';
   const interval = getBackoffInterval();
   schedulerTimer = setTimeout(async function poll() {
@@ -275,6 +279,7 @@ function notifyLocalChange() {
   if (schedulerState === 'stopped') return;
   if (schedulerState === 'idle') {
     clearSchedulerTimer();
+    batchAccum = { pulled: 0, pushed: 0 };
     schedulerState = 'first-wait';
     schedulerTimer = setTimeout(() => onBatchTimerFired(FIRST_BATCH_SIZE), FIRST_BATCH_DELAY_MS);
   }
@@ -996,7 +1001,14 @@ export async function syncNow(manual = false, pushLimit?: number): Promise<numbe
 
     lastSyncCompletedAt = Date.now();
     setDirtyFlag(false);
-    reportProgress('done', 'Sync complete', 1.0, newlyPulledCount, pendingEntries.length);
+    // Accumulate counts across batch cycle so the final done report includes totals
+    if (batchAccum) {
+      batchAccum.pulled += newlyPulledCount;
+      batchAccum.pushed += pendingEntries.length;
+      reportProgress('done', 'Sync complete', 1.0, batchAccum.pulled, batchAccum.pushed);
+    } else {
+      reportProgress('done', 'Sync complete', 1.0, newlyPulledCount, pendingEntries.length);
+    }
     notifySyncSuccess();
     if (manual) toast('Sync complete', 'success');
 

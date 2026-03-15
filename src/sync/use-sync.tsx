@@ -48,11 +48,7 @@ function useSync() {
     setSyncProgressCallback((progress) => {
       setSyncProgress(progress);
       if (progress.phase === 'done') {
-        const pulled = progress.pulled ?? 0;
-        const pushed = progress.pushed ?? 0;
-        if (pulled > 0 || pushed > 0) {
-          setLastSyncStats({ pulled, pushed });
-        }
+        setLastSyncStats({ pulled: progress.pulled ?? 0, pushed: progress.pushed ?? 0 });
         setLastError(null);
       }
       if (progress.phase === 'error') {
