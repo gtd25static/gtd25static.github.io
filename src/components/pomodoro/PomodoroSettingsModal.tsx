@@ -119,22 +119,35 @@ export function PomodoroSettingsModal() {
   async function handleSavePreset() {
     const name = presetName.trim();
     if (!name) return;
-    const id = newId();
     const now = Date.now();
-    await db.soundPresets.put({
-      id,
-      name,
-      sounds: { ...soundLevels },
-      createdAt: now,
-      updatedAt: now,
-    });
-    await updateSettings({ activePresetId: id });
-    setPresetName('');
-    toast('Preset saved', 'success');
+
+    // Check if a preset with this name already exists — overwrite it
+    const existing = presets.find((p) => p.name === name);
+    if (existing) {
+      await db.soundPresets.update(existing.id, {
+        sounds: { ...soundLevels },
+        updatedAt: now,
+      });
+      await updateSettings({ activePresetId: existing.id });
+      toast('Preset updated', 'success');
+    } else {
+      const id = newId();
+      await db.soundPresets.put({
+        id,
+        name,
+        sounds: { ...soundLevels },
+        createdAt: now,
+        updatedAt: now,
+      });
+      await updateSettings({ activePresetId: id });
+      toast('Preset saved', 'success');
+    }
   }
 
   async function handleSelectPreset(id: string) {
     await updateSettings({ activePresetId: id });
+    const preset = presets.find((p) => p.id === id);
+    if (preset) setPresetName(preset.name);
   }
 
   async function handleDeletePreset(id: string) {
