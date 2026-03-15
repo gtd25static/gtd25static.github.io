@@ -4,7 +4,7 @@ import type { ImportData } from '../db/export-import';
 import { getFile, putFile, deleteFile, RateLimitError } from './github-api';
 import { cleanupSoftDeletes, archiveOldCompleted } from './conflict-resolution';
 import { applyRemoteEntries, getPendingEntries, clearPendingEntries, clearEntriesByIds, pendingEntryCount } from './change-log';
-import { mergeEntity } from './field-timestamps';
+import { mergeEntity, stampUpdatedFields } from './field-timestamps';
 import { toast } from '../components/ui/Toast';
 import { SYNC_VERSION, isCompatibleVersion, needsMigration } from './version';
 import { runRemoteMigrations } from './migrations';
@@ -906,6 +906,7 @@ export async function syncNow(manual = false, pushLimit?: number): Promise<numbe
               try {
                 const retrySha = await putFile(creds.pat, creds.repo, CHANGELOG_FILE, retryContent, currentSha, signal);
                 currentSha = retrySha;
+                remoteToWrite = freshToWrite;
                 pushed = true;
               } catch {
                 // Will loop and retry
@@ -1111,8 +1112,11 @@ async function compactSnapshot(pat: string, repo: string, encKey: CryptoKey) {
       if (entry.operation === 'delete') {
         const existing = map.get(entry.entityId);
         if (existing) {
-          (existing as unknown as Record<string, unknown>).deletedAt = entry.timestamp;
-          (existing as unknown as Record<string, unknown>).updatedAt = entry.timestamp;
+          const rec = existing as unknown as Record<string, unknown>;
+          rec.deletedAt = entry.timestamp;
+          rec.updatedAt = entry.timestamp;
+          const existingFT = rec.fieldTimestamps as Record<string, number> | undefined;
+          rec.fieldTimestamps = stampUpdatedFields(existingFT, ['deletedAt'], entry.timestamp);
         }
       } else {
         const existing = map.get(entry.entityId);

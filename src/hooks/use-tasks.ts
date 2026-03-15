@@ -167,12 +167,15 @@ export async function deleteTask(id: string) {
 
     await ensureDeviceId();
     await db.transaction('rw', [db.tasks, db.subtasks, db.changeLog], async () => {
-      await db.tasks.update(id, { deletedAt: now, updatedAt: now });
+      const task = await db.tasks.get(id);
+      const taskFT = stampUpdatedFields(task?.fieldTimestamps, ['deletedAt'], now);
+      await db.tasks.update(id, { deletedAt: now, updatedAt: now, fieldTimestamps: taskFT });
       batch.push({ entityType: 'task', entityId: id, operation: 'delete' });
 
       const subtasks = await db.subtasks.where('taskId').equals(id).toArray();
       for (const sub of subtasks) {
-        await db.subtasks.update(sub.id, { deletedAt: now, updatedAt: now });
+        const subFT = stampUpdatedFields(sub.fieldTimestamps, ['deletedAt'], now);
+        await db.subtasks.update(sub.id, { deletedAt: now, updatedAt: now, fieldTimestamps: subFT });
         batch.push({ entityType: 'subtask', entityId: sub.id, operation: 'delete' });
       }
 
@@ -217,9 +220,9 @@ export async function restoreTask(id: string) {
 
 export async function moveTaskToList(taskId: string, targetListId: string) {
   try {
-    const count = await db.tasks.where('listId').equals(targetListId).count();
     await ensureDeviceId();
     await db.transaction('rw', [db.tasks, db.changeLog], async () => {
+      const count = await db.tasks.where('listId').equals(targetListId).count();
       const existing = await db.tasks.get(taskId);
       const now = Date.now();
       const fieldTimestamps = stampUpdatedFields(existing?.fieldTimestamps, ['listId', 'order'], now);
@@ -237,33 +240,34 @@ export async function moveTaskToList(taskId: string, targetListId: string) {
 
 export async function duplicateTask(taskId: string) {
   try {
-    const task = await db.tasks.get(taskId);
-    if (!task) return undefined;
-
-    // Clone subtasks
-    const subtasks = await db.subtasks.where('taskId').equals(taskId).toArray();
-    const liveSubtasks = subtasks.filter((s) => !s.deletedAt).sort((a, b) => a.order - b.order);
-
-    const count = await db.tasks.where('listId').equals(task.listId).count();
     const now = Date.now();
     const newTaskId = newId();
-    const newTask: Task = {
-      id: newTaskId,
-      listId: task.listId,
-      title: task.title,
-      description: task.description,
-      link: task.link,
-      linkTitle: task.linkTitle,
-      links: task.links ? [...task.links] : undefined,
-      status: 'todo',
-      order: count,
-      createdAt: now,
-      updatedAt: now,
-    };
-    newTask.fieldTimestamps = initFieldTimestamps(newTask as unknown as Record<string, unknown>, now);
+    let newTask!: Task;
 
     await ensureDeviceId();
     await db.transaction('rw', [db.tasks, db.subtasks, db.changeLog], async () => {
+      const task = await db.tasks.get(taskId);
+      if (!task) return;
+
+      const subtasks = await db.subtasks.where('taskId').equals(taskId).toArray();
+      const liveSubtasks = subtasks.filter((s) => !s.deletedAt).sort((a, b) => a.order - b.order);
+
+      const count = await db.tasks.where('listId').equals(task.listId).count();
+      newTask = {
+        id: newTaskId,
+        listId: task.listId,
+        title: task.title,
+        description: task.description,
+        link: task.link,
+        linkTitle: task.linkTitle,
+        links: task.links ? [...task.links] : undefined,
+        status: 'todo',
+        order: count,
+        createdAt: now,
+        updatedAt: now,
+      };
+      newTask.fieldTimestamps = initFieldTimestamps(newTask as unknown as Record<string, unknown>, now);
+
       await db.tasks.add(newTask);
       await recordChangeInTx('task', newTaskId, 'upsert', newTask as unknown as Record<string, unknown>);
 
@@ -292,6 +296,7 @@ export async function duplicateTask(taskId: string) {
       }
     });
 
+    if (!newTask) return undefined;
     scheduleSyncDebounced();
     return newTask;
   } catch (error) {

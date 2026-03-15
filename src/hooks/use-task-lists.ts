@@ -64,17 +64,21 @@ export async function deleteTaskList(id: string) {
 
     await ensureDeviceId();
     await db.transaction('rw', [db.taskLists, db.tasks, db.subtasks, db.changeLog], async () => {
-      await db.taskLists.update(id, { deletedAt: now, updatedAt: now });
+      const list = await db.taskLists.get(id);
+      const listFT = stampUpdatedFields(list?.fieldTimestamps, ['deletedAt'], now);
+      await db.taskLists.update(id, { deletedAt: now, updatedAt: now, fieldTimestamps: listFT });
       batch.push({ entityType: 'taskList', entityId: id, operation: 'delete' });
 
       const tasks = await db.tasks.where('listId').equals(id).toArray();
       for (const task of tasks) {
-        await db.tasks.update(task.id, { deletedAt: now, updatedAt: now });
+        const taskFT = stampUpdatedFields(task.fieldTimestamps, ['deletedAt'], now);
+        await db.tasks.update(task.id, { deletedAt: now, updatedAt: now, fieldTimestamps: taskFT });
         batch.push({ entityType: 'task', entityId: task.id, operation: 'delete' });
 
         const subtasks = await db.subtasks.where('taskId').equals(task.id).toArray();
         for (const sub of subtasks) {
-          await db.subtasks.update(sub.id, { deletedAt: now, updatedAt: now });
+          const subFT = stampUpdatedFields(sub.fieldTimestamps, ['deletedAt'], now);
+          await db.subtasks.update(sub.id, { deletedAt: now, updatedAt: now, fieldTimestamps: subFT });
           batch.push({ entityType: 'subtask', entityId: sub.id, operation: 'delete' });
         }
       }

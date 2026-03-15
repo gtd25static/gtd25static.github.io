@@ -254,6 +254,37 @@ describe('encryptChangeEntries / decryptChangeEntries', () => {
     const encrypted = await encryptChangeEntries(testKey, entries);
     expect(encrypted[0]).toEqual(entries[0]);
   });
+
+  it('skips corrupted entries without throwing', async () => {
+    const goodEntry: ChangeEntry = {
+      id: 'e1', deviceId: 'd1', timestamp: 1000,
+      entityType: 'task', entityId: 't1', operation: 'upsert',
+      data: { id: 't1', listId: 'l1', title: 'Good', status: 'todo', order: 0, createdAt: 1000, updatedAt: 1000 },
+    };
+    const encrypted = await encryptChangeEntries(testKey, [goodEntry]);
+
+    // Corrupt the _enc blob
+    const corruptedEntry: ChangeEntry = {
+      id: 'e2', deviceId: 'd1', timestamp: 1001,
+      entityType: 'task', entityId: 't2', operation: 'upsert',
+      data: { id: 't2', listId: 'l1', _enc: 'not-valid-base64-encrypted-data!!' },
+    };
+
+    const deleteEntry: ChangeEntry = {
+      id: 'e3', deviceId: 'd1', timestamp: 1002,
+      entityType: 'task', entityId: 't3', operation: 'delete',
+    };
+
+    // Should not throw — corrupted entry returned as-is
+    const result = await decryptChangeEntries(testKey, [encrypted[0], corruptedEntry, deleteEntry]);
+    expect(result).toHaveLength(3);
+    // Good entry decrypted successfully
+    expect(result[0].data!.title).toBe('Good');
+    // Corrupted entry returned as-is with _enc still present
+    expect(result[1].data!._enc).toBe('not-valid-base64-encrypted-data!!');
+    // Delete entry unchanged
+    expect(result[2]).toEqual(deleteEntry);
+  });
 });
 
 describe('createVerifier / checkVerifier', () => {

@@ -211,7 +211,9 @@ export async function deleteSubtask(id: string) {
     const now = Date.now();
     await ensureDeviceId();
     await db.transaction('rw', [db.subtasks, db.changeLog], async () => {
-      await db.subtasks.update(id, { deletedAt: now, updatedAt: now });
+      const existing = await db.subtasks.get(id);
+      const ft = stampUpdatedFields(existing?.fieldTimestamps, ['deletedAt'], now);
+      await db.subtasks.update(id, { deletedAt: now, updatedAt: now, fieldTimestamps: ft });
       await recordChangeInTx('subtask', id, 'delete');
     });
     scheduleSyncDebounced();
@@ -248,7 +250,8 @@ export async function convertSubtaskToTask(subtaskId: string, targetListId: stri
     await ensureDeviceId();
     await db.transaction('rw', [db.subtasks, db.tasks, db.changeLog], async () => {
       const count = await db.tasks.where('listId').equals(targetListId).count();
-      await db.subtasks.update(subtaskId, { deletedAt: now, updatedAt: now });
+      const subFT = stampUpdatedFields(subtask.fieldTimestamps, ['deletedAt'], now);
+      await db.subtasks.update(subtaskId, { deletedAt: now, updatedAt: now, fieldTimestamps: subFT });
       const newTask: import('../db/models').Task = {
         id: newTaskId,
         listId: targetListId,

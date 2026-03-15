@@ -453,6 +453,49 @@ describe('applyRemoteEntries — entry migration', () => {
   });
 });
 
+describe('applyRemoteEntries — delete stamps fieldTimestamps.deletedAt', () => {
+  it('stamps fieldTimestamps.deletedAt on delete', async () => {
+    const taskId = newId();
+    const now = Date.now();
+    await db.tasks.add({
+      id: taskId, listId: 'list-1', title: 'Task', status: 'todo', order: 0,
+      createdAt: now, updatedAt: now,
+      fieldTimestamps: { title: now, status: now, order: now, listId: now },
+    } as never);
+
+    await applyRemoteEntries([{
+      id: 'e1', deviceId: 'remote', timestamp: now + 100,
+      entityType: 'task', entityId: taskId, operation: 'delete',
+    }]);
+
+    const task = await db.tasks.get(taskId);
+    expect(task!.deletedAt).toBe(now + 100);
+    const ft = (task as unknown as Record<string, unknown>).fieldTimestamps as Record<string, number>;
+    expect(ft.deletedAt).toBe(now + 100);
+    // Original field timestamps preserved
+    expect(ft.title).toBe(now);
+  });
+
+  it('stamps fieldTimestamps.deletedAt even without prior FT', async () => {
+    const taskId = newId();
+    const now = Date.now();
+    await db.tasks.add({
+      id: taskId, listId: 'list-1', title: 'Task', status: 'todo', order: 0,
+      createdAt: now, updatedAt: now,
+    });
+
+    await applyRemoteEntries([{
+      id: 'e1', deviceId: 'remote', timestamp: now + 100,
+      entityType: 'task', entityId: taskId, operation: 'delete',
+    }]);
+
+    const task = await db.tasks.get(taskId);
+    expect(task!.deletedAt).toBe(now + 100);
+    const ft = (task as unknown as Record<string, unknown>).fieldTimestamps as Record<string, number>;
+    expect(ft.deletedAt).toBe(now + 100);
+  });
+});
+
 describe('applyRemoteEntries — field-level merge', () => {
   it('merges different fields from local and remote', async () => {
     const taskId = newId();

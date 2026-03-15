@@ -228,13 +228,22 @@ export async function encryptChangeEntries(key: CryptoKey, entries: ChangeEntry[
 }
 
 export async function decryptChangeEntries(key: CryptoKey, entries: ChangeEntry[]): Promise<ChangeEntry[]> {
-  return Promise.all(
-    entries.map(async (entry) => {
-      if (entry.operation === 'delete' || !entry.data || !entry.data._enc) return entry;
+  const result: ChangeEntry[] = [];
+  for (const entry of entries) {
+    if (entry.operation === 'delete' || !entry.data || !entry.data._enc) {
+      result.push(entry);
+      continue;
+    }
+    try {
       const decrypted = await decryptEntity(key, entry.data, entry.entityType);
-      return { ...entry, data: decrypted };
-    }),
-  );
+      result.push({ ...entry, data: decrypted });
+    } catch {
+      // Corrupted entry — return as-is (still has _enc, will fail validateEntityShape downstream)
+      console.warn(`Failed to decrypt ${entry.entityType} entry ${entry.id}, skipping`);
+      result.push(entry);
+    }
+  }
+  return result;
 }
 
 // --- Verifier ---

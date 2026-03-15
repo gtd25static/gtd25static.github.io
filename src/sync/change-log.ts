@@ -3,7 +3,7 @@ import type { ChangeEntry } from '../db/models';
 import { newId } from '../lib/id';
 import { SYNC_VERSION } from './version';
 import { migrateEntryData } from './migrations';
-import { mergeEntity } from './field-timestamps';
+import { mergeEntity, stampUpdatedFields } from './field-timestamps';
 
 async function getDeviceId(): Promise<string> {
   const local = await db.localSettings.get('local');
@@ -153,9 +153,15 @@ export async function applyRemoteEntries(entries: ChangeEntry[]) {
         if (existing) {
           const localUpdatedAt = (existing as { updatedAt?: number }).updatedAt ?? 0;
           if (entry.timestamp >= localUpdatedAt) {
+            const ft = stampUpdatedFields(
+              (existing as unknown as Record<string, unknown>).fieldTimestamps as Record<string, number> | undefined,
+              ['deletedAt'],
+              entry.timestamp,
+            );
             await table.update(entry.entityId, {
               deletedAt: entry.timestamp,
               updatedAt: entry.timestamp,
+              fieldTimestamps: ft,
             });
           }
         }

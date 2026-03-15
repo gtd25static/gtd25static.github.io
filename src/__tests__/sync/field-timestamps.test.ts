@@ -196,6 +196,60 @@ describe('mergeEntity', () => {
     });
   });
 
+  describe('deletedAt via fieldTimestamps', () => {
+    it('remote delete wins when fieldTimestamps.deletedAt is stamped', () => {
+      const local = base({
+        updatedAt: 200,
+        fieldTimestamps: { title: 200, status: 100, order: 100 },
+      });
+      const remote = base({
+        deletedAt: 300,
+        updatedAt: 300,
+        fieldTimestamps: { title: 200, status: 100, order: 100, deletedAt: 300 },
+      });
+
+      const merged = mergeEntity(local, remote, 300);
+      expect(merged).not.toBeNull();
+      expect(merged!.deletedAt).toBe(300);
+    });
+
+    it('remote delete loses when local has newer fieldTimestamps (restored)', () => {
+      // Local restored the entity after remote deleted it
+      const local = base({
+        updatedAt: 400,
+        fieldTimestamps: { title: 200, status: 100, order: 100, deletedAt: 400 },
+      });
+      const remote = base({
+        deletedAt: 300,
+        updatedAt: 300,
+        fieldTimestamps: { title: 200, status: 100, order: 100, deletedAt: 300 },
+      });
+
+      const merged = mergeEntity(local, remote, 300);
+      // Local deletedAt timestamp (400) > remote (300), so local wins — no change
+      expect(merged).toBeNull();
+    });
+
+    it('unstamped deletedAt on both sides = tie = local wins = delete lost', () => {
+      // This is the bug scenario: deletedAt NOT stamped in fieldTimestamps
+      const local = base({
+        updatedAt: 200,
+        fieldTimestamps: { title: 200, status: 100, order: 100 },
+      });
+      const remote = base({
+        deletedAt: 300,
+        updatedAt: 300,
+        // deletedAt NOT in fieldTimestamps — the bug scenario
+        fieldTimestamps: { title: 200, status: 100, order: 100 },
+      });
+
+      const merged = mergeEntity(local, remote, 300);
+      // deletedAt has localTs=0, remoteTs=0 → tie → local wins → delete dropped
+      // This test documents the bug that the fix prevents
+      expect(merged).toBeNull();
+    });
+  });
+
   describe('entity-level LWW fallback', () => {
     it('one side missing fieldTimestamps — remote wins when newer', () => {
       const local = base({ updatedAt: 200 }); // no fieldTimestamps
