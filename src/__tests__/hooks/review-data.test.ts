@@ -64,7 +64,8 @@ async function getReviewSnapshot() {
 function getStartOfWeek(): number {
   const d = new Date();
   d.setHours(0, 0, 0, 0);
-  d.setDate(d.getDate() - d.getDay() + 1);
+  const day = d.getDay() || 7; // treat Sunday (0) as 7
+  d.setDate(d.getDate() - day + 1);
   return d.getTime();
 }
 

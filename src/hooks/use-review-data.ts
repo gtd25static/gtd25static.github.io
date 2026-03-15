@@ -18,7 +18,8 @@ const STALE_DAYS = 7;
 function startOfWeek(date: Date): number {
   const d = new Date(date);
   d.setHours(0, 0, 0, 0);
-  d.setDate(d.getDate() - d.getDay() + 1); // Monday
+  const day = d.getDay() || 7; // treat Sunday (0) as 7
+  d.setDate(d.getDate() - day + 1); // Monday
   return d.getTime();
 }
 
