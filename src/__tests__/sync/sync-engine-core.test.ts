@@ -36,6 +36,7 @@ import {
   syncNow,
   forcePush,
   forcePull,
+  initialPull,
   wipeAllData,
   importData,
   restoreFromBackup,
@@ -540,6 +541,89 @@ describe('forcePull', () => {
     mockGetFile.mockResolvedValue(null);
 
     await forcePull();
+    expect(mockToast).toHaveBeenCalledWith('No remote data found', 'error');
+  });
+});
+
+describe('initialPull', () => {
+  it('merges remote data into local without deleting local items', async () => {
+    await setupWithEncryption();
+    const now = Date.now();
+
+    // Pre-existing local list
+    await db.taskLists.add({ id: 'local-list', name: 'Local Only', type: 'tasks', order: 0, createdAt: now, updatedAt: now });
+
+    const remoteListId = newId();
+    const snapshotContent = await makeEncryptedSnapshot({
+      taskLists: [{ id: remoteListId, name: 'Remote List', type: 'tasks', order: 1, createdAt: now, updatedAt: now }],
+      tasks: [{ id: 't1', listId: remoteListId, title: 'Remote Task', status: 'todo', order: 0, createdAt: now, updatedAt: now }],
+    });
+
+    mockGetFile.mockImplementation((_p: string, _r: string, path: string) => {
+      if (path === SNAPSHOT_FILE) return Promise.resolve({ data: snapshotContent, sha: 'snap-sha' });
+      if (path === CHANGELOG_FILE) return Promise.resolve({ data: '[]', sha: 'cl-sha' });
+      return Promise.resolve(null);
+    });
+
+    await initialPull();
+
+    const lists = await db.taskLists.toArray();
+    expect(lists).toHaveLength(2);
+    expect(lists.map(l => l.name).sort()).toEqual(['Local Only', 'Remote List']);
+
+    const tasks = await db.tasks.toArray();
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0].title).toBe('Remote Task');
+  });
+
+  it('records local-only items as pending changes', async () => {
+    await setupWithEncryption();
+    const now = Date.now();
+
+    await db.taskLists.add({ id: 'local-list', name: 'Local Only', type: 'tasks', order: 0, createdAt: now, updatedAt: now });
+
+    const snapshotContent = await makeEncryptedSnapshot();
+    mockGetFile.mockImplementation((_p: string, _r: string, path: string) => {
+      if (path === SNAPSHOT_FILE) return Promise.resolve({ data: snapshotContent, sha: 'snap-sha' });
+      if (path === CHANGELOG_FILE) return Promise.resolve({ data: '[]', sha: 'cl-sha' });
+      return Promise.resolve(null);
+    });
+
+    await initialPull();
+
+    const pending = await db.changeLog.toArray();
+    expect(pending).toHaveLength(1);
+    expect(pending[0].entityType).toBe('taskList');
+    expect(pending[0].entityId).toBe('local-list');
+    expect(pending[0].operation).toBe('upsert');
+  });
+
+  it('does not record remote items as pending changes', async () => {
+    await setupWithEncryption();
+    const now = Date.now();
+    const remoteListId = newId();
+
+    const snapshotContent = await makeEncryptedSnapshot({
+      taskLists: [{ id: remoteListId, name: 'Remote List', type: 'tasks', order: 0, createdAt: now, updatedAt: now }],
+    });
+
+    mockGetFile.mockImplementation((_p: string, _r: string, path: string) => {
+      if (path === SNAPSHOT_FILE) return Promise.resolve({ data: snapshotContent, sha: 'snap-sha' });
+      if (path === CHANGELOG_FILE) return Promise.resolve({ data: '[]', sha: 'cl-sha' });
+      return Promise.resolve(null);
+    });
+
+    await initialPull();
+
+    const pending = await db.changeLog.toArray();
+    expect(pending).toHaveLength(0);
+  });
+
+  it('shows error when no remote data', async () => {
+    await setupWithEncryption();
+    mockGetFile.mockResolvedValue(null);
+
+    await initialPull();
     expect(mockToast).toHaveBeenCalledWith('No remote data found', 'error');
   });
 });
