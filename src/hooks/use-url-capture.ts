@@ -45,8 +45,10 @@ export function formatCaptureTitle(title: string, url: string, text: string): st
 }
 
 /**
- * Hook that checks for `?capture` query params on mount and creates an inbox task.
- * Used by Web Share Target and bookmarklet flows.
+ * Hook that checks for capture params on mount and creates an inbox task.
+ * Triggers on:
+ *   - /capture?title=...&url=...&text=... (Web Share Target on Android)
+ *   - /?capture&title=...&url=... (bookmarklet)
  */
 export function useUrlCapture() {
   const handled = useRef(false);
@@ -55,7 +57,10 @@ export function useUrlCapture() {
     if (handled.current) return;
 
     const params = new URLSearchParams(window.location.search);
-    if (!params.has('capture')) return;
+    const isShareTarget = window.location.pathname === '/capture';
+    const isBookmarklet = params.has('capture');
+
+    if (!isShareTarget && !isBookmarklet) return;
 
     handled.current = true;
 
@@ -89,7 +94,5 @@ async function captureToInbox(title: string) {
 }
 
 function cleanUrl() {
-  const url = new URL(window.location.href);
-  url.search = '';
-  window.history.replaceState(null, '', url.pathname);
+  window.history.replaceState(null, '', '/');
 }
