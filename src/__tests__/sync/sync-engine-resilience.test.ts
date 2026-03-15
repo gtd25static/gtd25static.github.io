@@ -111,7 +111,7 @@ describe('syncNow — corrupted JSON handling', () => {
 
     const result = await syncNow();
     expect(result).toBe(-1);
-    expect(mockToast).toHaveBeenCalledWith('Remote data corrupted — cannot sync', 'error');
+    expect(mockToast).toHaveBeenCalledWith('Remote data corrupted', 'error');
   });
 
   it('handles HTML error page from GitHub', async () => {

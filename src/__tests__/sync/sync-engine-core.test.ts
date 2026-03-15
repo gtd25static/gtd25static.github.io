@@ -303,6 +303,7 @@ describe('syncNow — normal sync', () => {
 describe('syncNow — version check', () => {
   it('blocks on incompatible remote version', async () => {
     await setupWithEncryption();
+    await db.syncMeta.update('sync-meta', { lastPulledAt: Date.now() - 60_000 });
     const snapshotContent = JSON.stringify({
       syncVersion: 999, // Way ahead
       taskLists: [], tasks: [], subtasks: [],
