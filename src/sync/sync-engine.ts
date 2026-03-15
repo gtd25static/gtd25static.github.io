@@ -46,19 +46,21 @@ async function reconcileFromSnapshot(snapshot: SyncData) {
       const localMap = new Map<string, T>();
       for (const e of await table.toArray()) localMap.set(e.id, e);
 
+      const toPut: T[] = [];
       for (const remote of remoteEntities) {
         const local = localMap.get(remote.id);
         if (!local) {
-          await table.put(remote);
+          toPut.push(remote);
         } else {
           const merged = mergeEntity(
             local as unknown as Record<string, unknown>,
             remote as unknown as Record<string, unknown>,
             remote.updatedAt,
           );
-          if (merged) await table.put(merged as unknown as T);
+          if (merged) toPut.push(merged as unknown as T);
         }
       }
+      if (toPut.length > 0) await table.bulkPut(toPut);
     }
 
     await reconcileCollection(db.taskLists, snapshot.taskLists);

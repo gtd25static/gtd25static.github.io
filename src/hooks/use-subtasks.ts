@@ -222,9 +222,12 @@ export async function deleteSubtask(id: string) {
 
 export async function restoreSubtask(id: string) {
   try {
+    const now = Date.now();
     await ensureDeviceId();
     await db.transaction('rw', [db.subtasks, db.changeLog], async () => {
-      await db.subtasks.update(id, { deletedAt: undefined, updatedAt: Date.now() });
+      const existing = await db.subtasks.get(id);
+      const ft = stampUpdatedFields(existing?.fieldTimestamps, ['deletedAt'], now);
+      await db.subtasks.update(id, { deletedAt: undefined, updatedAt: now, fieldTimestamps: ft });
       const updated = await db.subtasks.get(id);
       if (updated) {
         await recordChangeInTx('subtask', id, 'upsert', updated as unknown as Record<string, unknown>);

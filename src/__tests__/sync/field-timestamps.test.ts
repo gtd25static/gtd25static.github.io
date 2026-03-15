@@ -4,7 +4,7 @@ describe('initFieldTimestamps', () => {
   it('stamps all non-excluded keys', () => {
     const entity = { id: 'x', title: 'T', status: 'todo', order: 0, createdAt: 100, updatedAt: 100 };
     const ft = initFieldTimestamps(entity, 100);
-    expect(ft).toEqual({ title: 100, status: 100, order: 100, updatedAt: 100 });
+    expect(ft).toEqual({ title: 100, status: 100, order: 100 });
     // Excluded fields not present
     expect(ft.id).toBeUndefined();
     expect(ft.createdAt).toBeUndefined();
@@ -55,13 +55,13 @@ describe('mergeEntity', () => {
         title: 'Local Title',
         description: 'Local Desc',
         updatedAt: 200,
-        fieldTimestamps: { title: 200, description: 100, status: 100, order: 100, updatedAt: 200 },
+        fieldTimestamps: { title: 200, description: 100, status: 100, order: 100 },
       });
       const remote = base({
         title: 'Remote Title',
         description: 'Remote Desc',
         updatedAt: 200,
-        fieldTimestamps: { title: 100, description: 200, status: 100, order: 100, updatedAt: 200 },
+        fieldTimestamps: { title: 100, description: 200, status: 100, order: 100 },
       });
 
       const merged = mergeEntity(local, remote, 200);
@@ -74,12 +74,12 @@ describe('mergeEntity', () => {
       const local = base({
         title: 'Local Title',
         updatedAt: 200,
-        fieldTimestamps: { title: 200, status: 100, order: 100, updatedAt: 200 },
+        fieldTimestamps: { title: 200, status: 100, order: 100 },
       });
       const remote = base({
         title: 'Remote Title',
         updatedAt: 300,
-        fieldTimestamps: { title: 300, status: 100, order: 100, updatedAt: 300 },
+        fieldTimestamps: { title: 300, status: 100, order: 100 },
       });
 
       const merged = mergeEntity(local, remote, 300);
@@ -91,12 +91,12 @@ describe('mergeEntity', () => {
       const local = base({
         title: 'Local Title',
         updatedAt: 300,
-        fieldTimestamps: { title: 300, status: 100, order: 100, updatedAt: 300 },
+        fieldTimestamps: { title: 300, status: 100, order: 100 },
       });
       const remote = base({
         title: 'Remote Title',
         updatedAt: 200,
-        fieldTimestamps: { title: 200, status: 100, order: 100, updatedAt: 200 },
+        fieldTimestamps: { title: 200, status: 100, order: 100 },
       });
 
       const merged = mergeEntity(local, remote, 200);
@@ -107,12 +107,12 @@ describe('mergeEntity', () => {
       const local = base({
         title: 'Local Title',
         updatedAt: 200,
-        fieldTimestamps: { title: 200, status: 100, order: 100, updatedAt: 200 },
+        fieldTimestamps: { title: 200, status: 100, order: 100 },
       });
       const remote = base({
         title: 'Remote Title',
         updatedAt: 200,
-        fieldTimestamps: { title: 200, status: 100, order: 100, updatedAt: 200 },
+        fieldTimestamps: { title: 200, status: 100, order: 100 },
       });
 
       const merged = mergeEntity(local, remote, 200);
@@ -123,30 +123,33 @@ describe('mergeEntity', () => {
       const local = base({
         title: 'Local Title',
         updatedAt: 200,
-        fieldTimestamps: { title: 200, status: 100, order: 100, updatedAt: 200 },
+        fieldTimestamps: { title: 200, status: 100, order: 100 },
       });
       const remote = base({
         title: 'Remote Title',
         description: 'Remote Desc',
         updatedAt: 300,
-        fieldTimestamps: { title: 100, description: 300, status: 100, order: 100, updatedAt: 300 },
+        fieldTimestamps: { title: 100, description: 300, status: 100, order: 100 },
       });
 
       const merged = mergeEntity(local, remote, 300);
       expect(merged).not.toBeNull();
       expect(merged!.updatedAt).toBe(300);
+      // mergedFT.updatedAt should also be consistent
+      const ft = merged!.fieldTimestamps as Record<string, number>;
+      expect(ft.updatedAt).toBe(300);
     });
 
     it('field present only on remote side is taken when remote timestamp is newer', () => {
       const local = base({
         updatedAt: 200,
-        fieldTimestamps: { title: 200, status: 100, order: 100, updatedAt: 200 },
+        fieldTimestamps: { title: 200, status: 100, order: 100 },
       });
       // Remote has a dueDate field that local doesn't
       const remote = base({
         dueDate: 999,
         updatedAt: 300,
-        fieldTimestamps: { title: 100, status: 100, order: 100, dueDate: 300, updatedAt: 300 },
+        fieldTimestamps: { title: 100, status: 100, order: 100, dueDate: 300 },
       });
 
       const merged = mergeEntity(local, remote, 300);
@@ -158,11 +161,11 @@ describe('mergeEntity', () => {
       const local = base({
         dueDate: 888,
         updatedAt: 300,
-        fieldTimestamps: { title: 200, status: 100, order: 100, dueDate: 200, updatedAt: 300 },
+        fieldTimestamps: { title: 200, status: 100, order: 100, dueDate: 200 },
       });
       const remote = base({
         updatedAt: 300,
-        fieldTimestamps: { title: 100, status: 100, order: 100, updatedAt: 300 },
+        fieldTimestamps: { title: 100, status: 100, order: 100 },
       });
 
       const merged = mergeEntity(local, remote, 300);
@@ -176,13 +179,13 @@ describe('mergeEntity', () => {
         title: 'Local',
         description: 'Local Desc',
         updatedAt: 200,
-        fieldTimestamps: { title: 200, description: 100, status: 100, order: 100, updatedAt: 200 },
+        fieldTimestamps: { title: 200, description: 100, status: 100, order: 100 },
       });
       const remote = base({
         title: 'Remote',
         description: 'Remote Desc',
         updatedAt: 300,
-        fieldTimestamps: { title: 100, description: 300, status: 100, order: 100, updatedAt: 300 },
+        fieldTimestamps: { title: 100, description: 300, status: 100, order: 100 },
       });
 
       const merged = mergeEntity(local, remote, 300);

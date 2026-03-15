@@ -5,7 +5,7 @@
  * modified. During merge, the newer value for each field wins independently.
  */
 
-const EXCLUDED_FIELDS = new Set(['id', 'createdAt', 'fieldTimestamps']);
+const EXCLUDED_FIELDS = new Set(['id', 'createdAt', 'updatedAt', 'fieldTimestamps']);
 
 type Entity = Record<string, unknown>;
 type FieldTimestamps = Record<string, number>;
@@ -99,10 +99,12 @@ export function mergeEntity(
 
   if (!changed) return null;
 
-  // updatedAt = max of both sides
+  // updatedAt = max of both sides (excluded from field-level comparison)
   const localUpdatedAt = (local.updatedAt as number) ?? 0;
   const remoteUpdatedAt = (remote.updatedAt as number) ?? 0;
-  merged.updatedAt = Math.max(localUpdatedAt, remoteUpdatedAt);
+  const maxUpdatedAt = Math.max(localUpdatedAt, remoteUpdatedAt);
+  merged.updatedAt = maxUpdatedAt;
+  mergedFT.updatedAt = maxUpdatedAt;
   merged.fieldTimestamps = mergedFT;
 
   return merged;
