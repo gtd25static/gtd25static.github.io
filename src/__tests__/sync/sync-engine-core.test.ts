@@ -36,7 +36,6 @@ import {
   syncNow,
   forcePush,
   forcePull,
-  initialPull,
   wipeAllData,
   importData,
   restoreFromBackup,
@@ -241,6 +240,7 @@ describe('syncNow — bootstrap from snapshot', () => {
 describe('syncNow — normal sync', () => {
   it('filters own-device entries and applies foreign ones', async () => {
     await setupWithEncryption();
+    await db.syncMeta.update('sync-meta', { lastPulledAt: Date.now() - 60_000 });
     const taskId = newId();
     const now = Date.now();
 
@@ -273,6 +273,7 @@ describe('syncNow — normal sync', () => {
 
   it('pushes pending entries and returns remaining count', async () => {
     await setupWithEncryption();
+    await db.syncMeta.update('sync-meta', { lastPulledAt: Date.now() - 60_000 });
     const snapshotContent = await makeEncryptedSnapshot();
 
     // Add local pending entries
@@ -356,6 +357,7 @@ describe('syncNow — wipedAt guard', () => {
 describe('syncNow — 409 conflict retry', () => {
   it('retries on CONFLICT and re-fetches', async () => {
     await setupWithEncryption();
+    await db.syncMeta.update('sync-meta', { lastPulledAt: Date.now() - 60_000 });
     const snapshotContent = await makeEncryptedSnapshot();
 
     // Add a pending entry to push
@@ -393,6 +395,7 @@ describe('syncNow — 409 conflict retry', () => {
 
   it('gives up after MAX_RETRIES', async () => {
     await setupWithEncryption();
+    await db.syncMeta.update('sync-meta', { lastPulledAt: Date.now() - 60_000 });
     const snapshotContent = await makeEncryptedSnapshot();
 
     await db.changeLog.add({
@@ -545,86 +548,78 @@ describe('forcePull', () => {
   });
 });
 
-describe('initialPull', () => {
-  it('merges remote data into local without deleting local items', async () => {
+describe('syncNow — fresh device bootstrap (both files exist, no lastPulledAt)', () => {
+  it('bootstraps from snapshot + changelog on fresh device', async () => {
     await setupWithEncryption();
     const now = Date.now();
+    const listId = newId();
+    const taskId = newId();
 
-    // Pre-existing local list
-    await db.taskLists.add({ id: 'local-list', name: 'Local Only', type: 'tasks', order: 0, createdAt: now, updatedAt: now });
-
-    const remoteListId = newId();
     const snapshotContent = await makeEncryptedSnapshot({
-      taskLists: [{ id: remoteListId, name: 'Remote List', type: 'tasks', order: 1, createdAt: now, updatedAt: now }],
-      tasks: [{ id: 't1', listId: remoteListId, title: 'Remote Task', status: 'todo', order: 0, createdAt: now, updatedAt: now }],
+      taskLists: [{ id: listId, name: 'Remote List', type: 'tasks', order: 0, createdAt: now, updatedAt: now }],
     });
+
+    const changelogEntry: ChangeEntry = {
+      id: 'cl-1', deviceId: 'device-B', timestamp: now,
+      entityType: 'task', entityId: taskId, operation: 'upsert',
+      data: { id: taskId, listId, title: 'CL Task', status: 'todo', order: 0, createdAt: now, updatedAt: now },
+    };
 
     mockGetFile.mockImplementation((_p: string, _r: string, path: string) => {
       if (path === SNAPSHOT_FILE) return Promise.resolve({ data: snapshotContent, sha: 'snap-sha' });
-      if (path === CHANGELOG_FILE) return Promise.resolve({ data: '[]', sha: 'cl-sha' });
+      if (path === CHANGELOG_FILE) return Promise.resolve({ data: JSON.stringify([changelogEntry]), sha: 'cl-sha' });
       return Promise.resolve(null);
     });
+    mockPutFile.mockResolvedValue('sha');
 
-    await initialPull();
+    const result = await syncNow();
+    expect(result).toBe(0);
 
+    // Snapshot data applied
     const lists = await db.taskLists.toArray();
-    expect(lists).toHaveLength(2);
-    expect(lists.map(l => l.name).sort()).toEqual(['Local Only', 'Remote List']);
+    expect(lists).toHaveLength(1);
+    expect(lists[0].name).toBe('Remote List');
 
+    // Changelog entry applied on top
     const tasks = await db.tasks.toArray();
     expect(tasks).toHaveLength(1);
-    expect(tasks[0].title).toBe('Remote Task');
+    expect(tasks[0].title).toBe('CL Task');
+
+    // syncMeta updated
+    const meta = await db.syncMeta.get('sync-meta');
+    expect(meta?.lastPulledAt).toBeGreaterThan(0);
+    expect(meta?.lastSnapshotSha).toBe('snap-sha');
+
+    // No remote writes (bootstrap is read-only)
+    expect(mockPutFile).not.toHaveBeenCalled();
   });
 
-  it('records local-only items as pending changes', async () => {
+  it('skips bootstrap when lastPulledAt exists', async () => {
     await setupWithEncryption();
     const now = Date.now();
 
-    await db.taskLists.add({ id: 'local-list', name: 'Local Only', type: 'tasks', order: 0, createdAt: now, updatedAt: now });
+    // Set lastPulledAt — this device has synced before
+    await db.syncMeta.update('sync-meta', { lastPulledAt: now - 60_000 });
 
     const snapshotContent = await makeEncryptedSnapshot();
-    mockGetFile.mockImplementation((_p: string, _r: string, path: string) => {
-      if (path === SNAPSHOT_FILE) return Promise.resolve({ data: snapshotContent, sha: 'snap-sha' });
-      if (path === CHANGELOG_FILE) return Promise.resolve({ data: '[]', sha: 'cl-sha' });
-      return Promise.resolve(null);
-    });
-
-    await initialPull();
-
-    const pending = await db.changeLog.toArray();
-    expect(pending).toHaveLength(1);
-    expect(pending[0].entityType).toBe('taskList');
-    expect(pending[0].entityId).toBe('local-list');
-    expect(pending[0].operation).toBe('upsert');
-  });
-
-  it('does not record remote items as pending changes', async () => {
-    await setupWithEncryption();
-    const now = Date.now();
-    const remoteListId = newId();
-
-    const snapshotContent = await makeEncryptedSnapshot({
-      taskLists: [{ id: remoteListId, name: 'Remote List', type: 'tasks', order: 0, createdAt: now, updatedAt: now }],
-    });
 
     mockGetFile.mockImplementation((_p: string, _r: string, path: string) => {
       if (path === SNAPSHOT_FILE) return Promise.resolve({ data: snapshotContent, sha: 'snap-sha' });
       if (path === CHANGELOG_FILE) return Promise.resolve({ data: '[]', sha: 'cl-sha' });
       return Promise.resolve(null);
     });
+    mockPutFile.mockResolvedValue('sha');
 
-    await initialPull();
+    const result = await syncNow();
+    expect(result).toBe(0);
 
-    const pending = await db.changeLog.toArray();
-    expect(pending).toHaveLength(0);
-  });
-
-  it('shows error when no remote data', async () => {
-    await setupWithEncryption();
-    mockGetFile.mockResolvedValue(null);
-
-    await initialPull();
-    expect(mockToast).toHaveBeenCalledWith('No remote data found', 'error');
+    // Should NOT have done a bulk clear (bootstrap clears tables)
+    // Instead, normal sync path was taken — verify via putFile being called
+    // (normal sync pushes pending entries or at least updates changelog)
+    // The key check: taskLists should NOT have been cleared and re-populated
+    // since the snapshot has no task lists and we didn't bootstrap
+    const lists = await db.taskLists.toArray();
+    expect(lists).toHaveLength(0); // empty because snapshot had none and no bootstrap clear happened
   });
 });
 

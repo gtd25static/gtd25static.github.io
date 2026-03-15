@@ -691,6 +691,83 @@ export async function syncNow(manual = false, pushLimit?: number): Promise<numbe
       return 0;
     }
 
+    // Both files exist but this device has never synced — full bootstrap
+    if (remoteSnapshotFile && remoteChangelogFile) {
+      const syncMeta = await db.syncMeta.get('sync-meta');
+      if (!syncMeta?.lastPulledAt) {
+        const snapshotParsed = safeParseJson<SyncData>(remoteSnapshotFile.data, 'remote snapshot (fresh bootstrap)');
+        if (!snapshotParsed.ok) {
+          reportProgress('error', 'Remote data corrupted', 0);
+          toast('Remote data corrupted — cannot sync', 'error');
+          return -1;
+        }
+        let snapshot = snapshotParsed.value;
+
+        if (!isCompatibleVersion(snapshot.syncVersion)) {
+          notifyVersionIncompatible();
+          reportProgress('error', 'Update required', 0);
+          toast('Remote data requires a newer app version', 'error');
+          return -1;
+        }
+
+        const encKey = await resolveEncryptionKey(snapshot.encryptionSalt);
+        if (encKey === 'needs-password') return -1;
+        if (snapshot.encryptionSalt) {
+          const ok = await checkVerifier(encKey, snapshot.encryptionVerifier ?? '');
+          if (!ok) {
+            await db.localSettings.update('local', { encryptionPassword: undefined });
+            clearEncryptionKey();
+            notifyPasswordNeeded(snapshot.encryptionSalt);
+            return -1;
+          }
+          snapshot = await decryptSyncData(encKey, snapshot);
+        }
+
+        reportProgress('applying', 'Applying data...', 0.6);
+
+        // Apply snapshot
+        await db.transaction('rw', [db.taskLists, db.tasks, db.subtasks], async () => {
+          await db.taskLists.clear();
+          await db.tasks.clear();
+          await db.subtasks.clear();
+          await db.taskLists.bulkPut(snapshot.taskLists);
+          await db.tasks.bulkPut(snapshot.tasks);
+          await db.subtasks.bulkPut(snapshot.subtasks);
+        });
+        if (snapshot.pomodoroSettings) {
+          await db.pomodoroSettings.put(snapshot.pomodoroSettings);
+        }
+        if (snapshot.soundPresets && snapshot.soundPresets.length > 0) {
+          await db.soundPresets.clear();
+          await db.soundPresets.bulkPut(snapshot.soundPresets);
+        }
+        if (snapshot.settings?.theme) {
+          localStorage.setItem('gtd25-theme', snapshot.settings.theme);
+        }
+
+        // Apply changelog entries on top
+        const clParsed = safeParseJson<ChangeEntry[]>(remoteChangelogFile.data, 'changelog (fresh bootstrap)');
+        let entries = clParsed.ok ? clParsed.value : [];
+        entries = await decryptChangeEntries(encKey, entries);
+        if (entries.length > 0) {
+          await applyRemoteEntries(entries);
+        }
+
+        await clearPendingEntries();
+        await db.syncMeta.update('sync-meta', {
+          lastPulledAt: Date.now(),
+          lastSnapshotSha: remoteSnapshotFile.sha,
+          pendingChanges: false,
+        });
+        lastSyncCompletedAt = Date.now();
+        setDirtyFlag(false);
+        reportProgress('done', 'Sync complete', 1.0);
+        notifySyncSuccess();
+        if (manual) toast('Initial sync complete', 'success');
+        return 0;
+      }
+    }
+
     // --- Version check on remote snapshot ---
     let remoteSalt: string | undefined;
     let remoteVersion: number | undefined;
@@ -973,6 +1050,7 @@ export async function syncNow(manual = false, pushLimit?: number): Promise<numbe
     await db.syncMeta.update('sync-meta', {
       lastPulledAt: Date.now(),
       lastPushedAt: pendingEntries.length > 0 ? Date.now() : undefined,
+      lastSnapshotSha: remoteSnapshotFile?.sha,
       pendingChanges: remaining > 0,
     });
 
@@ -1427,138 +1505,6 @@ export async function forcePull() {
     console.error('Force pull failed:', err);
     reportProgress('error', 'Force pull failed', 0);
     toast('Force pull failed', 'error');
-  } finally {
-    releaseSyncLock();
-  }
-}
-
-/**
- * Merge remote data into local DB without destroying either side.
- * - Remote entities are merged in (new ones inserted, existing ones field-merged).
- * - Local-only entities are preserved and recorded as pending changes for the next push.
- * - Nothing is deleted from the remote repo.
- * Designed for fresh device setup where the normal sync flow failed to bootstrap.
- */
-export async function initialPull() {
-  const signal = acquireSyncLock();
-  if (!signal) return;
-
-  try {
-    const creds = await getCredentials();
-    if (!creds) {
-      toast('Save sync settings first', 'error');
-      return;
-    }
-
-    reportProgress('connecting', 'Connecting...', 0.1);
-
-    const snapshotFile = await getFile(creds.pat, creds.repo, SNAPSHOT_FILE, signal);
-    if (!snapshotFile) {
-      toast('No remote data found', 'error');
-      reportProgress('error', 'No remote data', 0);
-      return;
-    }
-
-    reportProgress('pulling', 'Fetching data...', 0.3);
-
-    const pullParsed = safeParseJson<SyncData>(snapshotFile.data, 'remote snapshot (initial pull)');
-    if (!pullParsed.ok) {
-      toast('Remote data corrupted', 'error');
-      reportProgress('error', 'Remote data corrupted', 0);
-      return;
-    }
-    let snapshot = pullParsed.value;
-
-    if (!isCompatibleVersion(snapshot.syncVersion)) {
-      notifyVersionIncompatible();
-      reportProgress('error', 'Update required', 0);
-      toast('Remote data requires a newer app version', 'error');
-      return;
-    }
-
-    // Resolve encryption
-    const encResult = await resolveEncryptionKey(snapshot.encryptionSalt);
-    if (encResult === 'needs-password') return;
-    const encKey = encResult;
-    if (snapshot.encryptionSalt) {
-      const ok = await checkVerifier(encKey, snapshot.encryptionVerifier ?? '');
-      if (!ok) {
-        await db.localSettings.update('local', { encryptionPassword: undefined });
-        clearEncryptionKey();
-        notifyPasswordNeeded(snapshot.encryptionSalt);
-        return;
-      }
-      snapshot = await decryptSyncData(encKey, snapshot);
-    }
-
-    reportProgress('applying', 'Merging remote data...', 0.5);
-
-    // Snapshot IDs for diffing local-only entities afterwards
-    const remoteListIds = new Set(snapshot.taskLists.map(e => e.id));
-    const remoteTaskIds = new Set(snapshot.tasks.map(e => e.id));
-    const remoteSubtaskIds = new Set(snapshot.subtasks.map(e => e.id));
-
-    // Merge remote into local (inserts missing, field-merges existing)
-    await reconcileFromSnapshot(snapshot);
-
-    // Apply changelog entries on top
-    const changelogFile = await getFile(creds.pat, creds.repo, CHANGELOG_FILE, signal);
-    if (changelogFile) {
-      const clParsed = safeParseJson<ChangeEntry[]>(changelogFile.data, 'changelog (initial pull)');
-      let entries = clParsed.ok ? clParsed.value : [];
-      entries = await decryptChangeEntries(encKey, entries);
-      if (entries.length > 0) {
-        await applyRemoteEntries(entries);
-      }
-    }
-
-    if (snapshot.settings?.theme) {
-      localStorage.setItem('gtd25-theme', snapshot.settings.theme);
-    }
-
-    reportProgress('pushing', 'Recording local changes...', 0.8);
-
-    // Record local-only entities as pending changes so they get pushed
-    await clearPendingEntries();
-    const [localLists, localTasks, localSubtasks] = await Promise.all([
-      db.taskLists.toArray(),
-      db.tasks.toArray(),
-      db.subtasks.toArray(),
-    ]);
-
-    for (const list of localLists) {
-      if (!remoteListIds.has(list.id)) {
-        await recordChange('taskList', list.id, 'upsert', list as unknown as Record<string, unknown>);
-      }
-    }
-    for (const task of localTasks) {
-      if (!remoteTaskIds.has(task.id)) {
-        await recordChange('task', task.id, 'upsert', task as unknown as Record<string, unknown>);
-      }
-    }
-    for (const subtask of localSubtasks) {
-      if (!remoteSubtaskIds.has(subtask.id)) {
-        await recordChange('subtask', subtask.id, 'upsert', subtask as unknown as Record<string, unknown>);
-      }
-    }
-
-    await db.syncMeta.update('sync-meta', {
-      lastPulledAt: Date.now(),
-      lastSnapshotSha: snapshotFile.sha,
-      pendingChanges: localLists.some(l => !remoteListIds.has(l.id))
-        || localTasks.some(t => !remoteTaskIds.has(t.id))
-        || localSubtasks.some(s => !remoteSubtaskIds.has(s.id)),
-    });
-    lastSyncCompletedAt = Date.now();
-    setDirtyFlag(false);
-    reportProgress('done', 'Sync complete', 1.0);
-    notifySyncSuccess();
-    toast('Initial pull complete', 'success');
-  } catch (err) {
-    if (err instanceof DOMException && err.name === 'AbortError') return;
-    console.error('Initial pull failed:', err);
-    reportProgress('error', 'Initial pull failed', 0);
-    toast('Initial pull failed', 'error');
   } finally {
     releaseSyncLock();
   }

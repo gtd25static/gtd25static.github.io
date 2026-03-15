@@ -1,16 +1,14 @@
 import { useState, useEffect } from 'react';
 import { useLocalSettings, updateLocalSettings } from '../../hooks/use-settings';
-import { useSyncContext } from '../../sync/use-sync';
 import { Input } from '../ui/Input';
 import { Button } from '../ui/Button';
 import { toast } from '../ui/Toast';
 import { testConnection } from '../../sync/github-api';
-import { syncNow, forcePush, forcePull, initialPull } from '../../sync/sync-engine';
+import { syncNow, forcePush, forcePull } from '../../sync/sync-engine';
 import { deriveKey, cacheEncryptionKey, generateSalt } from '../../sync/crypto';
 
 export function GitHubSettings() {
   const local = useLocalSettings();
-  const { lastPulledAt } = useSyncContext();
   const [pat, setPat] = useState('');
   const [repo, setRepo] = useState('');
   const [encPassword, setEncPassword] = useState('');
@@ -122,7 +120,6 @@ export function GitHubSettings() {
           {testing ? 'Testing...' : 'Test Connection'}
         </Button>
         <Button size="sm" variant="secondary" onClick={() => syncNow(true)}>Sync Now</Button>
-        {!lastPulledAt && <Button size="sm" variant="secondary" onClick={() => initialPull()}>Initial Pull</Button>}
         <Button size="sm" variant="ghost" onClick={() => forcePush()}>Force Push</Button>
         <Button size="sm" variant="ghost" onClick={() => forcePull()}>Force Pull</Button>
       </div>
