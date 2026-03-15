@@ -231,13 +231,13 @@ describe('maybeCreateBackups — write', () => {
     expect(parseInt(hourlyAt!, 10)).toBeGreaterThan(0);
   });
 
-  it('updates localStorage even on error/409', async () => {
+  it('does NOT update localStorage on putFile failure', async () => {
     mockGetFile.mockResolvedValue(null);
     mockPutFile.mockRejectedValue(new Error('CONFLICT'));
 
     await maybeCreateBackups('pat', 'repo', mockEncKey());
     const hourlyAt = localStorage.getItem('gtd25-backup-hourly-at');
-    expect(hourlyAt).toBeTruthy();
+    expect(hourlyAt).toBeFalsy();
   });
 });
 

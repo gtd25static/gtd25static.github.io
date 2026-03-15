@@ -181,6 +181,20 @@ describe('markWorkingBlocked', () => {
     expect(s?.status).toBe('blocked');
   });
 
+  it('sets blockedAt when blocking working subtask', async () => {
+    const task = assertDefined(await createTask(listId, { title: 'Task' }));
+    const sub = assertDefined(await createSubtask(task.id, { title: 'Sub' }));
+    await startWorkingOn(sub.id);
+
+    const before = Date.now();
+    await markWorkingBlocked();
+
+    const s = await db.subtasks.get(sub.id);
+    expect(s?.blockedAt).toBeDefined();
+    expect(s!.blockedAt).toBeGreaterThanOrEqual(before);
+    expect(s!.blockedAt).toBeLessThanOrEqual(Date.now());
+  });
+
   it('is a no-op when nothing working', async () => {
     await markWorkingBlocked();
   });

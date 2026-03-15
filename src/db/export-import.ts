@@ -1,14 +1,16 @@
 import { db } from './index';
-import type { TaskList, Task, Subtask, Settings } from './models';
+import type { TaskList, Task, Subtask, Settings, PomodoroSettings, SoundPreset } from './models';
 
 export interface ImportData {
   taskLists: TaskList[];
   tasks: Task[];
   subtasks: Subtask[];
   settings?: Settings;
+  pomodoroSettings?: PomodoroSettings;
+  soundPresets?: SoundPreset[];
 }
 
-const CURRENT_EXPORT_VERSION = 1;
+const CURRENT_EXPORT_VERSION = 2;
 
 interface ExportPayload {
   exportVersion: number;
@@ -17,13 +19,17 @@ interface ExportPayload {
   tasks: Task[];
   subtasks: Subtask[];
   settings: Settings;
+  pomodoroSettings?: PomodoroSettings;
+  soundPresets?: SoundPreset[];
 }
 
 export async function exportToZip(): Promise<Blob> {
-  const [taskLists, tasks, subtasks] = await Promise.all([
+  const [taskLists, tasks, subtasks, pomodoroSettings, soundPresets] = await Promise.all([
     db.taskLists.toArray(),
     db.tasks.toArray(),
     db.subtasks.toArray(),
+    db.pomodoroSettings.get('pomodoro'),
+    db.soundPresets.toArray(),
   ]);
 
   const settings: Settings = {
@@ -37,6 +43,8 @@ export async function exportToZip(): Promise<Blob> {
     tasks,
     subtasks,
     settings,
+    pomodoroSettings: pomodoroSettings ?? undefined,
+    soundPresets: soundPresets.length > 0 ? soundPresets : undefined,
   };
 
   const JSZip = (await import('jszip')).default;
@@ -128,6 +136,29 @@ export async function parseImportZip(file: File): Promise<ImportData> {
     return true;
   });
 
+  // Validate pomodoro settings (optional)
+  let validPomodoroSettings: PomodoroSettings | undefined;
+  if (parsed.pomodoroSettings) {
+    const ps = parsed.pomodoroSettings;
+    if (ps.id === 'pomodoro' && isValidNumber(ps.updatedAt) && typeof ps.masterVolume === 'number') {
+      validPomodoroSettings = ps;
+    } else {
+      warnings.push('Skipped pomodoroSettings: invalid shape');
+    }
+  }
+
+  // Validate sound presets (optional)
+  let validSoundPresets: SoundPreset[] | undefined;
+  if (Array.isArray(parsed.soundPresets) && parsed.soundPresets.length > 0) {
+    validSoundPresets = parsed.soundPresets.filter((sp) => {
+      if (!sp.id || typeof sp.id !== 'string') { warnings.push('Skipped sound preset without valid id'); return false; }
+      if (!sp.name || typeof sp.name !== 'string') { warnings.push(`Skipped sound preset ${sp.id}: missing name`); return false; }
+      if (!isValidNumber(sp.createdAt) || !isValidNumber(sp.updatedAt)) { warnings.push(`Skipped sound preset ${sp.id}: invalid timestamps`); return false; }
+      return true;
+    });
+    if (validSoundPresets.length === 0) validSoundPresets = undefined;
+  }
+
   if (warnings.length > 0) {
     console.warn('Import validation warnings:', warnings);
   }
@@ -137,5 +168,7 @@ export async function parseImportZip(file: File): Promise<ImportData> {
     tasks: fkValidTasks,
     subtasks: fkValidSubtasks,
     settings: parsed.settings,
+    pomodoroSettings: validPomodoroSettings,
+    soundPresets: validSoundPresets,
   };
 }

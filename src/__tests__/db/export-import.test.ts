@@ -36,13 +36,13 @@ describe('exportToZip', () => {
     expect(dataFile).toBeTruthy();
   });
 
-  it('has exportVersion:1 and exportedAt', async () => {
+  it('has exportVersion:2 and exportedAt', async () => {
     const blob = await exportToZip();
     const buf = await blobToUint8Array(blob);
     const zip = await JSZip.loadAsync(buf);
     const raw = await zip.file('data.json')!.async('string');
     const data = JSON.parse(raw);
-    expect(data.exportVersion).toBe(1);
+    expect(data.exportVersion).toBe(2);
     expect(data.exportedAt).toBeGreaterThan(0);
   });
 
@@ -219,5 +219,115 @@ describe('parseImportZip — valid', () => {
     expect(result.taskLists[0].name).toBe('Roundtrip');
     expect(result.tasks).toHaveLength(1);
     expect(result.tasks[0].title).toBe('RT Task');
+  });
+});
+
+describe('export/import — pomodoro data', () => {
+  it('export includes pomodoro settings and sound presets', async () => {
+    const now = Date.now();
+    await db.pomodoroSettings.put({
+      id: 'pomodoro',
+      masterVolume: 0.8,
+      tickingEnabled: true,
+      bellEnabled: true,
+      activePresetId: null,
+      updatedAt: now,
+      dynamicMixEnabled: false,
+    });
+    await db.soundPresets.add({
+      id: 'preset-1',
+      name: 'Focus',
+      sounds: { rain: 'high', wind: 'low' },
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    const blob = await exportToZip();
+    const buf = await blobToUint8Array(blob);
+    const zip = await JSZip.loadAsync(buf);
+    const data = JSON.parse(await zip.file('data.json')!.async('string'));
+
+    expect(data.pomodoroSettings).toBeDefined();
+    expect(data.pomodoroSettings.masterVolume).toBe(0.8);
+    expect(data.soundPresets).toHaveLength(1);
+    expect(data.soundPresets[0].name).toBe('Focus');
+  });
+
+  it('v1 import without pomodoro data works (backward compat)', async () => {
+    const now = Date.now();
+    const file = await makeTestZip(JSON.stringify({
+      exportVersion: 1,
+      exportedAt: now,
+      taskLists: [{ id: 'l1', name: 'List', type: 'tasks', order: 0, createdAt: now, updatedAt: now }],
+      tasks: [],
+      subtasks: [],
+      settings: { theme: 'light' },
+    }));
+    const result = await parseImportZip(file);
+    expect(result.taskLists).toHaveLength(1);
+    expect(result.pomodoroSettings).toBeUndefined();
+    expect(result.soundPresets).toBeUndefined();
+  });
+
+  it('pomodoro settings and sound presets roundtrip through export/import', async () => {
+    const now = Date.now();
+    const listId = newId();
+    await db.taskLists.add({ id: listId, name: 'List', type: 'tasks', order: 0, createdAt: now, updatedAt: now });
+    await db.pomodoroSettings.put({
+      id: 'pomodoro',
+      masterVolume: 0.5,
+      tickingEnabled: false,
+      bellEnabled: true,
+      activePresetId: 'preset-1',
+      updatedAt: now,
+      dynamicMixEnabled: true,
+    });
+    await db.soundPresets.bulkAdd([
+      { id: 'preset-1', name: 'Calm', sounds: { rain: 'medium' }, createdAt: now, updatedAt: now },
+      { id: 'preset-2', name: 'Storm', sounds: { thunder: 'high' }, createdAt: now, updatedAt: now },
+    ]);
+
+    const blob = await exportToZip();
+    const buf = await blobToUint8Array(blob);
+    const result = await parseImportZip(buf as unknown as File);
+
+    expect(result.pomodoroSettings).toBeDefined();
+    expect(result.pomodoroSettings!.masterVolume).toBe(0.5);
+    expect(result.pomodoroSettings!.dynamicMixEnabled).toBe(true);
+    expect(result.pomodoroSettings!.activePresetId).toBe('preset-1');
+    expect(result.soundPresets).toHaveLength(2);
+    expect(result.soundPresets!.map((sp) => sp.name).sort()).toEqual(['Calm', 'Storm']);
+  });
+
+  it('skips invalid pomodoro settings', async () => {
+    const now = Date.now();
+    const file = await makeTestZip(JSON.stringify({
+      exportVersion: 2,
+      exportedAt: now,
+      taskLists: [],
+      tasks: [],
+      subtasks: [],
+      pomodoroSettings: { id: 'wrong-id', masterVolume: 0.5, updatedAt: now },
+    }));
+    const result = await parseImportZip(file);
+    expect(result.pomodoroSettings).toBeUndefined();
+  });
+
+  it('skips invalid sound presets', async () => {
+    const now = Date.now();
+    const file = await makeTestZip(JSON.stringify({
+      exportVersion: 2,
+      exportedAt: now,
+      taskLists: [],
+      tasks: [],
+      subtasks: [],
+      soundPresets: [
+        { id: 'valid', name: 'Good', sounds: {}, createdAt: now, updatedAt: now },
+        { name: 'No ID', sounds: {}, createdAt: now, updatedAt: now },
+      ],
+    }));
+    const result = await parseImportZip(file);
+    expect(result.soundPresets).toHaveLength(1);
+    expect(result.soundPresets![0].name).toBe('Good');
   });
 });

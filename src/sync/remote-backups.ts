@@ -119,8 +119,7 @@ export async function maybeCreateBackups(
         localStorage.setItem(getLocalTimestampKey(tier), String(backedUpAt));
       } catch {
         // 409 = another device won the race, network error = retry next period
-        // Either way, update local timestamp to avoid immediate retry
-        localStorage.setItem(getLocalTimestampKey(tier), String(backedUpAt));
+        // Don't update localStorage — allow retry on next check cycle
       }
     }),
   );

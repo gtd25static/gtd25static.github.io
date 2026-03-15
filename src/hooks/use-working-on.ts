@@ -192,8 +192,8 @@ export async function markWorkingBlocked() {
   await ensureDeviceId();
   const blockedNow = Date.now();
   await db.transaction('rw', [db.subtasks, db.changeLog], async () => {
-    const ft = stampUpdatedFields(active.fieldTimestamps, ['status'], blockedNow);
-    await db.subtasks.update(active.id, { status: 'blocked', updatedAt: blockedNow, fieldTimestamps: ft });
+    const ft = stampUpdatedFields(active.fieldTimestamps, ['status', 'blockedAt'], blockedNow);
+    await db.subtasks.update(active.id, { status: 'blocked', blockedAt: blockedNow, updatedAt: blockedNow, fieldTimestamps: ft });
     const updated = await db.subtasks.get(active.id);
     if (updated) {
       await recordChangeInTx('subtask', active.id, 'upsert', updated as unknown as Record<string, unknown>);

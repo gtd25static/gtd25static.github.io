@@ -1486,6 +1486,13 @@ export async function importData(data: ImportData) {
       await db.tasks.bulkPut(validTasks);
       await db.subtasks.bulkPut(validSubtasks);
     });
+    if (data.pomodoroSettings) {
+      await db.pomodoroSettings.put(data.pomodoroSettings);
+    }
+    if (data.soundPresets && data.soundPresets.length > 0) {
+      await db.soundPresets.clear();
+      await db.soundPresets.bulkPut(data.soundPresets);
+    }
 
     await clearPendingEntries();
 
@@ -1503,6 +1510,8 @@ export async function importData(data: ImportData) {
         tasks: validTasks,
         subtasks: validSubtasks,
         settings: { theme },
+        pomodoroSettings: data.pomodoroSettings,
+        soundPresets: data.soundPresets,
         encryptionSalt: salt,
         encryptionVerifier: await createVerifier(encKey),
       };
