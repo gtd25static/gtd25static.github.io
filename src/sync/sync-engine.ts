@@ -3,7 +3,7 @@ import type { SyncData, Settings, ChangeEntry } from '../db/models';
 import type { ImportData } from '../db/export-import';
 import { getFile, putFile, deleteFile, RateLimitError } from './github-api';
 import { cleanupSoftDeletes, archiveOldCompleted } from './conflict-resolution';
-import { applyRemoteEntries, getPendingEntries, clearPendingEntries, clearEntriesByIds, pendingEntryCount, recordChange } from './change-log';
+import { applyRemoteEntries, getPendingEntries, clearPendingEntries, clearEntriesByIds, pendingEntryCount } from './change-log';
 import { mergeEntity, stampUpdatedFields } from './field-timestamps';
 import { toast } from '../components/ui/Toast';
 import { SYNC_VERSION, isCompatibleVersion, needsMigration } from './version';
