@@ -5,6 +5,7 @@ import { purgeOldTrashItems } from '../db/purge';
 import { recordChangeInTx, recordChangeBatchInTx, ensureDeviceId } from '../sync/change-log';
 import { scheduleSyncDebounced } from '../sync/sync-engine';
 import { handleDbError } from '../lib/db-error';
+import { stampUpdatedFields } from '../sync/field-timestamps';
 
 export interface TrashItem {
   id: string;
@@ -90,11 +91,18 @@ export async function restoreFromTrash(item: TrashItem) {
     switch (item.type) {
       case 'list': {
         await db.transaction('rw', [db.taskLists, db.tasks, db.subtasks, db.changeLog], async () => {
-          await db.taskLists.update(item.id, { deletedAt: undefined, updatedAt: now });
+          const existingList = await db.taskLists.get(item.id);
+          const listFT = stampUpdatedFields(existingList?.fieldTimestamps, ['deletedAt'], now);
+          await db.taskLists.update(item.id, { deletedAt: undefined, updatedAt: now, fieldTimestamps: listFT });
           const tasks = await db.tasks.where('listId').equals(item.id).toArray();
           for (const t of tasks) {
-            await db.tasks.update(t.id, { deletedAt: undefined, updatedAt: now });
-            await db.subtasks.where('taskId').equals(t.id).modify({ deletedAt: undefined, updatedAt: now });
+            const tFT = stampUpdatedFields(t.fieldTimestamps, ['deletedAt'], now);
+            await db.tasks.update(t.id, { deletedAt: undefined, updatedAt: now, fieldTimestamps: tFT });
+            const subs = await db.subtasks.where('taskId').equals(t.id).toArray();
+            for (const s of subs) {
+              const sFT = stampUpdatedFields(s.fieldTimestamps, ['deletedAt'], now);
+              await db.subtasks.update(s.id, { deletedAt: undefined, updatedAt: now, fieldTimestamps: sFT });
+            }
           }
           // Record upserts for restored entities
           const batch: Array<{ entityType: 'taskList' | 'task' | 'subtask'; entityId: string; operation: 'upsert'; data: Record<string, unknown> }> = [];
@@ -114,8 +122,14 @@ export async function restoreFromTrash(item: TrashItem) {
       }
       case 'task': {
         await db.transaction('rw', [db.tasks, db.subtasks, db.changeLog], async () => {
-          await db.tasks.update(item.id, { deletedAt: undefined, updatedAt: now });
-          await db.subtasks.where('taskId').equals(item.id).modify({ deletedAt: undefined, updatedAt: now });
+          const existingTask = await db.tasks.get(item.id);
+          const tFT = stampUpdatedFields(existingTask?.fieldTimestamps, ['deletedAt'], now);
+          await db.tasks.update(item.id, { deletedAt: undefined, updatedAt: now, fieldTimestamps: tFT });
+          const taskSubs = await db.subtasks.where('taskId').equals(item.id).toArray();
+          for (const s of taskSubs) {
+            const sFT = stampUpdatedFields(s.fieldTimestamps, ['deletedAt'], now);
+            await db.subtasks.update(s.id, { deletedAt: undefined, updatedAt: now, fieldTimestamps: sFT });
+          }
           const batch: Array<{ entityType: 'task' | 'subtask'; entityId: string; operation: 'upsert'; data: Record<string, unknown> }> = [];
           const task = await db.tasks.get(item.id);
           if (task) batch.push({ entityType: 'task', entityId: item.id, operation: 'upsert', data: task as unknown as Record<string, unknown> });
@@ -129,7 +143,9 @@ export async function restoreFromTrash(item: TrashItem) {
       }
       case 'subtask': {
         await db.transaction('rw', [db.subtasks, db.changeLog], async () => {
-          await db.subtasks.update(item.id, { deletedAt: undefined, updatedAt: now });
+          const existingSub = await db.subtasks.get(item.id);
+          const sFT = stampUpdatedFields(existingSub?.fieldTimestamps, ['deletedAt'], now);
+          await db.subtasks.update(item.id, { deletedAt: undefined, updatedAt: now, fieldTimestamps: sFT });
           const sub = await db.subtasks.get(item.id);
           if (sub) {
             await recordChangeInTx('subtask', item.id, 'upsert', sub as unknown as Record<string, unknown>);

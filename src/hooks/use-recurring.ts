@@ -1,6 +1,7 @@
 import { db } from '../db';
 import { recordChangeBatchInTx, ensureDeviceId } from '../sync/change-log';
 import { scheduleSyncDebounced } from '../sync/sync-engine';
+import { stampUpdatedFields } from '../sync/field-timestamps';
 
 export function computeNextOccurrence(
   from: number,
@@ -56,10 +57,12 @@ export async function checkRecurringTasks() {
         task.recurrenceUnit!,
       );
 
+      const taskFT = stampUpdatedFields(task.fieldTimestamps, ['status', 'nextOccurrence'], now);
       await db.tasks.update(task.id, {
         status: 'todo',
         nextOccurrence: newNext,
         updatedAt: now,
+        fieldTimestamps: taskFT,
       });
       const updatedTask = await db.tasks.get(task.id);
       if (updatedTask) {
@@ -71,7 +74,8 @@ export async function checkRecurringTasks() {
       for (const sub of subtasks) {
         if (sub.deletedAt) continue;
         if (sub.status !== 'todo') {
-          await db.subtasks.update(sub.id, { status: 'todo', updatedAt: now });
+          const subFT = stampUpdatedFields(sub.fieldTimestamps, ['status'], now);
+          await db.subtasks.update(sub.id, { status: 'todo', updatedAt: now, fieldTimestamps: subFT });
           const updatedSub = await db.subtasks.get(sub.id);
           if (updatedSub) {
             batch.push({ entityType: 'subtask', entityId: sub.id, operation: 'upsert', data: updatedSub as unknown as Record<string, unknown> });

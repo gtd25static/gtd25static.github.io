@@ -6,6 +6,7 @@ import { setTaskStatus } from './use-tasks';
 import { recordChangeInTx, recordChangeBatchInTx, ensureDeviceId } from '../sync/change-log';
 import { scheduleSyncDebounced } from '../sync/sync-engine';
 import { handleDbError } from '../lib/db-error';
+import { stampUpdatedFields } from '../sync/field-timestamps';
 
 interface WorkingOnState {
   task?: Task;
@@ -44,7 +45,8 @@ export async function startWorkingOn(subtaskId: string) {
         const now = Date.now();
         await ensureDeviceId();
         await db.transaction('rw', [db.tasks, db.changeLog], async () => {
-          await db.tasks.update(parentTask.id, { workedAt: now, updatedAt: now });
+          const ft = stampUpdatedFields(parentTask.fieldTimestamps, ['workedAt'], now);
+          await db.tasks.update(parentTask.id, { workedAt: now, updatedAt: now, fieldTimestamps: ft });
           const updated = await db.tasks.get(parentTask.id);
           if (updated) {
             await recordChangeInTx('task', parentTask.id, 'upsert', updated as unknown as Record<string, unknown>);
@@ -67,7 +69,8 @@ export async function startWorkingOnTask(taskId: string) {
     await db.transaction('rw', [db.tasks, db.changeLog], async () => {
       const task = await db.tasks.get(taskId);
       const workedAt = task?.workedAt ?? now;
-      await db.tasks.update(taskId, { status: 'working' as const, updatedAt: now, workedAt });
+      const ft = stampUpdatedFields(task?.fieldTimestamps, ['status', 'workedAt'], now);
+      await db.tasks.update(taskId, { status: 'working' as const, updatedAt: now, workedAt, fieldTimestamps: ft });
       const updated = await db.tasks.get(taskId);
       if (updated) {
         await recordChangeInTx('task', taskId, 'upsert', updated as unknown as Record<string, unknown>);
@@ -86,7 +89,8 @@ async function clearWorkingTasks() {
   await ensureDeviceId();
   await db.transaction('rw', [db.tasks, db.changeLog], async () => {
     for (const t of working) {
-      await db.tasks.update(t.id, { status: 'todo', updatedAt: now });
+      const ft = stampUpdatedFields(t.fieldTimestamps, ['status'], now);
+      await db.tasks.update(t.id, { status: 'todo', updatedAt: now, fieldTimestamps: ft });
     }
     const batch: Array<{ entityType: 'task'; entityId: string; operation: 'upsert'; data: Record<string, unknown> }> = [];
     for (const t of working) {
@@ -107,7 +111,8 @@ export async function stopWorking() {
     await ensureDeviceId();
     await db.transaction('rw', [db.subtasks, db.changeLog], async () => {
       for (const s of workingSubs) {
-        await db.subtasks.update(s.id, { status: 'todo', updatedAt: now });
+        const ft = stampUpdatedFields(s.fieldTimestamps, ['status'], now);
+        await db.subtasks.update(s.id, { status: 'todo', updatedAt: now, fieldTimestamps: ft });
       }
       const batch: Array<{ entityType: 'subtask'; entityId: string; operation: 'upsert'; data: Record<string, unknown> }> = [];
       for (const s of workingSubs) {
@@ -139,7 +144,8 @@ export async function markWorkingDone() {
   const now = Date.now();
   await ensureDeviceId();
   await db.transaction('rw', [db.subtasks, db.tasks, db.changeLog], async () => {
-    await db.subtasks.update(active.id, { status: 'done', updatedAt: now, completedAt: now });
+    const activeFT = stampUpdatedFields(active.fieldTimestamps, ['status', 'completedAt'], now);
+    await db.subtasks.update(active.id, { status: 'done', updatedAt: now, completedAt: now, fieldTimestamps: activeFT });
     const batch: Array<{ entityType: 'task' | 'subtask'; entityId: string; operation: 'upsert'; data: Record<string, unknown> }> = [];
 
     const updatedActive = await db.subtasks.get(active.id);
@@ -149,14 +155,16 @@ export async function markWorkingDone() {
     const siblings = await db.subtasks.where('taskId').equals(active.taskId).sortBy('order');
     const nextUndone = siblings.find((s) => !s.deletedAt && s.id !== active.id && (s.status === 'todo' || s.status === 'blocked'));
     if (nextUndone) {
-      await db.subtasks.update(nextUndone.id, { status: 'working', updatedAt: now });
+      const nextFT = stampUpdatedFields(nextUndone.fieldTimestamps, ['status'], now);
+      await db.subtasks.update(nextUndone.id, { status: 'working', updatedAt: now, fieldTimestamps: nextFT });
       const updatedNext = await db.subtasks.get(nextUndone.id);
       if (updatedNext) batch.push({ entityType: 'subtask', entityId: nextUndone.id, operation: 'upsert', data: updatedNext as unknown as Record<string, unknown> });
     } else {
       // All subtasks done — mark parent task done
       const task = await db.tasks.get(active.taskId);
       if (task) {
-        await db.tasks.update(task.id, { status: 'done', updatedAt: now, completedAt: now });
+        const taskFT = stampUpdatedFields(task.fieldTimestamps, ['status', 'completedAt'], now);
+        await db.tasks.update(task.id, { status: 'done', updatedAt: now, completedAt: now, fieldTimestamps: taskFT });
         const updatedTask = await db.tasks.get(task.id);
         if (updatedTask) batch.push({ entityType: 'task', entityId: task.id, operation: 'upsert', data: updatedTask as unknown as Record<string, unknown> });
       }
@@ -182,8 +190,10 @@ export async function markWorkingBlocked() {
   }
 
   await ensureDeviceId();
+  const blockedNow = Date.now();
   await db.transaction('rw', [db.subtasks, db.changeLog], async () => {
-    await db.subtasks.update(active.id, { status: 'blocked', updatedAt: Date.now() });
+    const ft = stampUpdatedFields(active.fieldTimestamps, ['status'], blockedNow);
+    await db.subtasks.update(active.id, { status: 'blocked', updatedAt: blockedNow, fieldTimestamps: ft });
     const updated = await db.subtasks.get(active.id);
     if (updated) {
       await recordChangeInTx('subtask', active.id, 'upsert', updated as unknown as Record<string, unknown>);

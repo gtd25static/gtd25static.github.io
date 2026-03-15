@@ -3,6 +3,7 @@ import type { ChangeEntry } from '../db/models';
 import { newId } from '../lib/id';
 import { SYNC_VERSION } from './version';
 import { migrateEntryData } from './migrations';
+import { mergeEntity } from './field-timestamps';
 
 async function getDeviceId(): Promise<string> {
   const local = await db.localSettings.get('local');
@@ -168,12 +169,16 @@ export async function applyRemoteEntries(entries: ChangeEntry[]) {
           continue;
         }
 
-        // upsert
+        // upsert with field-level merge
         const existing = await table.get(entry.entityId);
         if (existing) {
-          const localUpdatedAt = (existing as { updatedAt?: number }).updatedAt ?? 0;
-          if (entry.timestamp >= localUpdatedAt) {
-            await table.put(data as never);
+          const merged = mergeEntity(
+            existing as unknown as Record<string, unknown>,
+            data as Record<string, unknown>,
+            entry.timestamp,
+          );
+          if (merged) {
+            await table.put(merged as never);
           }
         } else {
           await table.put(data as never);

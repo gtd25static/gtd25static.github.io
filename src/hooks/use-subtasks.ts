@@ -6,6 +6,7 @@ import { recordChangeInTx, recordChangeBatchInTx, ensureDeviceId } from '../sync
 import { scheduleSyncDebounced } from '../sync/sync-engine';
 import { computeNextOccurrence } from './use-recurring';
 import { handleDbError } from '../lib/db-error';
+import { initFieldTimestamps, stampUpdatedFields } from '../sync/field-timestamps';
 
 export function useSubtasks(taskId: string | undefined) {
   return useLiveQuery(
@@ -42,6 +43,7 @@ export async function createSubtask(
         createdAt: now,
         updatedAt: now,
       };
+      subtask.fieldTimestamps = initFieldTimestamps(subtask as unknown as Record<string, unknown>, now);
       await db.subtasks.add(subtask);
       await recordChangeInTx('subtask', subtask.id, 'upsert', subtask as unknown as Record<string, unknown>);
     });
@@ -57,7 +59,14 @@ export async function updateSubtask(id: string, updates: Partial<Subtask>) {
   try {
     await ensureDeviceId();
     await db.transaction('rw', [db.subtasks, db.changeLog], async () => {
-      await db.subtasks.update(id, { ...updates, updatedAt: Date.now() });
+      const existing = await db.subtasks.get(id);
+      const now = Date.now();
+      const fieldTimestamps = stampUpdatedFields(
+        existing?.fieldTimestamps,
+        Object.keys(updates),
+        now,
+      );
+      await db.subtasks.update(id, { ...updates, updatedAt: now, fieldTimestamps });
       const updated = await db.subtasks.get(id);
       if (updated) {
         await recordChangeInTx('subtask', id, 'upsert', updated as unknown as Record<string, unknown>);
@@ -80,13 +89,19 @@ export async function setSubtaskStatus(id: string, status: SubtaskStatus) {
       await db.transaction('rw', [db.subtasks, db.tasks, db.changeLog], async () => {
         for (const s of allWorkingSubs) {
           if (s.id !== id) {
-            await db.subtasks.update(s.id, { status: 'todo', updatedAt: now });
+            const ft = stampUpdatedFields(s.fieldTimestamps, ['status'], now);
+            await db.subtasks.update(s.id, { status: 'todo', updatedAt: now, fieldTimestamps: ft });
           }
         }
         for (const t of allWorkingTasks) {
-          await db.tasks.update(t.id, { status: 'todo', updatedAt: now });
+          const ft = stampUpdatedFields(t.fieldTimestamps, ['status'], now);
+          await db.tasks.update(t.id, { status: 'todo', updatedAt: now, fieldTimestamps: ft });
         }
-        await db.subtasks.update(id, { status, updatedAt: now });
+        {
+          const self = await db.subtasks.get(id);
+          const ft = stampUpdatedFields(self?.fieldTimestamps, ['status'], now);
+          await db.subtasks.update(id, { status, updatedAt: now, fieldTimestamps: ft });
+        }
 
         // Record changes for all modified entities
         const batch: Array<{ entityType: 'task' | 'subtask'; entityId: string; operation: 'upsert'; data: Record<string, unknown> }> = [];
@@ -133,19 +148,23 @@ export async function setSubtaskStatus(id: string, status: SubtaskStatus) {
         const live = siblings.filter((s) => !s.deletedAt);
         if (live.length > 0 && live.every((s) => s.status === 'done')) {
           const parentTask = await db.tasks.get(sub.taskId);
-          const taskUpdates: Partial<import('../db/models').Task> = { status: 'done', updatedAt: Date.now(), completedAt: Date.now() };
+          const acNow = Date.now();
+          const taskUpdates: Partial<import('../db/models').Task> = { status: 'done', updatedAt: acNow, completedAt: acNow };
 
           // Recurrence on auto-complete
           if (parentTask?.recurrenceType && parentTask.recurrenceInterval && parentTask.recurrenceUnit) {
-            taskUpdates.lastCompletedAt = Date.now();
+            taskUpdates.lastCompletedAt = acNow;
             if (parentTask.recurrenceType === 'time-based') {
               taskUpdates.nextOccurrence = computeNextOccurrence(
-                Date.now(),
+                acNow,
                 parentTask.recurrenceInterval,
                 parentTask.recurrenceUnit,
               );
             }
           }
+
+          const acFT = stampUpdatedFields(parentTask?.fieldTimestamps, Object.keys(taskUpdates), acNow);
+          taskUpdates.fieldTimestamps = acFT;
 
           await ensureDeviceId();
           await db.transaction('rw', [db.tasks, db.changeLog], async () => {
@@ -227,7 +246,7 @@ export async function convertSubtaskToTask(subtaskId: string, targetListId: stri
     await db.transaction('rw', [db.subtasks, db.tasks, db.changeLog], async () => {
       const count = await db.tasks.where('listId').equals(targetListId).count();
       await db.subtasks.update(subtaskId, { deletedAt: now, updatedAt: now });
-      await db.tasks.add({
+      const newTask: import('../db/models').Task = {
         id: newTaskId,
         listId: targetListId,
         title: subtask.title,
@@ -238,12 +257,14 @@ export async function convertSubtaskToTask(subtaskId: string, targetListId: stri
         order: count,
         createdAt: now,
         updatedAt: now,
-      });
+      };
+      newTask.fieldTimestamps = initFieldTimestamps(newTask as unknown as Record<string, unknown>, now);
+      await db.tasks.add(newTask);
 
       await recordChangeInTx('subtask', subtaskId, 'delete');
-      const newTask = await db.tasks.get(newTaskId);
-      if (newTask) {
-        await recordChangeInTx('task', newTaskId, 'upsert', newTask as unknown as Record<string, unknown>);
+      const createdTask = await db.tasks.get(newTaskId);
+      if (createdTask) {
+        await recordChangeInTx('task', newTaskId, 'upsert', createdTask as unknown as Record<string, unknown>);
       }
     });
 
@@ -259,7 +280,9 @@ export async function reorderSubtasks(orderedIds: string[]) {
     await ensureDeviceId();
     await db.transaction('rw', [db.subtasks, db.changeLog], async () => {
       for (let i = 0; i < orderedIds.length; i++) {
-        await db.subtasks.update(orderedIds[i], { order: i, updatedAt: now });
+        const existing = await db.subtasks.get(orderedIds[i]);
+        const ft = stampUpdatedFields(existing?.fieldTimestamps, ['order'], now);
+        await db.subtasks.update(orderedIds[i], { order: i, updatedAt: now, fieldTimestamps: ft });
       }
 
       const batch: Array<{ entityType: 'subtask'; entityId: string; operation: 'upsert'; data: Record<string, unknown> }> = [];

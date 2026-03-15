@@ -6,6 +6,7 @@ import { recordChangeInTx, recordChangeBatchInTx, ensureDeviceId } from '../sync
 import { scheduleSyncDebounced } from '../sync/sync-engine';
 import { INBOX_LIST_NAME } from '../lib/constants';
 import { handleDbError } from '../lib/db-error';
+import { initFieldTimestamps, stampUpdatedFields } from '../sync/field-timestamps';
 
 export function useTaskLists() {
   const allLists = useLiveQuery(
@@ -25,6 +26,7 @@ export async function createTaskList(name: string, type: ListType = 'tasks') {
     await db.transaction('rw', [db.taskLists, db.changeLog], async () => {
       const count = await db.taskLists.count();
       list = { id, name, type, order: count, createdAt: now, updatedAt: now };
+      list.fieldTimestamps = initFieldTimestamps(list as unknown as Record<string, unknown>, now);
       await db.taskLists.add(list);
       await recordChangeInTx('taskList', list.id, 'upsert', list as unknown as Record<string, unknown>);
     });
@@ -40,7 +42,10 @@ export async function updateTaskList(id: string, updates: Partial<Pick<TaskList,
   try {
     await ensureDeviceId();
     await db.transaction('rw', [db.taskLists, db.changeLog], async () => {
-      await db.taskLists.update(id, { ...updates, updatedAt: Date.now() });
+      const existing = await db.taskLists.get(id);
+      const now = Date.now();
+      const fieldTimestamps = stampUpdatedFields(existing?.fieldTimestamps, Object.keys(updates), now);
+      await db.taskLists.update(id, { ...updates, updatedAt: now, fieldTimestamps });
       const updated = await db.taskLists.get(id);
       if (updated) {
         await recordChangeInTx('taskList', id, 'upsert', updated as unknown as Record<string, unknown>);
@@ -88,11 +93,18 @@ export async function restoreTaskList(id: string) {
     const now = Date.now();
     await ensureDeviceId();
     await db.transaction('rw', [db.taskLists, db.tasks, db.subtasks, db.changeLog], async () => {
-      await db.taskLists.update(id, { deletedAt: undefined, updatedAt: now });
+      const existingList = await db.taskLists.get(id);
+      const listFT = stampUpdatedFields(existingList?.fieldTimestamps, ['deletedAt'], now);
+      await db.taskLists.update(id, { deletedAt: undefined, updatedAt: now, fieldTimestamps: listFT });
       const tasks = await db.tasks.where('listId').equals(id).toArray();
       for (const task of tasks) {
-        await db.tasks.update(task.id, { deletedAt: undefined, updatedAt: now });
-        await db.subtasks.where('taskId').equals(task.id).modify({ deletedAt: undefined, updatedAt: now });
+        const taskFT = stampUpdatedFields(task.fieldTimestamps, ['deletedAt'], now);
+        await db.tasks.update(task.id, { deletedAt: undefined, updatedAt: now, fieldTimestamps: taskFT });
+        const subs = await db.subtasks.where('taskId').equals(task.id).toArray();
+        for (const sub of subs) {
+          const subFT = stampUpdatedFields(sub.fieldTimestamps, ['deletedAt'], now);
+          await db.subtasks.update(sub.id, { deletedAt: undefined, updatedAt: now, fieldTimestamps: subFT });
+        }
       }
 
       // Re-read updated entities for upsert entries
@@ -122,7 +134,9 @@ export async function reorderTaskLists(orderedIds: string[]) {
     await ensureDeviceId();
     await db.transaction('rw', [db.taskLists, db.changeLog], async () => {
       for (let i = 0; i < orderedIds.length; i++) {
-        await db.taskLists.update(orderedIds[i], { order: i, updatedAt: now });
+        const existing = await db.taskLists.get(orderedIds[i]);
+        const ft = stampUpdatedFields(existing?.fieldTimestamps, ['order'], now);
+        await db.taskLists.update(orderedIds[i], { order: i, updatedAt: now, fieldTimestamps: ft });
       }
 
       // Record upserts for all reordered lists

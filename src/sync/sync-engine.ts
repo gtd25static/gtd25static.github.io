@@ -4,6 +4,7 @@ import type { ImportData } from '../db/export-import';
 import { getFile, putFile, deleteFile, RateLimitError } from './github-api';
 import { cleanupSoftDeletes, archiveOldCompleted } from './conflict-resolution';
 import { applyRemoteEntries, getPendingEntries, clearPendingEntries, clearEntriesByIds, pendingEntryCount } from './change-log';
+import { mergeEntity } from './field-timestamps';
 import { toast } from '../components/ui/Toast';
 import { SYNC_VERSION, isCompatibleVersion, needsMigration } from './version';
 import { runRemoteMigrations } from './migrations';
@@ -37,35 +38,32 @@ const SYNC_TIMEOUT_MS = 45_000;
 // --- Snapshot reconciliation (catches compaction gaps) ---
 async function reconcileFromSnapshot(snapshot: SyncData) {
   await db.transaction('rw', [db.taskLists, db.tasks, db.subtasks], async () => {
-    // TaskLists
-    const localLists = new Map(
-      (await db.taskLists.toArray()).map(l => [l.id, l.updatedAt])
-    );
-    const listsToUpsert = snapshot.taskLists.filter(l => {
-      const localTs = localLists.get(l.id);
-      return localTs === undefined || l.updatedAt > localTs;
-    });
-    if (listsToUpsert.length > 0) await db.taskLists.bulkPut(listsToUpsert);
+    // Helper: reconcile a collection using field-level merge
+    async function reconcileCollection<T extends { id: string; updatedAt: number }>(
+      table: import('dexie').Table<T, string>,
+      remoteEntities: T[],
+    ) {
+      const localMap = new Map<string, T>();
+      for (const e of await table.toArray()) localMap.set(e.id, e);
 
-    // Tasks
-    const localTasks = new Map(
-      (await db.tasks.toArray()).map(t => [t.id, t.updatedAt])
-    );
-    const tasksToUpsert = snapshot.tasks.filter(t => {
-      const localTs = localTasks.get(t.id);
-      return localTs === undefined || t.updatedAt > localTs;
-    });
-    if (tasksToUpsert.length > 0) await db.tasks.bulkPut(tasksToUpsert);
+      for (const remote of remoteEntities) {
+        const local = localMap.get(remote.id);
+        if (!local) {
+          await table.put(remote);
+        } else {
+          const merged = mergeEntity(
+            local as unknown as Record<string, unknown>,
+            remote as unknown as Record<string, unknown>,
+            remote.updatedAt,
+          );
+          if (merged) await table.put(merged as unknown as T);
+        }
+      }
+    }
 
-    // Subtasks
-    const localSubs = new Map(
-      (await db.subtasks.toArray()).map(s => [s.id, s.updatedAt])
-    );
-    const subsToUpsert = snapshot.subtasks.filter(s => {
-      const localTs = localSubs.get(s.id);
-      return localTs === undefined || s.updatedAt > localTs;
-    });
-    if (subsToUpsert.length > 0) await db.subtasks.bulkPut(subsToUpsert);
+    await reconcileCollection(db.taskLists, snapshot.taskLists);
+    await reconcileCollection(db.tasks, snapshot.tasks);
+    await reconcileCollection(db.subtasks, snapshot.subtasks);
   });
 
   // Reconcile pomodoro settings (outside entity transaction)
@@ -1115,7 +1113,19 @@ async function compactSnapshot(pat: string, repo: string, encKey: CryptoKey) {
           (existing as unknown as Record<string, unknown>).updatedAt = entry.timestamp;
         }
       } else {
-        map.set(entry.entityId, entry.data as never);
+        const existing = map.get(entry.entityId);
+        if (existing) {
+          const merged = mergeEntity(
+            existing as unknown as Record<string, unknown>,
+            entry.data as Record<string, unknown>,
+            entry.timestamp,
+          );
+          if (merged) {
+            map.set(entry.entityId, merged as never);
+          }
+        } else {
+          map.set(entry.entityId, entry.data as never);
+        }
       }
     }
 

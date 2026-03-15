@@ -3,6 +3,7 @@ import type { Task, TaskStatus } from '../db/models';
 import { recordChangeBatchInTx, ensureDeviceId } from '../sync/change-log';
 import { scheduleSyncDebounced } from '../sync/sync-engine';
 import { handleDbError } from '../lib/db-error';
+import { stampUpdatedFields } from '../sync/field-timestamps';
 
 export async function deleteTasksBatch(ids: string[]) {
   if (ids.length === 0) return;
@@ -50,6 +51,7 @@ export async function setTaskStatusBatch(ids: string[], status: TaskStatus) {
         } else if (task.status === 'done') {
           updates.completedAt = undefined;
         }
+        updates.fieldTimestamps = stampUpdatedFields(task.fieldTimestamps, Object.keys(updates), now);
         await db.tasks.update(id, updates);
         const updated = await db.tasks.get(id);
         if (updated) {
@@ -73,7 +75,9 @@ export async function moveTasksToListBatch(ids: string[], targetListId: string) 
       const existingCount = await db.tasks.where('listId').equals(targetListId).count();
       const batch: Array<{ entityType: 'task'; entityId: string; operation: 'upsert'; data: Record<string, unknown> }> = [];
       for (let i = 0; i < ids.length; i++) {
-        await db.tasks.update(ids[i], { listId: targetListId, order: existingCount + i, updatedAt: now });
+        const task = await db.tasks.get(ids[i]);
+        const ft = stampUpdatedFields(task?.fieldTimestamps, ['listId', 'order'], now);
+        await db.tasks.update(ids[i], { listId: targetListId, order: existingCount + i, updatedAt: now, fieldTimestamps: ft });
         const updated = await db.tasks.get(ids[i]);
         if (updated) {
           batch.push({ entityType: 'task', entityId: ids[i], operation: 'upsert', data: updated as unknown as Record<string, unknown> });

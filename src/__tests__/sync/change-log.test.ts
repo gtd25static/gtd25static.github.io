@@ -453,6 +453,84 @@ describe('applyRemoteEntries — entry migration', () => {
   });
 });
 
+describe('applyRemoteEntries — field-level merge', () => {
+  it('merges different fields from local and remote', async () => {
+    const taskId = newId();
+    const now = Date.now();
+    // Local task with fieldTimestamps — title edited locally
+    await db.tasks.add({
+      id: taskId, listId: 'list-1', title: 'Local Title', description: 'Old Desc',
+      status: 'todo', order: 0, createdAt: now, updatedAt: now + 100,
+      fieldTimestamps: { title: now + 100, description: now, status: now, order: now, updatedAt: now + 100, listId: now },
+    } as never);
+
+    // Remote edited description
+    await applyRemoteEntries([{
+      id: 'e1', deviceId: 'remote', timestamp: now + 100,
+      entityType: 'task', entityId: taskId, operation: 'upsert',
+      data: {
+        id: taskId, listId: 'list-1', title: 'Remote Title', description: 'New Desc',
+        status: 'todo', order: 0, createdAt: now, updatedAt: now + 100,
+        fieldTimestamps: { title: now, description: now + 100, status: now, order: now, updatedAt: now + 100, listId: now },
+      },
+    }]);
+
+    const task = await db.tasks.get(taskId);
+    expect(task!.title).toBe('Local Title'); // local wins (newer field timestamp)
+    expect(task!.description).toBe('New Desc'); // remote wins (newer field timestamp)
+  });
+
+  it('falls back to entity-level LWW when local lacks fieldTimestamps', async () => {
+    const taskId = newId();
+    const now = Date.now();
+    // Local without fieldTimestamps
+    await db.tasks.add({
+      id: taskId, listId: 'list-1', title: 'Local', status: 'todo', order: 0,
+      createdAt: now, updatedAt: now,
+    });
+
+    await applyRemoteEntries([{
+      id: 'e1', deviceId: 'remote', timestamp: now + 100,
+      entityType: 'task', entityId: taskId, operation: 'upsert',
+      data: {
+        id: taskId, listId: 'list-1', title: 'Remote', status: 'done', order: 0,
+        createdAt: now, updatedAt: now + 100,
+        fieldTimestamps: { title: now + 100, status: now + 100 },
+      },
+    }]);
+
+    const task = await db.tasks.get(taskId);
+    // Entity-level LWW: remote timestamp >= local → remote wins entirely
+    expect(task!.title).toBe('Remote');
+    expect(task!.status).toBe('done');
+  });
+
+  it('field-level merge: local wins on tie', async () => {
+    const taskId = newId();
+    const now = Date.now();
+    await db.tasks.add({
+      id: taskId, listId: 'list-1', title: 'Local', status: 'todo', order: 0,
+      createdAt: now, updatedAt: now,
+      fieldTimestamps: { title: now, status: now, order: now, updatedAt: now, listId: now },
+    } as never);
+
+    await applyRemoteEntries([{
+      id: 'e1', deviceId: 'remote', timestamp: now,
+      entityType: 'task', entityId: taskId, operation: 'upsert',
+      data: {
+        id: taskId, listId: 'list-1', title: 'Remote', status: 'done', order: 0,
+        createdAt: now, updatedAt: now,
+        fieldTimestamps: { title: now, status: now, order: now, updatedAt: now, listId: now },
+      },
+    }]);
+
+    const task = await db.tasks.get(taskId);
+    // Tie → local wins
+    expect(task!.title).toBe('Local');
+    expect(task!.status).toBe('todo');
+  });
+});
+
 describe('pruneChangelogIfSyncDisabled', () => {
   it('does not prune when sync is enabled', async () => {
     await db.localSettings.update('local', { syncEnabled: true });

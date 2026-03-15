@@ -11,6 +11,7 @@ export interface TaskList {
   createdAt: number;
   updatedAt: number;
   deletedAt?: number;
+  fieldTimestamps?: Record<string, number>;
 }
 
 export interface TaskLink {
@@ -51,6 +52,7 @@ export interface Task {
   recurrenceUnit?: 'hours' | 'days' | 'weeks' | 'months';
   lastCompletedAt?: number;
   nextOccurrence?: number;
+  fieldTimestamps?: Record<string, number>;
 }
 
 export interface Subtask {
@@ -72,6 +74,7 @@ export interface Subtask {
   completedAt?: number;
   // Additional links
   links?: TaskLink[];
+  fieldTimestamps?: Record<string, number>;
 }
 
 export interface Settings {
