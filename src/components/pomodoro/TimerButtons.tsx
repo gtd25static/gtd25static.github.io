@@ -19,7 +19,7 @@ export function TimerButtons() {
   const isActive = timerRunning || ambientPlaying;
 
   const pillClass =
-    'rounded-full px-3 py-1.5 text-sm font-medium transition-colors border';
+    'rounded-full px-2 py-1.5 text-sm font-medium transition-colors border';
   const defaultPill =
     'border-zinc-200 text-zinc-600 hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-400 dark:hover:bg-zinc-800';
 

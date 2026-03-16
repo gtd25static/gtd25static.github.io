@@ -330,7 +330,7 @@ export function Sidebar() {
       </div>
 
       {/* Pomodoro timer */}
-      <div className="px-3 pb-2">
+      <div className="px-3 pb-2 overflow-hidden">
         <PomodoroBar />
       </div>
 
