@@ -4,6 +4,7 @@ import { createTask } from '../../hooks/use-tasks';
 import { getOrCreateInbox } from '../../hooks/use-task-lists';
 import { toast } from '../ui/Toast';
 import { MAX_TITLE_LENGTH } from '../../lib/constants';
+import { extractUrl } from '../../lib/link-utils';
 
 export function QuickCapture() {
   const open = useAppState((s) => s.quickCaptureOpen);
@@ -40,9 +41,18 @@ export function QuickCapture() {
     if (!trimmed) return;
 
     const inboxId = await getOrCreateInbox();
-    const task = await createTask(inboxId, { title: trimmed });
-    if (task) {
-      toast('Captured to Inbox', 'success');
+    const url = extractUrl(trimmed);
+    if (url) {
+      const titleWithoutUrl = trimmed.replace(url, '').trim().replace(/\s+/g, ' ');
+      const task = await createTask(inboxId, {
+        title: titleWithoutUrl || url,
+        link: url,
+        ...(titleWithoutUrl ? { linkTitle: titleWithoutUrl } : {}),
+      });
+      if (task) toast('Captured to Inbox', 'success');
+    } else {
+      const task = await createTask(inboxId, { title: trimmed });
+      if (task) toast('Captured to Inbox', 'success');
     }
     setTitle('');
     // Stay open for the next item

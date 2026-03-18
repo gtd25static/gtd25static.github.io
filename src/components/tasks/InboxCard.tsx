@@ -3,6 +3,7 @@ import { deleteTask, restoreTask, moveTaskToList } from '../../hooks/use-tasks';
 import { useTaskLists } from '../../hooks/use-task-lists';
 import { toast } from '../ui/Toast';
 import { DropdownMenu } from '../ui/DropdownMenu';
+import { LinksList } from '../shared/LinksList';
 import { isInboxList } from '../../lib/constants';
 
 interface Props {
@@ -48,10 +49,17 @@ export function InboxCard({ task, index }: Props) {
         <circle cx="11" cy="13" r="1.5" />
       </svg>
 
-      {/* Title */}
-      <span className="flex-1 min-w-0 text-sm text-zinc-800 dark:text-zinc-200 truncate">
-        {task.title}
-      </span>
+      {/* Title + link */}
+      <div className="flex-1 min-w-0">
+        <span className="text-sm text-zinc-800 dark:text-zinc-200 line-clamp-3">
+          {task.title}
+        </span>
+        {task.link && (
+          <div className="mt-0.5">
+            <LinksList primaryLink={task.link} primaryTitle={task.linkTitle} links={task.links} />
+          </div>
+        )}
+      </div>
 
       {/* "Process to..." dropdown */}
       <div className="shrink-0">

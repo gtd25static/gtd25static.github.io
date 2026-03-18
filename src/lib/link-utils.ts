@@ -15,3 +15,9 @@ export function isValidUrl(str: string): boolean {
     return false;
   }
 }
+
+/** Extract the first URL from a text blob. */
+export function extractUrl(text: string): string | null {
+  const match = text.match(/https?:\/\/[^\s<>"']+/);
+  return match ? match[0] : null;
+}

@@ -175,7 +175,7 @@ export function TaskCard({ task, index, dragHandleProps }: Props) {
         </button>
         )}
 
-        <div className="flex-1 min-w-0 flex items-center gap-2">
+        <div className="flex-1 min-w-0">
           {editingTitle ? (
             <input
               className="text-sm bg-transparent border-b border-accent-500 outline-none w-full"
@@ -195,7 +195,7 @@ export function TaskCard({ task, index, dragHandleProps }: Props) {
             />
           ) : (
             <span
-              className={`text-sm leading-5 ${
+              className={`text-sm leading-5 line-clamp-3 ${
                 task.status === 'done'
                   ? 'line-through text-zinc-400 dark:text-zinc-500'
                   : 'text-zinc-800 dark:text-zinc-200'
@@ -210,25 +210,29 @@ export function TaskCard({ task, index, dragHandleProps }: Props) {
             </span>
           )}
 
-          {/* Inline metadata */}
-          {task.hasWarning && (
-            <svg width="14" height="14" viewBox="0 0 16 16" fill="#f59e0b" className="shrink-0">
-              <path d="M8 1l7 13H1L8 1z" />
-              <rect x="7.2" y="6" width="1.6" height="4" rx="0.8" fill="white" />
-              <circle cx="8" cy="12" r="0.9" fill="white" />
-            </svg>
+          {/* Metadata badges on separate row */}
+          {(task.hasWarning || task.recurrenceType || (task.status !== 'done' && task.dueDate) || task.link || task.links?.length) && (
+            <div className="mt-1 flex items-center gap-2 flex-wrap">
+              {task.hasWarning && (
+                <svg width="14" height="14" viewBox="0 0 16 16" fill="#f59e0b" className="shrink-0">
+                  <path d="M8 1l7 13H1L8 1z" />
+                  <rect x="7.2" y="6" width="1.6" height="4" rx="0.8" fill="white" />
+                  <circle cx="8" cy="12" r="0.9" fill="white" />
+                </svg>
+              )}
+              {task.recurrenceType && (
+                <span className="inline-flex items-center gap-0.5 rounded px-1 py-0.5 text-xs font-medium text-violet-600 bg-violet-50 dark:text-violet-400 dark:bg-violet-900/20 shrink-0">
+                  <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" className="opacity-70">
+                    <path d="M1 8a7 7 0 0113.6-2.3M15 8a7 7 0 01-13.6 2.3" strokeLinecap="round" />
+                    <path d="M14.6 2v3.7h-3.7M1.4 14v-3.7h3.7" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                  {task.nextOccurrence ? formatTimeRemaining(task.nextOccurrence) : ''}
+                </span>
+              )}
+              {task.status !== 'done' && task.dueDate && <DueDateBadge dueDate={task.dueDate} />}
+              <LinksList primaryLink={task.link} primaryTitle={task.linkTitle} links={task.links} />
+            </div>
           )}
-          {task.recurrenceType && (
-            <span className="inline-flex items-center gap-0.5 rounded px-1 py-0.5 text-xs font-medium text-violet-600 bg-violet-50 dark:text-violet-400 dark:bg-violet-900/20 shrink-0">
-              <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" className="opacity-70">
-                <path d="M1 8a7 7 0 0113.6-2.3M15 8a7 7 0 01-13.6 2.3" strokeLinecap="round" />
-                <path d="M14.6 2v3.7h-3.7M1.4 14v-3.7h3.7" strokeLinecap="round" strokeLinejoin="round" />
-              </svg>
-              {task.nextOccurrence ? formatTimeRemaining(task.nextOccurrence) : ''}
-            </span>
-          )}
-          {task.status !== 'done' && task.dueDate && <DueDateBadge dueDate={task.dueDate} />}
-          <LinksList primaryLink={task.link} primaryTitle={task.linkTitle} links={task.links} />
         </div>
 
         {/* Mobile dropdown (hidden in bulk mode) */}

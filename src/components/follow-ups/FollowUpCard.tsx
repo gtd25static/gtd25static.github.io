@@ -9,7 +9,7 @@ import { toggleWarning } from '../../hooks/use-warning';
 import { PingCooldownBadge } from './PingCooldownBadge';
 import { DropdownMenu } from '../ui/DropdownMenu';
 import { formatDate, dueDateColor } from '../../lib/date-utils';
-import { extractHostname } from '../../lib/link-utils';
+import { LinksList } from '../shared/LinksList';
 import { TaskForm } from '../tasks/TaskForm';
 
 const SNOOZE_OPTIONS: { value: PingCooldown; label: string }[] = [
@@ -172,7 +172,7 @@ export function FollowUpCard({ task, index, dragHandleProps }: Props) {
           />
         ) : (
           <span
-            className="text-sm text-zinc-800 dark:text-zinc-200"
+            className="text-sm text-zinc-800 dark:text-zinc-200 line-clamp-3"
             onDoubleClick={(e) => {
               e.stopPropagation();
               setEditedTitle(task.title);
@@ -192,16 +192,7 @@ export function FollowUpCard({ task, index, dragHandleProps }: Props) {
               {formatDate(task.dueDate)}
             </span>
           )}
-          {task.link && (
-            <a
-              href={task.link}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-xs text-accent-600 hover:underline dark:text-accent-400"
-            >
-              {task.linkTitle || extractHostname(task.link)}
-            </a>
-          )}
+          <LinksList primaryLink={task.link} primaryTitle={task.linkTitle} links={task.links} />
         </div>
       </div>
 

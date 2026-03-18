@@ -3,6 +3,7 @@ import { createTask } from './use-tasks';
 import { getOrCreateInbox } from './use-task-lists';
 import { toast } from '../components/ui/Toast';
 import { MAX_TITLE_LENGTH } from '../lib/constants';
+import { extractUrl } from '../lib/link-utils';
 
 /** Strip HTML tags from a string. */
 function stripHtml(s: string): string {
@@ -15,33 +16,34 @@ function sanitize(raw: string | null): string {
   return stripHtml(raw).trim().slice(0, MAX_TITLE_LENGTH);
 }
 
-/** Extract the first URL from a text blob (Android often puts URLs in the text param). */
-function extractUrl(text: string): string | null {
-  const match = text.match(/https?:\/\/[^\s<>"']+/);
-  return match ? match[0] : null;
+export interface CaptureResult {
+  title: string;
+  link?: string;
+  linkTitle?: string;
 }
 
-/** Build a task title from capture params. */
-export function formatCaptureTitle(title: string, url: string, text: string): string {
-  // If we have a URL in the url param, use title — url
+/** Build a task title + link from capture params. */
+export function formatCaptureResult(title: string, url: string, text: string): CaptureResult {
+  // If we have a URL in the url param
   if (url) {
-    return title ? `${title} — ${url}` : url;
+    return title
+      ? { title, link: url, linkTitle: title }
+      : { title: url, link: url };
   }
 
   // Try extracting a URL from the text param (common on Android)
   const embeddedUrl = extractUrl(text);
   if (embeddedUrl) {
-    // Text might be "Check this out https://example.com" — use the non-URL part as title
     const textWithoutUrl = text.replace(embeddedUrl, '').trim().replace(/\s+/g, ' ');
-    const effectiveTitle = title || textWithoutUrl;
-    return effectiveTitle ? `${effectiveTitle} — ${embeddedUrl}` : embeddedUrl;
+    const effectiveTitle = title || textWithoutUrl || embeddedUrl;
+    return { title: effectiveTitle, link: embeddedUrl };
   }
 
   // Plain text capture
   if (title && text && title !== text) {
-    return `${title} — ${text}`;
+    return { title: `${title} — ${text}` };
   }
-  return title || text;
+  return { title: title || text };
 }
 
 /**
@@ -74,20 +76,21 @@ export function useUrlCapture() {
       return;
     }
 
-    const taskTitle = formatCaptureTitle(title, url, text).slice(0, MAX_TITLE_LENGTH);
-    if (!taskTitle) {
+    const result = formatCaptureResult(title, url, text);
+    result.title = result.title.slice(0, MAX_TITLE_LENGTH);
+    if (!result.title) {
       cleanUrl();
       return;
     }
 
-    captureToInbox(taskTitle);
+    captureToInbox(result);
     cleanUrl();
   }, []);
 }
 
-async function captureToInbox(title: string) {
+async function captureToInbox({ title, link, linkTitle }: CaptureResult) {
   const inboxId = await getOrCreateInbox();
-  const task = await createTask(inboxId, { title });
+  const task = await createTask(inboxId, { title, link, linkTitle });
   if (task) {
     toast('Captured to Inbox', 'success');
   }

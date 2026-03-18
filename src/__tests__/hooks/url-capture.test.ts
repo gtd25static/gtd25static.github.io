@@ -1,53 +1,73 @@
-import { formatCaptureTitle } from '../../hooks/use-url-capture';
+import { formatCaptureResult } from '../../hooks/use-url-capture';
 
-describe('formatCaptureTitle', () => {
-  it('returns title — url when both provided', () => {
-    expect(formatCaptureTitle('My Page', 'https://example.com', '')).toBe(
-      'My Page — https://example.com',
-    );
+describe('formatCaptureResult', () => {
+  it('returns title + link when url param and title provided', () => {
+    expect(formatCaptureResult('My Page', 'https://example.com', '')).toEqual({
+      title: 'My Page',
+      link: 'https://example.com',
+      linkTitle: 'My Page',
+    });
   });
 
-  it('returns just the url when no title', () => {
-    expect(formatCaptureTitle('', 'https://example.com', '')).toBe('https://example.com');
+  it('returns url as title+link when no title', () => {
+    expect(formatCaptureResult('', 'https://example.com', '')).toEqual({
+      title: 'https://example.com',
+      link: 'https://example.com',
+    });
   });
 
-  it('extracts URL from text when url param is empty', () => {
-    expect(formatCaptureTitle('', '', 'Check this https://example.com/page')).toBe(
-      'Check this — https://example.com/page',
-    );
+  it('extracts URL from text into link field', () => {
+    expect(formatCaptureResult('', '', 'Check this https://example.com/page')).toEqual({
+      title: 'Check this',
+      link: 'https://example.com/page',
+    });
   });
 
   it('uses title with embedded URL from text', () => {
-    expect(formatCaptureTitle('My Title', '', 'https://example.com')).toBe(
-      'My Title — https://example.com',
-    );
+    expect(formatCaptureResult('My Title', '', 'https://example.com')).toEqual({
+      title: 'My Title',
+      link: 'https://example.com',
+    });
   });
 
   it('returns plain text when no URLs anywhere', () => {
-    expect(formatCaptureTitle('', '', 'Just a note')).toBe('Just a note');
+    expect(formatCaptureResult('', '', 'Just a note')).toEqual({
+      title: 'Just a note',
+    });
   });
 
   it('combines title and text when different and no URL', () => {
-    expect(formatCaptureTitle('Title', '', 'Some description')).toBe(
-      'Title — Some description',
-    );
+    expect(formatCaptureResult('Title', '', 'Some description')).toEqual({
+      title: 'Title — Some description',
+    });
   });
 
   it('deduplicates when title equals text', () => {
-    expect(formatCaptureTitle('Same', '', 'Same')).toBe('Same');
+    expect(formatCaptureResult('Same', '', 'Same')).toEqual({
+      title: 'Same',
+    });
   });
 
-  it('returns empty string when all empty', () => {
-    expect(formatCaptureTitle('', '', '')).toBe('');
+  it('returns empty title when all empty', () => {
+    expect(formatCaptureResult('', '', '')).toEqual({
+      title: '',
+    });
   });
 
   it('handles text that is only a URL with no surrounding text', () => {
-    expect(formatCaptureTitle('', '', 'https://example.com')).toBe('https://example.com');
+    expect(formatCaptureResult('', '', 'https://example.com')).toEqual({
+      title: 'https://example.com',
+      link: 'https://example.com',
+    });
   });
 
   it('prefers url param over embedded URL in text', () => {
     expect(
-      formatCaptureTitle('Page', 'https://main.com', 'text https://other.com'),
-    ).toBe('Page — https://main.com');
+      formatCaptureResult('Page', 'https://main.com', 'text https://other.com'),
+    ).toEqual({
+      title: 'Page',
+      link: 'https://main.com',
+      linkTitle: 'Page',
+    });
   });
 });
