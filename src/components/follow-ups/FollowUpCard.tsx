@@ -251,8 +251,19 @@ export function FollowUpCard({ task, index, dragHandleProps }: Props) {
         </div>
       )}
 
-      {/* Hover actions: edit/delete */}
+      {/* Hover actions: star + edit/delete */}
       <div className="flex items-center gap-1 md:opacity-0 md:group-hover:opacity-100 shrink-0">
+        <button
+          onClick={() => updateTask(task.id, { starred: !task.starred })}
+          className={`rounded p-0.5 ${task.starred ? 'text-amber-500' : 'text-zinc-300 hover:text-amber-400 dark:text-zinc-600 dark:hover:text-amber-400'}`}
+          title={task.starred ? 'Unstar' : 'Star'}
+        >
+          {task.starred ? (
+            <svg width="14" height="14" viewBox="0 0 20 20" fill="currentColor"><path d="M10 1l2.39 6.34H19l-5.19 3.78 1.98 6.34L10 13.68l-5.79 3.78 1.98-6.34L1 7.34h6.61z" /></svg>
+          ) : (
+            <svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M10 1l2.39 6.34H19l-5.19 3.78 1.98 6.34L10 13.68l-5.79 3.78 1.98-6.34L1 7.34h6.61z" /></svg>
+          )}
+        </button>
         <DropdownMenu
           trigger={
             <svg width="18" height="18" viewBox="0 0 20 20" fill="currentColor" className="text-zinc-400">
@@ -262,6 +273,7 @@ export function FollowUpCard({ task, index, dragHandleProps }: Props) {
             </svg>
           }
           items={[
+            { label: task.starred ? 'Unstar' : 'Star', onClick: () => updateTask(task.id, { starred: !task.starred }) },
             { label: task.hasWarning ? 'Clear warning' : 'Warn', onClick: () => toggleWarning('task', task.id) },
             { label: 'Edit', onClick: () => setEditing(true) },
             { label: 'Delete', onClick: () => {

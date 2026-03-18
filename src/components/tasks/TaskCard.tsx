@@ -246,6 +246,7 @@ export function TaskCard({ task, index, dragHandleProps }: Props) {
               </svg>
             }
             items={[
+              { label: task.starred ? 'Unstar' : 'Star', onClick: () => updateTask(task.id, { starred: !task.starred }) },
               ...(task.status !== 'working' && !hasWorkingSubtask && task.status !== 'done' ? [{
                 label: 'Work', onClick: () => {
                   if (subtasks.length > 0) {
@@ -273,6 +274,17 @@ export function TaskCard({ task, index, dragHandleProps }: Props) {
         </div>}
         {/* Desktop inline actions (hidden in bulk mode) */}
         {!bulkMode && <div className="hidden md:flex items-center gap-1 md:opacity-0 md:group-hover:opacity-100 shrink-0" onClick={(e) => e.stopPropagation()}>
+          <button
+            onClick={() => updateTask(task.id, { starred: !task.starred })}
+            className={`rounded px-1 py-0.5 text-xs ${task.starred ? 'text-amber-500' : 'text-zinc-300 hover:text-amber-400 dark:text-zinc-600 dark:hover:text-amber-400'}`}
+            title={task.starred ? 'Unstar' : 'Star'}
+          >
+            {task.starred ? (
+              <svg width="14" height="14" viewBox="0 0 20 20" fill="currentColor"><path d="M10 1l2.39 6.34H19l-5.19 3.78 1.98 6.34L10 13.68l-5.79 3.78 1.98-6.34L1 7.34h6.61z" /></svg>
+            ) : (
+              <svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M10 1l2.39 6.34H19l-5.19 3.78 1.98 6.34L10 13.68l-5.79 3.78 1.98-6.34L1 7.34h6.61z" /></svg>
+            )}
+          </button>
           {task.status !== 'working' && !hasWorkingSubtask && task.status !== 'done' && (
             <button
               onClick={() => {
@@ -382,7 +394,9 @@ export function TaskCard({ task, index, dragHandleProps }: Props) {
 
   function buildContextMenuItems(): MenuItem[] {
     const otherLists = lists.filter((l) => l.id !== task.listId && l.type === 'tasks');
-    const items: MenuItem[] = [];
+    const items: MenuItem[] = [
+      { label: task.starred ? 'Unstar' : 'Star', onClick: () => updateTask(task.id, { starred: !task.starred }) },
+    ];
     if (otherLists.length > 0) {
       items.push({
         label: 'Send to list',

@@ -27,6 +27,7 @@ import { FollowUpList } from '../follow-ups/FollowUpList';
 import { BulkActionBar } from './BulkActionBar';
 import { InboxListView } from './InboxListView';
 import { isInboxList } from '../../lib/constants';
+import { sortTasksForDisplay } from '../../lib/task-sort';
 
 function SortableTaskItem({ task, index }: { task: Task; index: number }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
@@ -141,7 +142,7 @@ export function TaskListView() {
     return <FollowUpList listId={selectedListId} listName={selectedList.name} />;
   }
 
-  const activeTasks = tasks.filter((t) => t.status !== 'done' || recentlyDone.has(t.id));
+  const activeTasks = sortTasksForDisplay(tasks.filter((t) => t.status !== 'done' || recentlyDone.has(t.id)));
   const completedTasks = tasks.filter((t) => t.status === 'done' && !recentlyDone.has(t.id));
 
   function handleDragEnd(event: DragEndEvent) {

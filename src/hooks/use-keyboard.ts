@@ -7,6 +7,7 @@ import { setSubtaskStatus } from './use-subtasks';
 import { startWorkingOn, startWorkingOnTask, markWorkingDone, markWorkingBlocked, stopWorking } from './use-working-on';
 import { updateTask, restoreTask } from './use-tasks';
 import { isInCooldown } from './use-follow-ups';
+import { sortTasksForDisplay, sortFollowUpsForDisplay } from '../lib/task-sort';
 import { deleteTasksBatch } from './use-bulk-operations';
 import { toast } from '../components/ui/Toast';
 import type { ListType } from '../db/models';
@@ -115,13 +116,15 @@ export function useKeyboard() {
         if (!isFollowUps && t.status === 'done') return false;
         return true;
       });
-      // Match visual sort: follow-ups show not-in-cooldown first
+      // Match visual sort order
       if (isFollowUps) {
-        live.sort((a, b) => {
-          const aCool = isInCooldown(a) ? 1 : 0;
-          const bCool = isInCooldown(b) ? 1 : 0;
-          return aCool - bCool;
-        });
+        const sorted = sortFollowUpsForDisplay(live);
+        live.length = 0;
+        live.push(...sorted);
+      } else if (isTasksList) {
+        const sorted = sortTasksForDisplay(live);
+        live.length = 0;
+        live.push(...sorted);
       }
 
       // Load subtasks only for expanded tasks — use taskId index
@@ -515,6 +518,19 @@ export function useKeyboard() {
           e.preventDefault();
           if (s.focusZone === 'main') {
             s.setBulkMode(!s.bulkMode);
+          }
+          break;
+        }
+
+        case 's': {
+          // Toggle starred
+          e.preventDefault();
+          if (s.focusZone !== 'main' || !s.focusedItemId) break;
+          const sItem = mainRef.current.find((i) => i.id === s.focusedItemId);
+          if (!sItem || isActionItem(sItem)) break;
+          if (sItem.type === 'task') {
+            const task = await db.tasks.get(sItem.id);
+            if (task) await updateTask(task.id, { starred: !task.starred });
           }
           break;
         }

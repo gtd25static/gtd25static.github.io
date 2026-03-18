@@ -23,6 +23,7 @@ import type { Task } from '../../db/models';
 import { FollowUpCard } from './FollowUpCard';
 import { InlineTaskForm } from '../tasks/InlineTaskForm';
 import { DropdownMenu } from '../ui/DropdownMenu';
+import { sortFollowUpsForDisplay } from '../../lib/task-sort';
 
 function SortableFollowUpItem({ task, index }: { task: Task; index: number }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
@@ -49,7 +50,8 @@ interface Props {
 }
 
 export function FollowUpList({ listId, listName }: Props) {
-  const { active, archived } = useFollowUps(listId);
+  const { active: rawActive, archived } = useFollowUps(listId);
+  const active = sortFollowUpsForDisplay(rawActive);
   const { navigateToTaskId, setNavigateToTaskId, creatingTask, setCreatingTask, focusedItemId, focusZone } = useAppState(useShallow(s => ({ navigateToTaskId: s.navigateToTaskId, setNavigateToTaskId: s.setNavigateToTaskId, creatingTask: s.creatingTask, setCreatingTask: s.setCreatingTask, focusedItemId: s.focusedItemId, focusZone: s.focusZone })));
   const [creating, setCreating] = useState(false);
 

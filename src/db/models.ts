@@ -27,6 +27,7 @@ export interface Task {
   link?: string;
   linkTitle?: string;
   dueDate?: number;
+  starred?: boolean;
   status: TaskStatus;
   order: number;
   createdAt: number;

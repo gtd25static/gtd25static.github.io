@@ -4,6 +4,7 @@ export const APP_VERSION: string = typeof __APP_VERSION__ !== 'undefined' ? __AP
 export const GIT_COMMIT: string = typeof __GIT_COMMIT__ !== 'undefined' ? __GIT_COMMIT__ : 'dev';
 
 export const DUE_SOON_DAYS = 14;
+export const SORT_DUE_SOON_DAYS = 7;
 export const SOFT_DELETE_CLEANUP_DAYS = 30;
 export const DEFAULT_SYNC_INTERVAL_MS = 300_000;
 
