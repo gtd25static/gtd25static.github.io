@@ -35,7 +35,7 @@ export function useWorkingOn(): WorkingOnState {
 
 export async function startWorkingOn(subtaskId: string) {
   try {
-    await clearWorkingTasks();
+    // setSubtaskStatus('working') already atomically clears all working items
     await setSubtaskStatus(subtaskId, 'working');
     // Set workedAt on parent task if not already set
     const subtask = await db.subtasks.get(subtaskId);
@@ -62,19 +62,39 @@ export async function startWorkingOn(subtaskId: string) {
 
 export async function startWorkingOnTask(taskId: string) {
   try {
-    await stopWorking();
-    await clearWorkingTasks();
     const now = Date.now();
+    const workingSubs = await db.subtasks.where('status').equals('working').toArray();
+    const workingTasks = await db.tasks.where('status').equals('working').toArray();
     await ensureDeviceId();
-    await db.transaction('rw', [db.tasks, db.changeLog], async () => {
+    await db.transaction('rw', [db.tasks, db.subtasks, db.changeLog], async () => {
+      const batch: Array<{ entityType: 'task' | 'subtask'; entityId: string; operation: 'upsert'; data: Record<string, unknown> }> = [];
+
+      // Clear working subtasks
+      for (const s of workingSubs) {
+        const ft = stampUpdatedFields(s.fieldTimestamps, ['status'], now);
+        await db.subtasks.update(s.id, { status: 'todo', updatedAt: now, fieldTimestamps: ft });
+        const updated = await db.subtasks.get(s.id);
+        if (updated) batch.push({ entityType: 'subtask', entityId: s.id, operation: 'upsert', data: updated as unknown as Record<string, unknown> });
+      }
+
+      // Clear working tasks
+      for (const t of workingTasks) {
+        if (t.id === taskId) continue; // Will be set to working below
+        const ft = stampUpdatedFields(t.fieldTimestamps, ['status'], now);
+        await db.tasks.update(t.id, { status: 'todo', updatedAt: now, fieldTimestamps: ft });
+        const updated = await db.tasks.get(t.id);
+        if (updated) batch.push({ entityType: 'task', entityId: t.id, operation: 'upsert', data: updated as unknown as Record<string, unknown> });
+      }
+
+      // Set target task to working
       const task = await db.tasks.get(taskId);
       const workedAt = task?.workedAt ?? now;
       const ft = stampUpdatedFields(task?.fieldTimestamps, ['status', 'workedAt'], now);
       await db.tasks.update(taskId, { status: 'working' as const, updatedAt: now, workedAt, fieldTimestamps: ft });
       const updated = await db.tasks.get(taskId);
-      if (updated) {
-        await recordChangeInTx('task', taskId, 'upsert', updated as unknown as Record<string, unknown>);
-      }
+      if (updated) batch.push({ entityType: 'task', entityId: taskId, operation: 'upsert', data: updated as unknown as Record<string, unknown> });
+
+      await recordChangeBatchInTx(batch);
     });
     scheduleSyncDebounced();
   } catch (error) {

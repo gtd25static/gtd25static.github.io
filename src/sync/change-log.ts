@@ -232,5 +232,7 @@ export async function pruneChangelogIfSyncDisabled(): Promise<number> {
   const toRemove = count - PRUNE_TARGET;
   const oldest = await db.changeLog.orderBy('timestamp').limit(toRemove).toArray();
   await db.changeLog.bulkDelete(oldest.map((e) => e.id));
+  // Track that pruning occurred so we can warn when sync is later enabled
+  await db.localSettings.update('local', { changelogPruned: true });
   return oldest.length;
 }

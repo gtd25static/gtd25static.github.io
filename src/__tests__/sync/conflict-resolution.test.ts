@@ -130,4 +130,29 @@ describe('archiveOldCompleted', () => {
     expect(result.taskLists).toEqual(data.taskLists);
     expect(result.subtasks).toEqual(data.subtasks);
   });
+
+  it('stamps fieldTimestamps.archived so merge preserves the flag', () => {
+    const oldCompletedAt = Date.now() - 91 * 24 * 60 * 60 * 1000;
+    const data = makeSyncData({
+      tasks: [makeTask({ id: 't1', status: 'done', completedAt: oldCompletedAt, updatedAt: oldCompletedAt })],
+    });
+    const result = archiveOldCompleted(data);
+    const task = result.tasks[0];
+    expect(task.archived).toBe(true);
+    expect(task.fieldTimestamps).toBeDefined();
+    expect(task.fieldTimestamps!.archived).toBeGreaterThan(0);
+  });
+
+  it('preserves existing fieldTimestamps when archiving', () => {
+    const oldCompletedAt = Date.now() - 91 * 24 * 60 * 60 * 1000;
+    const existingFT = { title: 5000, status: 6000 };
+    const data = makeSyncData({
+      tasks: [makeTask({ id: 't1', status: 'done', completedAt: oldCompletedAt, updatedAt: oldCompletedAt, fieldTimestamps: existingFT })],
+    });
+    const result = archiveOldCompleted(data);
+    const task = result.tasks[0];
+    expect(task.fieldTimestamps!.title).toBe(5000);
+    expect(task.fieldTimestamps!.status).toBe(6000);
+    expect(task.fieldTimestamps!.archived).toBeGreaterThan(0);
+  });
 });

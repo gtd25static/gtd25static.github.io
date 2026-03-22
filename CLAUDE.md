@@ -185,3 +185,4 @@ With each new added functionality, consider whether you are adding some security
 - Pay close attention to input validation
 - Handle corner cases gracefully
 - Create security tests when needed
+- Ensure app privacy and security principles are always safeguarded. If we are using end-to-end encryption, ensure all new fields get encrypted when new features are created.

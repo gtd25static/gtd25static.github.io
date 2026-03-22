@@ -107,4 +107,75 @@ describe('cleanOrphans', () => {
     const sub = await db.subtasks.get(orphanSubId);
     expect(sub?.deletedAt).toBe(12345); // Unchanged
   });
+
+  it('records changelog entries for orphaned subtasks', async () => {
+    const orphanSubId = newId();
+    await db.subtasks.add({
+      id: orphanSubId,
+      taskId: 'nonexistent-task',
+      title: 'Orphan Sub',
+      status: 'todo',
+      order: 0,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    });
+
+    const beforeCount = await db.changeLog.count();
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await cleanOrphans();
+    warnSpy.mockRestore();
+
+    const afterCount = await db.changeLog.count();
+    expect(afterCount).toBeGreaterThan(beforeCount);
+    const entries = await db.changeLog.toArray();
+    const orphanEntry = entries.find((e) => e.entityId === orphanSubId);
+    expect(orphanEntry).toBeDefined();
+    expect(orphanEntry!.entityType).toBe('subtask');
+    expect(orphanEntry!.operation).toBe('upsert');
+  });
+
+  it('stamps fieldTimestamps when soft-deleting orphaned subtasks', async () => {
+    const orphanSubId = newId();
+    await db.subtasks.add({
+      id: orphanSubId,
+      taskId: 'nonexistent-task',
+      title: 'Orphan Sub',
+      status: 'todo',
+      order: 0,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    });
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await cleanOrphans();
+    warnSpy.mockRestore();
+
+    const sub = await db.subtasks.get(orphanSubId);
+    expect(sub?.fieldTimestamps).toBeDefined();
+    expect(sub?.fieldTimestamps?.deletedAt).toBeDefined();
+    expect(sub!.fieldTimestamps!.deletedAt).toBeGreaterThan(0);
+  });
+
+  it('records changelog entries for orphaned tasks', async () => {
+    const orphanTaskId = newId();
+    await db.tasks.add({
+      id: orphanTaskId,
+      listId: 'nonexistent-list',
+      title: 'Orphan Task',
+      status: 'todo',
+      order: 0,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    });
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await cleanOrphans();
+    warnSpy.mockRestore();
+
+    const entries = await db.changeLog.toArray();
+    const orphanEntry = entries.find((e) => e.entityId === orphanTaskId);
+    expect(orphanEntry).toBeDefined();
+    expect(orphanEntry!.entityType).toBe('task');
+    expect(orphanEntry!.operation).toBe('upsert');
+  });
 });

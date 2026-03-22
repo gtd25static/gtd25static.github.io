@@ -25,7 +25,9 @@ export function archiveOldCompleted(data: SyncData): SyncData {
       if (t.status === 'done' && !t.archived) {
         const completedAt = t.completedAt ?? t.updatedAt;
         if (completedAt < cutoff) {
-          return { ...t, archived: true, updatedAt: Date.now() };
+          const now = Date.now();
+          const ft = { ...(t.fieldTimestamps ?? {}), archived: now };
+          return { ...t, archived: true, updatedAt: now, fieldTimestamps: ft };
         }
       }
       return t;

@@ -3,7 +3,8 @@ import type { TaskList, Task, Subtask, SyncMeta, LocalSettings, ChangeEntry, Pom
 import { newId } from '../lib/id';
 import { createLocalBackup } from './backup';
 import { purgeOldTrashItems } from './purge';
-import { pruneChangelogIfSyncDisabled } from '../sync/change-log';
+import { ensureDeviceId, recordChangeBatchInTx, pruneChangelogIfSyncDisabled } from '../sync/change-log';
+import { stampUpdatedFields } from '../sync/field-timestamps';
 import { SYNC_VERSION } from '../sync/version';
 import { runLocalMigrations } from '../sync/local-migrations';
 
@@ -52,13 +53,19 @@ export async function cleanOrphans() {
   let orphanedSubtasks = 0;
   let orphanedTasks = 0;
 
-  await db.transaction('rw', [db.taskLists, db.tasks, db.subtasks], async () => {
+  await ensureDeviceId();
+  await db.transaction('rw', [db.taskLists, db.tasks, db.subtasks, db.changeLog], async () => {
+    const changeBatch: Array<{ entityType: 'task' | 'subtask'; entityId: string; operation: 'upsert'; data: Record<string, unknown> }> = [];
+
     // Find subtasks whose parent task doesn't exist
     const taskIds = new Set((await db.tasks.toArray()).map((t) => t.id));
     const allSubtasks = await db.subtasks.toArray();
     for (const sub of allSubtasks) {
       if (!taskIds.has(sub.taskId) && !sub.deletedAt) {
-        await db.subtasks.update(sub.id, { deletedAt: now, updatedAt: now });
+        const ft = stampUpdatedFields(sub.fieldTimestamps, ['deletedAt'], now);
+        await db.subtasks.update(sub.id, { deletedAt: now, updatedAt: now, fieldTimestamps: ft });
+        const updated = await db.subtasks.get(sub.id);
+        if (updated) changeBatch.push({ entityType: 'subtask', entityId: sub.id, operation: 'upsert', data: updated as unknown as Record<string, unknown> });
         orphanedSubtasks++;
       }
     }
@@ -73,12 +80,20 @@ export async function cleanOrphans() {
     for (const task of allTasks) {
       if (!listIds.has(task.listId) && !task.deletedAt) {
         if (inbox) {
-          await db.tasks.update(task.id, { listId: inbox.id, updatedAt: now });
+          const ft = stampUpdatedFields(task.fieldTimestamps, ['listId'], now);
+          await db.tasks.update(task.id, { listId: inbox.id, updatedAt: now, fieldTimestamps: ft });
         } else {
-          await db.tasks.update(task.id, { deletedAt: now, updatedAt: now });
+          const ft = stampUpdatedFields(task.fieldTimestamps, ['deletedAt'], now);
+          await db.tasks.update(task.id, { deletedAt: now, updatedAt: now, fieldTimestamps: ft });
         }
+        const updated = await db.tasks.get(task.id);
+        if (updated) changeBatch.push({ entityType: 'task', entityId: task.id, operation: 'upsert', data: updated as unknown as Record<string, unknown> });
         orphanedTasks++;
       }
+    }
+
+    if (changeBatch.length > 0) {
+      await recordChangeBatchInTx(changeBatch);
     }
   });
 

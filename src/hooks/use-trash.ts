@@ -50,12 +50,25 @@ export async function permanentlyDelete(item: TrashItem) {
   try {
     await ensureDeviceId();
     switch (item.type) {
-      case 'list':
-        await db.transaction('rw', [db.taskLists, db.changeLog], async () => {
+      case 'list': {
+        const listTasks = await db.tasks.where('listId').equals(item.id).toArray();
+        const listSubtaskIds: string[] = [];
+        for (const t of listTasks) {
+          const subs = await db.subtasks.where('taskId').equals(t.id).toArray();
+          listSubtaskIds.push(...subs.map((s) => s.id));
+        }
+        await db.transaction('rw', [db.taskLists, db.tasks, db.subtasks, db.changeLog], async () => {
+          for (const subId of listSubtaskIds) await db.subtasks.delete(subId);
+          for (const t of listTasks) await db.tasks.delete(t.id);
           await db.taskLists.delete(item.id);
-          await recordChangeInTx('taskList', item.id, 'delete');
+          const batch: Array<{ entityType: 'taskList' | 'task' | 'subtask'; entityId: string; operation: 'delete' }> = [];
+          for (const subId of listSubtaskIds) batch.push({ entityType: 'subtask', entityId: subId, operation: 'delete' });
+          for (const t of listTasks) batch.push({ entityType: 'task', entityId: t.id, operation: 'delete' });
+          batch.push({ entityType: 'taskList', entityId: item.id, operation: 'delete' });
+          await recordChangeBatchInTx(batch);
         });
         break;
+      }
       case 'task': {
         const subtasks = await db.subtasks.where('taskId').equals(item.id).toArray();
         await db.transaction('rw', [db.tasks, db.subtasks, db.changeLog], async () => {

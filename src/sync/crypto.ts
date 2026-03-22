@@ -6,8 +6,8 @@ const VERIFIER_PLAINTEXT = 'gtd25-encryption-check';
 
 const SENSITIVE_FIELDS: Record<string, string[]> = {
   taskList: ['name'],
-  task: ['title', 'description', 'link', 'linkTitle'],
-  subtask: ['title', 'link', 'linkTitle'],
+  task: ['title', 'description', 'link', 'linkTitle', 'links'],
+  subtask: ['title', 'link', 'linkTitle', 'links'],
 };
 
 // --- Key cache ---

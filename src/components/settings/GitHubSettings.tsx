@@ -41,11 +41,18 @@ export function GitHubSettings() {
     }
 
     const wasSyncEnabled = local.syncEnabled;
+    const willEnableSync = !!(pat.trim() && repo.trim());
+
+    // Warn if enabling sync after changelog was pruned
+    if (!wasSyncEnabled && willEnableSync && local.changelogPruned) {
+      toast('Note: some older offline changes were pruned and will not sync', 'info');
+      await updateLocalSettings({ changelogPruned: undefined });
+    }
 
     await updateLocalSettings({
       githubPat: pat.trim() || undefined,
       githubRepo: repo.trim() || undefined,
-      syncEnabled: !!(pat.trim() && repo.trim()),
+      syncEnabled: willEnableSync,
       encryptionPassword: encPassword.trim() || undefined,
     });
     toast('Sync settings saved', 'success');

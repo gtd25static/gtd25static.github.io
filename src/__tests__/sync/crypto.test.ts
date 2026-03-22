@@ -174,6 +174,46 @@ describe('encryptEntity / decryptEntity', () => {
     const result = await decryptEntity(testKey, entity, 'taskList');
     expect(result).toEqual(entity);
   });
+
+  it('encrypts the links array on tasks', async () => {
+    const task = {
+      id: 'task1',
+      listId: 'list1',
+      title: 'Task with links',
+      links: [{ url: 'https://secret.com', title: 'Secret' }],
+      status: 'todo',
+      order: 0,
+      createdAt: 1000,
+      updatedAt: 1001,
+    };
+
+    const encrypted = await encryptEntity(testKey, task, 'task');
+    expect(encrypted.links).toBeUndefined();
+    expect(encrypted._enc).toBeDefined();
+
+    const decrypted = await decryptEntity(testKey, encrypted, 'task');
+    expect(decrypted.links).toEqual(task.links);
+  });
+
+  it('encrypts the links array on subtasks', async () => {
+    const subtask = {
+      id: 'sub1',
+      taskId: 'task1',
+      title: 'Sub with links',
+      links: [{ url: 'https://private.com', title: 'Private' }],
+      status: 'todo',
+      order: 0,
+      createdAt: 1000,
+      updatedAt: 1001,
+    };
+
+    const encrypted = await encryptEntity(testKey, subtask, 'subtask');
+    expect(encrypted.links).toBeUndefined();
+    expect(encrypted._enc).toBeDefined();
+
+    const decrypted = await decryptEntity(testKey, encrypted, 'subtask');
+    expect(decrypted.links).toEqual(subtask.links);
+  });
 });
 
 describe('encryptSyncData / decryptSyncData', () => {

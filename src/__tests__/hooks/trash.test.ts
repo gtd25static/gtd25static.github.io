@@ -19,6 +19,17 @@ describe('permanentlyDelete', () => {
     expect(result).toBeUndefined();
   });
 
+  it('hard-deletes a list and cascades to its tasks and subtasks', async () => {
+    const list = await createTaskList('Delete Me');
+    const task = assertDefined(await createTask(list.id, { title: 'Task' }));
+    const sub = assertDefined(await createSubtask(task.id, { title: 'Sub' }));
+    const item: TrashItem = { id: list.id, type: 'list', title: list.name, deletedAt: Date.now() };
+    await permanentlyDelete(item);
+    expect(await db.taskLists.get(list.id)).toBeUndefined();
+    expect(await db.tasks.get(task.id)).toBeUndefined();
+    expect(await db.subtasks.get(sub.id)).toBeUndefined();
+  });
+
   it('hard-deletes a task and its subtasks', async () => {
     const list = await createTaskList('List');
     const task = assertDefined(await createTask(list.id, { title: 'Task' }));

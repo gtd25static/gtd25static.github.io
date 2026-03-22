@@ -101,6 +101,7 @@ export interface LocalSettings {
   deviceId?: string;
   encryptionPassword?: string;
   appliedSyncVersion?: number;
+  changelogPruned?: boolean;
 }
 
 export interface ChangeEntry {
