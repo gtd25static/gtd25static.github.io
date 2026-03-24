@@ -59,7 +59,7 @@ export function DndProvider({ children }: { children: ReactNode }) {
     if (!over || active.id === over.id) return;
 
     const activeData = active.data.current as DragItemData | undefined;
-    const overData = over.data.current as (DragItemData & DropZoneData) | undefined;
+    const overData = over.data.current as (DragItemData | DropZoneData) | undefined;
     if (!activeData || !overData) return;
 
     // Cross-list move: task/follow-up dropped on a sidebar list
