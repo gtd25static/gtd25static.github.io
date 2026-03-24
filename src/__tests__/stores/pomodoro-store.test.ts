@@ -53,6 +53,19 @@ describe('pomodoro-store', () => {
       const target = new Date(state.timerEndTime!);
       expect(target.getMinutes()).toBe(25);
       expect(target.getSeconds()).toBe(0);
+      expect(target.getMilliseconds()).toBe(0);
+    });
+
+    it('targets :25:00 sharp even when pressed mid-second', () => {
+      // The timer should always target :25:00.000, never :25:30 or similar
+      getState().startColon25();
+      const state = getState();
+      const target = new Date(state.timerEndTime!);
+
+      expect(target.getMinutes()).toBe(25);
+      expect(target.getSeconds()).toBe(0);
+      expect(target.getMilliseconds()).toBe(0);
+      expect(state.displaySeconds).toBeGreaterThan(0);
     });
 
     it('targets next hour if past :25', () => {
@@ -88,6 +101,7 @@ describe('pomodoro-store', () => {
       const target = new Date(state.timerEndTime!);
       expect(target.getMinutes()).toBe(55);
       expect(target.getSeconds()).toBe(0);
+      expect(target.getMilliseconds()).toBe(0);
     });
   });
 

@@ -1,16 +1,10 @@
 import { useState, useEffect } from 'react';
 import {
-  DndContext,
-  closestCenter,
-  KeyboardSensor,
-  PointerSensor,
-  useSensor,
-  useSensors,
+  useDndMonitor,
   type DragEndEvent,
 } from '@dnd-kit/core';
 import {
   SortableContext,
-  sortableKeyboardCoordinates,
   useSortable,
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable';
@@ -20,14 +14,21 @@ import { createTask, reorderTasks } from '../../hooks/use-tasks';
 import { useAppState } from '../../stores/app-state';
 import { useShallow } from 'zustand/react/shallow';
 import type { Task } from '../../db/models';
+import type { DragItemData } from '../layout/DndProvider';
 import { FollowUpCard } from './FollowUpCard';
 import { InlineTaskForm } from '../tasks/InlineTaskForm';
 import { DropdownMenu } from '../ui/DropdownMenu';
 import { sortFollowUpsForDisplay } from '../../lib/task-sort';
 
-function SortableFollowUpItem({ task, index }: { task: Task; index: number }) {
+function SortableFollowUpItem({ task, index, listId }: { task: Task; index: number; listId: string }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: task.id,
+    data: {
+      type: 'follow-up',
+      listId,
+      listType: 'follow-ups',
+      title: task.title,
+    } satisfies DragItemData,
   });
 
   const style = {
@@ -75,22 +76,26 @@ export function FollowUpList({ listId, listName }: Props) {
     setNavigateToTaskId(null);
   }, [navigateToTaskId, archived]);
 
-  const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
-    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
-  );
+  // Handle intra-list follow-up reorder via shared DndContext
+  useDndMonitor({
+    onDragEnd(event: DragEndEvent) {
+      const { active: dragActive, over } = event;
+      if (!over || dragActive.id === over.id) return;
+      const activeData = dragActive.data.current as DragItemData | undefined;
+      const overData = over.data.current as DragItemData | undefined;
+      if (!activeData || !overData) return;
+      if (activeData.type !== 'follow-up' || overData.type !== 'follow-up') return;
+      if (activeData.listId !== overData.listId || activeData.listId !== listId) return;
 
-  function handleDragEnd(event: DragEndEvent) {
-    const { active: dragActive, over } = event;
-    if (!over || dragActive.id === over.id) return;
-
-    const oldIndex = active.findIndex((t) => t.id === dragActive.id);
-    const newIndex = active.findIndex((t) => t.id === over.id);
-    const newOrder = [...active];
-    const [moved] = newOrder.splice(oldIndex, 1);
-    newOrder.splice(newIndex, 0, moved);
-    reorderTasks(newOrder.map((t) => t.id));
-  }
+      const oldIndex = active.findIndex((t) => t.id === dragActive.id);
+      const newIndex = active.findIndex((t) => t.id === over.id);
+      if (oldIndex === -1 || newIndex === -1) return;
+      const newOrder = [...active];
+      const [moved] = newOrder.splice(oldIndex, 1);
+      newOrder.splice(newIndex, 0, moved);
+      reorderTasks(newOrder.map((t) => t.id));
+    },
+  });
 
   return (
     <div className="flex flex-1 flex-col overflow-hidden">
@@ -138,15 +143,13 @@ export function FollowUpList({ listId, listName }: Props) {
               <p className="text-sm">No follow-ups yet</p>
             </div>
           ) : (
-            <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
-              <SortableContext items={active.map((t) => t.id)} strategy={verticalListSortingStrategy}>
-                <div>
-                  {active.map((task, i) => (
-                    <SortableFollowUpItem key={task.id} task={task} index={i} />
-                  ))}
-                </div>
-              </SortableContext>
-            </DndContext>
+            <SortableContext items={active.map((t) => t.id)} strategy={verticalListSortingStrategy}>
+              <div>
+                {active.map((task, i) => (
+                  <SortableFollowUpItem key={task.id} task={task} index={i} listId={listId} />
+                ))}
+              </div>
+            </SortableContext>
           )}
 
           {archived.length > 0 && (

@@ -1,5 +1,7 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
+import { useDroppable } from '@dnd-kit/core';
 import type { Task } from '../../db/models';
+import type { DropZoneData } from '../layout/DndProvider';
 import { formatDate, daysUntil, formatTimeRemaining } from '../../lib/date-utils';
 import { setTaskStatus, deleteTask, restoreTask, updateTask, moveTaskToList, duplicateTask } from '../../hooks/use-tasks';
 import { toast } from '../ui/Toast';
@@ -49,6 +51,13 @@ export function TaskCard({ task, index, dragHandleProps }: Props) {
   const [editing, setEditing] = useState(false);
   const [editingTitle, setEditingTitle] = useState(false);
   const [editedTitle, setEditedTitle] = useState('');
+
+  // Droppable zone for subtask conversion (only active when task is expanded)
+  const { setNodeRef: setDropRef, isOver: isDropOver } = useDroppable({
+    id: `subtask-drop-${task.id}`,
+    data: { type: 'subtaskDropZone', taskId: task.id } satisfies DropZoneData,
+    disabled: !expanded || bulkMode,
+  });
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null);
 
   // React to keyboard-triggered editing
@@ -347,13 +356,18 @@ export function TaskCard({ task, index, dragHandleProps }: Props) {
 
       {/* Expanded content (hidden in bulk mode) */}
       {expanded && !bulkMode && (
-        <div className={`-mt-px rounded-b-lg border border-t-0 px-2 pb-2 pt-1 shadow-sm ${
+        <div
+          ref={setDropRef}
+          className={`-mt-px rounded-b-lg border border-t-0 px-2 pb-2 pt-1 shadow-sm ${
           focused
             ? 'border-accent-500/60 dark:border-accent-400/50'
             : 'border-zinc-200 dark:border-zinc-700/60'
         } ${
           index !== undefined && index % 2 === 1 ? 'bg-zinc-50/70 dark:bg-zinc-800/30' : 'bg-white dark:bg-zinc-900/50'
-        }`}>
+        } ${isDropOver ? 'ring-2 ring-accent-500/60 bg-accent-50/30 dark:bg-accent-900/20' : ''}`}>
+          {isDropOver && (
+            <p className="mb-1 text-xs text-accent-600 dark:text-accent-400 text-center">Drop to add as subtask</p>
+          )}
           {task.description && (
             <p className="mb-1 text-sm text-zinc-500 dark:text-zinc-400 whitespace-pre-wrap">{task.description}</p>
           )}

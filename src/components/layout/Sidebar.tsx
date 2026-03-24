@@ -1,17 +1,12 @@
 import { useState, useRef } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import {
-  DndContext,
-  closestCenter,
-  KeyboardSensor,
-  PointerSensor,
-  useSensor,
-  useSensors,
+  useDndMonitor,
+  useDroppable,
   type DragEndEvent,
 } from '@dnd-kit/core';
 import {
   SortableContext,
-  sortableKeyboardCoordinates,
   useSortable,
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable';
@@ -24,6 +19,7 @@ import { Input } from '../ui/Input';
 import { DropdownMenu } from '../ui/DropdownMenu';
 import { db } from '../../db';
 import type { ListType } from '../../db/models';
+import type { DragItemData } from './DndProvider';
 import { SyncIndicator } from './SyncIndicator';
 import { PomodoroBar } from '../pomodoro/PomodoroBar';
 import { GIT_COMMIT, MAX_LIST_NAME_LENGTH, isInboxList } from '../../lib/constants';
@@ -80,6 +76,17 @@ function ListItem({ list, selected, onSelect, highlight, focused, count, allList
   const [editName, setEditName] = useState('');
   const [dropHighlight, setDropHighlight] = useState(false);
 
+  // Make this list item a drop target for tasks/follow-ups from the shared DndContext
+  const { setNodeRef: setDropRef, isOver } = useDroppable({
+    id: `list-drop-${list.id}`,
+    data: {
+      type: 'sidebarList',
+      listId: list.id,
+      listType: list.type,
+      listName: list.name,
+    } satisfies DragItemData,
+  });
+
   const handleSave = () => {
     if (editName.trim() && editName.trim() !== list.name) {
       updateTaskList(list.id, { name: editName.trim().slice(0, MAX_LIST_NAME_LENGTH) });
@@ -124,6 +131,7 @@ function ListItem({ list, selected, onSelect, highlight, focused, count, allList
     );
   }
 
+  // HTML5 drag-and-drop handlers (for inbox card compatibility)
   function handleDrop(e: React.DragEvent) {
     e.preventDefault();
     setDropHighlight(false);
@@ -133,7 +141,6 @@ function ListItem({ list, selected, onSelect, highlight, focused, count, allList
       moveTaskToList(singleTaskId, list.id);
       toast(`Moved to ${list.name}`, 'success');
     } else if (inboxListId && allLists) {
-      // Move all inbox tasks to this list
       const inboxList = allLists.find((l) => l.id === inboxListId);
       if (inboxList) {
         db.tasks.where('listId').equals(inboxListId).toArray().then((tasks) => {
@@ -154,8 +161,9 @@ function ListItem({ list, selected, onSelect, highlight, focused, count, allList
 
   return (
     <div
+      ref={setDropRef}
       data-focus-id={list.id}
-      className={`group flex items-center ${dropHighlight ? 'ring-2 ring-accent-500 rounded-lg' : ''}`}
+      className={`group flex items-center ${(dropHighlight || isOver) ? 'ring-2 ring-accent-500 rounded-lg' : ''}`}
       onDragOver={handleDragOver}
       onDragEnter={(e) => {
         if (e.dataTransfer.types.includes('application/x-inbox-task') || e.dataTransfer.types.includes('application/x-inbox-all')) {
@@ -227,6 +235,12 @@ function SortableListItem({ list, selected, onSelect, highlight, focused, count,
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: list.id,
+    data: {
+      type: 'sidebarList',
+      listId: list.id,
+      listType: list.type,
+      listName: list.name,
+    } satisfies DragItemData,
   });
 
   const style = {
@@ -257,11 +271,6 @@ export function Sidebar() {
   const specialTotal = warningCount + blockedCount + recurringCount;
   const reviewData = useReviewData();
 
-  const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
-    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
-  );
-
   const filteredLists = searchQuery
     ? lists.filter((l) => l.name.toLowerCase().includes(searchQuery.toLowerCase()))
     : lists;
@@ -271,11 +280,19 @@ export function Sidebar() {
   const followUpLists = filteredLists.filter((l) => l.type === 'follow-ups');
   const inboxCount = inboxList ? (taskCounts.get(inboxList.id) ?? 0) : 0;
 
-  function handleDragEnd(group: 'tasks' | 'follow-ups') {
-    return (event: DragEndEvent) => {
+  // Handle sidebar list reorder via shared DndContext
+  useDndMonitor({
+    onDragEnd(event: DragEndEvent) {
       const { active, over } = event;
       if (!over || active.id === over.id) return;
+      const activeData = active.data.current as DragItemData | undefined;
+      const overData = over.data.current as DragItemData | undefined;
+      if (!activeData || !overData) return;
+      if (activeData.type !== 'sidebarList' || overData.type !== 'sidebarList') return;
+      // Only reorder within same group
+      if (activeData.listType !== overData.listType) return;
 
+      const group = activeData.listType === 'tasks' ? 'tasks' : 'follow-ups';
       const sourceList = group === 'tasks' ? taskLists : followUpLists;
       const otherList = group === 'tasks' ? followUpLists : taskLists;
       const oldIndex = sourceList.findIndex((l) => l.id === active.id);
@@ -286,13 +303,12 @@ export function Sidebar() {
       const [moved] = reordered.splice(oldIndex, 1);
       reordered.splice(newIndex, 0, moved);
 
-      // Tasks always come first in global order
       const allOrdered = group === 'tasks'
         ? [...reordered, ...otherList]
         : [...otherList, ...reordered];
       reorderTaskLists(allOrdered.map((l) => l.id));
-    };
-  }
+    },
+  });
 
   async function handleCreate() {
     if (!newName.trim()) return;
@@ -524,22 +540,20 @@ export function Sidebar() {
             <div className="flex items-center justify-between px-3 py-2">
               <span className="text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Lists</span>
             </div>
-            <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd('tasks')}>
-              <SortableContext items={taskLists.map((l) => l.id)} strategy={verticalListSortingStrategy}>
-                {taskLists.map((list) => (
-                  <SortableListItem
-                    key={list.id}
-                    list={list}
-                    selected={selectedListId === list.id}
-                    onSelect={() => { selectList(list.id); setSidebarOpen(false); }}
-                    highlight={searchQuery}
-                    focused={focusedItemId === list.id && focusZone === 'sidebar'}
-                    count={taskCounts.get(list.id) ?? 0}
-                    allLists={lists}
-                  />
-                ))}
-              </SortableContext>
-            </DndContext>
+            <SortableContext items={taskLists.map((l) => l.id)} strategy={verticalListSortingStrategy}>
+              {taskLists.map((list) => (
+                <SortableListItem
+                  key={list.id}
+                  list={list}
+                  selected={selectedListId === list.id}
+                  onSelect={() => { selectList(list.id); setSidebarOpen(false); }}
+                  highlight={searchQuery}
+                  focused={focusedItemId === list.id && focusZone === 'sidebar'}
+                  count={taskCounts.get(list.id) ?? 0}
+                  allLists={lists}
+                />
+              ))}
+            </SortableContext>
           </div>
         )}
 
@@ -549,22 +563,20 @@ export function Sidebar() {
             <div className="flex items-center justify-between px-3 py-2 mt-1 border-t border-zinc-200 dark:border-zinc-700">
               <span className="text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Follow-ups</span>
             </div>
-            <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd('follow-ups')}>
-              <SortableContext items={followUpLists.map((l) => l.id)} strategy={verticalListSortingStrategy}>
-                {followUpLists.map((list) => (
-                  <SortableListItem
-                    key={list.id}
-                    list={list}
-                    selected={selectedListId === list.id}
-                    onSelect={() => { selectList(list.id); setSidebarOpen(false); }}
-                    highlight={searchQuery}
-                    focused={focusedItemId === list.id && focusZone === 'sidebar'}
-                    count={taskCounts.get(list.id) ?? 0}
-                    allLists={lists}
-                  />
-                ))}
-              </SortableContext>
-            </DndContext>
+            <SortableContext items={followUpLists.map((l) => l.id)} strategy={verticalListSortingStrategy}>
+              {followUpLists.map((list) => (
+                <SortableListItem
+                  key={list.id}
+                  list={list}
+                  selected={selectedListId === list.id}
+                  onSelect={() => { selectList(list.id); setSidebarOpen(false); }}
+                  highlight={searchQuery}
+                  focused={focusedItemId === list.id && focusZone === 'sidebar'}
+                  count={taskCounts.get(list.id) ?? 0}
+                  allLists={lists}
+                />
+              ))}
+            </SortableContext>
           </div>
         )}
       </nav>

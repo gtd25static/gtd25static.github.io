@@ -280,6 +280,53 @@ export async function convertSubtaskToTask(subtaskId: string, targetListId: stri
   }
 }
 
+export async function convertTaskToSubtask(taskId: string, parentTaskId: string) {
+  try {
+    if (taskId === parentTaskId) return;
+
+    const task = await db.tasks.get(taskId);
+    if (!task) return;
+
+    // Don't convert tasks that have subtasks (no deep nesting)
+    const existingSubtasks = await db.subtasks.where('taskId').equals(taskId).toArray();
+    if (existingSubtasks.some((s) => !s.deletedAt)) return;
+
+    const now = Date.now();
+    const newSubtaskId = newId();
+    await ensureDeviceId();
+    await db.transaction('rw', [db.tasks, db.subtasks, db.changeLog], async () => {
+      const parentSubCount = await db.subtasks.where('taskId').equals(parentTaskId).count();
+
+      const newSub: Subtask = {
+        id: newSubtaskId,
+        taskId: parentTaskId,
+        title: task.title,
+        link: task.link,
+        linkTitle: task.linkTitle,
+        dueDate: task.dueDate,
+        links: task.links ? [...task.links] : undefined,
+        status: task.status === 'working' ? 'todo' : (task.status as import('../db/models').SubtaskStatus),
+        order: parentSubCount,
+        createdAt: now,
+        updatedAt: now,
+      };
+      newSub.fieldTimestamps = initFieldTimestamps(newSub as unknown as Record<string, unknown>, now);
+      await db.subtasks.add(newSub);
+
+      // Soft-delete the original task
+      const taskFT = stampUpdatedFields(task.fieldTimestamps, ['deletedAt'], now);
+      await db.tasks.update(taskId, { deletedAt: now, updatedAt: now, fieldTimestamps: taskFT });
+
+      await recordChangeInTx('task', taskId, 'delete');
+      await recordChangeInTx('subtask', newSubtaskId, 'upsert', newSub as unknown as Record<string, unknown>);
+    });
+
+    scheduleSyncDebounced();
+  } catch (error) {
+    handleDbError(error, 'convert task to subtask');
+  }
+}
+
 export async function reorderSubtasks(orderedIds: string[]) {
   try {
     const now = Date.now();

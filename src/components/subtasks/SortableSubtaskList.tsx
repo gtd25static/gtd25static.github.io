@@ -1,20 +1,15 @@
 import {
-  DndContext,
-  closestCenter,
-  KeyboardSensor,
-  PointerSensor,
-  useSensor,
-  useSensors,
+  useDndMonitor,
   type DragEndEvent,
 } from '@dnd-kit/core';
 import {
   SortableContext,
-  sortableKeyboardCoordinates,
   useSortable,
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import type { Subtask } from '../../db/models';
+import type { DragItemData } from '../layout/DndProvider';
 import { setSubtaskStatus } from '../../hooks/use-subtasks';
 import { SubtaskItem } from './SubtaskItem';
 
@@ -26,6 +21,11 @@ interface Props {
 function SortableItem({ subtask, isLast }: { subtask: Subtask; isLast: boolean }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: subtask.id,
+    data: {
+      type: 'subtask',
+      taskId: subtask.taskId,
+      title: subtask.title,
+    } satisfies DragItemData,
   });
 
   const style = {
@@ -88,32 +88,34 @@ function SortableItem({ subtask, isLast }: { subtask: Subtask; isLast: boolean }
 }
 
 export function SortableSubtaskList({ subtasks, onReorder }: Props) {
-  const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
-    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
-  );
+  // Handle subtask reorder via shared DndContext
+  useDndMonitor({
+    onDragEnd(event: DragEndEvent) {
+      const { active, over } = event;
+      if (!over || active.id === over.id) return;
+      const activeData = active.data.current as DragItemData | undefined;
+      const overData = over.data.current as DragItemData | undefined;
+      if (!activeData || !overData) return;
+      if (activeData.type !== 'subtask' || overData.type !== 'subtask') return;
+      if (activeData.taskId !== overData.taskId) return;
 
-  function handleDragEnd(event: DragEndEvent) {
-    const { active, over } = event;
-    if (!over || active.id === over.id) return;
-
-    const oldIndex = subtasks.findIndex((s) => s.id === active.id);
-    const newIndex = subtasks.findIndex((s) => s.id === over.id);
-    const newOrder = [...subtasks];
-    const [moved] = newOrder.splice(oldIndex, 1);
-    newOrder.splice(newIndex, 0, moved);
-    onReorder(newOrder.map((s) => s.id));
-  }
+      const oldIndex = subtasks.findIndex((s) => s.id === active.id);
+      const newIndex = subtasks.findIndex((s) => s.id === over.id);
+      if (oldIndex === -1 || newIndex === -1) return;
+      const newOrder = [...subtasks];
+      const [moved] = newOrder.splice(oldIndex, 1);
+      newOrder.splice(newIndex, 0, moved);
+      onReorder(newOrder.map((s) => s.id));
+    },
+  });
 
   return (
-    <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
-      <SortableContext items={subtasks.map((s) => s.id)} strategy={verticalListSortingStrategy}>
-        <div className="ml-10">
-          {subtasks.map((subtask, i) => (
-            <SortableItem key={subtask.id} subtask={subtask} isLast={i === subtasks.length - 1} />
-          ))}
-        </div>
-      </SortableContext>
-    </DndContext>
+    <SortableContext items={subtasks.map((s) => s.id)} strategy={verticalListSortingStrategy}>
+      <div className="ml-10">
+        {subtasks.map((subtask, i) => (
+          <SortableItem key={subtask.id} subtask={subtask} isLast={i === subtasks.length - 1} />
+        ))}
+      </div>
+    </SortableContext>
   );
 }

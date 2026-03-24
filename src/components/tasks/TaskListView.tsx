@@ -1,25 +1,21 @@
 import { useState, useEffect, useRef } from 'react';
 import {
-  DndContext,
-  closestCenter,
-  KeyboardSensor,
-  PointerSensor,
-  useSensor,
-  useSensors,
+  useDndMonitor,
   type DragEndEvent,
 } from '@dnd-kit/core';
 import {
   SortableContext,
-  sortableKeyboardCoordinates,
   useSortable,
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { useTasks, createTask, reorderTasks } from '../../hooks/use-tasks';
+import { useSubtasks } from '../../hooks/use-subtasks';
 import { useShallow } from 'zustand/react/shallow';
 import { useAppState } from '../../stores/app-state';
 import { useTaskLists } from '../../hooks/use-task-lists';
 import type { Task } from '../../db/models';
+import type { DragItemData } from '../layout/DndProvider';
 import { TaskCard } from './TaskCard';
 import { InlineTaskForm } from './InlineTaskForm';
 import { DropdownMenu } from '../ui/DropdownMenu';
@@ -29,9 +25,17 @@ import { InboxListView } from './InboxListView';
 import { isInboxList } from '../../lib/constants';
 import { sortTasksForDisplay } from '../../lib/task-sort';
 
-function SortableTaskItem({ task, index }: { task: Task; index: number }) {
+function SortableTaskItem({ task, index, listId }: { task: Task; index: number; listId: string }) {
+  const subtasks = useSubtasks(task.id);
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: task.id,
+    data: {
+      type: 'task',
+      listId,
+      listType: 'tasks',
+      title: task.title,
+      hasSubtasks: subtasks.length > 0,
+    } satisfies DragItemData,
   });
 
   const style = {
@@ -78,11 +82,6 @@ export function TaskListView() {
     setNavigateToTaskId(null);
   }, [navigateToTaskId, tasks]);
 
-  const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
-    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
-  );
-
   // Keep recently-done tasks visible in the active list for 60s
   useEffect(() => {
     const now = Date.now();
@@ -123,6 +122,35 @@ export function TaskListView() {
     };
   }, []);
 
+  const activeTasks = selectedList
+    ? sortTasksForDisplay(tasks.filter((t) => t.status !== 'done' || recentlyDone.has(t.id)))
+    : [];
+  const completedTasks = selectedList
+    ? tasks.filter((t) => t.status === 'done' && !recentlyDone.has(t.id))
+    : [];
+
+  // Handle intra-list task reorder via shared DndContext
+  useDndMonitor({
+    onDragEnd(event: DragEndEvent) {
+      const { active, over } = event;
+      if (!over || active.id === over.id) return;
+      const activeData = active.data.current as DragItemData | undefined;
+      const overData = over.data.current as DragItemData | undefined;
+      if (!activeData || !overData) return;
+      // Only handle intra-list task reorder
+      if (activeData.type !== 'task' || overData.type !== 'task') return;
+      if (activeData.listId !== overData.listId || activeData.listId !== selectedListId) return;
+
+      const oldIndex = activeTasks.findIndex((t) => t.id === active.id);
+      const newIndex = activeTasks.findIndex((t) => t.id === over.id);
+      if (oldIndex === -1 || newIndex === -1) return;
+      const newOrder = [...activeTasks];
+      const [moved] = newOrder.splice(oldIndex, 1);
+      newOrder.splice(newIndex, 0, moved);
+      reorderTasks(newOrder.map((t) => t.id));
+    },
+  });
+
   if (!selectedListId || !selectedList) {
     return (
       <div className="flex flex-1 flex-col items-center justify-center text-zinc-400">
@@ -140,21 +168,6 @@ export function TaskListView() {
 
   if (selectedList.type === 'follow-ups') {
     return <FollowUpList listId={selectedListId} listName={selectedList.name} />;
-  }
-
-  const activeTasks = sortTasksForDisplay(tasks.filter((t) => t.status !== 'done' || recentlyDone.has(t.id)));
-  const completedTasks = tasks.filter((t) => t.status === 'done' && !recentlyDone.has(t.id));
-
-  function handleDragEnd(event: DragEndEvent) {
-    const { active, over } = event;
-    if (!over || active.id === over.id) return;
-
-    const oldIndex = activeTasks.findIndex((t) => t.id === active.id);
-    const newIndex = activeTasks.findIndex((t) => t.id === over.id);
-    const newOrder = [...activeTasks];
-    const [moved] = newOrder.splice(oldIndex, 1);
-    newOrder.splice(newIndex, 0, moved);
-    reorderTasks(newOrder.map((t) => t.id));
   }
 
   return (
@@ -217,15 +230,13 @@ export function TaskListView() {
               ))}
             </div>
           ) : (
-            <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
-              <SortableContext items={activeTasks.map((t) => t.id)} strategy={verticalListSortingStrategy}>
-                <div>
-                  {activeTasks.map((task, i) => (
-                    <SortableTaskItem key={task.id} task={task} index={i} />
-                  ))}
-                </div>
-              </SortableContext>
-            </DndContext>
+            <SortableContext items={activeTasks.map((t) => t.id)} strategy={verticalListSortingStrategy}>
+              <div>
+                {activeTasks.map((task, i) => (
+                  <SortableTaskItem key={task.id} task={task} index={i} listId={selectedListId} />
+                ))}
+              </div>
+            </SortableContext>
           )}
 
           {/* Completed section */}

@@ -23,21 +23,19 @@ interface PomodoroState {
 }
 
 function computeTargetMinute(targetMinute: number, now: Date, currentEndTime: number | null): number {
-  const currentMinute = now.getMinutes();
-  const currentSeconds = now.getSeconds();
-
   // If timer is already running and was set by a colon button, extend by 60 minutes
   if (currentEndTime !== null) {
     return currentEndTime + 60 * 60 * 1000;
   }
 
-  // Compute target time for the next occurrence of :targetMinute
-  const target = new Date(now);
-  target.setSeconds(0, 0);
-  target.setMinutes(targetMinute);
+  // Construct target time explicitly with seconds=0, ms=0 for :XX:00 sharp
+  const target = new Date(
+    now.getFullYear(), now.getMonth(), now.getDate(),
+    now.getHours(), targetMinute, 0, 0,
+  );
 
-  // If we're already past that minute (or exactly at it), target next hour
-  if (currentMinute > targetMinute || (currentMinute === targetMinute && currentSeconds > 0)) {
+  // If target is at or before now, advance to the next hour
+  if (target.getTime() <= now.getTime()) {
     target.setHours(target.getHours() + 1);
   }
 

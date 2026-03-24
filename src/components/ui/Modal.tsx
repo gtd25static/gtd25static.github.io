@@ -9,6 +9,7 @@ interface Props {
 
 export function Modal({ open, onClose, title, children }: Props) {
   const dialogRef = useRef<HTMLDialogElement>(null);
+  const mouseDownTarget = useRef<EventTarget | null>(null);
 
   useEffect(() => {
     const el = dialogRef.current;
@@ -23,8 +24,27 @@ export function Modal({ open, onClose, title, children }: Props) {
     <dialog
       ref={dialogRef}
       onClose={onClose}
+      onCancel={(e) => {
+        // Prevent Escape from closing the dialog when a native date picker is open.
+        // The date picker popup consumes Escape to close itself, but some browsers
+        // also fire a cancel event on the dialog.
+        e.preventDefault();
+        const active = document.activeElement;
+        const isNativePicker = active instanceof HTMLInputElement &&
+          ['date', 'datetime-local', 'time'].includes(active.type);
+        if (!isNativePicker) onClose();
+      }}
+      onMouseDown={(e) => {
+        mouseDownTarget.current = e.target;
+      }}
       onClick={(e) => {
-        if (e.target === dialogRef.current) onClose();
+        // Only close on backdrop click if BOTH mousedown and click originated on the
+        // dialog backdrop itself. This prevents the native date picker popup (rendered
+        // outside the dialog DOM) from triggering a close when its events bubble up.
+        if (e.target === dialogRef.current && mouseDownTarget.current === dialogRef.current) {
+          onClose();
+        }
+        mouseDownTarget.current = null;
       }}
       className="m-auto w-full max-w-lg rounded-2xl border border-zinc-200 bg-white p-0 shadow-2xl backdrop:bg-black/30
         dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200"

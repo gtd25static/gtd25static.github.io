@@ -19,6 +19,7 @@ import { WeeklyReviewModal } from '../review/WeeklyReviewModal';
 import { useSpecialListContext } from '../../hooks/use-special-list';
 import { PomodoroSettingsModal } from '../pomodoro/PomodoroSettingsModal';
 import { MobileTimerWidget } from '../pomodoro/MobileTimerWidget';
+import { DndProvider } from './DndProvider';
 
 export function AppShell() {
   const { sidebarOpen, setSidebarOpen, setSettingsOpen, searchQuery, selectedListId, selectList, quickCaptureOpen, setQuickCaptureOpen } = useAppState(useShallow(s => ({ sidebarOpen: s.sidebarOpen, setSidebarOpen: s.setSidebarOpen, setSettingsOpen: s.setSettingsOpen, searchQuery: s.searchQuery, selectedListId: s.selectedListId, selectList: s.selectList, quickCaptureOpen: s.quickCaptureOpen, setQuickCaptureOpen: s.setQuickCaptureOpen })));
@@ -61,6 +62,7 @@ export function AppShell() {
   }, [selectedListId, lists]);
 
   return (
+    <DndProvider>
     <div className="flex h-screen overflow-hidden bg-white dark:bg-zinc-900">
       {/* Mobile overlay */}
       {sidebarOpen && (
@@ -154,5 +156,6 @@ export function AppShell() {
       <QuickCapture />
       <ToastContainer />
     </div>
+    </DndProvider>
   );
 }
