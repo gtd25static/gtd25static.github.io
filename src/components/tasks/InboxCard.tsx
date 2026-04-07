@@ -1,3 +1,4 @@
+import { useRef } from 'react';
 import type { Task } from '../../db/models';
 import { deleteTask, restoreTask, moveTaskToList } from '../../hooks/use-tasks';
 import { useTaskLists } from '../../hooks/use-task-lists';
@@ -14,10 +15,14 @@ interface Props {
 export function InboxCard({ task, index }: Props) {
   const lists = useTaskLists();
   const targetLists = lists.filter((l) => !isInboxList(l));
+  const cardRef = useRef<HTMLDivElement>(null);
 
   function handleDragStart(e: React.DragEvent) {
     e.dataTransfer.setData('application/x-inbox-task', task.id);
     e.dataTransfer.effectAllowed = 'move';
+    if (cardRef.current) {
+      e.dataTransfer.setDragImage(cardRef.current, 0, 0);
+    }
   }
 
   function handleDelete() {
@@ -33,21 +38,26 @@ export function InboxCard({ task, index }: Props) {
 
   return (
     <div
-      draggable="true"
-      onDragStart={handleDragStart}
-      className={`group mb-1.5 flex items-center gap-2 rounded-lg border border-zinc-200 px-2 py-3 md:py-2 shadow-sm cursor-grab active:cursor-grabbing transition-shadow hover:shadow-md dark:border-zinc-700/60 ${
+      ref={cardRef}
+      className={`group mb-1.5 flex items-center gap-2 rounded-lg border border-zinc-200 px-2 py-3 md:py-2 shadow-sm transition-shadow hover:shadow-md dark:border-zinc-700/60 ${
         index % 2 === 1 ? 'bg-zinc-50/70 dark:bg-zinc-800/30' : 'bg-white dark:bg-zinc-900/50'
       }`}
     >
       {/* Drag handle */}
-      <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" className="shrink-0 text-zinc-300 dark:text-zinc-500">
-        <circle cx="5" cy="3" r="1.5" />
-        <circle cx="11" cy="3" r="1.5" />
-        <circle cx="5" cy="8" r="1.5" />
-        <circle cx="11" cy="8" r="1.5" />
-        <circle cx="5" cy="13" r="1.5" />
-        <circle cx="11" cy="13" r="1.5" />
-      </svg>
+      <div
+        draggable="true"
+        onDragStart={handleDragStart}
+        className="shrink-0 cursor-grab active:cursor-grabbing"
+      >
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" className="text-zinc-300 dark:text-zinc-500">
+          <circle cx="5" cy="3" r="1.5" />
+          <circle cx="11" cy="3" r="1.5" />
+          <circle cx="5" cy="8" r="1.5" />
+          <circle cx="11" cy="8" r="1.5" />
+          <circle cx="5" cy="13" r="1.5" />
+          <circle cx="11" cy="13" r="1.5" />
+        </svg>
+      </div>
 
       {/* Title + link */}
       <div className="flex-1 min-w-0">
