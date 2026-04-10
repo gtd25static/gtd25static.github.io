@@ -13,6 +13,7 @@ import {
 import { CSS } from '@dnd-kit/utilities';
 import { useTaskLists, createTaskList, updateTaskList, deleteTaskList, restoreTaskList, reorderTaskLists } from '../../hooks/use-task-lists';
 import { toast } from '../ui/Toast';
+import { confirmDialog } from '../ui/ConfirmDialog';
 import { useShallow } from 'zustand/react/shallow';
 import { useAppState } from '../../stores/app-state';
 import { Input } from '../ui/Input';
@@ -212,8 +213,8 @@ function ListItem({ list, selected, onSelect, highlight, focused, count, allList
           }
           items={[
             { label: 'Rename', onClick: () => { setEditingId(list.id); setEditName(list.name); } },
-            { label: 'Delete', onClick: () => {
-                  if (!confirm('Delete this list and all its tasks?')) return;
+            { label: 'Delete', onClick: async () => {
+                  if (!await confirmDialog('Delete this list and all its tasks?', { confirmLabel: 'Delete' })) return;
                   deleteTaskList(list.id);
                   toast('List deleted', 'info', () => restoreTaskList(list.id));
                 }, danger: true },

@@ -32,6 +32,26 @@ export function sortTasksForDisplay(tasks: Task[]): Task[] {
 }
 
 /**
+ * Sort tasks by due date ascending (tasks without due dates go last), then by manual order.
+ */
+export function sortTasksByDate(tasks: Task[]): Task[] {
+  return [...tasks].sort((a, b) => {
+    const aHas = a.dueDate ? 1 : 0;
+    const bHas = b.dueDate ? 1 : 0;
+    if (aHas !== bHas) return bHas - aHas;
+    if (aHas && bHas) return a.dueDate! - b.dueDate!;
+    return a.order - b.order;
+  });
+}
+
+/**
+ * Sort tasks alphabetically by title (case-insensitive).
+ */
+export function sortTasksByName(tasks: Task[]): Task[] {
+  return [...tasks].sort((a, b) => a.title.localeCompare(b.title, undefined, { sensitivity: 'base' }));
+}
+
+/**
  * Sort follow-ups for display: starred first, then not snoozed (by order), then snoozed (by order).
  */
 export function sortFollowUpsForDisplay(tasks: Task[]): Task[] {

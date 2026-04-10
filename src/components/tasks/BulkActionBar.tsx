@@ -5,6 +5,7 @@ import { useTaskLists } from '../../hooks/use-task-lists';
 import { deleteTasksBatch, setTaskStatusBatch, moveTasksToListBatch } from '../../hooks/use-bulk-operations';
 import { restoreTask } from '../../hooks/use-tasks';
 import { toast } from '../ui/Toast';
+import { confirmDialog } from '../ui/ConfirmDialog';
 import { BulkListPicker } from './BulkListPicker';
 
 interface Props {
@@ -26,6 +27,10 @@ export function BulkActionBar({ activeTaskIds, currentListId }: Props) {
 
   async function handleDelete() {
     const ids = [...selectedTaskIds];
+    if (!await confirmDialog(
+      `Delete ${ids.length} task${ids.length > 1 ? 's' : ''}?`,
+      { confirmLabel: 'Delete' },
+    )) return;
     clearSelection();
     await deleteTasksBatch(ids);
     toast(`${ids.length} task${ids.length > 1 ? 's' : ''} deleted`, 'info', async () => {

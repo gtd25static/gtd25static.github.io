@@ -1,9 +1,11 @@
-import { useRef } from 'react';
+import { useState, useRef, useCallback } from 'react';
 import type { Task } from '../../db/models';
 import { deleteTask, restoreTask, moveTaskToList } from '../../hooks/use-tasks';
 import { useTaskLists } from '../../hooks/use-task-lists';
 import { toast } from '../ui/Toast';
+import { confirmDialog } from '../ui/ConfirmDialog';
 import { DropdownMenu } from '../ui/DropdownMenu';
+import { ContextMenu, type MenuItem } from '../ui/ContextMenu';
 import { LinksList } from '../shared/LinksList';
 import { isInboxList } from '../../lib/constants';
 
@@ -16,6 +18,7 @@ export function InboxCard({ task, index }: Props) {
   const lists = useTaskLists();
   const targetLists = lists.filter((l) => !isInboxList(l));
   const cardRef = useRef<HTMLDivElement>(null);
+  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null);
 
   function handleDragStart(e: React.DragEvent) {
     e.dataTransfer.setData('application/x-inbox-task', task.id);
@@ -25,9 +28,30 @@ export function InboxCard({ task, index }: Props) {
     }
   }
 
-  function handleDelete() {
+  async function handleDelete() {
+    if (!await confirmDialog('Delete this task?', { confirmLabel: 'Delete' })) return;
     deleteTask(task.id);
     toast('Task deleted', 'info', () => restoreTask(task.id));
+  }
+
+  const handleContextMenu = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    setCtxMenu({ x: e.clientX, y: e.clientY });
+  }, []);
+
+  function buildContextMenuItems(): MenuItem[] {
+    const items: MenuItem[] = [];
+    if (targetLists.length > 0) {
+      items.push({
+        label: 'Process to',
+        children: targetLists.map((l) => ({
+          label: l.name,
+          onClick: () => handleMoveTo(l.id),
+        })),
+      });
+    }
+    items.push({ label: 'Delete', onClick: handleDelete, danger: true });
+    return items;
   }
 
   function handleMoveTo(listId: string) {
@@ -39,6 +63,7 @@ export function InboxCard({ task, index }: Props) {
   return (
     <div
       ref={cardRef}
+      onContextMenu={handleContextMenu}
       className={`group mb-1.5 flex items-center gap-2 rounded-lg border border-zinc-200 px-2 py-3 md:py-2 shadow-sm transition-shadow hover:shadow-md dark:border-zinc-700/60 ${
         index % 2 === 1 ? 'bg-zinc-50/70 dark:bg-zinc-800/30' : 'bg-white dark:bg-zinc-900/50'
       }`}
@@ -96,6 +121,14 @@ export function InboxCard({ task, index }: Props) {
           <path d="M18 6L6 18M6 6l12 12" />
         </svg>
       </button>
+
+      {ctxMenu && (
+        <ContextMenu
+          position={ctxMenu}
+          onClose={() => setCtxMenu(null)}
+          items={buildContextMenuItems()}
+        />
+      )}
     </div>
   );
 }

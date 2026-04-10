@@ -5,6 +5,7 @@ import { listRemoteBackups, type BackupInfo } from '../../sync/remote-backups';
 import { restoreFromBackup, wipeAllData, importData } from '../../sync/sync-engine';
 import { exportToZip, parseImportZip } from '../../db/export-import';
 import { toast } from '../ui/Toast';
+import { confirmDialog } from '../ui/ConfirmDialog';
 
 export function BackupsSettings() {
   const local = useLocalSettings();
@@ -34,8 +35,9 @@ export function BackupsSettings() {
   }
 
   async function handleRestore(tier: BackupInfo['tier']) {
-    if (!window.confirm(
+    if (!await confirmDialog(
       'This will replace all current data with this backup and sync the change to all devices. Continue?',
+      { confirmLabel: 'Restore', danger: false },
     )) return;
 
     setRestoringTier(tier);
@@ -66,7 +68,7 @@ export function BackupsSettings() {
   async function handleImportFile(file: File) {
     try {
       const data = await parseImportZip(file);
-      if (!window.confirm('This will replace all current data with the backup. Continue?')) return;
+      if (!await confirmDialog('This will replace all current data with the backup. Continue?', { confirmLabel: 'Import', danger: false })) return;
       await importData(data);
     } catch (err) {
       console.error('Import failed:', err);
@@ -105,8 +107,8 @@ export function BackupsSettings() {
         <Button
           size="sm"
           variant="danger"
-          onClick={() => {
-            if (window.confirm('This will permanently delete ALL tasks, lists, and subtasks on this device and all synced devices. This cannot be undone. Continue?')) {
+          onClick={async () => {
+            if (await confirmDialog('This will permanently delete ALL tasks, lists, and subtasks on this device and all synced devices. This cannot be undone. Continue?', { confirmLabel: 'Wipe All Data' })) {
               wipeAllData();
             }
           }}

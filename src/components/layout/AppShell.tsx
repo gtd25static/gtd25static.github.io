@@ -14,6 +14,7 @@ import { TrashModal } from '../trash/TrashModal';
 import { HelpOverlay } from './HelpOverlay';
 import { SyncIndicator } from './SyncIndicator';
 import { ToastContainer } from '../ui/Toast';
+import { ConfirmDialogContainer } from '../ui/ConfirmDialog';
 import { QuickCapture } from '../tasks/QuickCapture';
 import { WeeklyReviewModal } from '../review/WeeklyReviewModal';
 import { useSpecialListContext } from '../../hooks/use-special-list';
@@ -147,6 +148,7 @@ export function AppShell() {
         onClick={() => setQuickCaptureOpen(!quickCaptureOpen)}
         className="fixed bottom-6 right-6 z-[92] flex h-14 w-14 md:h-12 md:w-12 items-center justify-center rounded-full bg-accent-600 text-white shadow-lg hover:bg-accent-700 active:scale-95 transition-transform"
         aria-label="Quick capture"
+        title="Quick capture (Ctrl+N)"
       >
         <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
           <path d="M12 5v14M5 12h14" />
@@ -154,6 +156,7 @@ export function AppShell() {
       </button>
 
       <QuickCapture />
+      <ConfirmDialogContainer />
       <ToastContainer />
     </div>
     </DndProvider>

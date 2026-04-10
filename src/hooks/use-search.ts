@@ -19,7 +19,13 @@ export interface SearchResult {
   parentTaskTitle?: string;
 }
 
-export function useSearch(query: string): SearchResult[] {
+export interface SearchState {
+  results: SearchResult[];
+  isSearching: boolean;
+  maxReached: boolean;
+}
+
+export function useSearch(query: string): SearchState {
   // Debounce the query to avoid scanning on every keystroke
   const [debouncedQuery, setDebouncedQuery] = useState(query);
   useEffect(() => {
@@ -31,7 +37,9 @@ export function useSearch(query: string): SearchResult[] {
     return () => clearTimeout(timer);
   }, [query]);
 
-  return useLiveQuery(
+  const isSearching = query !== '' && query !== debouncedQuery;
+
+  const results = useLiveQuery(
     async () => {
       if (!debouncedQuery || debouncedQuery.length < 1) return [];
 
@@ -93,4 +101,6 @@ export function useSearch(query: string): SearchResult[] {
     [debouncedQuery],
     [],
   );
+
+  return { results, isSearching, maxReached: results.length >= MAX_SEARCH_RESULTS };
 }

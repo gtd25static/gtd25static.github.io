@@ -17,7 +17,8 @@ export function InboxListView({ listId }: Props) {
           <div className="mb-1">
             <h2 className="text-lg font-normal text-zinc-800 dark:text-zinc-200">Inbox</h2>
             <p className="text-xs text-zinc-400 dark:text-zinc-500">
-              Drag items to a list in the sidebar to process them
+              <span className="hidden md:inline">Drag items to a list in the sidebar to process them</span>
+              <span className="md:hidden">Tap Process on each item to move it to a list</span>
             </p>
           </div>
 

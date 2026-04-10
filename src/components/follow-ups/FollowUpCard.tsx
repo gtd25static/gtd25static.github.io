@@ -1,12 +1,15 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import type { Task, PingCooldown } from '../../db/models';
-import { updateTask, deleteTask, restoreTask } from '../../hooks/use-tasks';
+import { updateTask, deleteTask, restoreTask, moveTaskToList } from '../../hooks/use-tasks';
 import { toast } from '../ui/Toast';
+import { confirmDialog } from '../ui/ConfirmDialog';
 import { useAppState } from '../../stores/app-state';
 import { useShallow } from 'zustand/react/shallow';
 import { isInCooldown, cooldownRemaining, formatCooldown } from '../../hooks/use-follow-ups';
 import { toggleWarning } from '../../hooks/use-warning';
+import { useTaskLists } from '../../hooks/use-task-lists';
 import { PingCooldownBadge } from './PingCooldownBadge';
+import { ContextMenu, type MenuItem } from '../ui/ContextMenu';
 import { DropdownMenu } from '../ui/DropdownMenu';
 import { formatDate, dueDateColor } from '../../lib/date-utils';
 import { LinksList } from '../shared/LinksList';
@@ -32,9 +35,13 @@ export function FollowUpCard({ task, index, dragHandleProps }: Props) {
   const [editingTitle, setEditingTitle] = useState(false);
   const [editedTitle, setEditedTitle] = useState('');
   const inCooldown = isInCooldown(task);
+  const lists = useTaskLists();
+  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null);
   const [showSnoozePicker, setShowSnoozePicker] = useState(false);
   const [showDatePicker, setShowDatePicker] = useState(false);
+  const [pickerAlign, setPickerAlign] = useState<'right' | 'left'>('right');
   const pickerRef = useRef<HTMLDivElement>(null);
+  const dropdownRef = useRef<HTMLDivElement>(null);
 
   // React to keyboard-triggered editing
   useEffect(() => {
@@ -43,6 +50,17 @@ export function FollowUpCard({ task, index, dragHandleProps }: Props) {
       setEditingTitle(true);
     }
   }, [editingItemId, task.id, task.title]);
+
+  // Adjust picker alignment if it would overflow the viewport
+  useEffect(() => {
+    if (!showSnoozePicker || !dropdownRef.current) return;
+    const rect = dropdownRef.current.getBoundingClientRect();
+    if (rect.right > window.innerWidth - 8) {
+      setPickerAlign('left');
+    } else {
+      setPickerAlign('right');
+    }
+  }, [showSnoozePicker]);
 
   // Close picker on outside click
   useEffect(() => {
@@ -94,8 +112,39 @@ export function FollowUpCard({ task, index, dragHandleProps }: Props) {
   tomorrow.setDate(tomorrow.getDate() + 1);
   const minDate = tomorrow.toISOString().split('T')[0];
 
+  const handleContextMenu = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    setCtxMenu({ x: e.clientX, y: e.clientY });
+  }, []);
+
+  function buildContextMenuItems(): MenuItem[] {
+    const otherLists = lists.filter((l) => l.id !== task.listId && l.type === 'follow-ups');
+    const items: MenuItem[] = [
+      { label: task.starred ? 'Unstar' : 'Star', onClick: () => updateTask(task.id, { starred: !task.starred }) },
+      { label: task.hasWarning ? 'Clear warning' : 'Warn', onClick: () => toggleWarning('task', task.id) },
+    ];
+    if (otherLists.length > 0) {
+      items.push({
+        label: 'Send to list',
+        children: otherLists.map((l) => ({
+          label: l.name,
+          onClick: () => moveTaskToList(task.id, l.id),
+        })),
+      });
+    }
+    items.push(
+      { label: 'Edit', onClick: () => setEditing(true) },
+      { label: 'Delete', onClick: async () => {
+        if (!await confirmDialog('Delete this follow-up?', { confirmLabel: 'Delete' })) return;
+        deleteTask(task.id);
+        toast('Follow-up deleted', 'info', () => restoreTask(task.id));
+      }, danger: true },
+    );
+    return items;
+  }
+
   return (
-    <div data-focus-id={task.id} className={`group mb-2 flex items-start gap-3 rounded-lg border px-3 py-3 shadow-sm transition-shadow hover:shadow-md ${
+    <div data-focus-id={task.id} onContextMenu={handleContextMenu} className={`group mb-2 flex items-start gap-3 rounded-lg border px-3 py-3 shadow-sm transition-shadow hover:shadow-md ${
       focused
         ? 'border-accent-500 ring-2 ring-accent-500/40 dark:border-accent-400 dark:ring-accent-400/30'
         : 'border-zinc-200 dark:border-zinc-700/60'
@@ -172,7 +221,8 @@ export function FollowUpCard({ task, index, dragHandleProps }: Props) {
           />
         ) : (
           <span
-            className="text-sm text-zinc-800 dark:text-zinc-200 line-clamp-3"
+            className="text-sm text-zinc-800 dark:text-zinc-200 line-clamp-3 hover:cursor-text"
+            title="Double-click to edit"
             onDoubleClick={(e) => {
               e.stopPropagation();
               setEditedTitle(task.title);
@@ -217,7 +267,7 @@ export function FollowUpCard({ task, index, dragHandleProps }: Props) {
             </button>
           )}
           {showSnoozePicker && (
-            <div className="absolute right-0 z-50 mt-1 min-w-[160px] rounded-xl border border-zinc-200 bg-white py-1 shadow-lg dark:border-zinc-700 dark:bg-zinc-900">
+            <div ref={dropdownRef} className={`absolute z-50 mt-1 min-w-[160px] rounded-xl border border-zinc-200 bg-white py-1 shadow-lg dark:border-zinc-700 dark:bg-zinc-900 ${pickerAlign === 'right' ? 'right-0' : 'left-0'}`}>
               {SNOOZE_OPTIONS.map((opt) => (
                 <button
                   key={opt.value}
@@ -277,8 +327,8 @@ export function FollowUpCard({ task, index, dragHandleProps }: Props) {
             { label: task.starred ? 'Unstar' : 'Star', onClick: () => updateTask(task.id, { starred: !task.starred }) },
             { label: task.hasWarning ? 'Clear warning' : 'Warn', onClick: () => toggleWarning('task', task.id) },
             { label: 'Edit', onClick: () => setEditing(true) },
-            { label: 'Delete', onClick: () => {
-              if (!confirm('Delete this follow-up?')) return;
+            { label: 'Delete', onClick: async () => {
+              if (!await confirmDialog('Delete this follow-up?', { confirmLabel: 'Delete' })) return;
               deleteTask(task.id);
               toast('Follow-up deleted', 'info', () => restoreTask(task.id));
             }, danger: true },
@@ -295,6 +345,14 @@ export function FollowUpCard({ task, index, dragHandleProps }: Props) {
             await updateTask(task.id, data);
             setEditing(false);
           }}
+        />
+      )}
+
+      {ctxMenu && (
+        <ContextMenu
+          position={ctxMenu}
+          onClose={() => setCtxMenu(null)}
+          items={buildContextMenuItems()}
         />
       )}
     </div>

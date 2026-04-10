@@ -93,7 +93,7 @@ function ResultItem({ result, query, onNavigate }: { result: SearchResult; query
 
 export function SearchResults() {
   const { searchQuery, selectList, toggleTaskExpanded, setSearchQuery, expandedTaskIds, setNavigateToTaskId } = useAppState(useShallow(s => ({ searchQuery: s.searchQuery, selectList: s.selectList, toggleTaskExpanded: s.toggleTaskExpanded, setSearchQuery: s.setSearchQuery, expandedTaskIds: s.expandedTaskIds, setNavigateToTaskId: s.setNavigateToTaskId })));
-  const results = useSearch(searchQuery);
+  const { results, isSearching, maxReached } = useSearch(searchQuery);
 
   function handleNavigate(result: SearchResult) {
     const taskId = result.type === 'subtask' ? result.parentTaskId! : result.id;
@@ -123,7 +123,14 @@ export function SearchResults() {
             </h2>
           </div>
 
-          {results.length === 0 ? (
+          {isSearching ? (
+            <div className="flex items-center justify-center py-16 text-zinc-400">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="mr-2 animate-spin">
+                <path d="M12 2a10 10 0 0 1 10 10" strokeLinecap="round" />
+              </svg>
+              <span className="text-sm">Searching...</span>
+            </div>
+          ) : results.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-16 text-zinc-400">
               <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="mb-3 text-zinc-300 dark:text-zinc-500">
                 <circle cx="11" cy="11" r="8" />
@@ -132,11 +139,18 @@ export function SearchResults() {
               <p className="text-sm">No results for &ldquo;{searchQuery}&rdquo;</p>
             </div>
           ) : (
-            <div className="divide-y divide-zinc-100 dark:divide-zinc-800/60">
-              {results.map((r) => (
-                <ResultItem key={`${r.type}-${r.id}`} result={r} query={searchQuery} onNavigate={() => handleNavigate(r)} />
-              ))}
-            </div>
+            <>
+              <div className="divide-y divide-zinc-100 dark:divide-zinc-800/60">
+                {results.map((r) => (
+                  <ResultItem key={`${r.type}-${r.id}`} result={r} query={searchQuery} onNavigate={() => handleNavigate(r)} />
+                ))}
+              </div>
+              {maxReached && (
+                <p className="mt-3 text-center text-xs text-zinc-400 dark:text-zinc-500">
+                  Showing first 50 results. Refine your search for more.
+                </p>
+              )}
+            </>
           )}
         </div>
       </div>

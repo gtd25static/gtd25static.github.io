@@ -10,6 +10,7 @@ import { isInCooldown } from './use-follow-ups';
 import { sortTasksForDisplay, sortFollowUpsForDisplay } from '../lib/task-sort';
 import { deleteTasksBatch } from './use-bulk-operations';
 import { toast } from '../components/ui/Toast';
+import { confirmDialog } from '../components/ui/ConfirmDialog';
 import type { ListType } from '../db/models';
 
 interface NavItem {
@@ -440,6 +441,10 @@ export function useKeyboard() {
           // Bulk mode: delete selected tasks
           if (s.bulkMode && s.selectedTaskIds.size > 0) {
             const ids = [...s.selectedTaskIds];
+            if (!await confirmDialog(
+              `Delete ${ids.length} task${ids.length > 1 ? 's' : ''}?`,
+              { confirmLabel: 'Delete' },
+            )) break;
             s.clearSelection();
             await deleteTasksBatch(ids);
             toast(`${ids.length} task${ids.length > 1 ? 's' : ''} deleted`, 'info', async () => {

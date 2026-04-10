@@ -5,6 +5,7 @@ import type { DropZoneData } from '../layout/DndProvider';
 import { formatDate, daysUntil, formatTimeRemaining } from '../../lib/date-utils';
 import { setTaskStatus, deleteTask, restoreTask, updateTask, moveTaskToList, duplicateTask } from '../../hooks/use-tasks';
 import { toast } from '../ui/Toast';
+import { confirmDialog } from '../ui/ConfirmDialog';
 import { useShallow } from 'zustand/react/shallow';
 import { useAppState } from '../../stores/app-state';
 import { useSubtasks } from '../../hooks/use-subtasks';
@@ -51,6 +52,7 @@ export function TaskCard({ task, index, dragHandleProps }: Props) {
   const [editing, setEditing] = useState(false);
   const [editingTitle, setEditingTitle] = useState(false);
   const [editedTitle, setEditedTitle] = useState('');
+  const [justCompleted, setJustCompleted] = useState(false);
 
   // Droppable zone for subtask conversion (only active when task is expanded)
   const { setNodeRef: setDropRef, isOver: isDropOver } = useDroppable({
@@ -75,7 +77,12 @@ export function TaskCard({ task, index, dragHandleProps }: Props) {
 
   function handleCheck(e: React.MouseEvent) {
     e.stopPropagation();
-    setTaskStatus(task.id, task.status === 'done' ? 'todo' : 'done');
+    const markingDone = task.status !== 'done';
+    setTaskStatus(task.id, markingDone ? 'done' : 'todo');
+    if (markingDone) {
+      setJustCompleted(true);
+      setTimeout(() => setJustCompleted(false), 800);
+    }
   }
 
   function finishEditingTitle() {
@@ -86,7 +93,7 @@ export function TaskCard({ task, index, dragHandleProps }: Props) {
   }
 
   return (
-    <div data-task-id={task.id} data-focus-id={task.id} className={`mb-1.5 rounded-lg ${focused ? 'relative z-10 ring-2 ring-accent-500 dark:ring-accent-400' : ''} ${bulkMode && isSelected ? 'ring-2 ring-accent-500/40' : ''}`} onContextMenu={bulkMode ? undefined : handleContextMenu} onTouchStart={handleTouchStart} onTouchEnd={handleTouchEnd} onTouchMove={handleTouchEnd}>
+    <div data-task-id={task.id} data-focus-id={task.id} className={`mb-1.5 rounded-lg transition-colors duration-700 ${justCompleted ? 'bg-green-50 dark:bg-green-900/20' : ''} ${focused ? 'relative z-10 ring-2 ring-accent-500 dark:ring-accent-400' : ''} ${bulkMode && isSelected ? 'ring-2 ring-accent-500/40' : ''}`} onContextMenu={bulkMode ? undefined : handleContextMenu} onTouchStart={handleTouchStart} onTouchEnd={handleTouchEnd} onTouchMove={handleTouchEnd}>
       <div
         className={`group flex items-center gap-2 rounded-t-lg px-2 py-3 md:py-1.5 cursor-pointer border transition-shadow ${
           focused
@@ -204,11 +211,12 @@ export function TaskCard({ task, index, dragHandleProps }: Props) {
             />
           ) : (
             <span
-              className={`text-sm leading-5 line-clamp-3 ${
+              className={`text-sm leading-5 line-clamp-3 hover:cursor-text ${
                 task.status === 'done'
                   ? 'line-through text-zinc-400 dark:text-zinc-500'
                   : 'text-zinc-800 dark:text-zinc-200'
               }`}
+              title="Double-click to edit"
               onDoubleClick={(e) => {
                 e.stopPropagation();
                 setEditedTitle(task.title);
@@ -273,8 +281,8 @@ export function TaskCard({ task, index, dragHandleProps }: Props) {
                 const dup = await duplicateTask(task.id);
                 if (dup) toast('Task duplicated', 'success');
               }},
-              { label: 'Delete', onClick: () => {
-                if (!confirm('Delete this task?')) return;
+              { label: 'Delete', onClick: async () => {
+                if (!await confirmDialog('Delete this task?', { confirmLabel: 'Delete' })) return;
                 deleteTask(task.id);
                 toast('Task deleted', 'info', () => restoreTask(task.id));
               }, danger: true },
@@ -339,11 +347,11 @@ export function TaskCard({ task, index, dragHandleProps }: Props) {
             className="rounded px-1.5 py-0.5 text-xs text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800"
             title="Duplicate task"
           >
-            Dup
+            Duplicate
           </button>
           <button
-            onClick={() => {
-              if (!confirm('Delete this task?')) return;
+            onClick={async () => {
+              if (!await confirmDialog('Delete this task?', { confirmLabel: 'Delete' })) return;
               deleteTask(task.id);
               toast('Task deleted', 'info', () => restoreTask(task.id));
             }}
@@ -412,6 +420,22 @@ export function TaskCard({ task, index, dragHandleProps }: Props) {
     const items: MenuItem[] = [
       { label: task.starred ? 'Unstar' : 'Star', onClick: () => updateTask(task.id, { starred: !task.starred }) },
     ];
+    if (task.status !== 'working' && !hasWorkingSubtask && task.status !== 'done') {
+      items.push({
+        label: 'Work', onClick: () => {
+          if (subtasks.length > 0) {
+            const firstUndone = subtasks.find((s) => s.status === 'todo' || s.status === 'blocked');
+            if (firstUndone) startWorkingOn(firstUndone.id);
+          } else {
+            startWorkingOnTask(task.id);
+          }
+        },
+      });
+    }
+    items.push(
+      { label: task.status === 'blocked' ? 'Unblock' : 'Block', onClick: () => setTaskStatus(task.id, task.status === 'blocked' ? 'todo' : 'blocked') },
+      { label: task.hasWarning ? 'Clear warning' : 'Warn', onClick: () => toggleWarning('task', task.id) },
+    );
     if (otherLists.length > 0) {
       items.push({
         label: 'Send to list',
@@ -421,6 +445,18 @@ export function TaskCard({ task, index, dragHandleProps }: Props) {
         })),
       });
     }
+    items.push(
+      { label: 'Edit', onClick: () => setEditing(true) },
+      { label: 'Duplicate', onClick: async () => {
+        const dup = await duplicateTask(task.id);
+        if (dup) toast('Task duplicated', 'success');
+      }},
+      { label: 'Delete', onClick: async () => {
+        if (!await confirmDialog('Delete this task?', { confirmLabel: 'Delete' })) return;
+        deleteTask(task.id);
+        toast('Task deleted', 'info', () => restoreTask(task.id));
+      }, danger: true },
+    );
     return items;
   }
 }
@@ -450,11 +486,6 @@ function DueDateBadge({ dueDate }: { dueDate: number }) {
         <path d="M4 1v2M12 1v2M1 6h14M3 3h10a2 2 0 012 2v8a2 2 0 01-2 2H3a2 2 0 01-2-2V5a2 2 0 012-2z" />
       </svg>
       {label}
-      {/* Repeat icon if recurring */}
-      <svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" className="opacity-50">
-        <path d="M1 8a7 7 0 0113.6-2.3M15 8a7 7 0 01-13.6 2.3" strokeLinecap="round" />
-        <path d="M14.6 2v3.7h-3.7M1.4 14v-3.7h3.7" strokeLinecap="round" strokeLinejoin="round" />
-      </svg>
     </span>
   );
 }

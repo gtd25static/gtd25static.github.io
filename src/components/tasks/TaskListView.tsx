@@ -23,7 +23,9 @@ import { FollowUpList } from '../follow-ups/FollowUpList';
 import { BulkActionBar } from './BulkActionBar';
 import { InboxListView } from './InboxListView';
 import { isInboxList } from '../../lib/constants';
-import { sortTasksForDisplay } from '../../lib/task-sort';
+import { sortTasksForDisplay, sortTasksByDate, sortTasksByName } from '../../lib/task-sort';
+
+type SortMode = 'default' | 'date' | 'name';
 
 function SortableTaskItem({ task, index, listId }: { task: Task; index: number; listId: string }) {
   const subtasks = useSubtasks(task.id);
@@ -67,6 +69,7 @@ export function TaskListView() {
     }
   }, [creatingTask]);
   const [showCompleted, setShowCompleted] = useState(false);
+  const [sortMode, setSortMode] = useState<SortMode>('default');
   const [recentlyDone, setRecentlyDone] = useState<Set<string>>(new Set());
   const timersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
 
@@ -122,8 +125,9 @@ export function TaskListView() {
     };
   }, []);
 
+  const sortFn = sortMode === 'date' ? sortTasksByDate : sortMode === 'name' ? sortTasksByName : sortTasksForDisplay;
   const activeTasks = selectedList
-    ? sortTasksForDisplay(tasks.filter((t) => t.status !== 'done' || recentlyDone.has(t.id)))
+    ? sortFn(tasks.filter((t) => t.status !== 'done' || recentlyDone.has(t.id)))
     : [];
   const completedTasks = selectedList
     ? tasks.filter((t) => t.status === 'done' && !recentlyDone.has(t.id))
@@ -187,8 +191,8 @@ export function TaskListView() {
               }
               items={[
                 { label: bulkMode ? 'Cancel selection' : 'Select', onClick: () => setBulkMode(!bulkMode) },
-                { label: 'Sort by date', onClick: () => {} },
-                { label: 'Sort by name', onClick: () => {} },
+                { label: `Sort by date${sortMode === 'date' ? ' ✓' : ''}`, onClick: () => setSortMode(sortMode === 'date' ? 'default' : 'date') },
+                { label: `Sort by name${sortMode === 'name' ? ' ✓' : ''}`, onClick: () => setSortMode(sortMode === 'name' ? 'default' : 'name') },
               ]}
             />
           </div>
@@ -221,7 +225,11 @@ export function TaskListView() {
           {/* Active tasks */}
           {activeTasks.length === 0 && completedTasks.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-16 text-zinc-400">
+              <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="mb-3 text-zinc-300 dark:text-zinc-600">
+                <path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+              </svg>
               <p className="text-sm">No tasks yet</p>
+              <p className="mt-1 text-xs">Click Add a task above or press <kbd className="rounded border border-zinc-300 px-1 py-0.5 text-[10px] font-mono dark:border-zinc-600">n</kbd> to get started</p>
             </div>
           ) : bulkMode ? (
             <div>

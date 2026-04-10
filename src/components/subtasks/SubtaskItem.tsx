@@ -2,6 +2,7 @@ import { useState, useCallback, useEffect } from 'react';
 import type { Subtask } from '../../db/models';
 import { setSubtaskStatus, deleteSubtask, restoreSubtask, updateSubtask, convertSubtaskToTask } from '../../hooks/use-subtasks';
 import { toast } from '../ui/Toast';
+import { confirmDialog } from '../ui/ConfirmDialog';
 import { startWorkingOn } from '../../hooks/use-working-on';
 import { toggleWarning } from '../../hooks/use-warning';
 import { useTaskLists } from '../../hooks/use-task-lists';
@@ -139,8 +140,8 @@ export function SubtaskItem({ subtask }: Props) {
             { label: subtask.status === 'blocked' ? 'Unblock' : 'Block', onClick: () => setSubtaskStatus(subtask.id, subtask.status === 'blocked' ? 'todo' : 'blocked') },
             { label: subtask.hasWarning ? 'Clear warning' : 'Warn', onClick: () => toggleWarning('subtask', subtask.id) },
             { label: 'Edit', onClick: () => setEditing(true) },
-            { label: 'Delete', onClick: () => {
-              if (!confirm('Delete this subtask?')) return;
+            { label: 'Delete', onClick: async () => {
+              if (!await confirmDialog('Delete this subtask?', { confirmLabel: 'Delete' })) return;
               deleteSubtask(subtask.id);
               toast('Subtask deleted', 'info', () => restoreSubtask(subtask.id));
             }, danger: true },
@@ -170,8 +171,8 @@ export function SubtaskItem({ subtask }: Props) {
           Edit
         </button>
         <button
-          onClick={() => {
-            if (!confirm('Delete this subtask?')) return;
+          onClick={async () => {
+            if (!await confirmDialog('Delete this subtask?', { confirmLabel: 'Delete' })) return;
             deleteSubtask(subtask.id);
             toast('Subtask deleted', 'info', () => restoreSubtask(subtask.id));
           }}

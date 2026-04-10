@@ -22,7 +22,7 @@ function WorkingSection() {
   }
 
   return (
-    <div className="flex items-center gap-2 border-b border-accent-100 bg-accent-50/60 px-5 py-2.5 md:py-1.5 dark:border-accent-800/40 dark:bg-accent-950/50">
+    <div className="flex flex-wrap items-center gap-2 border-b border-accent-100 bg-accent-50/60 px-5 py-2.5 md:py-1.5 dark:border-accent-800/40 dark:bg-accent-950/50">
       <span className="shrink-0 text-sm md:text-xs font-medium text-zinc-400">Working on</span>
       <button
         onClick={navigateToTask}
@@ -80,7 +80,7 @@ function SuggestionSection() {
   }
 
   return (
-    <div className="flex items-center gap-2 border-b border-zinc-100 px-5 py-2.5 md:py-1.5 dark:border-zinc-800">
+    <div className="flex flex-wrap items-center gap-2 border-b border-zinc-100 px-5 py-2.5 md:py-1.5 dark:border-zinc-800">
       <span className="shrink-0 text-sm md:text-xs font-medium text-zinc-400">Next up</span>
       <button
         onClick={navigateToTask}

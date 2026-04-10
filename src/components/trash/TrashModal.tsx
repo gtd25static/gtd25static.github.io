@@ -1,4 +1,5 @@
 import { Modal } from '../ui/Modal';
+import { confirmDialog } from '../ui/ConfirmDialog';
 import { useTrash, restoreFromTrash, permanentlyDelete, type TrashItem } from '../../hooks/use-trash';
 import { useAppState } from '../../stores/app-state';
 import { useShallow } from 'zustand/react/shallow';
@@ -77,8 +78,8 @@ function TrashContent() {
             Restore
           </button>
           <button
-            onClick={() => {
-              if (!confirm(`Permanently delete "${item.title}"? This cannot be undone.`)) return;
+            onClick={async () => {
+              if (!await confirmDialog(`Permanently delete "${item.title}"? This cannot be undone.`, { confirmLabel: 'Delete' })) return;
               permanentlyDelete(item);
             }}
             className="shrink-0 rounded px-2 py-0.5 text-xs text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20"
