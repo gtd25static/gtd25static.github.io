@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { render, screen, act } from '@testing-library/react';
+import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import '../setup-component';
 import { makeTask, makeTaskList } from '../helpers/component-helpers';
@@ -77,13 +77,9 @@ describe('InboxCard', () => {
     await user.click(screen.getByLabelText('Delete'));
     // ConfirmDialog should appear
     expect(screen.getByText('Delete this task?')).toBeInTheDocument();
-    // The ConfirmDialog has the confirm button with custom label "Delete"
-    // There's also the card's delete button, so we find the one inside the dialog
+    // Find the "Delete" button inside the dialog (not the card's delete button)
     const dialog = screen.getByRole('dialog');
-    const confirmBtn = dialog.querySelector('button');
-    // Find the "Delete" button inside the dialog (it's the danger-styled one)
-    const dialogButtons = dialog.querySelectorAll('button');
-    const deleteBtn = Array.from(dialogButtons).find(b => b.textContent === 'Delete');
+    const deleteBtn = Array.from(dialog.querySelectorAll('button')).find(b => b.textContent === 'Delete');
     expect(deleteBtn).toBeTruthy();
     await user.click(deleteBtn!);
     expect(mockDeleteTask).toHaveBeenCalledWith(task.id);

@@ -17,9 +17,8 @@ describe('ConfirmDialog', () => {
   });
 
   it('shows the message when triggered', async () => {
-    let result: boolean | undefined;
     act(() => {
-      confirmDialog('Are you sure?').then((r) => { result = r; });
+      confirmDialog('Are you sure?');
     });
     expect(screen.getByText('Are you sure?')).toBeInTheDocument();
   });

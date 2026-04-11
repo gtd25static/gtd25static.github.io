@@ -84,9 +84,7 @@ describe('app-state store', () => {
 
     it('does not duplicate if already expanded', () => {
       getState().toggleTaskExpanded('t1');
-      const before = getState().expandedTaskIds;
       getState().ensureTaskExpanded('t1');
-      // Should return the same state reference (no update)
       expect(getState().expandedTaskIds.has('t1')).toBe(true);
     });
   });

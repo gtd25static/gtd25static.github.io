@@ -4,7 +4,6 @@ import userEvent from '@testing-library/user-event';
 import '../setup-component';
 import { resetAppState, makeTask, makeTaskList } from '../helpers/component-helpers';
 import { FollowUpCard } from '../../components/follow-ups/FollowUpCard';
-import { useAppState } from '../../stores/app-state';
 import { ConfirmDialogContainer } from '../../components/ui/ConfirmDialog';
 import { ToastContainer } from '../../components/ui/Toast';
 
