@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Input } from '../ui/Input';
 import { Button } from '../ui/Button';
-import { isValidUrl, extractHostname } from '../../lib/link-utils';
+import { isValidUrl, extractHostname, sanitizeUrl } from '../../lib/link-utils';
 import { fromInputDate, toInputDate } from '../../lib/date-utils';
 import type { Subtask, TaskLink } from '../../db/models';
 import { AddLinkForm } from '../shared/AddLinkForm';
@@ -65,7 +65,7 @@ export function SubtaskForm({ onSubmit, onCancel, initial }: Props) {
           </div>
           {links.map((l, i) => (
             <div key={i} className="flex items-center gap-2 text-xs">
-              <a href={l.url} target="_blank" rel="noopener noreferrer" className="text-accent-600 hover:underline dark:text-accent-400 truncate">
+              <a href={sanitizeUrl(l.url)} target="_blank" rel="noopener noreferrer" className="text-accent-600 hover:underline dark:text-accent-400 truncate">
                 {l.title || extractHostname(l.url)}
               </a>
               <button type="button" onClick={() => setLinks(links.filter((_, j) => j !== i))} className="text-red-400 hover:text-red-600">

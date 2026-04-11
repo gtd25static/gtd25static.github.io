@@ -1,5 +1,5 @@
 import type { TaskLink } from '../../db/models';
-import { extractHostname } from '../../lib/link-utils';
+import { extractHostname, sanitizeUrl } from '../../lib/link-utils';
 
 interface Props {
   primaryLink?: string;
@@ -23,7 +23,7 @@ export function LinksList({ primaryLink, primaryTitle, links, maxDisplay = 3 }: 
       {visible.map((link, i) => (
         <a
           key={i}
-          href={link.url}
+          href={sanitizeUrl(link.url)}
           target="_blank"
           rel="noopener noreferrer"
           onClick={(e) => e.stopPropagation()}
