@@ -44,7 +44,7 @@ function useAllTaskCounts(listIds: string[]): Map<string, number> {
     const map = new Map<string, number>();
     await Promise.all(listIds.map(async (id) => {
       const tasks = await db.tasks.where('listId').equals(id).toArray();
-      map.set(id, tasks.filter((t) => !t.deletedAt && t.status !== 'done').length);
+      map.set(id, tasks.filter((t) => !t.deletedAt && t.status !== 'done' && !t.archived).length);
     }));
     return map;
   }, [key]);

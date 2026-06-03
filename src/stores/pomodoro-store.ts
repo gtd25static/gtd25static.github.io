@@ -22,12 +22,8 @@ interface PomodoroState {
   setPomodoroSettingsOpen: (open: boolean) => void;
 }
 
-function computeTargetMinute(targetMinute: number, now: Date, currentEndTime: number | null): number {
-  // If timer is already running and was set by a colon button, extend by 60 minutes
-  if (currentEndTime !== null) {
-    return currentEndTime + 60 * 60 * 1000;
-  }
-
+function computeTargetMinute(targetMinute: number, now: Date): number {
+  // Always target the next occurrence of :XX, replacing any running timer.
   // Construct target time explicitly with seconds=0, ms=0 for :XX:00 sharp
   const target = new Date(
     now.getFullYear(), now.getMonth(), now.getDate(),
@@ -60,17 +56,15 @@ export const usePomodoroStore = create<PomodoroState>((set, get) => ({
   },
 
   startColon25: () => {
-    const state = get();
     const now = new Date();
-    const endTime = computeTargetMinute(25, now, state.timerRunning ? state.timerEndTime : null);
+    const endTime = computeTargetMinute(25, now);
     const seconds = Math.ceil((endTime - now.getTime()) / 1000);
     set({ timerRunning: true, timerEndTime: endTime, displaySeconds: seconds });
   },
 
   startColon55: () => {
-    const state = get();
     const now = new Date();
-    const endTime = computeTargetMinute(55, now, state.timerRunning ? state.timerEndTime : null);
+    const endTime = computeTargetMinute(55, now);
     const seconds = Math.ceil((endTime - now.getTime()) / 1000);
     set({ timerRunning: true, timerEndTime: endTime, displaySeconds: seconds });
   },

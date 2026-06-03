@@ -80,15 +80,16 @@ describe('pomodoro-store', () => {
       expect(target.getMinutes()).toBe(25);
     });
 
-    it('extends by 60 minutes on second click', () => {
+    it('replaces (does not extend) on second click', () => {
       getState().startColon25();
       const firstEnd = getState().timerEndTime!;
 
       getState().startColon25();
       const secondEnd = getState().timerEndTime!;
 
-      expect(secondEnd).toBeGreaterThanOrEqual(firstEnd + 60 * 60 * 1000 - 100);
-      expect(secondEnd).toBeLessThanOrEqual(firstEnd + 60 * 60 * 1000 + 100);
+      // Re-targets the same upcoming :25 rather than adding 60 minutes.
+      expect(new Date(secondEnd).getMinutes()).toBe(25);
+      expect(Math.abs(secondEnd - firstEnd)).toBeLessThan(1000);
     });
   });
 
@@ -102,6 +103,21 @@ describe('pomodoro-store', () => {
       expect(target.getMinutes()).toBe(55);
       expect(target.getSeconds()).toBe(0);
       expect(target.getMilliseconds()).toBe(0);
+    });
+  });
+
+  describe('colon button correction (misclick)', () => {
+    it('replaces :25 target with :55 when the other button is clicked', () => {
+      getState().startColon25();
+      expect(new Date(getState().timerEndTime!).getMinutes()).toBe(25);
+
+      getState().startColon55();
+      const corrected = new Date(getState().timerEndTime!);
+
+      // Should land on the next :55:00, not :25 + 60 minutes.
+      expect(corrected.getMinutes()).toBe(55);
+      expect(corrected.getSeconds()).toBe(0);
+      expect(corrected.getMilliseconds()).toBe(0);
     });
   });
 
