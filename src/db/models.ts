@@ -102,6 +102,13 @@ export interface LocalSettings {
   encryptionPassword?: string;
   appliedSyncVersion?: number;
   changelogPruned?: boolean;
+  // Nudge notifications (device-local; not synced)
+  nudgesEnabled?: boolean;
+  nudgeIntervalHours?: number;
+  nudgeWindowStart?: number; // hour 0–23
+  nudgeWindowEnd?: number;   // hour 0–23
+  nudgeSoundEnabled?: boolean;
+  lastNudgeAt?: number;
 }
 
 export interface ChangeEntry {

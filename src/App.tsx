@@ -9,6 +9,7 @@ import { SpecialListProvider } from './hooks/use-special-list';
 import { SyncProvider } from './sync/use-sync';
 import { usePomodoroClock } from './hooks/use-pomodoro-clock';
 import { useUrlCapture } from './hooks/use-url-capture';
+import { useNudges } from './hooks/use-nudges';
 
 export default function App() {
   useEffect(() => {
@@ -26,6 +27,7 @@ export default function App() {
   useKeyboard();
   usePomodoroClock();
   useUrlCapture();
+  useNudges();
 
   return (
     <ErrorBoundary>

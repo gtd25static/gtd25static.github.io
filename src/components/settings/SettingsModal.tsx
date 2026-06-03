@@ -6,6 +6,7 @@ import { ThemeSettings } from './ThemeSettings';
 import { GitHubSettings } from './GitHubSettings';
 import { KeyboardSettings } from './KeyboardSettings';
 import { ShareSettings } from './ShareSettings';
+import { NotificationSettings } from './NotificationSettings';
 import { BackupsSettings } from './BackupsSettings';
 
 type SettingsTab = 'general' | 'backups';
@@ -41,6 +42,8 @@ export function SettingsModal() {
             <GitHubSettings />
             <hr className="border-zinc-200 dark:border-zinc-700" />
             <KeyboardSettings />
+            <hr className="border-zinc-200 dark:border-zinc-700" />
+            <NotificationSettings />
             <hr className="border-zinc-200 dark:border-zinc-700" />
             <ShareSettings />
           </>
