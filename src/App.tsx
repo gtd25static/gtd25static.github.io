@@ -10,6 +10,7 @@ import { SyncProvider } from './sync/use-sync';
 import { usePomodoroClock } from './hooks/use-pomodoro-clock';
 import { useUrlCapture } from './hooks/use-url-capture';
 import { useNudges } from './hooks/use-nudges';
+import { useAppBadge } from './hooks/use-app-badge';
 
 export default function App() {
   useEffect(() => {
@@ -28,6 +29,7 @@ export default function App() {
   usePomodoroClock();
   useUrlCapture();
   useNudges();
+  useAppBadge();
 
   return (
     <ErrorBoundary>

@@ -1,6 +1,7 @@
 import { useState, useCallback } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../db';
+import { eligibleForFocus, pickWeighted } from '../lib/focus-pick';
 
 interface Suggestion {
   taskId: string;
@@ -31,14 +32,7 @@ export function useSuggestion() {
       );
 
       const tasks = await db.tasks.toArray();
-      const eligible = tasks.filter(
-        (t) =>
-          !t.deletedAt &&
-          t.status !== 'done' &&
-          t.status !== 'blocked' &&
-          !t.archived &&
-          taskListIds.has(t.listId),
-      );
+      const eligible = eligibleForFocus(tasks, taskListIds);
 
       if (eligible.length === 0) return null;
 
@@ -46,21 +40,7 @@ export function useSuggestion() {
       const rng = mulberry32(seed);
 
       // Weighted random selection: age-based with 3x boost for previously-worked tasks
-      const weights = eligible.map((t) => {
-        const ageDays = (now - t.createdAt) / (1000 * 60 * 60 * 24);
-        const base = Math.sqrt(ageDays + 1);
-        return t.workedAt ? base * 3 : base;
-      });
-      const totalWeight = weights.reduce((a, b) => a + b, 0);
-      let pick = rng() * totalWeight;
-      let selected = eligible[0];
-      for (let i = 0; i < eligible.length; i++) {
-        pick -= weights[i];
-        if (pick <= 0) {
-          selected = eligible[i];
-          break;
-        }
-      }
+      const selected = pickWeighted(eligible, now, rng) ?? eligible[0];
 
       const result: Suggestion = {
         taskId: selected.id,

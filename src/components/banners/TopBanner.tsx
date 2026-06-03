@@ -6,8 +6,50 @@ import { useAppState } from '../../stores/app-state';
 import { useShallow } from 'zustand/react/shallow';
 import { daysUntil } from '../../lib/date-utils';
 import { startWorkingOn, startWorkingOnTask } from '../../hooks/use-working-on';
+import { focusNow, getFocusTimerPref, setFocusTimerPref } from '../../hooks/use-focus';
 import { db } from '../../db';
 import { MotivationBanner } from './MotivationBanner';
+
+function FocusSection() {
+  const { isWorking } = useWorkingOn();
+  const { suggestion } = useSuggestion();
+  const [startTimer, setStartTimer] = useState(getFocusTimerPref);
+
+  // Nothing to focus on: not working and no eligible suggestion.
+  if (!isWorking && !suggestion) return null;
+
+  function toggleTimer() {
+    setStartTimer((prev) => {
+      const next = !prev;
+      setFocusTimerPref(next);
+      return next;
+    });
+  }
+
+  return (
+    <div className="flex flex-wrap items-center gap-2 border-b border-zinc-100 px-5 py-2.5 md:py-1.5 dark:border-zinc-800">
+      <button
+        onClick={() => focusNow({ startTimer })}
+        className="flex items-center gap-1.5 rounded-full bg-accent-600 px-3.5 py-1.5 md:py-1 text-sm md:text-xs font-semibold text-white hover:bg-accent-700"
+        title={isWorking ? 'Jump back to what you were working on' : 'Start working on the next task (f)'}
+      >
+        <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+          <path d="M4 2.5v11l9-5.5-9-5.5z" />
+        </svg>
+        {isWorking ? 'Resume' : 'Focus'}
+      </button>
+      <label className="flex cursor-pointer select-none items-center gap-1.5 text-sm md:text-xs text-zinc-500 dark:text-zinc-400">
+        <input
+          type="checkbox"
+          checked={startTimer}
+          onChange={toggleTimer}
+          className="h-3.5 w-3.5 rounded border-zinc-300 text-accent-600 focus:ring-accent-500 dark:border-zinc-600"
+        />
+        Start timer
+      </label>
+    </div>
+  );
+}
 
 function WorkingSection() {
   const { task, subtask, isWorking } = useWorkingOn();
@@ -225,6 +267,7 @@ function DueSoonSection() {
 export function TopBanner() {
   return (
     <>
+      <FocusSection />
       <WorkingSection />
       <SuggestionSection />
       <DueSoonSection />
