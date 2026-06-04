@@ -1,0 +1,230 @@
+// Paranoid Mode vault: in-memory DEK lifecycle, idle re-lock, enable/disable,
+// and the credential secrets cache. The DEK never touches disk except wrapped.
+//
+// Gate flag: the *synchronous* source of truth for "is this device in Paranoid
+// Mode" is localStorage['gtd25-paranoid']. It lets the app decide on first paint
+// whether to show the lock screen without awaiting IndexedDB (avoiding a flash
+// of decrypted UI). The Dexie `vault` row holds the persisted key material and
+// migration state; localSettings.paranoidEnabled mirrors the flag for records.
+
+import { db } from './index';
+import {
+  deriveKey, generateSalt, createVerifier, checkVerifier,
+  encryptBlob, decryptBlob, clearEncryptionKey,
+} from '../sync/crypto';
+import { generateDek, wrapDek, unwrapDek } from './vault-crypto';
+import { setVaultKeyProvider } from './vault-middleware';
+import { encryptAllAtRest, decryptAllAtRest } from './vault-migration';
+
+const PARANOID_FLAG = 'gtd25-paranoid';
+export const DEFAULT_IDLE_MINUTES = 15;
+
+export interface VaultSecrets {
+  githubPat?: string;
+  syncPassword?: string;
+}
+
+// --- In-memory state (never persisted) ---
+let currentDek: CryptoKey | null = null;
+let currentSecrets: VaultSecrets | null = null;
+let idleTimeoutMs = DEFAULT_IDLE_MINUTES * 60_000;
+let idleTimer: ReturnType<typeof setTimeout> | null = null;
+
+// --- Reactive snapshot for React (useSyncExternalStore) ---
+const listeners = new Set<() => void>();
+let snapshot = computeSnapshot();
+
+function readFlag(): boolean {
+  try { return localStorage.getItem(PARANOID_FLAG) === '1'; } catch { return false; }
+}
+function setFlag(on: boolean): void {
+  try {
+    if (on) localStorage.setItem(PARANOID_FLAG, '1');
+    else localStorage.removeItem(PARANOID_FLAG);
+  } catch { /* ignore */ }
+}
+function computeSnapshot(): { enabled: boolean; unlocked: boolean } {
+  return { enabled: readFlag(), unlocked: currentDek !== null };
+}
+function emit(): void {
+  snapshot = computeSnapshot();
+  for (const l of listeners) l();
+}
+
+export function subscribeVault(cb: () => void): () => void {
+  listeners.add(cb);
+  return () => { listeners.delete(cb); };
+}
+export function getVaultSnapshot(): { enabled: boolean; unlocked: boolean } {
+  return snapshot;
+}
+
+export function isParanoidEnabled(): boolean { return readFlag(); }
+export function isUnlocked(): boolean { return currentDek !== null; }
+
+// Feed the at-rest key to the DBCore middleware. Reading the key counts as
+// activity so active DB use defers the idle re-lock.
+setVaultKeyProvider(() => {
+  if (currentDek) resetIdleTimer();
+  return currentDek;
+});
+
+// --- Idle re-lock ---
+function resetIdleTimer(): void {
+  if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
+  if (currentDek) idleTimer = setTimeout(() => { lock(); }, idleTimeoutMs);
+}
+/** Call on user interaction to defer the idle re-lock. */
+export function touchVaultActivity(): void { resetIdleTimer(); }
+
+export function getDEK(): CryptoKey | null { resetIdleTimer(); return currentDek; }
+export function getVaultSecrets(): VaultSecrets | null { return currentSecrets; }
+
+export function lock(): void {
+  currentDek = null;
+  currentSecrets = null;
+  if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
+  clearEncryptionKey(); // drop the sync key too
+  emit();
+}
+
+// --- Enable / disable / unlock ---
+
+export async function enableParanoid(passphrase: string, idleMinutes = DEFAULT_IDLE_MINUTES): Promise<void> {
+  if (readFlag()) throw new Error('Paranoid mode is already enabled');
+  if (!passphrase) throw new Error('A passphrase is required');
+
+  const dek = await generateDek();
+  const passSalt = generateSalt();
+  const kek = await deriveKey(passphrase, passSalt);
+  const dekWrappedByPass = await wrapDek(kek, dek);
+  const verifier = await createVerifier(dek);
+  const prfSalt = generateSalt();
+
+  // Snapshot current sync credentials into the vault (encrypted with the DEK).
+  const local = await db.localSettings.get('local');
+  const secrets: VaultSecrets = { githubPat: local?.githubPat, syncPassword: local?.encryptionPassword };
+
+  // Activate the DEK first so the migration encrypts as it rewrites.
+  currentDek = dek;
+  currentSecrets = secrets;
+  idleTimeoutMs = idleMinutes * 60_000;
+
+  await db.vault.put({
+    id: 'vault',
+    dekWrappedByPass,
+    passSalt,
+    prfSalt,
+    verifier,
+    idleTimeoutMinutes: idleMinutes,
+    migrationState: 'encrypting',
+  });
+
+  await encryptAllAtRest();
+
+  await db.vault.update('vault', {
+    secrets: await encryptBlob(dek, JSON.stringify(secrets)),
+    migrationState: 'done',
+  });
+  await db.localSettings.update('local', { paranoidEnabled: true, paranoidIdleTimeoutMinutes: idleMinutes });
+
+  purgeLocalBackups();
+  setFlag(true);
+  resetIdleTimer();
+  emit();
+}
+
+export async function disableParanoid(): Promise<void> {
+  if (!currentDek) throw new Error('Unlock the vault before disabling Paranoid Mode');
+  await db.vault.update('vault', { migrationState: 'decrypting' });
+  await completeDisable();
+}
+
+async function completeDisable(): Promise<void> {
+  await decryptAllAtRest();
+  await db.localSettings.update('local', { paranoidEnabled: false });
+  await db.vault.delete('vault'); // delete LAST so an interrupted disable can resume
+  setFlag(false);
+  currentDek = null;
+  currentSecrets = null;
+  if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
+  clearEncryptionKey();
+  emit();
+}
+
+/** Returns false on a wrong passphrase; true once unlocked. */
+export async function unlockWithPassphrase(passphrase: string): Promise<boolean> {
+  const vault = await db.vault.get('vault');
+  if (!vault) return false;
+
+  const kek = await deriveKey(passphrase, vault.passSalt);
+  let dek: CryptoKey;
+  try {
+    dek = await unwrapDek(kek, vault.dekWrappedByPass);
+  } catch {
+    return false; // wrong passphrase -> AES-GCM auth failure
+  }
+  if (!(await checkVerifier(dek, vault.verifier))) return false;
+
+  currentDek = dek;
+  idleTimeoutMs = (vault.idleTimeoutMinutes ?? DEFAULT_IDLE_MINUTES) * 60_000;
+  currentSecrets = vault.secrets
+    ? (JSON.parse(await decryptBlob(dek, vault.secrets)) as VaultSecrets)
+    : null;
+
+  // Resume an interrupted migration.
+  if (vault.migrationState === 'encrypting') {
+    await encryptAllAtRest();
+    await db.vault.update('vault', { migrationState: 'done' });
+  } else if (vault.migrationState === 'decrypting') {
+    await completeDisable();
+    return true;
+  }
+
+  resetIdleTimer();
+  emit();
+  return true;
+}
+
+/** Re-wrap the DEK under a new passphrase. Requires the vault to be unlocked. */
+export async function changePassphrase(newPassphrase: string): Promise<void> {
+  if (!currentDek) throw new Error('Unlock the vault before changing the passphrase');
+  if (!newPassphrase) throw new Error('A passphrase is required');
+  const passSalt = generateSalt();
+  const kek = await deriveKey(newPassphrase, passSalt);
+  const dekWrappedByPass = await wrapDek(kek, currentDek);
+  await db.vault.update('vault', { passSalt, dekWrappedByPass });
+}
+
+export async function configureIdleTimeout(minutes: number): Promise<void> {
+  idleTimeoutMs = minutes * 60_000;
+  if (await db.vault.get('vault')) {
+    await db.vault.update('vault', { idleTimeoutMinutes: minutes });
+  }
+  await db.localSettings.update('local', { paranoidIdleTimeoutMinutes: minutes });
+  resetIdleTimer();
+}
+
+function purgeLocalBackups(): void {
+  try {
+    for (const k of Object.keys(localStorage)) {
+      if (k.startsWith('gtd25-local-backup-')) localStorage.removeItem(k);
+    }
+  } catch { /* ignore */ }
+}
+
+// Test-only: reset in-memory state without touching persistence.
+export function __resetVaultStateForTests(): void {
+  currentDek = null;
+  currentSecrets = null;
+  if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
+  idleTimeoutMs = DEFAULT_IDLE_MINUTES * 60_000;
+  emit();
+}
+
+// Test-only: shrink the idle window (and re-arm) so re-lock can be tested with
+// real timers and a short wait.
+export function __setIdleTimeoutMsForTests(ms: number): void {
+  idleTimeoutMs = ms;
+  resetIdleTimer();
+}

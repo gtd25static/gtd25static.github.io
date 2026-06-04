@@ -1,0 +1,135 @@
+import { useState } from 'react';
+import { Input } from '../ui/Input';
+import { Button } from '../ui/Button';
+import { toast } from '../ui/Toast';
+import { confirmDialog } from '../ui/ConfirmDialog';
+import { useVault } from '../../hooks/use-vault';
+import { useLocalSettings } from '../../hooks/use-settings';
+import {
+  enableParanoid, disableParanoid, changePassphrase, configureIdleTimeout, lock,
+  DEFAULT_IDLE_MINUTES,
+} from '../../db/vault';
+
+function clampMinutes(value: string): number {
+  const n = parseInt(value, 10);
+  if (Number.isNaN(n)) return DEFAULT_IDLE_MINUTES;
+  return Math.max(1, Math.min(240, n));
+}
+
+function EnableForm() {
+  const [pass, setPass] = useState('');
+  const [confirm, setConfirm] = useState('');
+  const [idle, setIdle] = useState(String(DEFAULT_IDLE_MINUTES));
+  const [busy, setBusy] = useState(false);
+
+  async function handleEnable() {
+    if (pass !== confirm) { toast('Passphrases do not match', 'error'); return; }
+    if (!pass.trim()) { toast('Choose a passphrase', 'error'); return; }
+    setBusy(true);
+    try {
+      await enableParanoid(pass.trim(), clampMinutes(idle));
+      toast('Paranoid Mode enabled — local data is now encrypted', 'success');
+      setPass(''); setConfirm('');
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Could not enable Paranoid Mode', 'error');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="space-y-3">
+      <h3 className="text-sm font-medium">Paranoid Mode</h3>
+      <p className="text-xs text-zinc-400 dark:text-zinc-500">
+        Encrypts all task data on this device at rest. The app locks and requires this passphrase
+        to decrypt. Use on devices you do not fully trust. There is no recovery if you forget the
+        passphrase — local data becomes unreadable (data synced to other devices is unaffected).
+      </p>
+      <Input label="Passphrase" type="password" value={pass} onChange={(e) => setPass(e.target.value)} placeholder="Choose a strong passphrase" disabled={busy} />
+      <Input label="Confirm passphrase" type="password" value={confirm} onChange={(e) => setConfirm(e.target.value)} placeholder="Repeat passphrase" disabled={busy} />
+      <Input label="Auto-lock after (minutes idle)" type="number" min={1} max={240} value={idle} onChange={(e) => setIdle(e.target.value)} disabled={busy} />
+      <Button size="sm" variant="danger" onClick={handleEnable} disabled={busy}>
+        {busy ? 'Encrypting…' : 'Enable Paranoid Mode'}
+      </Button>
+    </div>
+  );
+}
+
+function ManageForm({ idleMinutes }: { idleMinutes: number }) {
+  const [idle, setIdle] = useState(String(idleMinutes));
+  const [newPass, setNewPass] = useState('');
+  const [newPassConfirm, setNewPassConfirm] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  async function handleSaveIdle() {
+    await configureIdleTimeout(clampMinutes(idle));
+    setIdle(String(clampMinutes(idle)));
+    toast('Auto-lock updated', 'success');
+  }
+
+  async function handleChangePass() {
+    if (newPass !== newPassConfirm) { toast('Passphrases do not match', 'error'); return; }
+    if (!newPass.trim()) { toast('Enter a new passphrase', 'error'); return; }
+    setBusy(true);
+    try {
+      await changePassphrase(newPass.trim());
+      toast('Passphrase changed', 'success');
+      setNewPass(''); setNewPassConfirm('');
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Could not change passphrase', 'error');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleDisable() {
+    const ok = await confirmDialog(
+      'This decrypts all local data back to plaintext on this device. The data will no longer be protected at rest.',
+      { confirmLabel: 'Disable', danger: true },
+    );
+    if (!ok) return;
+    setBusy(true);
+    try {
+      await disableParanoid();
+      toast('Paranoid Mode disabled — local data decrypted', 'success');
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Could not disable Paranoid Mode', 'error');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="space-y-1">
+        <h3 className="text-sm font-medium">Paranoid Mode</h3>
+        <p className="text-xs text-emerald-600 dark:text-emerald-400">Active — local data on this device is encrypted at rest.</p>
+      </div>
+
+      <div className="flex items-end gap-2">
+        <Input label="Auto-lock after (minutes idle)" type="number" min={1} max={240} value={idle} onChange={(e) => setIdle(e.target.value)} />
+        <Button size="sm" variant="secondary" onClick={handleSaveIdle}>Save</Button>
+      </div>
+
+      <div className="space-y-2 border-t border-zinc-200 pt-3 dark:border-zinc-700">
+        <Input label="New passphrase" type="password" value={newPass} onChange={(e) => setNewPass(e.target.value)} placeholder="Change passphrase" disabled={busy} />
+        <Input label="Confirm new passphrase" type="password" value={newPassConfirm} onChange={(e) => setNewPassConfirm(e.target.value)} placeholder="Repeat new passphrase" disabled={busy} />
+        <Button size="sm" variant="secondary" onClick={handleChangePass} disabled={busy}>Change passphrase</Button>
+      </div>
+
+      <div className="flex flex-wrap gap-2 border-t border-zinc-200 pt-3 dark:border-zinc-700">
+        <Button size="sm" variant="secondary" onClick={() => lock()}>Lock now</Button>
+        <Button size="sm" variant="danger" onClick={handleDisable} disabled={busy}>
+          {busy ? 'Working…' : 'Disable Paranoid Mode'}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+export function SecuritySettings() {
+  const { enabled } = useVault();
+  const local = useLocalSettings();
+  if (!enabled) return <EnableForm />;
+  return <ManageForm idleMinutes={local.paranoidIdleTimeoutMinutes ?? DEFAULT_IDLE_MINUTES} />;
+}

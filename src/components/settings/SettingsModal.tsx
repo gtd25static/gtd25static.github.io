@@ -8,8 +8,9 @@ import { KeyboardSettings } from './KeyboardSettings';
 import { ShareSettings } from './ShareSettings';
 import { NotificationSettings } from './NotificationSettings';
 import { BackupsSettings } from './BackupsSettings';
+import { SecuritySettings } from './SecuritySettings';
 
-type SettingsTab = 'general' | 'backups';
+type SettingsTab = 'general' | 'security' | 'backups';
 
 export function SettingsModal() {
   const { settingsOpen, setSettingsOpen } = useAppState(useShallow(s => ({ settingsOpen: s.settingsOpen, setSettingsOpen: s.setSettingsOpen })));
@@ -20,7 +21,7 @@ export function SettingsModal() {
       <div className="space-y-6">
         {/* Tab bar */}
         <div className="flex gap-4 border-b border-zinc-200 dark:border-zinc-700">
-          {([['general', 'General'], ['backups', 'Backups']] as const).map(([tab, label]) => (
+          {([['general', 'General'], ['security', 'Security'], ['backups', 'Backups']] as const).map(([tab, label]) => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
@@ -35,7 +36,7 @@ export function SettingsModal() {
           ))}
         </div>
 
-        {activeTab === 'general' ? (
+        {activeTab === 'general' && (
           <>
             <ThemeSettings />
             <hr className="border-zinc-200 dark:border-zinc-700" />
@@ -47,9 +48,9 @@ export function SettingsModal() {
             <hr className="border-zinc-200 dark:border-zinc-700" />
             <ShareSettings />
           </>
-        ) : (
-          <BackupsSettings />
         )}
+        {activeTab === 'security' && <SecuritySettings />}
+        {activeTab === 'backups' && <BackupsSettings />}
       </div>
     </Modal>
   );

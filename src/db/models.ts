@@ -110,6 +110,10 @@ export interface LocalSettings {
   nudgeWindowEnd?: number;   // hour 0–23
   nudgeSoundEnabled?: boolean;
   lastNudgeAt?: number;
+  // Paranoid Mode (device-local; not synced). Persistent record of the mode;
+  // the synchronous gate flag lives in localStorage ('gtd25-paranoid').
+  paranoidEnabled?: boolean;
+  paranoidIdleTimeoutMinutes?: number;
 }
 
 // Paranoid Mode vault (device-local, NEVER synced or exported). Holds the
