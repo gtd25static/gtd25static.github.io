@@ -382,7 +382,12 @@ export function useKeyboard() {
                 const task = await db.tasks.get(item.id);
                 if (task) {
                   if (isInCooldown(task)) {
-                    await updateTask(task.id, { pingedAt: undefined });
+                    await updateTask(task.id, {
+                      pingedAt: undefined,
+                      pingCooldown: undefined,
+                      pingCooldownCustomMs: undefined,
+                      pingCooldownUntil: undefined,
+                    });
                   } else {
                     await updateTask(task.id, { pingedAt: Date.now(), pingCooldown: task.pingCooldown ?? '12h' });
                   }

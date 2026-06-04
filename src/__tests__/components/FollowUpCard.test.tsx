@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import '../setup-component';
 import { resetAppState, makeTask, makeTaskList } from '../helpers/component-helpers';
@@ -101,6 +101,27 @@ describe('FollowUpCard', () => {
     expect(mockUpdateTask).toHaveBeenCalledWith(task.id, {
       pingedAt: expect.any(Number),
       pingCooldown: '12h',
+      pingCooldownCustomMs: undefined,
+      pingCooldownUntil: undefined,
+    });
+  });
+
+  it('stores custom snooze dates as absolute end-of-day timestamps', async () => {
+    const { user, task, container } = renderCard();
+    await user.click(screen.getByTitle('Snooze this follow-up'));
+    await user.click(screen.getByText('Pick a date...'));
+
+    const input = container.querySelector('input[type="date"]');
+    expect(input).toBeTruthy();
+    await act(async () => {
+      fireEvent.change(input!, { target: { value: '2099-06-22' } });
+    });
+
+    expect(mockUpdateTask).toHaveBeenCalledWith(task.id, {
+      pingedAt: expect.any(Number),
+      pingCooldown: 'custom',
+      pingCooldownCustomMs: undefined,
+      pingCooldownUntil: new Date(2099, 5, 22, 23, 59, 59, 999).getTime(),
     });
   });
 
@@ -112,7 +133,12 @@ describe('FollowUpCard', () => {
   it('clears pingedAt when wake is clicked', async () => {
     const { user, task } = renderCard({ pingedAt: Date.now() });
     await user.click(screen.getByTitle('Wake — remove snooze'));
-    expect(mockUpdateTask).toHaveBeenCalledWith(task.id, { pingedAt: undefined });
+    expect(mockUpdateTask).toHaveBeenCalledWith(task.id, {
+      pingedAt: undefined,
+      pingCooldown: undefined,
+      pingCooldownCustomMs: undefined,
+      pingCooldownUntil: undefined,
+    });
   });
 
   it('shows star button', () => {

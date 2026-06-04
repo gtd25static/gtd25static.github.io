@@ -3,6 +3,9 @@ import { db } from '../db';
 import type { Task } from '../db/models';
 import { PING_COOLDOWN_MS } from '../lib/constants';
 
+const ABSOLUTE_TIMESTAMP_FLOOR = Date.UTC(2000, 0, 1);
+const MAX_REASONABLE_CUSTOM_MS = 10 * 366 * 24 * 60 * 60 * 1000;
+
 export function useFollowUps(listId: string | null) {
   return useLiveQuery(
     async () => {
@@ -21,21 +24,39 @@ export function useFollowUps(listId: string | null) {
 }
 
 export function isInCooldown(task: Task): boolean {
-  if (!task.pingedAt || !task.pingCooldown) return false;
-  const cooldownMs =
-    task.pingCooldown === 'custom'
-      ? (task.pingCooldownCustomMs ?? 0)
-      : PING_COOLDOWN_MS[task.pingCooldown] ?? 0;
-  return Date.now() < task.pingedAt + cooldownMs;
+  return cooldownRemaining(task) > 0;
 }
 
 export function cooldownRemaining(task: Task): number {
+  const until = cooldownUntil(task);
+  if (!until) return 0;
+  return Math.max(0, until - Date.now());
+}
+
+export function cooldownUntil(task: Task): number {
   if (!task.pingedAt || !task.pingCooldown) return 0;
-  const cooldownMs =
-    task.pingCooldown === 'custom'
-      ? (task.pingCooldownCustomMs ?? 0)
-      : PING_COOLDOWN_MS[task.pingCooldown] ?? 0;
-  return Math.max(0, task.pingedAt + cooldownMs - Date.now());
+
+  if (task.pingCooldown === 'custom') {
+    if (isReasonableWakeTime(task.pingCooldownUntil)) return task.pingCooldownUntil;
+
+    const legacy = task.pingCooldownCustomMs;
+    if (!Number.isFinite(legacy) || legacy === undefined || legacy <= 0) return 0;
+    if (legacy >= ABSOLUTE_TIMESTAMP_FLOOR) {
+      return isReasonableWakeTime(legacy) ? legacy : 0;
+    }
+    if (legacy > MAX_REASONABLE_CUSTOM_MS) return 0;
+
+    const relativeUntil = task.pingedAt + legacy;
+    return isReasonableWakeTime(relativeUntil) ? relativeUntil : 0;
+  }
+
+  const cooldownMs = PING_COOLDOWN_MS[task.pingCooldown] ?? 0;
+  return cooldownMs > 0 ? task.pingedAt + cooldownMs : 0;
+}
+
+function isReasonableWakeTime(value: number | undefined): value is number {
+  if (!Number.isFinite(value) || value === undefined || value <= 0) return false;
+  return value <= Date.now() + MAX_REASONABLE_CUSTOM_MS;
 }
 
 export function formatCooldown(ms: number): string {

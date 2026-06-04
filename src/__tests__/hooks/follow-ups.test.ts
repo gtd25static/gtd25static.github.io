@@ -1,4 +1,4 @@
-import { isInCooldown, cooldownRemaining, formatCooldown } from '../../hooks/use-follow-ups';
+import { isInCooldown, cooldownRemaining, cooldownUntil, formatCooldown } from '../../hooks/use-follow-ups';
 import type { Task } from '../../db/models';
 
 function makeTask(overrides?: Partial<Task>): Task {
@@ -46,6 +46,24 @@ describe('isInCooldown', () => {
     });
     expect(isInCooldown(task)).toBe(true);
   });
+
+  it('handles custom cooldown wake timestamps', () => {
+    const task = makeTask({
+      pingedAt: Date.now(),
+      pingCooldown: 'custom',
+      pingCooldownUntil: Date.now() + 5000,
+    });
+    expect(isInCooldown(task)).toBe(true);
+  });
+
+  it('ignores unreasonable custom cooldown values', () => {
+    const task = makeTask({
+      pingedAt: Date.now(),
+      pingCooldown: 'custom',
+      pingCooldownCustomMs: Number.MAX_SAFE_INTEGER,
+    });
+    expect(isInCooldown(task)).toBe(false);
+  });
 });
 
 describe('cooldownRemaining', () => {
@@ -69,6 +87,40 @@ describe('cooldownRemaining', () => {
       pingCooldown: '12h',
     });
     expect(cooldownRemaining(task)).toBe(0);
+  });
+
+  it('returns remaining ms for custom wake timestamps', () => {
+    const task = makeTask({
+      pingedAt: Date.now(),
+      pingCooldown: 'custom',
+      pingCooldownUntil: Date.now() + 3 * 60 * 60 * 1000,
+    });
+    expect(cooldownRemaining(task)).toBe(3 * 60 * 60 * 1000);
+  });
+});
+
+describe('cooldownUntil', () => {
+  it('uses pingCooldownUntil for custom cooldowns', () => {
+    const until = Date.now() + 2 * 24 * 60 * 60 * 1000;
+    const task = makeTask({
+      pingedAt: Date.now(),
+      pingCooldown: 'custom',
+      pingCooldownUntil: until,
+      pingCooldownCustomMs: 5000,
+    });
+
+    expect(cooldownUntil(task)).toBe(until);
+  });
+
+  it('treats legacy absolute pingCooldownCustomMs as a wake timestamp', () => {
+    const until = Date.now() + 4 * 60 * 60 * 1000;
+    const task = makeTask({
+      pingedAt: Date.now(),
+      pingCooldown: 'custom',
+      pingCooldownCustomMs: until,
+    });
+
+    expect(cooldownUntil(task)).toBe(until);
   });
 });
 

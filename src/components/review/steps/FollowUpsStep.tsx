@@ -39,7 +39,12 @@ export function FollowUpsStep({ followUpLists, onNext, onPrev, onSkip }: Props) 
                 <button
                   onClick={() => {
                     if (inCooldown) {
-                      updateTask(task.id, { pingedAt: undefined });
+                      updateTask(task.id, {
+                        pingedAt: undefined,
+                        pingCooldown: undefined,
+                        pingCooldownCustomMs: undefined,
+                        pingCooldownUntil: undefined,
+                      });
                     } else {
                       updateTask(task.id, { pingedAt: Date.now(), pingCooldown: task.pingCooldown ?? '12h' });
                     }

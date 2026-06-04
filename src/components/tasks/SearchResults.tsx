@@ -16,15 +16,18 @@ function HighlightedText({ text, query }: { text: string; query: string }) {
 }
 
 function isInactive(result: SearchResult) {
-  return result.status === 'done' || result.archived;
+  if (result.type === 'list') return false;
+  return result.status === 'done' || result.archived || result.parentTaskStatus === 'done';
 }
 
 function statusLabel(result: SearchResult): string {
+  if (result.type === 'list') return result.listType === 'follow-ups' ? 'follow-up list' : 'task list';
   if (result.archived) return 'archived';
   return result.status;
 }
 
 function statusBadgeClass(result: SearchResult): string {
+  if (result.type === 'list') return 'bg-blue-50 text-blue-600 dark:bg-blue-900/30 dark:text-blue-400';
   if (result.archived) return 'bg-zinc-100 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400';
   switch (result.status) {
     case 'done': return 'bg-green-50 text-green-600 dark:bg-green-900/30 dark:text-green-400';
@@ -35,6 +38,7 @@ function statusBadgeClass(result: SearchResult): string {
 }
 
 function statusDot(result: SearchResult): string {
+  if (result.type === 'list') return result.listType === 'follow-ups' ? 'bg-orange-500' : 'bg-blue-500';
   if (result.archived) return 'bg-zinc-300 dark:bg-zinc-600';
   switch (result.status) {
     case 'done': return 'bg-green-500';
@@ -42,6 +46,22 @@ function statusDot(result: SearchResult): string {
     case 'blocked': return 'bg-red-500';
     default: return 'bg-zinc-300 dark:bg-zinc-600';
   }
+}
+
+function typeLabel(result: SearchResult): string {
+  if (result.type === 'list') return 'list';
+  if (result.type === 'task' && result.listType === 'follow-ups') return 'follow-up';
+  return result.type;
+}
+
+function resultContext(result: SearchResult) {
+  if (result.type === 'list') return result.listType === 'follow-ups' ? 'Follow-up list' : 'Task list';
+  return result.listName;
+}
+
+function findFocusElement(id: string): HTMLElement | null {
+  const nodes = document.querySelectorAll<HTMLElement>('[data-focus-id]');
+  return Array.from(nodes).find((node) => node.dataset.focusId === id) ?? null;
 }
 
 function ResultItem({ result, query, onNavigate }: { result: SearchResult; query: string; onNavigate: () => void }) {
@@ -64,7 +84,7 @@ function ResultItem({ result, query, onNavigate }: { result: SearchResult; query
           <HighlightedText text={result.title} query={query} />
         </div>
         <div className="mt-0.5 flex items-center gap-1.5 text-xs text-zinc-400 dark:text-zinc-400">
-          <span className="truncate">{result.listName}</span>
+          <span className="truncate">{resultContext(result)}</span>
           {result.type === 'subtask' && result.parentTaskTitle && (
             <>
               <svg width="8" height="8" viewBox="0 0 8 8" fill="currentColor" className="shrink-0 opacity-50">
@@ -82,9 +102,11 @@ function ResultItem({ result, query, onNavigate }: { result: SearchResult; query
         <span className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${
           result.type === 'subtask'
             ? 'bg-zinc-100 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400'
+            : result.type === 'list'
+              ? 'bg-blue-50 text-blue-600 dark:bg-blue-900/30 dark:text-blue-400'
             : 'bg-accent-50 text-accent-600 dark:bg-accent-900/30 dark:text-accent-400'
         }`}>
-          {result.type}
+          {typeLabel(result)}
         </span>
       </div>
     </button>
@@ -92,24 +114,47 @@ function ResultItem({ result, query, onNavigate }: { result: SearchResult; query
 }
 
 export function SearchResults() {
-  const { searchQuery, selectList, toggleTaskExpanded, setSearchQuery, expandedTaskIds, setNavigateToTaskId } = useAppState(useShallow(s => ({ searchQuery: s.searchQuery, selectList: s.selectList, toggleTaskExpanded: s.toggleTaskExpanded, setSearchQuery: s.setSearchQuery, expandedTaskIds: s.expandedTaskIds, setNavigateToTaskId: s.setNavigateToTaskId })));
+  const { searchQuery, selectList, ensureTaskExpanded, setSearchQuery, setNavigateToTaskId, setFocusedItem, setFocusZone } = useAppState(useShallow(s => ({ searchQuery: s.searchQuery, selectList: s.selectList, ensureTaskExpanded: s.ensureTaskExpanded, setSearchQuery: s.setSearchQuery, setNavigateToTaskId: s.setNavigateToTaskId, setFocusedItem: s.setFocusedItem, setFocusZone: s.setFocusZone })));
   const { results, isSearching, maxReached } = useSearch(searchQuery);
 
-  function handleNavigate(result: SearchResult) {
-    const taskId = result.type === 'subtask' ? result.parentTaskId! : result.id;
+  function scrollToResult(targetId: string, fallbackId?: string) {
+    let attempts = 0;
+    const tryScroll = () => {
+      const el = findFocusElement(targetId) ?? (fallbackId ? findFocusElement(fallbackId) : null);
+      if (el) {
+        const focusedId = el.dataset.focusId ?? targetId;
+        setFocusedItem(focusedId);
+        el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        return;
+      }
+      attempts++;
+      if (attempts < 30) window.setTimeout(tryScroll, 50);
+    };
+    window.setTimeout(tryScroll, 0);
+  }
 
-    // Signal TaskListView / FollowUpList to reveal the item (open Completed/Archived section)
+  function handleNavigate(result: SearchResult) {
+    if (result.type === 'list') {
+      selectList(result.listId);
+      setSearchQuery('');
+      setFocusZone('sidebar');
+      setFocusedItem(result.id);
+      scrollToResult(result.id);
+      return;
+    }
+
+    const taskId = result.type === 'subtask' ? result.parentTaskId! : result.id;
+    const targetId = result.type === 'subtask' && result.listType === 'tasks' ? result.id : taskId;
+
+    // Signal TaskListView / FollowUpList to reveal hidden sections before scrolling.
     setNavigateToTaskId(taskId);
+    if (result.listType === 'tasks') ensureTaskExpanded(taskId);
 
     selectList(result.listId);
     setSearchQuery('');
-
-    // Expand the task card after the list view mounts
-    setTimeout(() => {
-      if (!expandedTaskIds.has(taskId)) {
-        toggleTaskExpanded(taskId);
-      }
-    }, 50);
+    setFocusZone('main');
+    setFocusedItem(targetId);
+    scrollToResult(targetId, taskId);
   }
 
   return (

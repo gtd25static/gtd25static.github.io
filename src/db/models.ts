@@ -37,6 +37,7 @@ export interface Task {
   pingedAt?: number;
   pingCooldown?: PingCooldown;
   pingCooldownCustomMs?: number;
+  pingCooldownUntil?: number;
   archived?: boolean;
   // Warning
   hasWarning?: boolean;

@@ -83,28 +83,35 @@ export function FollowUpCard({ task, index, dragHandleProps }: Props) {
     await updateTask(task.id, {
       pingedAt: Date.now(),
       pingCooldown: cd,
+      pingCooldownCustomMs: undefined,
+      pingCooldownUntil: undefined,
     });
     setShowSnoozePicker(false);
     setShowDatePicker(false);
   }
 
   async function handleSnoozeUntilDate(dateStr: string) {
-    const target = new Date(dateStr);
-    // Set to end of day in local timezone
-    target.setHours(23, 59, 59, 999);
-    const ms = target.getTime() - Date.now();
-    if (ms <= 0) return;
+    const [year, month, day] = dateStr.split('-').map(Number);
+    if (!year || !month || !day) return;
+    const target = new Date(year, month - 1, day, 23, 59, 59, 999);
+    if (target.getTime() <= Date.now()) return;
     await updateTask(task.id, {
       pingedAt: Date.now(),
       pingCooldown: 'custom',
-      pingCooldownCustomMs: ms,
+      pingCooldownCustomMs: undefined,
+      pingCooldownUntil: target.getTime(),
     });
     setShowSnoozePicker(false);
     setShowDatePicker(false);
   }
 
   async function handleWake() {
-    await updateTask(task.id, { pingedAt: undefined });
+    await updateTask(task.id, {
+      pingedAt: undefined,
+      pingCooldown: undefined,
+      pingCooldownCustomMs: undefined,
+      pingCooldownUntil: undefined,
+    });
   }
 
   // Minimum date for the date picker: tomorrow

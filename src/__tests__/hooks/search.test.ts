@@ -3,70 +3,7 @@ import { resetDb, assertDefined } from '../helpers/db-helpers';
 import { createTaskList } from '../../hooks/use-task-lists';
 import { createTask, deleteTask } from '../../hooks/use-tasks';
 import { createSubtask, deleteSubtask } from '../../hooks/use-subtasks';
-import type { SearchResult } from '../../hooks/use-search';
-import type { Task, TaskList } from '../../db/models';
-
-const MAX_SEARCH_RESULTS = 50;
-
-/** Replicate the search logic from useSearch to test it directly against the DB */
-async function searchDb(query: string): Promise<SearchResult[]> {
-  if (!query || query.length < 1) return [];
-
-  const q = query.toLowerCase();
-
-  const lists = await db.taskLists.toArray();
-  const liveLists = lists.filter((l) => !l.deletedAt);
-  const listMap = new Map<string, TaskList>();
-  for (const l of liveLists) listMap.set(l.id, l);
-
-  const allTasks = await db.tasks.toArray();
-  const liveTasks = allTasks.filter((t) => !t.deletedAt && listMap.has(t.listId));
-  const taskMap = new Map<string, Task>();
-  for (const t of liveTasks) taskMap.set(t.id, t);
-
-  const allSubtasks = await db.subtasks.toArray();
-  const liveSubtasks = allSubtasks.filter((s) => !s.deletedAt && taskMap.has(s.taskId));
-
-  const results: SearchResult[] = [];
-
-  for (const task of liveTasks) {
-    if (results.length >= MAX_SEARCH_RESULTS) break;
-    if (task.title.toLowerCase().includes(q) || task.description?.toLowerCase().includes(q)) {
-      const list = listMap.get(task.listId)!;
-      results.push({
-        type: 'task',
-        id: task.id,
-        title: task.title,
-        status: task.status,
-        listId: task.listId,
-        listName: list.name,
-        listType: list.type,
-        archived: task.archived,
-      });
-    }
-  }
-
-  for (const sub of liveSubtasks) {
-    if (results.length >= MAX_SEARCH_RESULTS) break;
-    if (sub.title.toLowerCase().includes(q)) {
-      const task = taskMap.get(sub.taskId)!;
-      const list = listMap.get(task.listId)!;
-      results.push({
-        type: 'subtask',
-        id: sub.id,
-        title: sub.title,
-        status: sub.status,
-        listId: task.listId,
-        listName: list.name,
-        listType: list.type,
-        parentTaskId: task.id,
-        parentTaskTitle: task.title,
-      });
-    }
-  }
-
-  return results;
-}
+import { searchDb } from '../../hooks/use-search';
 
 let listId: string;
 
@@ -84,6 +21,32 @@ describe('search', () => {
     const results = await searchDb('buy');
     expect(results).toHaveLength(1);
     expect(results[0].title).toBe('Buy Groceries');
+  });
+
+  it('returns matching lists', async () => {
+    const results = await searchDb('search list');
+
+    expect(results).toHaveLength(1);
+    expect(results[0]).toEqual(expect.objectContaining({
+      type: 'list',
+      title: 'Search List',
+      listId,
+      listType: 'tasks',
+    }));
+  });
+
+  it('returns matching follow-up items', async () => {
+    const followUpList = await createTaskList('People', 'follow-ups');
+    await createTask(followUpList.id, { title: 'Follow up with Rosa' });
+
+    const results = await searchDb('rosa');
+
+    expect(results).toHaveLength(1);
+    expect(results[0]).toEqual(expect.objectContaining({
+      type: 'task',
+      title: 'Follow up with Rosa',
+      listType: 'follow-ups',
+    }));
   });
 
   it('returns matching tasks by description', async () => {
@@ -150,6 +113,21 @@ describe('search', () => {
     expect(results[0].archived).toBe(true);
   });
 
+  it('includes archived follow-up items in results', async () => {
+    const followUpList = await createTaskList('People', 'follow-ups');
+    const task = assertDefined(await createTask(followUpList.id, { title: 'Archived follow-up' }));
+    await db.tasks.update(task.id, { archived: true, updatedAt: Date.now() });
+
+    const results = await searchDb('archived follow');
+
+    expect(results).toHaveLength(1);
+    expect(results[0]).toEqual(expect.objectContaining({
+      type: 'task',
+      listType: 'follow-ups',
+      archived: true,
+    }));
+  });
+
   it('includes correct listName, listType, parentTaskId for subtask results', async () => {
     const task = assertDefined(await createTask(listId, { title: 'Parent Task' }));
     await createSubtask(task.id, { title: 'Child Sub' });
@@ -160,5 +138,6 @@ describe('search', () => {
     expect(results[0].listType).toBe('tasks');
     expect(results[0].parentTaskId).toBe(task.id);
     expect(results[0].parentTaskTitle).toBe('Parent Task');
+    expect(results[0].parentTaskStatus).toBe('todo');
   });
 });
