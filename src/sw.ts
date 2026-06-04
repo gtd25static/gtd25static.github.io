@@ -23,6 +23,24 @@ self.addEventListener('fetch', (event) => {
   }
 });
 
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  const data = event.notification.data as { url?: string } | undefined;
+  const targetUrl = new URL(data?.url ?? '/', self.location.origin).href;
+
+  event.waitUntil((async () => {
+    const windowClients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    const sameOriginClient = windowClients.find((client) => client.url.startsWith(self.location.origin));
+    if (sameOriginClient && 'focus' in sameOriginClient) {
+      await sameOriginClient.focus();
+      return;
+    }
+    if (self.clients.openWindow) {
+      await self.clients.openWindow(targetUrl);
+    }
+  })());
+});
+
 // Message-based skipWaiting for registerType: 'prompt'
 self.addEventListener('message', (event) => {
   if (event.data && event.data.type === 'SKIP_WAITING') {

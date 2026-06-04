@@ -105,6 +105,7 @@ function NudgeForm({ local }: { local: LocalSettings }) {
     }
     const fallback = { title: 'GTD25', body: "This is how nudges look. Nothing pending right now 🎉" };
     showNudgeNotification(fallback.title, fallback.body, { sound: soundEnabled });
+    toast('Test nudge sent', 'success');
   }
 
   return (

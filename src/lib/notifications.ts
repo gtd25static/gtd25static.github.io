@@ -6,6 +6,10 @@ export async function requestNotificationPermission(): Promise<boolean> {
   return result === 'granted';
 }
 
+type NudgeNotificationOptions = NotificationOptions & {
+  renotify?: boolean;
+};
+
 export function showTimerNotification(): void {
   if (!('Notification' in window) || Notification.permission !== 'granted') return;
   const n = new Notification('Pomodoro Complete', {
@@ -14,6 +18,14 @@ export function showTimerNotification(): void {
     silent: true, // we play our own bell
   });
   setTimeout(() => n.close(), 3000);
+}
+
+function appOpenUrl(): string {
+  try {
+    return new URL('/', window.location.origin).href;
+  } catch {
+    return '/';
+  }
 }
 
 // Reused AudioContext for the nudge chime (browsers cap the number of contexts).
@@ -58,21 +70,45 @@ export function playNudgeChime(): void {
 }
 
 /**
- * Show a gentle nudge notification. Clicking it focuses the app. The OS sound is
- * suppressed (`silent`) in favour of our own discreet chime when `sound` is enabled.
+ * Show a gentle nudge notification. Nudges should remain visible in the OS
+ * notification center, so we do not auto-close them like the pomodoro timer.
+ * Clicking it focuses or opens the app.
  */
 export function showNudgeNotification(title: string, body: string, opts?: { sound?: boolean }): void {
   if (!('Notification' in window) || Notification.permission !== 'granted') return;
-  const n = new Notification(title, {
+  const options: NudgeNotificationOptions = {
     body,
     icon: '/favicon.ico',
+    badge: '/pwa-192.png',
     silent: true,
     tag: 'gtd25-nudge', // collapse repeated nudges into one
-  });
-  n.onclick = () => {
-    window.focus();
-    n.close();
+    renotify: true,
+    requireInteraction: true,
+    data: { url: appOpenUrl() },
   };
+
+  const showWindowNotification = () => {
+    const n = new Notification(title, options);
+    n.onclick = () => {
+      window.focus();
+      n.close();
+    };
+  };
+
   if (opts?.sound) playNudgeChime();
-  setTimeout(() => n.close(), 8000);
+
+  const serviceWorker = navigator.serviceWorker;
+  if (serviceWorker && typeof serviceWorker.getRegistration === 'function') {
+    void serviceWorker.getRegistration()
+      .then((registration) => {
+        if (registration && typeof registration.showNotification === 'function') {
+          return registration.showNotification(title, options);
+        }
+        showWindowNotification();
+      })
+      .catch(showWindowNotification);
+    return;
+  }
+
+  showWindowNotification();
 }
