@@ -5,7 +5,6 @@ import { useAppState } from '../stores/app-state';
 import { setTaskStatus } from './use-tasks';
 import { setSubtaskStatus } from './use-subtasks';
 import { startWorkingOn, startWorkingOnTask, markWorkingDone, markWorkingBlocked, stopWorking } from './use-working-on';
-import { focusNow, getFocusTimerPref } from './use-focus';
 import { updateTask, restoreTask } from './use-tasks';
 import { isInCooldown } from './use-follow-ups';
 import { sortTasksForDisplay, sortFollowUpsForDisplay } from '../lib/task-sort';
@@ -552,13 +551,6 @@ export function useKeyboard() {
           // Open weekly review
           e.preventDefault();
           s.setWeeklyReviewOpen(true);
-          break;
-        }
-
-        case 'f': {
-          // Focus: resume current work, or start the next-up task
-          e.preventDefault();
-          await focusNow({ startTimer: getFocusTimerPref() });
           break;
         }
 
