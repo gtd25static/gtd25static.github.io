@@ -112,6 +112,22 @@ export interface LocalSettings {
   lastNudgeAt?: number;
 }
 
+// Paranoid Mode vault (device-local, NEVER synced or exported). Holds the
+// wrapped data-encryption key (DEK) and at-rest-encrypted secrets. Single row
+// with id='vault'. See src/db/vault.ts.
+export interface Vault {
+  id: string; // always 'vault'
+  dekWrappedByPass: string;       // encryptBlob(KEK_passphrase, rawDEK)
+  passSalt: string;               // PBKDF2 salt for the passphrase KEK
+  dekWrappedByPrf?: string;       // encryptBlob(KEK_webauthn-prf, rawDEK)
+  webauthnCredentialId?: string;  // base64 credential id for allowCredentials
+  prfSalt?: string;               // salt fed to the WebAuthn PRF extension
+  verifier: string;               // encryptBlob(DEK, VERIFIER_PLAINTEXT)
+  secrets?: string;               // encryptBlob(DEK, JSON({githubPat, syncPassword}))
+  idleTimeoutMinutes: number;     // re-lock after this much inactivity
+  migrationState?: 'encrypting' | 'decrypting' | 'done';
+}
+
 export interface ChangeEntry {
   id: string;
   deviceId: string;

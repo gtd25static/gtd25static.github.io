@@ -1,5 +1,5 @@
 import Dexie, { type Table } from 'dexie';
-import type { TaskList, Task, Subtask, SyncMeta, LocalSettings, ChangeEntry, PomodoroSound, SoundPreset, PomodoroSettings } from './models';
+import type { TaskList, Task, Subtask, SyncMeta, LocalSettings, ChangeEntry, PomodoroSound, SoundPreset, PomodoroSettings, Vault } from './models';
 import { newId } from '../lib/id';
 import { createLocalBackup } from './backup';
 import { purgeOldTrashItems } from './purge';
@@ -7,6 +7,7 @@ import { ensureDeviceId, recordChangeBatchInTx, pruneChangelogIfSyncDisabled } f
 import { stampUpdatedFields } from '../sync/field-timestamps';
 import { SYNC_VERSION } from '../sync/version';
 import { runLocalMigrations } from '../sync/local-migrations';
+import { vaultMiddleware } from './vault-middleware';
 
 export class Gtd25DB extends Dexie {
   taskLists!: Table<TaskList, string>;
@@ -18,6 +19,7 @@ export class Gtd25DB extends Dexie {
   pomodoroSounds!: Table<PomodoroSound, string>;
   soundPresets!: Table<SoundPreset, string>;
   pomodoroSettings!: Table<PomodoroSettings, string>;
+  vault!: Table<Vault, string>;
 
   constructor() {
     super('gtd25');
@@ -43,10 +45,19 @@ export class Gtd25DB extends Dexie {
       soundPresets: 'id',
       pomodoroSettings: 'id',
     });
+    // Paranoid Mode: device-local vault holding the wrapped at-rest DEK.
+    this.version(6).stores({
+      vault: 'id',
+    });
   }
 }
 
 export const db = new Gtd25DB();
+
+// At-rest encryption chokepoint for Paranoid Mode. No-op until the vault wires
+// up a key provider (see src/db/vault-middleware.ts); registering it here is
+// inert while Paranoid Mode is off.
+db.use(vaultMiddleware);
 
 export async function cleanOrphans() {
   const now = Date.now();
