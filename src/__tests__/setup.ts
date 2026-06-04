@@ -1,17 +1,21 @@
 /// <reference types="vitest/globals" />
 import 'fake-indexeddb/auto';
 
-// Polyfill localStorage for node test environment
-if (typeof globalThis.localStorage === 'undefined') {
+// Polyfill localStorage for node test environment, including runners that expose
+// a placeholder object without the Storage methods.
+if (typeof globalThis.localStorage === 'undefined' || typeof globalThis.localStorage.getItem !== 'function') {
   const store: Record<string, string> = {};
-  globalThis.localStorage = {
+  Object.defineProperty(globalThis, 'localStorage', {
+    configurable: true,
+    value: {
     getItem: (key: string) => store[key] ?? null,
     setItem: (key: string, value: string) => { store[key] = String(value); },
     removeItem: (key: string) => { delete store[key]; },
     clear: () => { for (const k of Object.keys(store)) delete store[k]; },
     get length() { return Object.keys(store).length; },
     key: (i: number) => Object.keys(store)[i] ?? null,
-  };
+    },
+  });
 }
 
 // Polyfill document/window event targets for node test environment

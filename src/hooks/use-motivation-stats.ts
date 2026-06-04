@@ -95,7 +95,7 @@ export function computeStreak(completionDates: number[]): number {
 
 export function useMotivationStats(): MotivationStats | undefined {
   const [timeOfDay, setTimeOfDay] = useState(getTimeOfDay);
-  const [, setRefreshKey] = useState(0);
+  const [refreshKey, setRefreshKey] = useState(0);
 
   // Midnight refresh
   useEffect(() => {
@@ -185,5 +185,5 @@ export function useMotivationStats(): MotivationStats | undefined {
       isWeekend: isWeekend(now),
       timeOfDay,
     };
-  }, [timeOfDay]);
+  }, [timeOfDay, refreshKey]);
 }

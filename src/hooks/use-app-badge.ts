@@ -1,15 +1,9 @@
 import { useEffect, useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../db';
-import { countAttention } from '../lib/attention';
+import { countAttention, endOfDayMs, taskListIds } from '../lib/attention';
 
 const BASE_TITLE = 'GTD25';
-
-function endOfTodayMs(): number {
-  const d = new Date();
-  d.setHours(23, 59, 59, 999);
-  return d.getTime();
-}
 
 /**
  * Reflects the count of attention-worthy tasks (overdue + due today) in the browser tab
@@ -35,8 +29,22 @@ export function useAppBadge() {
 
   const count = useLiveQuery(
     async () => {
-      const due = await db.tasks.where('dueDate').belowOrEqual(endOfTodayMs()).toArray();
-      return countAttention(Date.now(), due);
+      const now = Date.now();
+      const cutoff = endOfDayMs(now);
+      const [lists, dueTasks, dueSubtasks] = await Promise.all([
+        db.taskLists.toArray(),
+        db.tasks.where('dueDate').belowOrEqual(cutoff).toArray(),
+        db.subtasks.filter((subtask) => subtask.dueDate != null && subtask.dueDate <= cutoff).toArray(),
+      ]);
+      const parentIds = new Set(dueSubtasks.map((subtask) => subtask.taskId));
+      const parents = parentIds.size > 0 ? await db.tasks.bulkGet([...parentIds]) : [];
+      const taskMap = new Map(dueTasks.map((task) => [task.id, task]));
+      for (const parent of parents) {
+        if (parent) taskMap.set(parent.id, parent);
+      }
+      return countAttention(now, [...taskMap.values()], dueSubtasks, {
+        allowedListIds: taskListIds(lists),
+      });
     },
     [tick],
     0,

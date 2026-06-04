@@ -267,8 +267,8 @@ export function TaskCard({ task, index, dragHandleProps }: Props) {
               ...(task.status !== 'working' && !hasWorkingSubtask && task.status !== 'done' ? [{
                 label: 'Work', onClick: () => {
                   if (subtasks.length > 0) {
-                    const firstUndone = subtasks.find((s) => s.status === 'todo' || s.status === 'blocked');
-                    if (firstUndone) startWorkingOn(firstUndone.id);
+                    const firstTodo = subtasks.find((s) => s.status === 'todo');
+                    if (firstTodo) startWorkingOn(firstTodo.id);
                   } else {
                     startWorkingOnTask(task.id);
                   }
@@ -307,8 +307,8 @@ export function TaskCard({ task, index, dragHandleProps }: Props) {
             <button
               onClick={() => {
                 if (subtasks.length > 0) {
-                  const firstUndone = subtasks.find((s) => s.status === 'todo' || s.status === 'blocked');
-                  if (firstUndone) startWorkingOn(firstUndone.id);
+                  const firstTodo = subtasks.find((s) => s.status === 'todo');
+                  if (firstTodo) startWorkingOn(firstTodo.id);
                 } else {
                   startWorkingOnTask(task.id);
                 }
@@ -424,8 +424,8 @@ export function TaskCard({ task, index, dragHandleProps }: Props) {
       items.push({
         label: 'Work', onClick: () => {
           if (subtasks.length > 0) {
-            const firstUndone = subtasks.find((s) => s.status === 'todo' || s.status === 'blocked');
-            if (firstUndone) startWorkingOn(firstUndone.id);
+            const firstTodo = subtasks.find((s) => s.status === 'todo');
+            if (firstTodo) startWorkingOn(firstTodo.id);
           } else {
             startWorkingOnTask(task.id);
           }

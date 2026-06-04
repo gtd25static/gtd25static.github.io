@@ -2,6 +2,7 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../db';
 import type { Task, Subtask, TaskList } from '../db/models';
 import { INBOX_LIST_NAME, DUE_SOON_DAYS } from '../lib/constants';
+import { collectDueItems, taskListIds as activeTaskListIds } from '../lib/attention';
 
 export interface ReviewData {
   inboxTasks: Task[];
@@ -141,22 +142,14 @@ export function useReviewData(): ReviewData | undefined {
     }
 
     // 5. Overdue & due soon
-    const overdueItems: ReviewData['overdueItems'] = [];
-    for (const task of liveTasks) {
-      if (task.dueDate && task.status !== 'done' && !task.archived && task.dueDate < dueSoonThreshold) {
-        overdueItems.push({ type: 'task', item: task });
-      }
-    }
-    for (const sub of liveSubtasks) {
-      if (sub.dueDate && sub.status !== 'done' && sub.dueDate < dueSoonThreshold) {
-        const parent = liveTasks.find((t) => t.id === sub.taskId);
-        if (parent && !parent.archived) {
-          overdueItems.push({ type: 'subtask', item: sub, parent });
-        }
-      }
-    }
-    // Sort: overdue first, then by date
-    overdueItems.sort((a, b) => (a.item.dueDate ?? 0) - (b.item.dueDate ?? 0));
+    const overdueItems: ReviewData['overdueItems'] = collectDueItems(now, liveTasks, liveSubtasks, {
+      cutoff: dueSoonThreshold,
+      allowedListIds: activeTaskListIds(liveLists),
+    }).map((item) =>
+      item.type === 'task'
+        ? { type: 'task' as const, item: item.task }
+        : { type: 'subtask' as const, item: item.subtask!, parent: item.task },
+    );
 
     // 6. Stats
     const allCompletionDates: number[] = [];

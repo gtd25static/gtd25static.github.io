@@ -77,6 +77,7 @@ describe('QuickCapture', () => {
     useAppState.setState({ quickCaptureOpen: true });
     const user = userEvent.setup();
     render(<QuickCapture />);
+    await user.click(screen.getByPlaceholderText('Quick capture to Inbox...'));
     await user.keyboard('{Escape}');
     expect(useAppState.getState().quickCaptureOpen).toBe(false);
   });

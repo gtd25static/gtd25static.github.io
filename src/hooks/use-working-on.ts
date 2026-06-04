@@ -35,6 +35,9 @@ export function useWorkingOn(): WorkingOnState {
 
 export async function startWorkingOn(subtaskId: string) {
   try {
+    const current = await db.subtasks.get(subtaskId);
+    if (!current || current.deletedAt || current.status !== 'todo') return;
+
     // setSubtaskStatus('working') already atomically clears all working items
     await setSubtaskStatus(subtaskId, 'working');
     // Set workedAt on parent task if not already set
@@ -171,15 +174,16 @@ export async function markWorkingDone() {
     const updatedActive = await db.subtasks.get(active.id);
     if (updatedActive) batch.push({ entityType: 'subtask', entityId: active.id, operation: 'upsert', data: updatedActive as unknown as Record<string, unknown> });
 
-    // Auto-advance to next undone subtask
+    // Auto-advance to the next actionable subtask. Blocked subtasks stay blocked
+    // and visible, but should not be silently promoted to working.
     const siblings = await db.subtasks.where('taskId').equals(active.taskId).sortBy('order');
-    const nextUndone = siblings.find((s) => !s.deletedAt && s.id !== active.id && (s.status === 'todo' || s.status === 'blocked'));
-    if (nextUndone) {
-      const nextFT = stampUpdatedFields(nextUndone.fieldTimestamps, ['status'], now);
-      await db.subtasks.update(nextUndone.id, { status: 'working', updatedAt: now, fieldTimestamps: nextFT });
-      const updatedNext = await db.subtasks.get(nextUndone.id);
-      if (updatedNext) batch.push({ entityType: 'subtask', entityId: nextUndone.id, operation: 'upsert', data: updatedNext as unknown as Record<string, unknown> });
-    } else {
+    const nextTodo = siblings.find((s) => !s.deletedAt && s.id !== active.id && s.status === 'todo');
+    if (nextTodo) {
+      const nextFT = stampUpdatedFields(nextTodo.fieldTimestamps, ['status'], now);
+      await db.subtasks.update(nextTodo.id, { status: 'working', updatedAt: now, fieldTimestamps: nextFT });
+      const updatedNext = await db.subtasks.get(nextTodo.id);
+      if (updatedNext) batch.push({ entityType: 'subtask', entityId: nextTodo.id, operation: 'upsert', data: updatedNext as unknown as Record<string, unknown> });
+    } else if (!siblings.some((s) => !s.deletedAt && s.id !== active.id && s.status === 'blocked')) {
       // All subtasks done — mark parent task done
       const task = await db.tasks.get(active.taskId);
       if (task) {

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { dayDiff, countAttention } from '../../lib/attention';
-import type { Task } from '../../db/models';
+import type { Subtask, Task } from '../../db/models';
 
 const DAY = 24 * 60 * 60 * 1000;
 const NOW = new Date(2026, 5, 3, 12, 0, 0, 0).getTime();
@@ -9,6 +9,17 @@ function makeTask(overrides: Partial<Task> & { id: string }): Task {
   return {
     listId: 'list-1',
     title: `Task ${overrides.id}`,
+    status: 'todo',
+    order: 0,
+    createdAt: NOW,
+    updatedAt: NOW,
+    ...overrides,
+  };
+}
+
+function makeSubtask(overrides: Partial<Subtask> & { id: string; taskId: string }): Subtask {
+  return {
+    title: `Subtask ${overrides.id}`,
     status: 'todo',
     order: 0,
     createdAt: NOW,
@@ -48,6 +59,26 @@ describe('countAttention', () => {
       makeTask({ id: 'deleted', dueDate: NOW - DAY, deletedAt: NOW }),
     ];
     expect(countAttention(NOW, tasks)).toBe(0);
+  });
+
+  it('counts due subtasks under active parent tasks', () => {
+    const parent = makeTask({ id: 'parent' });
+    const subtasks = [
+      makeSubtask({ id: 'overdue-sub', taskId: parent.id, dueDate: NOW - DAY }),
+      makeSubtask({ id: 'today-sub', taskId: parent.id, dueDate: NOW }),
+      makeSubtask({ id: 'future-sub', taskId: parent.id, dueDate: NOW + DAY }),
+    ];
+    expect(countAttention(NOW, [parent], subtasks)).toBe(2);
+  });
+
+  it('excludes due subtasks under done, archived, or deleted parents', () => {
+    const parents = [
+      makeTask({ id: 'done-parent', status: 'done' }),
+      makeTask({ id: 'archived-parent', archived: true }),
+      makeTask({ id: 'deleted-parent', deletedAt: NOW }),
+    ];
+    const subtasks = parents.map((parent) => makeSubtask({ id: `${parent.id}-sub`, taskId: parent.id, dueDate: NOW - DAY }));
+    expect(countAttention(NOW, parents, subtasks)).toBe(0);
   });
 
   it('is 0 when nothing is due', () => {

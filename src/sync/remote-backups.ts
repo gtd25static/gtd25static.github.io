@@ -56,7 +56,7 @@ export async function maybeCreateBackups(
   const tiers = Object.keys(BACKUP_FILES) as BackupTier[];
 
   // Check localStorage for each tier — collect stale tiers
-  let staleTiers = tiers.filter((tier) => {
+  const staleTiers = tiers.filter((tier) => {
     const lastAt = parseInt(localStorage.getItem(getLocalTimestampKey(tier)) ?? '0', 10);
     return now - lastAt >= TIER_THRESHOLDS[tier];
   });

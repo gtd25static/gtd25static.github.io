@@ -163,10 +163,10 @@ interface DueBucket {
 }
 
 function DueSoonSection() {
-  const rawItems = useDueSoon();
+  const [refreshKey, setRefreshKey] = useState(0);
+  const rawItems = useDueSoon(refreshKey);
   const items = useDeferredValue(rawItems);
   const { selectList, toggleTaskExpanded } = useAppState(useShallow(s => ({ selectList: s.selectList, toggleTaskExpanded: s.toggleTaskExpanded })));
-  const [, setRefreshKey] = useState(0);
 
   // Auto-refresh at midnight
   useEffect(() => {

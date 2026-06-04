@@ -152,6 +152,20 @@ describe('markWorkingDone', () => {
     expect(next?.status).toBe('working');
   });
 
+  it('does not auto-advance to a blocked subtask', async () => {
+    const task = assertDefined(await createTask(listId, { title: 'Task' }));
+    const active = assertDefined(await createSubtask(task.id, { title: 'Active' }));
+    const blocked = assertDefined(await createSubtask(task.id, { title: 'Blocked' }));
+    await setSubtaskStatus(blocked.id, 'blocked');
+
+    await startWorkingOn(active.id);
+    await markWorkingDone();
+
+    expect((await db.subtasks.get(active.id))?.status).toBe('done');
+    expect((await db.subtasks.get(blocked.id))?.status).toBe('blocked');
+    expect((await db.tasks.get(task.id))?.status).toBe('todo');
+  });
+
   it('completes parent when all subtasks done', async () => {
     const task = assertDefined(await createTask(listId, { title: 'Task' }));
     const s1 = assertDefined(await createSubtask(task.id, { title: 'Only Sub' }));

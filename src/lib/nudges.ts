@@ -1,9 +1,18 @@
-import type { Task, TaskList } from '../db/models';
-import { isInboxList } from './constants';
+import type { Subtask, Task, TaskList } from '../db/models';
+import { collectDueItems, taskListIds } from './attention';
+import { eligibleForFocus, pickWeighted } from './focus-pick';
 
 export interface NudgeContent {
+  kind: 'overdue' | 'due-today' | 'pending';
+  itemType: 'task' | 'subtask';
   title: string;
   body: string;
+  taskId: string;
+  listId: string;
+  taskTitle: string;
+  subtaskId?: string;
+  subtaskTitle?: string;
+  dueDate?: number;
 }
 
 /** Subset of LocalSettings the nudge scheduler depends on (kept narrow for testability). */
@@ -30,21 +39,6 @@ function truncate(title: string): string {
   return t.length > MAX_TITLE_LEN ? `${t.slice(0, MAX_TITLE_LEN - 1)}…` : t;
 }
 
-/** Whole-day difference between two timestamps (target - now), using local calendar days. */
-function dayDiff(now: number, target: number): number {
-  const a = new Date(now);
-  a.setHours(0, 0, 0, 0);
-  const b = new Date(target);
-  b.setHours(0, 0, 0, 0);
-  return Math.round((b.getTime() - a.getTime()) / (24 * 60 * 60 * 1000));
-}
-
-function isActive(t: Task): boolean {
-  // Mirrors the "active" predicate used across the app (Sidebar/useAllTaskCounts,
-  // use-motivation-stats): not deleted, not done, not archived.
-  return !t.deletedAt && t.status !== 'done' && !t.archived;
-}
-
 /**
  * Pick a single task at random, weighted linearly by age (now - createdAt) so the
  * older a task is the more likely it is to be picked — but no task is guaranteed.
@@ -69,66 +63,80 @@ export function pickWeightedByAge(tasks: Task[], now: number, rng: () => number 
  * is nothing worth nudging about. Priority ladder:
  *   1. Overdue tasks
  *   2. Tasks due today
- *   3. Inbox backlog
- *   4. Fallback: a random active task (older-weighted) — only when nothing is
- *      overdue or due today.
+ *   3. Pending task: a random focusable active task (older / worked weighted)
  */
 export function computeNudge(
   now: number,
   tasks: Task[],
   lists: TaskList[],
   rng: () => number = Math.random,
+  subtasks: Subtask[] = [],
 ): NudgeContent | null {
-  const inboxIds = new Set(
-    lists.filter((l) => !l.deletedAt && isInboxList(l)).map((l) => l.id),
-  );
+  const allowedListIds = taskListIds(lists);
 
-  const active = tasks.filter(isActive);
+  const subtasksByTask = new Map<string, Subtask[]>();
+  for (const subtask of subtasks) {
+    const bucket = subtasksByTask.get(subtask.taskId) ?? [];
+    bucket.push(subtask);
+    subtasksByTask.set(subtask.taskId, bucket);
+  }
+  const active = eligibleForFocus(tasks, allowedListIds).filter((task) => {
+    const taskSubtasks = (subtasksByTask.get(task.id) ?? []).filter((subtask) => !subtask.deletedAt && subtask.status !== 'done');
+    return taskSubtasks.length === 0 || taskSubtasks.some((subtask) => subtask.status === 'todo');
+  });
+  const activeTaskIds = new Set(active.map((task) => task.id));
+  const dueItems = collectDueItems(now, tasks, subtasks, {
+    allowedListIds,
+    includeBlocked: false,
+  }).filter((item) => item.type === 'subtask' || activeTaskIds.has(item.taskId));
+  const overdue = dueItems.filter((item) => item.dueDate < new Date(now).setHours(0, 0, 0, 0));
+  const dueToday = dueItems.filter((item) => {
+    const dayStart = new Date(now);
+    dayStart.setHours(0, 0, 0, 0);
+    return item.dueDate >= dayStart.getTime();
+  });
 
-  const overdue = active.filter((t) => t.dueDate != null && dayDiff(now, t.dueDate) < 0);
-  const dueToday = active.filter((t) => t.dueDate != null && dayDiff(now, t.dueDate) === 0);
-  const inbox = active.filter((t) => inboxIds.has(t.listId));
+  function contentFor(item: (typeof dueItems)[number], kind: 'overdue' | 'due-today'): NudgeContent {
+    const title = item.title;
+    return {
+      kind,
+      itemType: item.type,
+      title: kind === 'overdue' ? 'Overdue task' : 'Due today',
+      body:
+        kind === 'overdue'
+          ? `“${truncate(title)}” is overdue.`
+          : `“${truncate(title)}” is due today.`,
+      taskId: item.taskId,
+      listId: item.listId,
+      taskTitle: item.task.title,
+      subtaskId: item.subtask?.id,
+      subtaskTitle: item.subtask?.title,
+      dueDate: item.dueDate,
+    };
+  }
 
   // 1. Overdue
   if (overdue.length > 0) {
-    const earliest = overdue.reduce((a, b) => (a.dueDate! <= b.dueDate! ? a : b));
-    return {
-      title: 'Overdue tasks',
-      body:
-        overdue.length === 1
-          ? `“${truncate(earliest.title)}” is overdue.`
-          : `${overdue.length} tasks are overdue, including “${truncate(earliest.title)}”.`,
-    };
+    return contentFor(overdue[0], 'overdue');
   }
 
   // 2. Due today
   if (dueToday.length > 0) {
-    return {
-      title: 'Due today',
-      body:
-        dueToday.length === 1
-          ? `“${truncate(dueToday[0].title)}” is due today.`
-          : `${dueToday.length} tasks are due today.`,
-    };
+    return contentFor(dueToday[0], 'due-today');
   }
 
-  // 3. Inbox backlog
-  if (inbox.length > 0) {
-    return {
-      title: 'Inbox needs triage',
-      body:
-        inbox.length === 1
-          ? '1 item is waiting in your Inbox.'
-          : `${inbox.length} items are waiting in your Inbox.`,
-    };
-  }
-
-  // 4. Fallback: random older-weighted active task (gated on no overdue / due-today).
-  const pick = pickWeightedByAge(active, now, rng);
+  // 3. Pending task fallback.
+  const pick = pickWeighted(active, now, rng);
   if (!pick) return null;
   return {
+    kind: 'pending',
+    itemType: 'task',
     title: 'A gentle nudge',
     body: `Maybe pick this back up: “${truncate(pick.title)}”?`,
+    taskId: pick.id,
+    listId: pick.listId,
+    taskTitle: pick.title,
+    dueDate: pick.dueDate,
   };
 }
 

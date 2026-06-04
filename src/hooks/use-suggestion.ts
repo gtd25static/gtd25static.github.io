@@ -48,15 +48,16 @@ export function useSuggestion() {
         listId: selected.listId,
       };
 
-      // If task has undone subtasks, show the first one
+      // If task has actionable subtasks, show the first one. Blocked subtasks stay
+      // visible elsewhere, but should not be suggested as next work.
       const subtasks = await db.subtasks
         .where('taskId')
         .equals(selected.id)
         .sortBy('order');
-      const firstUndone = subtasks.find((s) => !s.deletedAt && s.status !== 'done');
-      if (firstUndone) {
-        result.subtaskId = firstUndone.id;
-        result.subtaskTitle = firstUndone.title;
+      const firstTodo = subtasks.find((s) => !s.deletedAt && s.status === 'todo');
+      if (firstTodo) {
+        result.subtaskId = firstTodo.id;
+        result.subtaskTitle = firstTodo.title;
       }
 
       return result;

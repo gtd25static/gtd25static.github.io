@@ -5,6 +5,7 @@ import { useTaskLists } from '../../hooks/use-task-lists';
 import { Sidebar } from './Sidebar';
 import { UpdateBanner } from '../banners/UpdateBanner';
 import { TopBanner } from '../banners/TopBanner';
+import { FocusNudgeToast } from '../banners/FocusNudgeToast';
 import { TaskListView } from '../tasks/TaskListView';
 import { SpecialListView } from '../tasks/SpecialListView';
 import { SearchResults } from '../tasks/SearchResults';
@@ -156,6 +157,7 @@ export function AppShell() {
       </button>
 
       <QuickCapture />
+      <FocusNudgeToast />
       <ConfirmDialogContainer />
       <ToastContainer />
     </div>

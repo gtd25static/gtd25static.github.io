@@ -323,12 +323,13 @@ export function useKeyboard() {
               const item = mainRef.current.find((i) => i.id === s.focusedItemId);
               if (!item || isActionItem(item)) break;
               if (item.type === 'subtask') {
-                await startWorkingOn(item.id);
+                const subtask = await db.subtasks.get(item.id);
+                if (subtask?.status === 'todo' && !subtask.deletedAt) await startWorkingOn(item.id);
               } else {
                 const subs = await db.subtasks.where('taskId').equals(item.id).toArray();
-                const undone = subs.filter((sub) => !sub.deletedAt).find((sub) => sub.status === 'todo' || sub.status === 'blocked');
-                if (undone) await startWorkingOn(undone.id);
-                else await startWorkingOnTask(item.id);
+                const todo = subs.filter((sub) => !sub.deletedAt).find((sub) => sub.status === 'todo');
+                if (todo) await startWorkingOn(todo.id);
+                else if (!subs.some((sub) => !sub.deletedAt && sub.status !== 'done')) await startWorkingOnTask(item.id);
               }
             }
           } else {
@@ -496,12 +497,13 @@ export function useKeyboard() {
           const item = mainRef.current.find((i) => i.id === s.focusedItemId);
           if (!item || isActionItem(item)) break;
           if (item.type === 'subtask') {
-            await startWorkingOn(item.id);
+            const subtask = await db.subtasks.get(item.id);
+            if (subtask?.status === 'todo' && !subtask.deletedAt) await startWorkingOn(item.id);
           } else {
             const subs = await db.subtasks.where('taskId').equals(item.id).toArray();
-            const undone = subs.filter((sub) => !sub.deletedAt).find((sub) => sub.status === 'todo' || sub.status === 'blocked');
-            if (undone) await startWorkingOn(undone.id);
-            else await startWorkingOnTask(item.id);
+            const todo = subs.filter((sub) => !sub.deletedAt).find((sub) => sub.status === 'todo');
+            if (todo) await startWorkingOn(todo.id);
+            else if (!subs.some((sub) => !sub.deletedAt && sub.status !== 'done')) await startWorkingOnTask(item.id);
           }
           break;
         }

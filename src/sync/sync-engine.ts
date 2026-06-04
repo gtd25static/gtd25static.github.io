@@ -1111,7 +1111,7 @@ async function compactSnapshot(pat: string, repo: string, encKey: CryptoKey) {
     // Get current snapshot
     const snapshotFile = await getFile(pat, repo, SNAPSHOT_FILE);
     let snapshot: SyncData;
-    let snapshotSha = snapshotFile?.sha;
+    const snapshotSha = snapshotFile?.sha;
     let savedSalt: string | undefined;
     let savedVerifier: string | undefined;
     let savedWipedAt: number | undefined;

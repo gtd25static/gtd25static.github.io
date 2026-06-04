@@ -1,6 +1,5 @@
 import { useDueSoon } from '../../hooks/use-due-soon';
 import { daysUntil, dueDateColor } from '../../lib/date-utils';
-import { startWorkingOn } from '../../hooks/use-working-on';
 import { useAppState } from '../../stores/app-state';
 import { useShallow } from 'zustand/react/shallow';
 import { db } from '../../db';
@@ -26,7 +25,6 @@ export function DueSoonBanner() {
           selectList(task.listId);
           toggleTaskExpanded(task.id);
         }
-        await startWorkingOn(item.id);
       }
     }
   }

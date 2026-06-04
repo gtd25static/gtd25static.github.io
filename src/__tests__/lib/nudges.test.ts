@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { computeNudge, pickWeightedByAge, shouldNudgeNow, NUDGE_DEFAULTS } from '../../lib/nudges';
-import type { Task, TaskList } from '../../db/models';
+import type { Subtask, Task, TaskList } from '../../db/models';
 
 const DAY = 24 * 60 * 60 * 1000;
 const HOUR = 60 * 60 * 1000;
@@ -12,6 +12,17 @@ function makeTask(overrides: Partial<Task> & { id: string }): Task {
   return {
     listId: 'list-1',
     title: `Task ${overrides.id}`,
+    status: 'todo',
+    order: 0,
+    createdAt: NOW,
+    updatedAt: NOW,
+    ...overrides,
+  };
+}
+
+function makeSubtask(overrides: Partial<Subtask> & { id: string; taskId: string }): Subtask {
+  return {
+    title: `Subtask ${overrides.id}`,
     status: 'todo',
     order: 0,
     createdAt: NOW,
@@ -43,7 +54,10 @@ describe('computeNudge — priority ladder', () => {
       makeTask({ id: 'plain' }),
     ];
     const nudge = computeNudge(NOW, tasks, lists)!;
-    expect(nudge.title).toBe('Overdue tasks');
+    expect(nudge.kind).toBe('overdue');
+    expect(nudge.itemType).toBe('task');
+    expect(nudge.taskId).toBe('overdue');
+    expect(nudge.title).toBe('Overdue task');
   });
 
   it('names the single overdue task', () => {
@@ -57,26 +71,53 @@ describe('computeNudge — priority ladder', () => {
       makeTask({ id: 'inbox-item', listId: 'inbox' }),
       makeTask({ id: 'plain' }),
     ];
-    expect(computeNudge(NOW, tasks, lists)!.title).toBe('Due today');
+    const nudge = computeNudge(NOW, tasks, lists)!;
+    expect(nudge.kind).toBe('due-today');
+    expect(nudge.itemType).toBe('task');
+    expect(nudge.taskId).toBe('today');
+    expect(nudge.title).toBe('Due today');
   });
 
-  it('inbox backlog beats fallback when nothing is due', () => {
+  it('can nudge a due subtask under an active task', () => {
+    const parent = makeTask({ id: 'parent', title: 'Project' });
+    const subtask = makeSubtask({ id: 'sub', taskId: parent.id, title: 'Send update', dueDate: NOW - DAY });
+    const nudge = computeNudge(NOW, [parent], lists, () => 0, [subtask])!;
+    expect(nudge.kind).toBe('overdue');
+    expect(nudge.itemType).toBe('subtask');
+    expect(nudge.taskId).toBe(parent.id);
+    expect(nudge.subtaskId).toBe(subtask.id);
+    expect(nudge.subtaskTitle).toBe('Send update');
+  });
+
+  it('falls back to a concrete pending task when nothing is due', () => {
     const tasks = [
-      makeTask({ id: 'inbox-item', listId: 'inbox' }),
+      makeTask({ id: 'inbox-item', listId: 'inbox', createdAt: NOW - 10 * DAY }),
       makeTask({ id: 'plain' }),
     ];
-    expect(computeNudge(NOW, tasks, lists)!.title).toBe('Inbox needs triage');
+    const nudge = computeNudge(NOW, tasks, lists, () => 0)!;
+    expect(nudge.kind).toBe('pending');
+    expect(nudge.itemType).toBe('task');
+    expect(nudge.taskId).toBe('inbox-item');
+    expect(nudge.title).toBe('A gentle nudge');
   });
 
-  it('ignores done/archived/deleted items when classifying', () => {
+  it('ignores done/blocked/archived/deleted/non-task-list items when classifying', () => {
     const tasks = [
       makeTask({ id: 'overdue-done', dueDate: NOW - DAY, status: 'done' }),
+      makeTask({ id: 'overdue-blocked', dueDate: NOW - DAY, status: 'blocked' }),
       makeTask({ id: 'overdue-archived', dueDate: NOW - DAY, archived: true }),
       makeTask({ id: 'overdue-deleted', dueDate: NOW - DAY, deletedAt: NOW }),
+      makeTask({ id: 'overdue-followup', dueDate: NOW - DAY, listId: 'follow-ups' }),
       makeTask({ id: 'plain' }),
     ];
-    // No active overdue/due/inbox → falls through to the random fallback.
-    expect(computeNudge(NOW, tasks, lists)!.title).toBe('A gentle nudge');
+    const nudge = computeNudge(
+      NOW,
+      tasks,
+      [...lists, { id: 'follow-ups', name: 'Follow-ups', type: 'follow-ups', order: 2, createdAt: NOW, updatedAt: NOW }],
+      () => 0,
+    )!;
+    expect(nudge.kind).toBe('pending');
+    expect(nudge.taskId).toBe('plain');
   });
 
   it('a future due date is neither overdue nor due-today', () => {
@@ -91,18 +132,21 @@ describe('computeNudge — fallback gating', () => {
       makeTask({ id: 'o', dueDate: NOW - DAY }),
       makeTask({ id: 'p' }),
     ];
-    expect(computeNudge(NOW, withOverdue, lists)!.title).toBe('Overdue tasks');
+    expect(computeNudge(NOW, withOverdue, lists)!.kind).toBe('overdue');
 
     const withDueToday = [
       makeTask({ id: 't', dueDate: NOW }),
       makeTask({ id: 'p' }),
     ];
-    expect(computeNudge(NOW, withDueToday, lists)!.title).toBe('Due today');
+    expect(computeNudge(NOW, withDueToday, lists)!.kind).toBe('due-today');
   });
 
   it('engages the random fallback only when nothing is overdue or due today', () => {
     const tasks = [makeTask({ id: 'plain', title: 'Read book' })];
     const nudge = computeNudge(NOW, tasks, lists, () => 0)!;
+    expect(nudge.kind).toBe('pending');
+    expect(nudge.itemType).toBe('task');
+    expect(nudge.taskId).toBe('plain');
     expect(nudge.title).toBe('A gentle nudge');
     expect(nudge.body).toContain('Read book');
   });

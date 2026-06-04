@@ -3,6 +3,7 @@ import { db } from '../db';
 import { useLocalSettings, updateLocalSettings } from './use-settings';
 import { computeNudge, shouldNudgeNow } from '../lib/nudges';
 import { showNudgeNotification } from '../lib/notifications';
+import { showFocusNudge } from '../stores/focus-nudge';
 
 const CHECK_INTERVAL_MS = 60_000;
 
@@ -26,13 +27,14 @@ export function useNudges() {
       const local = await db.localSettings.get('local');
       if (!local || !shouldNudgeNow(local, now)) return;
 
-      const [tasks, lists] = await Promise.all([db.tasks.toArray(), db.taskLists.toArray()]);
-      const nudge = computeNudge(now, tasks, lists);
+      const [tasks, lists, subtasks] = await Promise.all([db.tasks.toArray(), db.taskLists.toArray(), db.subtasks.toArray()]);
+      const nudge = computeNudge(now, tasks, lists, Math.random, subtasks);
       if (!nudge) return;
 
       // Stamp first to minimise the window where two tabs both fire.
       await updateLocalSettings({ lastNudgeAt: now });
       showNudgeNotification(nudge.title, nudge.body, { sound: local.nudgeSoundEnabled !== false });
+      showFocusNudge(nudge);
     }
 
     void maybeNudge();

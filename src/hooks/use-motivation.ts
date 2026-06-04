@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useMotivationStats } from './use-motivation-stats';
 import { pickMotivationMessage, type MotivationMessage } from '../lib/motivation-messages';
 
@@ -14,12 +14,23 @@ function mulberry32(seed: number) {
 
 export function useMotivation(): MotivationMessage | null {
   const stats = useMotivationStats();
+  const [seed, setSeed] = useState(() => Math.floor(Date.now() / (30 * 60 * 1000)));
 
-  // Rotate every 30 minutes
-  const seed = useMemo(
-    () => Math.floor(Date.now() / (30 * 60 * 1000)),
-    [],
-  );
+  useEffect(() => {
+    const intervalMs = 30 * 60 * 1000;
+    let timeout: ReturnType<typeof setTimeout>;
+
+    function scheduleNext() {
+      const delay = intervalMs - (Date.now() % intervalMs) + 50;
+      timeout = setTimeout(() => {
+        setSeed(Math.floor(Date.now() / intervalMs));
+        scheduleNext();
+      }, delay);
+    }
+
+    scheduleNext();
+    return () => clearTimeout(timeout);
+  }, []);
 
   return useMemo(() => {
     if (!stats) return null;

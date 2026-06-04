@@ -62,10 +62,10 @@ async function getSuggestion(seed: number) {
     .where('taskId')
     .equals(selected.id)
     .sortBy('order');
-  const firstUndone = subtasks.find((s) => !s.deletedAt && s.status !== 'done');
-  if (firstUndone) {
-    result.subtaskId = firstUndone.id;
-    result.subtaskTitle = firstUndone.title;
+  const firstTodo = subtasks.find((s) => !s.deletedAt && s.status === 'todo');
+  if (firstTodo) {
+    result.subtaskId = firstTodo.id;
+    result.subtaskTitle = firstTodo.title;
   }
 
   return result;
@@ -168,6 +168,15 @@ describe('suggestion logic', () => {
     const task = assertDefined(await createTask(listId, { title: 'Parent' }));
     const sub = assertDefined(await createSubtask(task.id, { title: 'Sub' }));
     await db.subtasks.update(sub.id, { status: 'done' });
+
+    const result = await getSuggestion(42);
+    expect(result!.subtaskId).toBeUndefined();
+  });
+
+  it('does not include a blocked subtask as next work', async () => {
+    const task = assertDefined(await createTask(listId, { title: 'Parent' }));
+    const sub = assertDefined(await createSubtask(task.id, { title: 'Blocked Sub' }));
+    await db.subtasks.update(sub.id, { status: 'blocked' });
 
     const result = await getSuggestion(42);
     expect(result!.subtaskId).toBeUndefined();

@@ -7,6 +7,7 @@ import { toast } from '../ui/Toast';
 import { requestNotificationPermission, showNudgeNotification } from '../../lib/notifications';
 import { computeNudge, NUDGE_DEFAULTS } from '../../lib/nudges';
 import { db } from '../../db';
+import { showFocusNudge } from '../../stores/focus-nudge';
 
 function clampInt(value: string, min: number, max: number, fallback: number): number {
   const n = parseInt(value, 10);
@@ -95,11 +96,15 @@ function NudgeForm({ local }: { local: LocalSettings }) {
       toast('Allow notifications first', 'error');
       return;
     }
-    const [tasks, lists] = await Promise.all([db.tasks.toArray(), db.taskLists.toArray()]);
-    const nudge =
-      computeNudge(Date.now(), tasks, lists) ??
-      { title: 'GTD25', body: "This is how nudges look. Nothing pending right now 🎉" };
-    showNudgeNotification(nudge.title, nudge.body, { sound: soundEnabled });
+    const [tasks, lists, subtasks] = await Promise.all([db.tasks.toArray(), db.taskLists.toArray(), db.subtasks.toArray()]);
+    const nudge = computeNudge(Date.now(), tasks, lists, Math.random, subtasks);
+    if (nudge) {
+      showFocusNudge(nudge);
+      showNudgeNotification(nudge.title, nudge.body, { sound: soundEnabled });
+      return;
+    }
+    const fallback = { title: 'GTD25', body: "This is how nudges look. Nothing pending right now 🎉" };
+    showNudgeNotification(fallback.title, fallback.body, { sound: soundEnabled });
   }
 
   return (
