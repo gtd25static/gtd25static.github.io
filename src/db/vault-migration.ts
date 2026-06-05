@@ -73,14 +73,17 @@ export async function encryptAllAtRest(onProgress?: ProgressFn): Promise<void> {
   const total = await totalRows(tables);
   let done = 0;
   for (const table of tables) {
-    const raw = await readRaw(table);
-    // In memory: normalize to plaintext (decrypt anything a prior interrupted run
-    // already encrypted), then encrypt. Outside any transaction. Idempotent.
-    const encrypted = await Promise.all(
-      raw.map(async (r) => (await encryptRow(table.name, key, (await decryptRow(table.name, key, r)) as Row)) as Row),
-    );
-    await writeRaw(table, encrypted);
-    done += raw.length;
+    // Read plaintext THROUGH the middleware (decrypts any rows a prior interrupted
+    // run already encrypted; passes plaintext through on a first run), encrypt IN
+    // MEMORY (not inside the write tx — Safari-safe), then write the pre-encrypted
+    // rows back through the NORMAL middleware: encryptRow passes through rows that
+    // already carry `_enc`, so no crypto runs in the write tx AND there is no
+    // global bypass window for a concurrent liveQuery to read raw `_enc` from
+    // (which is what left e.g. sidebar list names blank right after enabling).
+    const plain = (await table.toArray()) as Row[];
+    const encrypted = await Promise.all(plain.map((r) => encryptRow(table.name, key, r) as Promise<Row>));
+    if (encrypted.length) await table.bulkPut(encrypted as unknown[]);
+    done += plain.length;
     onProgress?.(done, total);
   }
 }

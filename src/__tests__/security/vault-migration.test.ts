@@ -7,6 +7,7 @@ import {
   isParanoidEnabled, isUnlocked, __resetVaultStateForTests,
 } from '../../db/vault';
 import { setMigrationBypass } from '../../db/vault-middleware';
+import { liveQuery } from 'dexie';
 import type { Task, TaskList, Subtask } from '../../db/models';
 
 const PASSPHRASE = 'a strong passphrase';
@@ -106,5 +107,37 @@ describe('enable migration on existing data', () => {
     expect(isParanoidEnabled()).toBe(false);
     expect(await db.vault.get('vault')).toBeUndefined();
     expect(await rawTitle('t1')).toBe('alpha');
+  });
+
+  it('writing an already-encrypted row passes through (no double-encryption)', async () => {
+    await enableParanoid(PASSPHRASE);
+    // Read the on-disk encrypted row, then re-write it through the NORMAL
+    // middleware: it must pass through (not re-encrypt) and stay decryptable.
+    setMigrationBypass(true);
+    let encRow: Task | undefined;
+    try { encRow = await db.tasks.get('t1'); } finally { setMigrationBypass(false); }
+    expect((encRow as unknown as { _enc?: string })._enc).toBeTruthy();
+    expect((encRow as Task).title).toBeUndefined(); // ciphertext form
+
+    await db.tasks.put(encRow as Task); // normal middleware write -> pass-through
+    expect((await db.tasks.get('t1'))?.title).toBe('alpha'); // still readable
+  });
+
+  it('a live query of task lists keeps names readable across enable (sidebar regression)', async () => {
+    // Mirrors useTaskLists(): a liveQuery over taskLists. The bug was that the
+    // migration's bypass window let a re-read return raw `_enc` (blank names).
+    const emissions: Array<Array<string | undefined>> = [];
+    const sub = liveQuery(() => db.taskLists.toArray()).subscribe((lists) => {
+      emissions.push(lists.map((l) => l.name));
+    });
+    await new Promise((r) => setTimeout(r, 20)); // initial emission
+
+    await enableParanoid(PASSPHRASE);
+    await new Promise((r) => setTimeout(r, 60)); // let post-migration emissions settle
+    sub.unsubscribe();
+
+    const last = emissions[emissions.length - 1];
+    expect(last).toEqual(['List One']);            // name present, never blank
+    expect(last.every((n) => !!n)).toBe(true);
   });
 });

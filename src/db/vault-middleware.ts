@@ -77,14 +77,18 @@ export async function encryptRow(table: string, key: CryptoKey, row: Row | null 
   if (table === 'changeLog') {
     if (row.operation !== 'upsert' || row.data == null) return row;
     const data = row.data as Row;
-    if (data._enc) throw new Error('vault-middleware: changeLog.data already carries _enc (double encryption)');
+    // Already at-rest encrypted -> pass through (no double-encryption). This lets
+    // the enable migration write rows it encrypted IN MEMORY through the normal
+    // write path, so it needs no global read/write bypass (whose window made
+    // concurrent liveQuery reads return raw `_enc` -> e.g. blank list names).
+    if (data._enc) return row;
     const encData = await encryptEntity(key, data, String(row.entityType));
     return { ...row, data: encData };
   }
 
   const entityType = ENTITY_TYPE_BY_TABLE[table];
   if (!entityType) return row;
-  if (row._enc) throw new Error(`vault-middleware: ${table} row already carries _enc (double encryption)`);
+  if (row._enc) return row; // already at-rest encrypted -> pass through (see above)
   return encryptEntity(key, row, entityType);
 }
 
