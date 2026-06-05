@@ -2,29 +2,8 @@ import { useState, useEffect } from 'react';
 import { onVersionIncompatible, offVersionIncompatible, onSyncSuccess, offSyncSuccess } from '../../sync/sync-engine';
 import { useServiceWorker } from '../../hooks/use-service-worker';
 import { GIT_COMMIT } from '../../lib/constants';
+import { changelogFor, parseVersionInfo, type VersionInfo } from '../../lib/changelog';
 import { Button } from '../ui/Button';
-
-interface VersionInfo {
-  commit: string;
-  message: string;
-  builtAt?: string;
-  log?: Array<{ h: string; s: string }>;
-}
-
-// The commits in the incoming build that are newer than the running one (stop at
-// the current commit). Falls back to just the headline commit when the running
-// commit isn't in the recent log (or no log is available).
-function changelogFor(info: VersionInfo, current: string): Array<{ h: string; s: string }> {
-  if (info.log && info.log.length) {
-    const fresh: Array<{ h: string; s: string }> = [];
-    for (const c of info.log) {
-      if (c.h === current) return fresh;
-      fresh.push(c);
-    }
-    if (fresh.length) return fresh; // current not found in window — show what we have
-  }
-  return info.message ? [{ h: info.commit, s: info.message }] : [];
-}
 
 // App-wide update prompt. Rendered from the always-mounted App (inside
 // ServiceWorkerProvider) so it appears over BOTH the unlocked app and the lock
@@ -46,9 +25,9 @@ export function AppUpdatePrompt() {
   useEffect(() => {
     if (!needRefresh && !syncIncompat) return;
     let active = true;
-    fetch(`/version.json?t=${Date.now()}`, { cache: 'no-store' })
+    fetch(`${import.meta.env.BASE_URL}version.json?t=${Date.now()}`, { cache: 'no-store' })
       .then((r) => (r.ok ? r.json() : null))
-      .then((j: VersionInfo | null) => { if (active && j?.commit) setInfo(j); })
+      .then((j: unknown) => { const v = parseVersionInfo(j); if (active && v) setInfo(v); })
       .catch(() => { /* changelog is optional */ });
     return () => { active = false; };
   }, [needRefresh, syncIncompat]);
