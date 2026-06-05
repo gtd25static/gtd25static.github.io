@@ -34,30 +34,33 @@ function changelogFor(info: VersionInfo, current: string): Array<{ h: string; s:
 // "Later" dismisses the dialog and falls back to a thin top BANNER that stays
 // available but unobtrusive.
 export function AppUpdatePrompt() {
-  const { needRefresh, applyUpdate, checkForUpdate } = useServiceWorker();
+  const { needRefresh, applyUpdate, checkForUpdate, forceCheck } = useServiceWorker();
   const [syncIncompat, setSyncIncompat] = useState(false);
   const [dismissed, setDismissed] = useState(false);
   const [updating, setUpdating] = useState(false);
   const [info, setInfo] = useState<VersionInfo | null>(null);
 
   // Fetch the LIVE version.json (cache-busted, bypassing the SW) to show what the
-  // pending update contains. Best-effort: omitted if offline / not deployed yet.
+  // pending update contains — for BOTH a detected new build and a sync-required
+  // update. Best-effort: omitted if offline / not deployed yet.
   useEffect(() => {
-    if (!needRefresh) return;
+    if (!needRefresh && !syncIncompat) return;
     let active = true;
     fetch(`/version.json?t=${Date.now()}`, { cache: 'no-store' })
       .then((r) => (r.ok ? r.json() : null))
       .then((j: VersionInfo | null) => { if (active && j?.commit) setInfo(j); })
       .catch(() => { /* changelog is optional */ });
     return () => { active = false; };
-  }, [needRefresh]);
+  }, [needRefresh, syncIncompat]);
 
-  // A sync that reports an incompatible version means an update is needed.
+  // A sync that reports an incompatible version means an update is required —
+  // force an immediate SW check so the waiting build is detected and applyUpdate
+  // (not a bare reload) can install it.
   useEffect(() => {
-    const handler = () => { setSyncIncompat(true); checkForUpdate(); };
+    const handler = () => { setSyncIncompat(true); forceCheck(); };
     onVersionIncompatible(handler);
     return () => offVersionIncompatible(handler);
-  }, [checkForUpdate]);
+  }, [forceCheck]);
 
   // Opportunistically check for a new build after each successful sync.
   useEffect(() => {
@@ -94,7 +97,9 @@ export function AppUpdatePrompt() {
         >
           <div className="mb-2 flex items-center gap-2">
             <span aria-hidden className="text-xl">⬆️</span>
-            <h2 className="text-lg font-medium text-zinc-800 dark:text-zinc-100">Update available</h2>
+            <h2 className="text-lg font-medium text-zinc-800 dark:text-zinc-100">
+              {syncIncompat ? 'Update required' : 'Update available'}
+            </h2>
           </div>
           <p className="mb-3 text-sm text-zinc-500 dark:text-zinc-400">
             {message} Updating takes a second and keeps all your data.
