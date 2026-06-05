@@ -57,6 +57,10 @@ export function installWebAuthnMock(): void {
     },
     get: (options: CredentialRequestOptions) => {
       if (mode === 'cancel') return Promise.reject(new DOMException('cancelled', 'NotAllowedError'));
+      if (mode === 'no-prf') {
+        // Authenticator returns an assertion but no PRF result -> truly unsupported.
+        return Promise.resolve({ getClientExtensionResults: () => ({}) } as unknown as PublicKeyCredential);
+      }
       const salt = saltOf(options.publicKey);
       const first = prfOutputFor(salt, mode === 'wrong-output').buffer;
       return Promise.resolve({
