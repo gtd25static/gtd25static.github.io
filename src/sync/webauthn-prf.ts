@@ -96,7 +96,13 @@ export async function registerPrfCredential(prfSalt: string): Promise<PrfRegistr
         authenticatorSelection: {
           authenticatorAttachment: 'platform',
           userVerification: 'required',
-          residentKey: 'preferred',
+          // Device-bound (non-discoverable), NOT a synced/iCloud passkey. On
+          // Chrome/macOS this routes to Chrome's own platform authenticator,
+          // which exposes the hmac-secret/PRF extension — whereas iCloud
+          // Keychain passkeys (residentKey 'preferred'/'required') do not return
+          // a PRF result via Chrome. We always unlock with an explicit
+          // allowCredentials list, so a non-discoverable credential is fine.
+          residentKey: 'discouraged',
         },
         timeout: 60_000,
         extensions: { prf: { eval: { first: saltBytes as BufferSource } } },
