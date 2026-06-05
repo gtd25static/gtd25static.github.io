@@ -27,6 +27,8 @@ import { GIT_COMMIT, MAX_LIST_NAME_LENGTH, isInboxList } from '../../lib/constan
 import { moveTaskToList } from '../../hooks/use-tasks';
 import { useSpecialListContext } from '../../hooks/use-special-list';
 import { useReviewData } from '../../hooks/use-review-data';
+import { useVault } from '../../hooks/use-vault';
+import { lock as lockVault } from '../../db/vault';
 
 function formatLastReviewed(ts: number): string {
   const diff = Date.now() - ts;
@@ -271,6 +273,7 @@ export function Sidebar() {
   const { warningCount, blockedCount, recurringCount } = useSpecialListContext();
   const specialTotal = warningCount + blockedCount + recurringCount;
   const reviewData = useReviewData();
+  const { enabled: paranoidEnabled } = useVault();
 
   const filteredLists = searchQuery
     ? lists.filter((l) => l.name.toLowerCase().includes(searchQuery.toLowerCase()))
@@ -584,6 +587,18 @@ export function Sidebar() {
 
       {/* Bottom actions */}
       <div className="border-t border-zinc-200 px-2 py-2 dark:border-zinc-800">
+        {paranoidEnabled && (
+          <button
+            onClick={() => { lockVault(); setSidebarOpen(false); }}
+            className="flex w-full items-center gap-3 rounded-full px-3 py-3.5 md:py-2 text-sm text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800"
+          >
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+              <rect x="5" y="11" width="14" height="10" rx="2" />
+              <path d="M8 11V7a4 4 0 018 0v4" strokeLinecap="round" />
+            </svg>
+            <span className="flex-1 text-left">Lock now</span>
+          </button>
+        )}
         <button
           onClick={() => { setWeeklyReviewOpen(true); setSidebarOpen(false); }}
           className="flex w-full items-center gap-3 rounded-full px-3 py-3.5 md:py-2 text-sm text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800"
