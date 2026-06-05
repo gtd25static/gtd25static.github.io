@@ -1,0 +1,65 @@
+import { vi } from 'vitest';
+import {
+  isSystemIdleSupported, requestSystemIdlePermission, startSystemIdleLock,
+} from '../../lib/system-idle';
+
+interface GlobalWithIdle { IdleDetector?: unknown }
+
+// Shared fake detector instance so the test can flip userState/screenState and
+// fire the 'change' event the module subscribes to.
+function installFakeIdleDetector(permission: PermissionState) {
+  const instance = {
+    userState: 'active' as 'active' | 'idle',
+    screenState: 'unlocked' as 'locked' | 'unlocked',
+    cb: () => {},
+    addEventListener(_type: string, cb: () => void) { instance.cb = cb; },
+    start: vi.fn().mockResolvedValue(undefined),
+  };
+  const Ctor = function () { return instance; } as unknown as { new (): typeof instance; requestPermission: () => Promise<PermissionState> };
+  (Ctor as { requestPermission: () => Promise<PermissionState> }).requestPermission = vi.fn().mockResolvedValue(permission);
+  (globalThis as GlobalWithIdle).IdleDetector = Ctor;
+  return instance;
+}
+
+afterEach(() => {
+  delete (globalThis as GlobalWithIdle).IdleDetector;
+  vi.restoreAllMocks();
+});
+
+describe('system-idle (IdleDetector)', () => {
+  it('reports unsupported and no-ops when IdleDetector is absent', async () => {
+    expect(isSystemIdleSupported()).toBe(false);
+    expect(await requestSystemIdlePermission()).toBe(false);
+    const onLock = vi.fn();
+    const stop = await startSystemIdleLock(60_000, onLock);
+    stop();
+    expect(onLock).not.toHaveBeenCalled();
+  });
+
+  it('returns false when permission is denied', async () => {
+    installFakeIdleDetector('denied');
+    expect(isSystemIdleSupported()).toBe(true);
+    expect(await requestSystemIdlePermission()).toBe(false);
+  });
+
+  it('locks on system idle and on screen lock', async () => {
+    const detector = installFakeIdleDetector('granted');
+    expect(await requestSystemIdlePermission()).toBe(true);
+
+    const onLock = vi.fn();
+    await startSystemIdleLock(60_000, onLock);
+    expect(detector.start).toHaveBeenCalled();
+
+    detector.cb();                  // active + unlocked -> no lock
+    expect(onLock).not.toHaveBeenCalled();
+
+    detector.userState = 'idle';
+    detector.cb();                  // idle -> lock
+    expect(onLock).toHaveBeenCalledTimes(1);
+
+    detector.userState = 'active';
+    detector.screenState = 'locked';
+    detector.cb();                  // screen locked -> lock
+    expect(onLock).toHaveBeenCalledTimes(2);
+  });
+});

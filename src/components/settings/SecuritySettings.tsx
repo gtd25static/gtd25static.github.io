@@ -4,10 +4,12 @@ import { Button } from '../ui/Button';
 import { toast } from '../ui/Toast';
 import { confirmDialog } from '../ui/ConfirmDialog';
 import { useVault } from '../../hooks/use-vault';
-import { useLocalSettings } from '../../hooks/use-settings';
+import { useLocalSettings, updateLocalSettings } from '../../hooks/use-settings';
+import { isSystemIdleSupported, requestSystemIdlePermission } from '../../lib/system-idle';
 import {
-  enableParanoid, disableParanoid, changePassphrase, configureIdleTimeout, lock,
-  addSecurityKey, removeSecurityKey, DEFAULT_IDLE_MINUTES,
+  enableParanoid, disableParanoid, changePassphrase, configureIdleTimeout,
+  configureMaxUnlockAttempts, lock, addSecurityKey, removeSecurityKey,
+  DEFAULT_IDLE_MINUTES, DEFAULT_MAX_ATTEMPTS,
 } from '../../db/vault';
 import { isWebAuthnSupported } from '../../sync/webauthn-prf';
 import { panicWipe } from '../../lib/panic-wipe';
@@ -122,8 +124,52 @@ function SecurityKeySection({ hasSecurityKey }: { hasSecurityKey: boolean }) {
   );
 }
 
-function ManageForm({ idleMinutes, hasSecurityKey }: { idleMinutes: number; hasSecurityKey: boolean }) {
+function SystemIdleToggle({ enabled }: { enabled: boolean }) {
+  const supported = isSystemIdleSupported();
+  const [busy, setBusy] = useState(false);
+
+  async function toggle() {
+    setBusy(true);
+    try {
+      if (enabled) {
+        await updateLocalSettings({ paranoidSystemIdleLock: false });
+        toast('System idle lock disabled', 'success');
+      } else {
+        const granted = await requestSystemIdlePermission();
+        if (!granted) { toast('Idle-detection permission denied or unavailable', 'error'); return; }
+        await updateLocalSettings({ paranoidSystemIdleLock: true });
+        toast('Will lock on system idle / screen lock', 'success');
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="space-y-1 border-t border-zinc-200 pt-3 dark:border-zinc-700">
+      <h4 className="text-sm font-medium">System idle lock</h4>
+      {supported ? (
+        <>
+          <p className="text-xs text-zinc-400 dark:text-zinc-500">
+            Lock when the whole system goes idle or the screen locks — not just this app. Needs a
+            one-time browser permission (Chrome/Edge). Reapplies the auto-lock minutes above.
+          </p>
+          <Button size="sm" variant="secondary" onClick={toggle} disabled={busy}>
+            {enabled ? 'Disable system idle lock' : 'Enable system idle lock'}
+          </Button>
+        </>
+      ) : (
+        <p className="text-xs text-zinc-400 dark:text-zinc-500">
+          Not available in this browser (Chrome/Edge only). The in-app idle timer still applies.
+        </p>
+      )}
+    </div>
+  );
+}
+
+function ManageForm({ idleMinutes, maxAttempts, systemIdleOn, hasSecurityKey }: { idleMinutes: number; maxAttempts: number; systemIdleOn: boolean; hasSecurityKey: boolean }) {
   const [idle, setIdle] = useState(String(idleMinutes));
+  const [attempts, setAttempts] = useState(String(maxAttempts));
   const [newPass, setNewPass] = useState('');
   const [newPassConfirm, setNewPassConfirm] = useState('');
   const [busy, setBusy] = useState(false);
@@ -132,6 +178,13 @@ function ManageForm({ idleMinutes, hasSecurityKey }: { idleMinutes: number; hasS
     await configureIdleTimeout(clampMinutes(idle));
     setIdle(String(clampMinutes(idle)));
     toast('Auto-lock updated', 'success');
+  }
+
+  async function handleSaveAttempts() {
+    const n = Math.max(0, Math.min(50, parseInt(attempts, 10) || 0));
+    await configureMaxUnlockAttempts(n);
+    setAttempts(String(n));
+    toast(n === 0 ? 'Failed-attempt wipe disabled' : `Will wipe after ${n} failed attempts`, 'success');
   }
 
   async function handleChangePass() {
@@ -191,11 +244,24 @@ function ManageForm({ idleMinutes, hasSecurityKey }: { idleMinutes: number; hasS
         <Button size="sm" variant="secondary" onClick={handleSaveIdle}>Save</Button>
       </div>
 
+      <div className="space-y-1">
+        <div className="flex items-end gap-2">
+          <Input label="Wipe after N failed unlock attempts (0 = off)" type="number" min={0} max={50} value={attempts} onChange={(e) => setAttempts(e.target.value)} />
+          <Button size="sm" variant="secondary" onClick={handleSaveAttempts}>Save</Button>
+        </div>
+        <p className="text-xs text-zinc-400 dark:text-zinc-500">
+          Erases local data after too many wrong passphrases at the lock screen. Protects against
+          someone guessing at the keyboard; it cannot stop an offline attack on a copied disk.
+        </p>
+      </div>
+
       <div className="space-y-2 border-t border-zinc-200 pt-3 dark:border-zinc-700">
         <Input label="New passphrase" type="password" value={newPass} onChange={(e) => setNewPass(e.target.value)} placeholder="Change passphrase" disabled={busy} />
         <Input label="Confirm new passphrase" type="password" value={newPassConfirm} onChange={(e) => setNewPassConfirm(e.target.value)} placeholder="Repeat new passphrase" disabled={busy} />
         <Button size="sm" variant="secondary" onClick={handleChangePass} disabled={busy}>Change passphrase</Button>
       </div>
+
+      <SystemIdleToggle enabled={systemIdleOn} />
 
       <SecurityKeySection hasSecurityKey={hasSecurityKey} />
 
@@ -217,6 +283,8 @@ export function SecuritySettings() {
   return (
     <ManageForm
       idleMinutes={local.paranoidIdleTimeoutMinutes ?? DEFAULT_IDLE_MINUTES}
+      maxAttempts={local.paranoidMaxUnlockAttempts ?? DEFAULT_MAX_ATTEMPTS}
+      systemIdleOn={!!local.paranoidSystemIdleLock}
       hasSecurityKey={hasSecurityKey}
     />
   );

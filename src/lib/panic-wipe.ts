@@ -79,6 +79,6 @@ export async function panicWipe(opts: { reload?: boolean } = {}): Promise<void> 
   await unregisterServiceWorkers();
 
   if (reload && typeof window !== 'undefined') {
-    window.location.reload();
+    try { window.location.reload(); } catch { /* environment without a real location */ }
   }
 }

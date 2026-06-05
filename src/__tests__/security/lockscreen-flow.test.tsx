@@ -59,14 +59,21 @@ describe('Paranoid Mode UI flow', () => {
     await waitFor(() => expect(screen.getByText('Vault locked')).toBeInTheDocument());
     expect(screen.queryByText('APP CONTENT')).not.toBeInTheDocument();
 
+    // Passphrase is entered by clicking the on-screen randomized keys, never typed.
+    const tap = async (text: string) => {
+      for (const ch of text) {
+        await user.click(screen.getByRole('button', { name: ch === ' ' ? 'Space' : ch }));
+      }
+    };
+
     // Wrong passphrase shows an error and stays locked.
-    await user.type(screen.getByLabelText('Passphrase'), 'wrong');
+    await tap('wrong');
     await user.click(screen.getByRole('button', { name: /^unlock$/i }));
     await waitFor(() => expect(screen.getByText('Incorrect passphrase')).toBeInTheDocument());
     expect(isUnlocked()).toBe(false);
 
     // Correct passphrase unlocks and restores the app.
-    await user.type(screen.getByLabelText('Passphrase'), PASS);
+    await tap(PASS);
     await user.click(screen.getByRole('button', { name: /^unlock$/i }));
     await waitFor(() => expect(screen.getByText('APP CONTENT')).toBeInTheDocument());
     expect(isUnlocked()).toBe(true);

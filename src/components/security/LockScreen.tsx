@@ -1,23 +1,23 @@
 import { useState } from 'react';
-import { Input } from '../ui/Input';
-import { Button } from '../ui/Button';
+import { RandomizedKeyboard } from './RandomizedKeyboard';
 import { unlockWithPassphrase, unlockWithSecurityKey } from '../../db/vault';
 import { useVault } from '../../hooks/use-vault';
 import { panicWipe } from '../../lib/panic-wipe';
 
 // Full-screen gate shown when Paranoid Mode is enabled but the vault is locked.
 // Until the passphrase (or security key) unlocks the DEK, no decrypted data
-// is rendered — the rest of the app is not even mounted.
+// is rendered — the rest of the app is not even mounted. The passphrase is
+// entered on a randomized on-screen keyboard (never typed) to defeat keyloggers.
 export function LockScreen() {
   const { hasSecurityKey } = useVault();
   const [passphrase, setPassphrase] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [showWipe, setShowWipe] = useState(false);
+  const [attempt, setAttempt] = useState(0); // bump to reshuffle the keyboard
 
-  async function handleUnlock(e: React.FormEvent) {
-    e.preventDefault();
-    if (!passphrase.trim() || busy) return;
+  async function handleUnlock() {
+    if (!passphrase || busy) return;
     setBusy(true);
     setError('');
     try {
@@ -25,6 +25,7 @@ export function LockScreen() {
       if (!ok) {
         setError('Incorrect passphrase');
         setPassphrase('');
+        setAttempt((n) => n + 1); // reshuffle the keys after a wrong attempt
       }
       // On success the vault emits -> the app re-renders and unmounts this screen.
     } catch {
@@ -57,35 +58,26 @@ export function LockScreen() {
 
   return (
     <div className="fixed inset-0 z-[200] flex items-center justify-center bg-zinc-100 p-4 dark:bg-zinc-950">
-      <form
-        onSubmit={handleUnlock}
-        className="w-full max-w-sm rounded-2xl border border-zinc-200 bg-white p-6 shadow-2xl dark:border-zinc-800 dark:bg-zinc-900"
-      >
+      <div className="w-full max-w-sm rounded-2xl border border-zinc-200 bg-white p-6 shadow-2xl dark:border-zinc-800 dark:bg-zinc-900">
         <div className="mb-4 flex items-center gap-2">
           <span aria-hidden className="text-xl">🔒</span>
           <h1 className="text-lg font-medium text-zinc-800 dark:text-zinc-100">Vault locked</h1>
         </div>
         <p className="mb-4 text-sm text-zinc-500 dark:text-zinc-400">
-          Paranoid Mode is on. Enter your passphrase to decrypt this device&rsquo;s data.
+          Paranoid Mode is on. Tap your passphrase on the on-screen keys (it is never typed, so a
+          keylogger sees nothing).
         </p>
 
-        <Input
-          label="Passphrase"
-          type="password"
+        <RandomizedKeyboard
           value={passphrase}
-          onChange={(e) => setPassphrase(e.target.value)}
-          placeholder="Enter vault passphrase"
-          autoFocus
+          onChange={setPassphrase}
+          onSubmit={handleUnlock}
           disabled={busy}
+          nonce={attempt}
+          submitLabel={busy ? 'Unlocking…' : 'Unlock'}
         />
 
         {error && <p className="mt-2 text-sm text-red-600 dark:text-red-400">{error}</p>}
-
-        <div className="mt-4">
-          <Button type="submit" disabled={busy || !passphrase.trim()}>
-            {busy ? 'Unlocking…' : 'Unlock'}
-          </Button>
-        </div>
 
         {hasSecurityKey && (
           <div className="mt-3 text-center">
@@ -134,7 +126,7 @@ export function LockScreen() {
             </button>
           )}
         </div>
-      </form>
+      </div>
     </div>
   );
 }

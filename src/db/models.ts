@@ -116,6 +116,8 @@ export interface LocalSettings {
   // the synchronous gate flag lives in localStorage ('gtd25-paranoid').
   paranoidEnabled?: boolean;
   paranoidIdleTimeoutMinutes?: number;
+  paranoidMaxUnlockAttempts?: number;   // device-local mirror of Vault.maxUnlockAttempts
+  paranoidSystemIdleLock?: boolean;     // lock on system-wide idle / screen lock (IdleDetector)
 }
 
 // Paranoid Mode vault (device-local, NEVER synced or exported). Holds the
@@ -134,6 +136,11 @@ export interface Vault {
   verifier: string;               // encryptBlob(DEK, VERIFIER_PLAINTEXT)
   secrets?: string;               // encryptBlob(DEK, JSON({githubPat, syncPassword}))
   idleTimeoutMinutes: number;     // re-lock after this much inactivity
+  // Brute-force tripwire for the at-keyboard path: wipe local data after this many
+  // consecutive failed passphrase unlocks (0 = disabled). Persisted so a reload
+  // can't reset the count.
+  maxUnlockAttempts?: number;
+  failedUnlockAttempts?: number;
   migrationState?: 'encrypting' | 'decrypting' | 'done';
 }
 

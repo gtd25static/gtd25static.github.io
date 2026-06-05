@@ -2,11 +2,12 @@ import { useEffect } from 'react';
 import { AppShell } from './components/layout/AppShell';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { LockScreen } from './components/security/LockScreen';
-import { ensureDefaults } from './db';
+import { db, ensureDefaults } from './db';
 import { useKeyboard } from './hooks/use-keyboard';
 import { useTheme } from './components/settings/ThemeSettings';
 import { useVault } from './hooks/use-vault';
-import { touchVaultActivity } from './db/vault';
+import { touchVaultActivity, lock, isParanoidEnabled, DEFAULT_IDLE_MINUTES } from './db/vault';
+import { startSystemIdleLock } from './lib/system-idle';
 import { checkRecurringTasks } from './hooks/use-recurring';
 import { SpecialListProvider } from './hooks/use-special-list';
 import { SyncProvider } from './sync/use-sync';
@@ -52,6 +53,22 @@ function UnlockedApp() {
       window.removeEventListener('pointerdown', onActivity);
       window.removeEventListener('keydown', onActivity);
     };
+  }, []);
+
+  // Best-effort system-wide auto-lock (Chromium IdleDetector): lock when the OS
+  // goes idle or the screen locks. No-op where unavailable/denied — the in-app
+  // idle timer still applies. Only runs while unlocked (this component is mounted).
+  useEffect(() => {
+    let stop = () => {};
+    let cancelled = false;
+    void (async () => {
+      const local = await db.localSettings.get('local');
+      if (!isParanoidEnabled() || !local?.paranoidSystemIdleLock) return;
+      const thresholdMs = (local.paranoidIdleTimeoutMinutes ?? DEFAULT_IDLE_MINUTES) * 60_000;
+      const s = await startSystemIdleLock(thresholdMs, () => lock());
+      if (cancelled) s(); else stop = s;
+    })();
+    return () => { cancelled = true; stop(); };
   }, []);
 
   useKeyboard();

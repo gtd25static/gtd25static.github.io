@@ -24,6 +24,7 @@ import type { Vault } from './models';
 // screen and settings can render the affordance without awaiting IndexedDB.
 const KEY_FLAG = 'gtd25-paranoid-key';
 export const DEFAULT_IDLE_MINUTES = 15;
+export const DEFAULT_MAX_ATTEMPTS = 10;
 
 export interface VaultSecrets {
   githubPat?: string;
@@ -149,6 +150,8 @@ export async function enableParanoid(passphrase: string, idleMinutes = DEFAULT_I
     prfSalt,
     verifier,
     idleTimeoutMinutes: idleMinutes,
+    maxUnlockAttempts: DEFAULT_MAX_ATTEMPTS,
+    failedUnlockAttempts: 0,
     migrationState: 'encrypting',
   });
 
@@ -164,6 +167,7 @@ export async function enableParanoid(passphrase: string, idleMinutes = DEFAULT_I
   await db.localSettings.update('local', {
     paranoidEnabled: true,
     paranoidIdleTimeoutMinutes: idleMinutes,
+    paranoidMaxUnlockAttempts: DEFAULT_MAX_ATTEMPTS,
     githubPat: undefined,
     encryptionPassword: undefined,
   });
@@ -205,19 +209,34 @@ export async function unlockWithPassphrase(passphrase: string): Promise<boolean>
   if (!vault) return false;
 
   const kek = await deriveVaultKek(passphrase, vault.passSalt, vault.kdf ?? LEGACY_KDF);
-  let dek: CryptoKey;
+  let dek: CryptoKey | null = null;
   try {
     dek = await unwrapDek(kek, vault.dekWrappedByPass);
-  } catch {
-    return false; // wrong passphrase -> AES-GCM auth failure
+  } catch { /* wrong passphrase -> AES-GCM auth failure */ }
+
+  const ok = dek ? await finishUnlock(vault, dek) : false;
+  if (!ok) {
+    await registerFailedAttempt(vault);
+    return false;
   }
-  const ok = await finishUnlock(vault, dek);
   // Transparently upgrade a legacy PBKDF2 vault to Argon2id now that we hold the
-  // passphrase (skip if finishUnlock tore the vault down via a resumed disable).
-  if (ok && (vault.kdf?.algo ?? 'pbkdf2') !== DEFAULT_ARGON2.algo) {
+  // passphrase (rewrapPassphrase no-ops if a resumed disable tore the vault down).
+  if ((vault.kdf?.algo ?? 'pbkdf2') !== DEFAULT_ARGON2.algo) {
     await rewrapPassphrase(passphrase);
   }
-  return ok;
+  return true;
+}
+
+// Count a failed passphrase unlock; trip the panic wipe at the configured limit.
+// The counter lives in the vault row so a reload cannot reset it.
+async function registerFailedAttempt(vault: Vault): Promise<void> {
+  const max = vault.maxUnlockAttempts ?? 0; // 0 => tripwire disabled
+  const count = (vault.failedUnlockAttempts ?? 0) + 1;
+  await db.vault.update('vault', { failedUnlockAttempts: count });
+  if (max > 0 && count >= max) {
+    const { panicWipe } = await import('../lib/panic-wipe'); // dynamic: avoids an import cycle
+    await panicWipe();
+  }
 }
 
 /**
@@ -248,6 +267,10 @@ async function finishUnlock(vault: Vault, dek: CryptoKey): Promise<boolean> {
   if (!(await checkVerifier(dek, vault.verifier))) return false;
 
   currentDek = dek;
+  // A successful unlock (passphrase OR security key) clears the failure tripwire.
+  if ((vault.failedUnlockAttempts ?? 0) !== 0) {
+    await db.vault.update('vault', { failedUnlockAttempts: 0 });
+  }
   idleTimeoutMs = (vault.idleTimeoutMinutes ?? DEFAULT_IDLE_MINUTES) * 60_000;
   currentSecrets = vault.secrets
     ? (JSON.parse(await decryptBlob(dek, vault.secrets)) as VaultSecrets)
@@ -324,6 +347,15 @@ export async function configureIdleTimeout(minutes: number): Promise<void> {
   }
   await db.localSettings.update('local', { paranoidIdleTimeoutMinutes: minutes });
   resetIdleTimer();
+}
+
+/** Set the failed-attempt wipe threshold (0 disables it). */
+export async function configureMaxUnlockAttempts(n: number): Promise<void> {
+  const max = Math.max(0, Math.floor(n));
+  if (await db.vault.get('vault')) {
+    await db.vault.update('vault', { maxUnlockAttempts: max });
+  }
+  await db.localSettings.update('local', { paranoidMaxUnlockAttempts: max });
 }
 
 function purgeLocalBackups(): void {
