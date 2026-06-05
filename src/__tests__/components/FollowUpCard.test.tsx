@@ -33,6 +33,14 @@ vi.mock('../../hooks/use-follow-ups', () => ({
   isInCooldown: (t: { pingedAt?: number }) => Boolean(t.pingedAt),
   cooldownRemaining: () => 3600000,
   formatCooldown: () => '1h',
+  cadenceMs: () => 7 * 24 * 60 * 60 * 1000,
+  isAwake: () => true,
+  applyDiscussed: (_t: unknown, note?: string) => ({
+    discussionLog: [{ id: 'x', at: 1, note }],
+    pingedAt: 1,
+    pingCooldown: 'custom',
+    pingCooldownUntil: 2,
+  }),
 }));
 
 describe('FollowUpCard', () => {
@@ -64,20 +72,44 @@ describe('FollowUpCard', () => {
     expect(screen.getByText('Waiting for response')).toBeInTheDocument();
   });
 
-  it('shows Archive button', () => {
+  it('has no one-tap archive/clock button (misclick fix)', () => {
     renderCard();
-    expect(screen.getByTitle('Archive')).toBeInTheDocument();
+    expect(screen.queryByTitle('Archive')).not.toBeInTheDocument();
+    expect(screen.queryByTitle('Restore')).not.toBeInTheDocument();
   });
 
-  it('calls updateTask with archived flag on archive click', async () => {
+  it('logs a discussion and re-snoozes when "Discussed" is confirmed', async () => {
     const { user, task } = renderCard();
-    await user.click(screen.getByTitle('Archive'));
+    await user.click(screen.getByText('Discussed'));
+    await user.click(screen.getByText('Log & snooze'));
+    expect(mockUpdateTask).toHaveBeenCalledWith(
+      task.id,
+      expect.objectContaining({
+        discussionLog: expect.any(Array),
+        pingCooldown: 'custom',
+        pingCooldownUntil: expect.any(Number),
+      }),
+    );
+  });
+
+  it('resolving is confirm-gated and sets archived', async () => {
+    const { user, task, container } = renderCard();
+    fireEvent.contextMenu(container.querySelector('[data-focus-id]')!);
+    await user.click(screen.getByText('Resolve'));
+    // Confirmation must appear before anything is archived.
+    expect(mockUpdateTask).not.toHaveBeenCalled();
+    const confirmBtn = await screen.findByRole('button', { name: 'Resolve' });
+    await user.click(confirmBtn);
     expect(mockUpdateTask).toHaveBeenCalledWith(task.id, { archived: true });
   });
 
-  it('shows Restore button when archived', () => {
-    renderCard({ archived: true });
-    expect(screen.getByTitle('Restore')).toBeInTheDocument();
+  it('shows discussion history entries', async () => {
+    const { user, container } = renderCard({
+      discussionLog: [{ id: 'd1', at: Date.now(), note: 'talked to ops team' }],
+    });
+    fireEvent.contextMenu(container.querySelector('[data-focus-id]')!);
+    await user.click(screen.getByText('History'));
+    expect(await screen.findByText('talked to ops team')).toBeInTheDocument();
   });
 
   it('shows Snooze button when not in cooldown', () => {

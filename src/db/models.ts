@@ -21,6 +21,14 @@ export interface TaskLink {
   title?: string;
 }
 
+// A single recorded discussion of a follow-up topic. Free-text `note` is
+// sensitive content (encrypted in sync + at-rest); see SENSITIVE_FIELDS.task.
+export interface DiscussionEntry {
+  id: string;
+  at: number; // when the topic was discussed
+  note?: string; // optional outcome / what was said
+}
+
 export interface Task {
   id: string;
   listId: string;
@@ -41,6 +49,12 @@ export interface Task {
   pingCooldownCustomMs?: number;
   pingCooldownUntil?: number;
   archived?: boolean;
+  // Follow-up: per-topic default snooze cadence, used by the one-tap "Discussed"
+  // re-snooze. Plaintext metadata (no user content). 'custom' => snoozeCadenceDays.
+  snoozeCadence?: PingCooldown;
+  snoozeCadenceDays?: number;
+  // Follow-up: discussion history (oldest-first). SENSITIVE — encrypted as a unit.
+  discussionLog?: DiscussionEntry[];
   // Warning
   hasWarning?: boolean;
   warningAt?: number;

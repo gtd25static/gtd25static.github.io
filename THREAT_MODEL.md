@@ -1,6 +1,6 @@
 # GTD25 — Security Review & Threat Model
 
-**Last updated:** 2026-06-05 (added key sizes / KDFs / brute-force economics)
+**Last updated:** 2026-06-05 (follow-up discussion log + encrypted export)
 **Maintenance:** This document MUST be kept current. See "Keeping this document
 updated" at the end and the corresponding rule in `CLAUDE.md`.
 
@@ -32,13 +32,25 @@ updated" at the end and the corresponding rule in `CLAUDE.md`.
 ### What is encrypted vs. always plaintext (critical)
 
 Encryption is **field-level**. Encrypted fields (`SENSITIVE_FIELDS`):
-- `taskList.name`; `task.title/description/link/linkTitle/links`;
+- `taskList.name`; `task.title/description/link/linkTitle/links/discussionLog`;
   `subtask.title/link/linkTitle/links`; and the `changeLog.data` snapshots.
+- `task.discussionLog` is the follow-up discussion history (`{id, at, note}[]`).
+  The free-text `note` is content, so the **whole array** is encrypted as a unit
+  (the per-entry `at` timestamps are encrypted too — they are not exposed as
+  metadata). ⚠️ Because field-level sync merge is last-write-wins per field, two
+  devices that each append a discussion between syncs will keep only one device's
+  array — a **data-loss** risk (not a confidentiality one); accepted for a
+  single-user app. A union-by-`id` merge is a possible future hardening.
 
 **Always plaintext (metadata), at rest AND on the wire AND on the backend:**
 - task/list/subtask **ids**, `listId`, `taskId`, `status`, `order`, `dueDate`,
   `createdAt`, `updatedAt`, `deletedAt`, recurrence/warning flags, `deviceId`,
   changelog `timestamp`. These are DB indexes and sync metadata.
+- Follow-up ping/snooze timing — `pingedAt`, `pingCooldown`, `pingCooldownUntil`,
+  `snoozeCadence`, `snoozeCadenceDays`, `archived` — is plaintext metadata. This
+  is deliberate: it lets the "ready to discuss" count and the nudge engine work
+  without unlocking the vault (the topic *titles* still require an unlocked vault
+  to read). It also leaks how often you revisit topics.
 
 ➡️ **Metadata leakage is inherent to every scenario below.** An adversary always
 learns the structure, size, timing, due dates, completion state, device count,
@@ -170,6 +182,26 @@ cache.
     real seizure risk), persistent-storage request, panic/failed-attempt wipe
     (note: wipes only help *before* imaging — a copied disk is immune).
 
+#### Backup/export files (manual ZIP exports)
+- **`exportToZip()` offers an encrypted container.** The export dialog lets the
+  user pick: unencrypted (legacy), or AES‑256‑GCM encrypted with a key derived
+  (PBKDF2‑SHA256, 600k) from **either a typed passphrase or the existing sync
+  password**. The ZIP holds a plaintext `manifest.json` (`format`, `exportVersion`,
+  `exportedAt`, `kdf`, `salt`, `verifier`, `keySource` — all non-sensitive) and an
+  encrypted `data.enc` blob. Import detects the format, validates the password via
+  the verifier (clear "wrong password" error), then decrypts.
+- **Stronger than the sync wire format on purpose:** the *entire* payload —
+  including metadata — is inside `data.enc`, so an encrypted export leaks **no**
+  metadata, unlike the sync snapshot (which leaves metadata plaintext). It does
+  **not** contain the PAT/syncPassword (export only carries tasks/lists/subtasks/
+  settings/pomodoro).
+- **Residual:** unencrypted export is still available by user choice (in Paranoid
+  Mode the dialog *defaults* to encrypted but does not forbid plaintext). Strength
+  is bounded by passphrase entropy; PBKDF2‑600k is weaker than the vault's
+  Argon2id. Export reads decrypted data, so in Paranoid Mode it requires an
+  **unlocked vault**. The separate Paranoid recovery export
+  (`SecuritySettings.handleRecoveryExport`) is still plaintext by design.
+
 ### Scenario 3 — Device seized, **memory dumped** (RAM capture while powered on)
 - **Paranoid OFF — 🔴.** Plaintext content + PAT + syncPassword are in the JS heap.
 - **Paranoid ON + UNLOCKED — 🔴.** While unlocked, the **DEK**, decrypted data,
@@ -286,6 +318,8 @@ history**.
 6. **Do setup / passphrase changes on a trusted device** (Scenario 5).
 7. Treat a complex passphrase as essential; a low-entropy one is the limiting
    factor for the disk-seizure case (Scenario 2).
+8. **Encrypt manual ZIP exports** (Export → passphrase or sync password). An
+   unencrypted export on disk is plaintext content + metadata (Scenario 2).
 
 ## 6. Summary matrix (content confidentiality)
 | # | Threat | Paranoid OFF | Paranoid ON |

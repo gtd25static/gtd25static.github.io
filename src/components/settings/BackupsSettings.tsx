@@ -3,9 +3,11 @@ import { Button } from '../ui/Button';
 import { useLocalSettings } from '../../hooks/use-settings';
 import { listRemoteBackups, type BackupInfo } from '../../sync/remote-backups';
 import { restoreFromBackup, wipeAllData, importData } from '../../sync/sync-engine';
-import { exportToZip, parseImportZip } from '../../db/export-import';
+import { parseImportZip } from '../../db/export-import';
+import { ExportDialog } from './ExportDialog';
 import { toast } from '../ui/Toast';
 import { confirmDialog } from '../ui/ConfirmDialog';
+import { promptPassword } from '../ui/PasswordPrompt';
 import { useVault } from '../../hooks/use-vault';
 import { getVaultSecrets } from '../../db/vault';
 
@@ -16,10 +18,12 @@ export function BackupsSettings() {
   const [backups, setBackups] = useState<BackupInfo[]>([]);
   const [loading, setLoading] = useState(false);
   const [restoringTier, setRestoringTier] = useState<string | null>(null);
+  const [showExport, setShowExport] = useState(false);
 
   // Paranoid devices keep the PAT in the vault; the remote-backup READ/restore
   // path still works (only the create path is disabled). Non-paranoid: localSettings.
   const pat = paranoid ? getVaultSecrets()?.githubPat : local.githubPat;
+  const syncPassword = paranoid ? getVaultSecrets()?.syncPassword : local.encryptionPassword;
   const repo = local.githubRepo;
   const syncConfigured = local.syncEnabled && !!pat && !!repo;
 
@@ -56,25 +60,15 @@ export function BackupsSettings() {
     }
   }
 
-  async function handleExport() {
-    try {
-      const blob = await exportToZip();
-      const date = new Date().toISOString().slice(0, 10);
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `gtd25-backup-${date}.zip`;
-      a.click();
-      URL.revokeObjectURL(url);
-    } catch (err) {
-      console.error('Export failed:', err);
-      toast('Export failed', 'error');
-    }
-  }
-
   async function handleImportFile(file: File) {
     try {
-      const data = await parseImportZip(file);
+      const data = await parseImportZip(file, {
+        syncPassword,
+        getPassword: () => promptPassword('Encrypted backup', {
+          message: 'This backup is encrypted. Enter its passphrase to import.',
+          confirmLabel: 'Import',
+        }),
+      });
       if (!await confirmDialog('This will replace all current data with the backup. Continue?', { confirmLabel: 'Import', danger: false })) return;
       await importData(data);
     } catch (err) {
@@ -89,7 +83,7 @@ export function BackupsSettings() {
         <h3 className="text-sm font-medium text-zinc-700 dark:text-zinc-300">Local Backups</h3>
       </div>
       <div className="flex gap-2">
-        <Button size="sm" variant="secondary" onClick={handleExport}>
+        <Button size="sm" variant="secondary" onClick={() => setShowExport(true)}>
           Export Backup
         </Button>
         <Button size="sm" variant="secondary" onClick={() => fileInputRef.current?.click()}>
@@ -110,6 +104,12 @@ export function BackupsSettings() {
       <p className="text-xs text-zinc-400 dark:text-zinc-500">
         Export downloads a zip backup of all tasks. Import replaces all data and syncs to other devices.
       </p>
+      <ExportDialog
+        open={showExport}
+        onClose={() => setShowExport(false)}
+        syncPassword={syncPassword}
+        defaultEncrypted={paranoid}
+      />
       <div>
         <Button
           size="sm"

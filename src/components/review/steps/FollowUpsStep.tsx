@@ -1,6 +1,6 @@
 import type { Task, TaskList } from '../../../db/models';
 import { updateTask } from '../../../hooks/use-tasks';
-import { isInCooldown, formatCooldown, cooldownRemaining } from '../../../hooks/use-follow-ups';
+import { isInCooldown, formatCooldown, cooldownRemaining, applyDiscussed } from '../../../hooks/use-follow-ups';
 import { ReviewStep } from '../ReviewStep';
 
 interface FollowUpEntry {
@@ -36,28 +36,32 @@ export function FollowUpsStep({ followUpLists, onNext, onPrev, onSkip }: Props) 
                 )}
               </div>
               <div className="flex items-center gap-1 shrink-0">
-                <button
-                  onClick={() => {
-                    if (inCooldown) {
-                      updateTask(task.id, {
-                        pingedAt: undefined,
-                        pingCooldown: undefined,
-                        pingCooldownCustomMs: undefined,
-                        pingCooldownUntil: undefined,
-                      });
-                    } else {
-                      updateTask(task.id, { pingedAt: Date.now(), pingCooldown: task.pingCooldown ?? '12h' });
-                    }
-                  }}
-                  className={`rounded px-1.5 py-0.5 text-xs ${inCooldown ? 'text-orange-500' : 'text-accent-600'} hover:bg-zinc-100 dark:hover:bg-zinc-800`}
-                >
-                  {inCooldown ? 'Clear' : 'Ping'}
-                </button>
+                {inCooldown ? (
+                  <button
+                    onClick={() => updateTask(task.id, {
+                      pingedAt: undefined,
+                      pingCooldown: undefined,
+                      pingCooldownCustomMs: undefined,
+                      pingCooldownUntil: undefined,
+                    })}
+                    className="rounded px-1.5 py-0.5 text-xs text-orange-500 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+                  >
+                    Wake
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => updateTask(task.id, applyDiscussed(task))}
+                    className="rounded px-1.5 py-0.5 text-xs text-emerald-600 hover:bg-zinc-100 dark:text-emerald-400 dark:hover:bg-zinc-800"
+                    title="Log a discussion and snooze for this topic's cadence"
+                  >
+                    Discussed
+                  </button>
+                )}
                 <button
                   onClick={() => updateTask(task.id, { archived: true })}
                   className="rounded px-1.5 py-0.5 text-xs text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-800"
                 >
-                  Archive
+                  Resolve
                 </button>
               </div>
             </div>

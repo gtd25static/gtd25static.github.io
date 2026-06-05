@@ -15,6 +15,7 @@ import { HelpOverlay } from './HelpOverlay';
 import { SyncIndicator } from './SyncIndicator';
 import { ToastContainer } from '../ui/Toast';
 import { ConfirmDialogContainer } from '../ui/ConfirmDialog';
+import { PasswordPromptContainer } from '../ui/PasswordPrompt';
 import { QuickCapture } from '../tasks/QuickCapture';
 import { WeeklyReviewModal } from '../review/WeeklyReviewModal';
 import { useSpecialListContext } from '../../hooks/use-special-list';
@@ -157,6 +158,7 @@ export function AppShell() {
       <QuickCapture />
       <FocusNudgeToast />
       <ConfirmDialogContainer />
+      <PasswordPromptContainer />
       <ToastContainer />
     </div>
     </DndProvider>

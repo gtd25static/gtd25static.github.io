@@ -1,5 +1,7 @@
 import { db } from './index';
 import type { TaskList, Task, Subtask, Settings, PomodoroSettings, SoundPreset } from './models';
+import type JSZip from 'jszip';
+import { generateSalt, deriveKey, encryptBlob, decryptBlob, createVerifier, checkVerifier } from '../sync/crypto';
 
 export interface ImportData {
   taskLists: TaskList[];
@@ -11,6 +13,24 @@ export interface ImportData {
 }
 
 const CURRENT_EXPORT_VERSION = 2;
+const EXPORT_FORMAT = 'gtd25-export';
+const PBKDF2_ITERATIONS = 600_000;
+
+export type ExportKeySource = 'passphrase' | 'sync';
+
+// Plaintext manifest for an encrypted export. Holds only non-sensitive metadata
+// needed to derive the key and validate the password; the actual data is in the
+// `data.enc` blob.
+export interface EncryptedManifest {
+  format: typeof EXPORT_FORMAT;
+  encrypted: true;
+  exportVersion: number;
+  exportedAt: number;
+  kdf: { name: 'PBKDF2'; hash: 'SHA-256'; iterations: number };
+  salt: string;
+  verifier: string;
+  keySource: ExportKeySource;
+}
 
 interface ExportPayload {
   exportVersion: number;
@@ -23,7 +43,19 @@ interface ExportPayload {
   soundPresets?: SoundPreset[];
 }
 
-export async function exportToZip(): Promise<Blob> {
+export interface ExportOptions {
+  encrypt?: { password: string; keySource: ExportKeySource };
+}
+
+export interface ImportOptions {
+  // Sync password to try automatically (used when keySource === 'sync').
+  syncPassword?: string;
+  // Prompt the user for a passphrase. Called only when the encrypted backup
+  // can't be opened with `syncPassword`. Return null to cancel.
+  getPassword?: (manifest: EncryptedManifest) => Promise<string | null>;
+}
+
+async function buildPayload(): Promise<ExportPayload> {
   const [taskLists, tasks, subtasks, pomodoroSettings, soundPresets] = await Promise.all([
     db.taskLists.toArray(),
     db.tasks.toArray(),
@@ -36,7 +68,7 @@ export async function exportToZip(): Promise<Blob> {
     theme: (localStorage.getItem('gtd25-theme') as Settings['theme']) ?? 'system',
   };
 
-  const payload: ExportPayload = {
+  return {
     exportVersion: CURRENT_EXPORT_VERSION,
     exportedAt: Date.now(),
     taskLists,
@@ -46,30 +78,113 @@ export async function exportToZip(): Promise<Blob> {
     pomodoroSettings: pomodoroSettings ?? undefined,
     soundPresets: soundPresets.length > 0 ? soundPresets : undefined,
   };
+}
+
+export async function exportToZip(opts?: ExportOptions): Promise<Blob> {
+  const payload = await buildPayload();
 
   const JSZip = (await import('jszip')).default;
   const zip = new JSZip();
-  zip.file('data.json', JSON.stringify(payload, null, 2));
+
+  if (opts?.encrypt) {
+    const { password, keySource } = opts.encrypt;
+    if (!password) throw new Error('A password is required to encrypt the backup');
+    const salt = generateSalt();
+    const key = await deriveKey(password, salt);
+    const manifest: EncryptedManifest = {
+      format: EXPORT_FORMAT,
+      encrypted: true,
+      exportVersion: CURRENT_EXPORT_VERSION,
+      exportedAt: payload.exportedAt,
+      kdf: { name: 'PBKDF2', hash: 'SHA-256', iterations: PBKDF2_ITERATIONS },
+      salt,
+      verifier: await createVerifier(key),
+      keySource,
+    };
+    zip.file('manifest.json', JSON.stringify(manifest, null, 2));
+    zip.file('data.enc', await encryptBlob(key, JSON.stringify(payload)));
+  } else {
+    zip.file('data.json', JSON.stringify(payload, null, 2));
+  }
+
   return zip.generateAsync({ type: 'blob' });
 }
 
-export async function parseImportZip(file: File): Promise<ImportData> {
+export async function parseImportZip(file: File, opts?: ImportOptions): Promise<ImportData> {
   const JSZip = (await import('jszip')).default;
   const zip = await JSZip.loadAsync(file);
 
   const dataFile = zip.file('data.json');
-  if (!dataFile) {
-    throw new Error('Invalid backup: missing data.json');
+  if (dataFile) {
+    const raw = await dataFile.async('string');
+    let parsed: ExportPayload;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      throw new Error('Invalid backup: data.json is not valid JSON');
+    }
+    return validatePayload(parsed);
   }
 
-  const raw = await dataFile.async('string');
+  // Encrypted container
+  const manifestFile = zip.file('manifest.json');
+  if (manifestFile) {
+    const parsed = await decryptPayload(zip, await manifestFile.async('string'), opts);
+    return validatePayload(parsed);
+  }
+
+  throw new Error('Invalid backup: missing data.json');
+}
+
+async function decryptPayload(
+  zip: JSZip,
+  manifestRaw: string,
+  opts?: ImportOptions,
+): Promise<ExportPayload> {
+  let manifest: EncryptedManifest;
+  try {
+    manifest = JSON.parse(manifestRaw);
+  } catch {
+    throw new Error('Invalid backup: manifest.json is not valid JSON');
+  }
+  if (manifest.format !== EXPORT_FORMAT || !manifest.encrypted || !manifest.salt || !manifest.verifier) {
+    throw new Error('Invalid backup: unrecognized encrypted backup');
+  }
+
+  const encFile = zip.file('data.enc');
+  if (!encFile) throw new Error('Invalid backup: missing data.enc');
+  const cipher = await encFile.async('string');
+
+  // Resolve a key: try the sync password first when the backup was encrypted
+  // with it, otherwise prompt. A wrong password is caught by the verifier.
+  let key: CryptoKey | null = null;
+  if (manifest.keySource === 'sync' && opts?.syncPassword) {
+    const candidate = await deriveKey(opts.syncPassword, manifest.salt);
+    if (await checkVerifier(candidate, manifest.verifier)) key = candidate;
+  }
+  if (!key) {
+    if (!opts?.getPassword) {
+      throw new Error('Invalid backup: this backup is encrypted; a password is required');
+    }
+    const entered = await opts.getPassword(manifest);
+    if (entered == null) throw new Error('Import cancelled');
+    const candidate = await deriveKey(entered, manifest.salt);
+    if (!(await checkVerifier(candidate, manifest.verifier))) {
+      throw new Error('Invalid backup: wrong password');
+    }
+    key = candidate;
+  }
+
   let parsed: ExportPayload;
   try {
-    parsed = JSON.parse(raw);
+    parsed = JSON.parse(await decryptBlob(key, cipher));
   } catch {
-    throw new Error('Invalid backup: data.json is not valid JSON');
+    throw new Error('Invalid backup: could not decrypt data');
   }
+  return parsed;
+}
 
+function validatePayload(parsed: ExportPayload): ImportData {
   if (!parsed.exportVersion) {
     throw new Error('Invalid backup: missing exportVersion');
   }

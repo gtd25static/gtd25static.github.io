@@ -5,10 +5,12 @@ import { toast } from '../ui/Toast';
 import { confirmDialog } from '../ui/ConfirmDialog';
 import { useAppState } from '../../stores/app-state';
 import { useShallow } from 'zustand/react/shallow';
-import { isInCooldown, cooldownRemaining, formatCooldown } from '../../hooks/use-follow-ups';
+import { isInCooldown, cooldownRemaining, formatCooldown, cadenceMs } from '../../hooks/use-follow-ups';
 import { toggleWarning } from '../../hooks/use-warning';
 import { useTaskLists } from '../../hooks/use-task-lists';
 import { PingCooldownBadge } from './PingCooldownBadge';
+import { DiscussedPopover } from './DiscussedPopover';
+import { DiscussionHistory } from './DiscussionHistory';
 import { ContextMenu, type MenuItem } from '../ui/ContextMenu';
 import { DropdownMenu } from '../ui/DropdownMenu';
 import { formatDate, dueDateColor } from '../../lib/date-utils';
@@ -19,8 +21,20 @@ const SNOOZE_OPTIONS: { value: PingCooldown; label: string }[] = [
   { value: '12h', label: '12 hours' },
   { value: '1week', label: '1 week' },
   { value: '1month', label: '1 month' },
+  { value: '3months', label: '3 months' },
   { value: 'custom', label: 'Pick a date...' },
 ];
+
+function cadenceLabel(ms: number): string {
+  const days = Math.round(ms / (24 * 60 * 60 * 1000));
+  if (days >= 30) {
+    const months = Math.round(days / 30);
+    return `every ${months}mo`;
+  }
+  if (days >= 7 && days % 7 === 0) return `every ${days / 7}w`;
+  if (days >= 1) return `every ${days}d`;
+  return `every ${Math.round(ms / (60 * 60 * 1000))}h`;
+}
 
 interface Props {
   task: Task;
@@ -39,9 +53,12 @@ export function FollowUpCard({ task, index, dragHandleProps }: Props) {
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null);
   const [showSnoozePicker, setShowSnoozePicker] = useState(false);
   const [showDatePicker, setShowDatePicker] = useState(false);
+  const [showDiscussed, setShowDiscussed] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
   const [pickerAlign, setPickerAlign] = useState<'right' | 'left'>('right');
   const pickerRef = useRef<HTMLDivElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
+  const discussedRef = useRef<HTMLDivElement>(null);
 
   // React to keyboard-triggered editing
   useEffect(() => {
@@ -75,8 +92,25 @@ export function FollowUpCard({ task, index, dragHandleProps }: Props) {
     return () => document.removeEventListener('mousedown', handleClick);
   }, [showSnoozePicker]);
 
-  async function handleArchive() {
-    await updateTask(task.id, { archived: !task.archived });
+  // Close the "Discussed" popover on outside click
+  useEffect(() => {
+    if (!showDiscussed) return;
+    function handleClick(e: MouseEvent) {
+      if (discussedRef.current && !discussedRef.current.contains(e.target as Node)) {
+        setShowDiscussed(false);
+      }
+    }
+    document.addEventListener('mousedown', handleClick);
+    return () => document.removeEventListener('mousedown', handleClick);
+  }, [showDiscussed]);
+
+  async function handleResolve() {
+    if (!await confirmDialog('Resolve this follow-up? It moves to the Resolved section and you can reopen it later.', { confirmLabel: 'Resolve' })) return;
+    await updateTask(task.id, { archived: true });
+  }
+
+  async function handleReopen() {
+    await updateTask(task.id, { archived: false });
   }
 
   async function handleSnooze(cd: PingCooldown) {
@@ -129,6 +163,7 @@ export function FollowUpCard({ task, index, dragHandleProps }: Props) {
     const items: MenuItem[] = [
       { label: task.starred ? 'Unstar' : 'Star', onClick: () => updateTask(task.id, { starred: !task.starred }) },
       { label: task.hasWarning ? 'Clear warning' : 'Warn', onClick: () => toggleWarning('task', task.id) },
+      { label: 'History', onClick: () => setShowHistory(true) },
     ];
     if (otherLists.length > 0) {
       items.push({
@@ -141,6 +176,9 @@ export function FollowUpCard({ task, index, dragHandleProps }: Props) {
     }
     items.push(
       { label: 'Edit', onClick: () => setEditing(true) },
+      task.archived
+        ? { label: 'Reopen', onClick: handleReopen }
+        : { label: 'Resolve', onClick: handleResolve },
       { label: 'Delete', onClick: async () => {
         if (!await confirmDialog('Delete this follow-up?', { confirmLabel: 'Delete' })) return;
         deleteTask(task.id);
@@ -174,25 +212,6 @@ export function FollowUpCard({ task, index, dragHandleProps }: Props) {
           </svg>
         </div>
       )}
-
-      {/* Archive button (clock icon) */}
-      <button
-        onClick={handleArchive}
-        className="mt-0.5 shrink-0"
-        title={task.archived ? 'Restore' : 'Archive'}
-      >
-        {task.archived ? (
-          <svg width="20" height="20" viewBox="0 0 20 20" className="text-green-500 hover:text-green-600 dark:text-green-400 dark:hover:text-green-500">
-            <circle cx="10" cy="10" r="9" fill="none" stroke="currentColor" strokeWidth="1.5" />
-            <path d="M6.5 10l2.5 2.5 4.5-5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" fill="none" />
-          </svg>
-        ) : (
-          <svg width="20" height="20" viewBox="0 0 20 20" className="text-orange-400 hover:text-orange-500">
-            <circle cx="10" cy="10" r="9" fill="none" stroke="currentColor" strokeWidth="1.5" />
-            <path d="M10 6v4l2.5 1.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" fill="none" />
-          </svg>
-        )}
-      </button>
 
       <div className="flex-1 min-w-0">
         {task.hasWarning && (
@@ -244,6 +263,11 @@ export function FollowUpCard({ task, index, dragHandleProps }: Props) {
         )}
         <div className="mt-1 flex items-center gap-2 flex-wrap">
           <PingCooldownBadge task={task} />
+          {!task.archived && task.snoozeCadence && (
+            <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-xs font-medium text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400" title="Default snooze cadence">
+              {cadenceLabel(cadenceMs(task))}
+            </span>
+          )}
           {task.dueDate && (
             <span className={`text-xs font-medium ${dueDateColor(task.dueDate)}`}>
               {formatDate(task.dueDate)}
@@ -252,6 +276,22 @@ export function FollowUpCard({ task, index, dragHandleProps }: Props) {
           <LinksList primaryLink={task.link} primaryTitle={task.linkTitle} links={task.links} />
         </div>
       </div>
+
+      {/* Discussed button — log a discussion and re-snooze for the topic's cadence */}
+      {!task.archived && (
+        <div className="relative shrink-0" ref={discussedRef}>
+          <button
+            onClick={() => setShowDiscussed((v) => !v)}
+            className="shrink-0 rounded-full px-2.5 py-1 text-xs font-medium bg-emerald-50 text-emerald-700 hover:bg-emerald-100 dark:bg-emerald-900/30 dark:text-emerald-400 dark:hover:bg-emerald-800/40"
+            title="Log that you discussed this, then snooze for its cadence"
+          >
+            Discussed
+          </button>
+          {showDiscussed && (
+            <DiscussedPopover task={task} align="right" onDone={() => setShowDiscussed(false)} />
+          )}
+        </div>
+      )}
 
       {/* Snooze / Wake button */}
       {!task.archived && (
@@ -333,7 +373,11 @@ export function FollowUpCard({ task, index, dragHandleProps }: Props) {
           items={[
             { label: task.starred ? 'Unstar' : 'Star', onClick: () => updateTask(task.id, { starred: !task.starred }) },
             { label: task.hasWarning ? 'Clear warning' : 'Warn', onClick: () => toggleWarning('task', task.id) },
+            { label: 'History', onClick: () => setShowHistory(true) },
             { label: 'Edit', onClick: () => setEditing(true) },
+            task.archived
+              ? { label: 'Reopen', onClick: handleReopen }
+              : { label: 'Resolve', onClick: handleResolve },
             { label: 'Delete', onClick: async () => {
               if (!await confirmDialog('Delete this follow-up?', { confirmLabel: 'Delete' })) return;
               deleteTask(task.id);
@@ -354,6 +398,8 @@ export function FollowUpCard({ task, index, dragHandleProps }: Props) {
           }}
         />
       )}
+
+      <DiscussionHistory task={task} open={showHistory} onClose={() => setShowHistory(false)} />
 
       {ctxMenu && (
         <ContextMenu

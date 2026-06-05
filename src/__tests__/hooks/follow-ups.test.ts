@@ -1,4 +1,4 @@
-import { isInCooldown, cooldownRemaining, cooldownUntil, formatCooldown } from '../../hooks/use-follow-ups';
+import { isInCooldown, cooldownRemaining, cooldownUntil, formatCooldown, cadenceMs, applyDiscussed, isAwake } from '../../hooks/use-follow-ups';
 import type { Task } from '../../db/models';
 
 function makeTask(overrides?: Partial<Task>): Task {
@@ -131,5 +131,77 @@ describe('formatCooldown', () => {
 
   it('formats days when 24h or more', () => {
     expect(formatCooldown(3 * 24 * 60 * 60 * 1000)).toBe('3d');
+  });
+});
+
+const WEEK = 7 * 24 * 60 * 60 * 1000;
+const MONTH = 30 * 24 * 60 * 60 * 1000;
+const DAY = 24 * 60 * 60 * 1000;
+
+describe('cadenceMs', () => {
+  it('uses a preset snoozeCadence', () => {
+    expect(cadenceMs(makeTask({ snoozeCadence: '1month' }))).toBe(MONTH);
+  });
+
+  it('uses custom cadence days', () => {
+    expect(cadenceMs(makeTask({ snoozeCadence: 'custom', snoozeCadenceDays: 10 }))).toBe(10 * DAY);
+  });
+
+  it('falls back to the last pingCooldown when no cadence set', () => {
+    expect(cadenceMs(makeTask({ pingCooldown: '1week' }))).toBe(WEEK);
+  });
+
+  it('defaults to 1 week when nothing is set', () => {
+    expect(cadenceMs(makeTask())).toBe(WEEK);
+  });
+
+  it('ignores a custom cadence with no/invalid days and falls back', () => {
+    expect(cadenceMs(makeTask({ snoozeCadence: 'custom' }))).toBe(WEEK);
+  });
+});
+
+describe('applyDiscussed', () => {
+  it('appends a log entry and re-snoozes for the cadence', () => {
+    const task = makeTask({ snoozeCadence: '1month' });
+    const update = applyDiscussed(task, '  spoke to the team  ');
+
+    expect(update.discussionLog).toHaveLength(1);
+    expect(update.discussionLog![0].at).toBe(Date.now());
+    expect(update.discussionLog![0].note).toBe('spoke to the team'); // trimmed
+    expect(update.discussionLog![0].id).toBeTruthy();
+    expect(update.pingedAt).toBe(Date.now());
+    expect(update.pingCooldown).toBe('custom');
+    expect(update.pingCooldownUntil).toBe(Date.now() + MONTH);
+  });
+
+  it('preserves prior log entries (append, not replace)', () => {
+    const task = makeTask({ discussionLog: [{ id: 'old', at: 5, note: 'first' }] });
+    const update = applyDiscussed(task);
+    expect(update.discussionLog).toHaveLength(2);
+    expect(update.discussionLog![0].id).toBe('old');
+    expect(update.discussionLog![1].note).toBeUndefined(); // empty note omitted
+  });
+
+  it('omits an empty/whitespace note', () => {
+    const update = applyDiscussed(makeTask(), '   ');
+    expect(update.discussionLog![0].note).toBeUndefined();
+  });
+});
+
+describe('isAwake', () => {
+  it('is true for a fresh follow-up', () => {
+    expect(isAwake(makeTask())).toBe(true);
+  });
+
+  it('is false while snoozed', () => {
+    expect(isAwake(makeTask({ pingedAt: Date.now(), pingCooldown: '12h' }))).toBe(false);
+  });
+
+  it('is false when resolved (archived)', () => {
+    expect(isAwake(makeTask({ archived: true }))).toBe(false);
+  });
+
+  it('is false when deleted', () => {
+    expect(isAwake(makeTask({ deletedAt: Date.now() }))).toBe(false);
   });
 });

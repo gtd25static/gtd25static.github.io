@@ -6,7 +6,7 @@ const VERIFIER_PLAINTEXT = 'gtd25-encryption-check';
 
 const SENSITIVE_FIELDS: Record<string, string[]> = {
   taskList: ['name'],
-  task: ['title', 'description', 'link', 'linkTitle', 'links'],
+  task: ['title', 'description', 'link', 'linkTitle', 'links', 'discussionLog'],
   subtask: ['title', 'link', 'linkTitle', 'links'],
 };
 

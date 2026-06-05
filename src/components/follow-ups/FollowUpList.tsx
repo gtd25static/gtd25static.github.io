@@ -167,7 +167,7 @@ export function FollowUpList({ listId, listName }: Props) {
                 >
                   <path d="M6 3l5 5-5 5z" />
                 </svg>
-                Archived ({archived.length})
+                Resolved ({archived.length})
               </button>
               {showArchived && (
                 <div>

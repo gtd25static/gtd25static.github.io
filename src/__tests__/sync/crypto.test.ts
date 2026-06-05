@@ -115,6 +115,28 @@ describe('encryptEntity / decryptEntity', () => {
     expect(decrypted).toEqual(task);
   });
 
+  it('encrypts the discussionLog (follow-up history) and round-trips it', async () => {
+    const task = {
+      id: 'task1',
+      listId: 'list1',
+      title: 'Topic',
+      status: 'todo',
+      order: 0,
+      createdAt: 1000,
+      updatedAt: 1001,
+      discussionLog: [{ id: 'd1', at: 5, note: 'sensitive outcome' }],
+    };
+
+    const encrypted = await encryptEntity(testKey, task, 'task');
+    // discussionLog must be moved into the encrypted blob, not left in plaintext.
+    expect(encrypted.discussionLog).toBeUndefined();
+    expect(encrypted._enc).toBeDefined();
+    expect(JSON.stringify(encrypted)).not.toContain('sensitive outcome');
+
+    const decrypted = await decryptEntity(testKey, encrypted, 'task');
+    expect(decrypted).toEqual(task);
+  });
+
   it('roundtrips a taskList', async () => {
     const list = {
       id: 'list1',

@@ -331,3 +331,106 @@ describe('export/import — pomodoro data', () => {
     expect(result.soundPresets![0].name).toBe('Good');
   });
 });
+
+describe('encrypted export/import', () => {
+  // Seed some real data so we exercise full encrypt -> decrypt -> validate.
+  async function seed() {
+    const listId = newId();
+    const taskId = newId();
+    const subId = newId();
+    const now = Date.now();
+    await db.taskLists.add({ id: listId, name: 'Secret List', type: 'follow-ups', order: 0, createdAt: now, updatedAt: now });
+    await db.tasks.add({
+      id: taskId, listId, title: 'Secret Topic', status: 'todo', order: 0, createdAt: now, updatedAt: now,
+      discussionLog: [{ id: newId(), at: now, note: 'private note' }],
+    });
+    await db.subtasks.add({ id: subId, taskId, title: 'Secret Sub', status: 'todo', order: 0, createdAt: now, updatedAt: now });
+    return { listId, taskId, subId };
+  }
+
+  async function exportEncrypted(opts: { password: string; keySource: 'passphrase' | 'sync' }): Promise<File> {
+    const blob = await exportToZip({ encrypt: opts });
+    const buf = await blobToUint8Array(blob);
+    return buf as unknown as File;
+  }
+
+  it('writes manifest.json + data.enc and no plaintext data.json', async () => {
+    await seed();
+    const blob = await exportToZip({ encrypt: { password: 'hunter2', keySource: 'passphrase' } });
+    const zip = await JSZip.loadAsync(await blobToUint8Array(blob));
+    expect(zip.file('data.json')).toBeNull();
+    expect(zip.file('data.enc')).toBeTruthy();
+    const manifest = JSON.parse(await zip.file('manifest.json')!.async('string'));
+    expect(manifest.encrypted).toBe(true);
+    expect(manifest.format).toBe('gtd25-export');
+    expect(manifest.keySource).toBe('passphrase');
+    expect(typeof manifest.salt).toBe('string');
+    expect(typeof manifest.verifier).toBe('string');
+    // The ciphertext must not contain the plaintext secrets.
+    const enc = await zip.file('data.enc')!.async('string');
+    expect(enc).not.toContain('Secret Topic');
+    expect(enc).not.toContain('private note');
+  });
+
+  it('round-trips with the correct passphrase', async () => {
+    const { taskId } = await seed();
+    const file = await exportEncrypted({ password: 'correct horse', keySource: 'passphrase' });
+    const result = await parseImportZip(file, { getPassword: async () => 'correct horse' });
+
+    expect(result.taskLists).toHaveLength(1);
+    expect(result.taskLists[0].name).toBe('Secret List');
+    expect(result.tasks).toHaveLength(1);
+    expect(result.tasks[0].id).toBe(taskId);
+    expect(result.tasks[0].title).toBe('Secret Topic');
+    expect(result.tasks[0].discussionLog?.[0].note).toBe('private note');
+    expect(result.subtasks).toHaveLength(1);
+    expect(result.subtasks[0].title).toBe('Secret Sub');
+  });
+
+  it('rejects a wrong passphrase via the verifier', async () => {
+    await seed();
+    const file = await exportEncrypted({ password: 'right', keySource: 'passphrase' });
+    await expect(
+      parseImportZip(file, { getPassword: async () => 'wrong' }),
+    ).rejects.toThrow(/wrong password/i);
+  });
+
+  it('throws when no password is available (no prompt, no sync password)', async () => {
+    await seed();
+    const file = await exportEncrypted({ password: 'pw', keySource: 'passphrase' });
+    await expect(parseImportZip(file)).rejects.toThrow(/password is required/i);
+  });
+
+  it('throws "Import cancelled" when the prompt is dismissed', async () => {
+    await seed();
+    const file = await exportEncrypted({ password: 'pw', keySource: 'passphrase' });
+    await expect(
+      parseImportZip(file, { getPassword: async () => null }),
+    ).rejects.toThrow(/cancelled/i);
+  });
+
+  it('opens a sync-password backup automatically with the sync password', async () => {
+    await seed();
+    const file = await exportEncrypted({ password: 'sync-pw', keySource: 'sync' });
+    // No getPassword supplied — must succeed purely from syncPassword.
+    const result = await parseImportZip(file, { syncPassword: 'sync-pw' });
+    expect(result.tasks[0].title).toBe('Secret Topic');
+  });
+
+  it('falls back to the prompt when the sync password is wrong', async () => {
+    await seed();
+    const file = await exportEncrypted({ password: 'real-sync-pw', keySource: 'sync' });
+    const result = await parseImportZip(file, {
+      syncPassword: 'stale-pw',
+      getPassword: async () => 'real-sync-pw',
+    });
+    expect(result.tasks[0].title).toBe('Secret Topic');
+  });
+
+  it('still imports a plaintext (unencrypted) backup', async () => {
+    const { taskId } = await seed();
+    const blob = await exportToZip(); // no encryption
+    const result = await parseImportZip(await blobToUint8Array(blob) as unknown as File);
+    expect(result.tasks[0].id).toBe(taskId);
+  });
+});

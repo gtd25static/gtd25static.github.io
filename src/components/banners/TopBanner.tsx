@@ -8,6 +8,7 @@ import { daysUntil } from '../../lib/date-utils';
 import { startWorkingOn, startWorkingOnTask } from '../../hooks/use-working-on';
 import { db } from '../../db';
 import { MotivationBanner } from './MotivationBanner';
+import { FollowUpsReadyBanner } from './FollowUpsReadyBanner';
 
 function WorkingSection() {
   const { task, subtask, isWorking } = useWorkingOn();
@@ -228,6 +229,7 @@ export function TopBanner() {
       <WorkingSection />
       <SuggestionSection />
       <DueSoonSection />
+      <FollowUpsReadyBanner />
       <MotivationBanner />
     </>
   );
