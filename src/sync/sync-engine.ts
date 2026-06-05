@@ -1306,6 +1306,20 @@ export async function forcePush() {
 
     let localData = await getLocalSnapshot();
 
+    // Data-loss guard: refuse to overwrite a POPULATED remote with an EMPTY local
+    // database (e.g. a mis-click right after a wipe, before pulling). Force push
+    // is destructive and propagates to every device — never let it silently wipe.
+    const localEmpty = localData.taskLists.length === 0 && localData.tasks.length === 0 && localData.subtasks.length === 0;
+    if (localEmpty && existing) {
+      const p = safeParseJson<SyncData>(existing.data, 'existing snapshot (force push empty guard)');
+      const remoteCount = p.ok ? (p.value.taskLists.length + p.value.tasks.length + p.value.subtasks.length) : 0;
+      if (remoteCount > 0) {
+        reportProgress('error', 'Force push refused', 0);
+        toast('Force push refused: local data is empty but remote has data. Pull first.', 'error');
+        return;
+      }
+    }
+
     // Always encrypt before pushing
     const salt = getCachedSalt()!;
     localData.encryptionSalt = salt;
@@ -1490,6 +1504,15 @@ export async function wipeAllData() {
       emptySnapshot = await encryptSyncData(encKey, emptySnapshot);
 
       const existing = await getFile(creds.pat, creds.repo, SNAPSHOT_FILE, signal);
+      // Recoverability: back up the remote snapshot before replacing it with the
+      // empty one, so a "Wipe All Data" can be undone (this propagates to every
+      // device). Mirrors forcePush's pre-overwrite backup.
+      if (existing) {
+        const p = safeParseJson<SyncData>(existing.data, 'existing snapshot (wipe backup)');
+        if (p.ok) {
+          await backupRemoteSnapshot(creds.pat, creds.repo, existing.data, p.value.syncVersion ?? SYNC_VERSION);
+        }
+      }
       await putFile(creds.pat, creds.repo, SNAPSHOT_FILE, JSON.stringify(emptySnapshot), existing?.sha, signal);
 
       // Delete changelog so other devices hit the bootstrap path

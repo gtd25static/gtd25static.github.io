@@ -25,6 +25,7 @@
 
 import Dexie, { type Middleware, type DBCore, type DBCoreTable } from 'dexie';
 import { encryptEntity, decryptEntity } from '../sync/crypto';
+import { recordError } from '../lib/diagnostics';
 
 // Dexie table name -> entity type understood by SENSITIVE_FIELDS in crypto.ts.
 const ENTITY_TYPE_BY_TABLE: Record<string, string> = {
@@ -101,6 +102,35 @@ export async function decryptRow(table: string, key: CryptoKey, row: Row | null 
   if (!entityType) return row;
   if (!row._enc) return row; // already plaintext (e.g. mid-migration)
   return decryptEntity(key, row, entityType);
+}
+
+// Placeholder shown for a sensitive field whose row could not be decrypted.
+const UNREADABLE = '⚠︎ unreadable';
+
+// Build a safe, readable stand-in for a row that failed to decrypt, so a single
+// corrupted row cannot make the whole table (or app) unreadable. Metadata
+// (id/status/order/…) is intact; the row stays recoverable by re-syncing the
+// authoritative copy from remote, which overwrites the corrupt local row.
+function quarantineRow(table: string, row: Row): Row {
+  const out: Row = {};
+  for (const [k, v] of Object.entries(row)) if (k !== '_enc') out[k] = v;
+  if (table === 'tasks' || table === 'subtasks') out.title = UNREADABLE;
+  else if (table === 'taskLists') out.name = UNREADABLE;
+  out._decryptError = true;
+  return out;
+}
+
+// Read-path decrypt that never throws: on failure it records the error and
+// returns a quarantined placeholder. Used ONLY for reads — the migration path
+// stays strict so it never silently destroys recoverable data.
+async function safeDecryptRow(table: string, key: CryptoKey, row: Row | null | undefined): Promise<Row | null | undefined> {
+  if (row == null) return row;
+  try {
+    return await decryptRow(table, key, row);
+  } catch (err) {
+    recordError(`vault-decrypt:${table}`, err);
+    return quarantineRow(table, row);
+  }
 }
 
 // --- Buffered decrypting cursor ---
@@ -242,7 +272,7 @@ export const vaultMiddleware: Middleware<DBCore> = {
             if (!key) return downTable.get(req);
             return Dexie.waitFor((async () => {
               const row = await downTable.get(req);
-              return (await decryptRow(tableName, key, row as Row)) as typeof row;
+              return (await safeDecryptRow(tableName, key, row as Row)) as typeof row;
             })());
           },
 
@@ -251,7 +281,7 @@ export const vaultMiddleware: Middleware<DBCore> = {
             if (!key) return downTable.getMany(req);
             return Dexie.waitFor((async () => {
               const rows = await downTable.getMany(req);
-              return (await Promise.all((rows as Row[]).map((r) => decryptRow(tableName, key, r)))) as typeof rows;
+              return (await Promise.all((rows as Row[]).map((r) => safeDecryptRow(tableName, key, r)))) as typeof rows;
             })());
           },
 
@@ -260,7 +290,7 @@ export const vaultMiddleware: Middleware<DBCore> = {
             if (!key || req.values === false) return downTable.query(req);
             return Dexie.waitFor((async () => {
               const res = await downTable.query(req);
-              const result = await Promise.all((res.result as Row[]).map((r) => decryptRow(tableName, key, r)));
+              const result = await Promise.all((res.result as Row[]).map((r) => safeDecryptRow(tableName, key, r)));
               return { ...res, result: result as typeof res.result };
             })());
           },
@@ -278,7 +308,7 @@ export const vaultMiddleware: Middleware<DBCore> = {
                 real.continue();
               });
 
-              const decrypted = await Promise.all(buffer.map((e) => decryptRow(tableName, key, e.value as Row)));
+              const decrypted = await Promise.all(buffer.map((e) => safeDecryptRow(tableName, key, e.value as Row)));
               buffer.forEach((e, idx) => { e.value = decrypted[idx]; });
 
               return makeBufferedCursor(buffer, req.trans) as unknown as Awaited<ReturnType<typeof downTable.openCursor>>;
