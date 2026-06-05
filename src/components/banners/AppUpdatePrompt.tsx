@@ -66,14 +66,8 @@ export function AppUpdatePrompt() {
 
   if (!dismissed) {
     return (
-      <div
-        className="fixed inset-0 z-[300] flex items-center justify-center bg-black/40 p-4"
-        onClick={() => setDismissed(true)}
-      >
-        <div
-          className="w-full max-w-sm rounded-2xl border border-zinc-200 bg-white p-6 shadow-2xl dark:border-zinc-800 dark:bg-zinc-900"
-          onClick={(e) => e.stopPropagation()}
-        >
+      <div className="fixed inset-0 z-[300] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
+        <div className="w-full max-w-sm rounded-2xl border border-zinc-200 bg-white p-6 shadow-2xl dark:border-zinc-800 dark:bg-zinc-900">
           <div className="mb-2 flex items-center gap-2">
             <span aria-hidden className="text-xl">⬆️</span>
             <h2 className="text-lg font-medium text-zinc-800 dark:text-zinc-100">
