@@ -64,9 +64,13 @@ export function getActiveAtRestKey(): CryptoKey | null {
 
 // --- Row transforms ---
 
-type Row = Record<string, unknown>;
+export type Row = Record<string, unknown>;
 
-async function encryptRow(table: string, key: CryptoKey, row: Row | null | undefined): Promise<Row | null | undefined> {
+// Exported so the enable/disable migration can run these transforms IN MEMORY
+// (outside any IndexedDB transaction) and write the results with the middleware
+// bypassed — keeping crypto.subtle out of the write transaction, which Safari's
+// IndexedDB requires (it auto-commits during an in-transaction crypto await).
+export async function encryptRow(table: string, key: CryptoKey, row: Row | null | undefined): Promise<Row | null | undefined> {
   if (row == null) return row;
 
   if (table === 'changeLog') {
@@ -83,7 +87,7 @@ async function encryptRow(table: string, key: CryptoKey, row: Row | null | undef
   return encryptEntity(key, row, entityType);
 }
 
-async function decryptRow(table: string, key: CryptoKey, row: Row | null | undefined): Promise<Row | null | undefined> {
+export async function decryptRow(table: string, key: CryptoKey, row: Row | null | undefined): Promise<Row | null | undefined> {
   if (row == null) return row;
 
   if (table === 'changeLog') {
