@@ -58,7 +58,7 @@ export interface PrfRegistration {
 
 /** Thrown when the authenticator created a credential but does not support PRF. */
 export class PrfUnsupportedError extends Error {
-  constructor(message = "This device's authenticator does not support the PRF extension required for biometric unlock") {
+  constructor(message = 'Biometric unlock is not available in this browser — the authenticator does not expose the required PRF extension. This is a known limitation of Chrome on macOS; try Safari, or use your passphrase.') {
     super(message);
     this.name = 'PrfUnsupportedError';
   }
