@@ -56,16 +56,31 @@ export interface PrfRegistration {
   prfOutput: Uint8Array; // 32-byte secret used to derive the KEK
 }
 
+/** Thrown when the authenticator created a credential but does not support PRF. */
+export class PrfUnsupportedError extends Error {
+  constructor(message = "This device's authenticator does not support the PRF extension required for biometric unlock") {
+    super(message);
+    this.name = 'PrfUnsupportedError';
+  }
+}
+
 /**
  * Enroll a platform credential and obtain its PRF output for `prfSalt`.
- * Returns null when WebAuthn/PRF is unsupported or the user cancels.
+ *
+ * Throws (rather than returning null) so the caller can show the user *why* it
+ * failed: a cancelled prompt (DOMException 'NotAllowedError'), an authenticator
+ * without PRF support (PrfUnsupportedError — e.g. some synced passkeys), or an
+ * empty PRF result. The DOMException / extension results are also logged.
  */
-export async function registerPrfCredential(prfSalt: string): Promise<PrfRegistration | null> {
-  if (!isWebAuthnSupported()) return null;
+export async function registerPrfCredential(prfSalt: string): Promise<PrfRegistration> {
+  if (!isWebAuthnSupported()) {
+    throw new PrfUnsupportedError('WebAuthn is not available in this browser');
+  }
   const saltBytes = base64ToBytes(prfSalt);
 
+  let cred: PublicKeyCredential | null;
   try {
-    const cred = (await navigator.credentials.create({
+    cred = (await navigator.credentials.create({
       publicKey: {
         challenge: crypto.getRandomValues(new Uint8Array(32)),
         rp: { name: RP_NAME, id: window.location.hostname },
@@ -87,25 +102,30 @@ export async function registerPrfCredential(prfSalt: string): Promise<PrfRegistr
         extensions: { prf: { eval: { first: saltBytes as BufferSource } } },
       },
     })) as PublicKeyCredential | null;
-    if (!cred) return null;
-
-    const ext = cred.getClientExtensionResults();
-    if (!ext.prf?.enabled) return null; // authenticator lacks PRF support
-
-    const credentialId = bytesToBase64(new Uint8Array(cred.rawId));
-
-    // The PRF output is frequently NOT returned on create() — per spec it may
-    // only surface on a subsequent assertion. Fetch it via an immediate get().
-    const onCreate = ext.prf.results?.first;
-    const prfOutput = onCreate
-      ? toBytes(onCreate)
-      : await getPrfOutput(credentialId, prfSalt);
-    if (!prfOutput) return null;
-
-    return { credentialId, prfOutput };
-  } catch {
-    return null; // user cancelled / not allowed / policy-blocked
+  } catch (err) {
+    console.warn('[paranoid] passkey creation failed:', err);
+    throw err; // typically NotAllowedError (user cancelled / timed out)
   }
+  if (!cred) throw new Error('No credential was created');
+
+  const ext = cred.getClientExtensionResults();
+  console.info('[paranoid] passkey created; prf extension result:', ext.prf);
+  if (!ext.prf?.enabled) {
+    throw new PrfUnsupportedError();
+  }
+
+  const credentialId = bytesToBase64(new Uint8Array(cred.rawId));
+
+  // The PRF output is frequently NOT returned on create() — per spec it may only
+  // surface on a subsequent assertion, which prompts the authenticator again.
+  const onCreate = ext.prf.results?.first;
+  if (onCreate) return { credentialId, prfOutput: toBytes(onCreate) };
+
+  const prfOutput = await getPrfOutput(credentialId, prfSalt);
+  if (!prfOutput) {
+    throw new Error('Could not read the biometric key — the unlock prompt was dismissed or returned nothing');
+  }
+  return { credentialId, prfOutput };
 }
 
 /**
@@ -130,7 +150,8 @@ export async function getPrfOutput(credentialId: string, prfSalt: string): Promi
 
     const first = assertion.getClientExtensionResults().prf?.results?.first;
     return first ? toBytes(first) : null;
-  } catch {
+  } catch (err) {
+    console.warn('[paranoid] biometric assertion failed:', err);
     return null;
   }
 }

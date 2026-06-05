@@ -2,7 +2,7 @@ import { vi } from 'vitest';
 vi.setConfig({ testTimeout: 20_000 });
 import {
   isWebAuthnSupported, isPlatformAuthenticatorAvailable,
-  registerPrfCredential, getPrfOutput,
+  registerPrfCredential, getPrfOutput, PrfUnsupportedError,
 } from '../../sync/webauthn-prf';
 import {
   installWebAuthnMock, uninstallWebAuthnMock, setWebAuthnMode, prfOutputFor,
@@ -34,27 +34,26 @@ describe('webauthn-prf', () => {
   it('registers a credential and returns the salt-derived PRF output', async () => {
     const salt = generateSalt();
     const reg = await registerPrfCredential(salt);
-    expect(reg).not.toBeNull();
-    expect(reg!.credentialId).toBeTruthy();
-    expect(Array.from(reg!.prfOutput)).toEqual(Array.from(prfOutputFor(base64ToBytes(salt))));
+    expect(reg.credentialId).toBeTruthy();
+    expect(Array.from(reg.prfOutput)).toEqual(Array.from(prfOutputFor(base64ToBytes(salt))));
   });
 
   it('getPrfOutput reproduces the same bytes register saw (stable KEK)', async () => {
     const salt = generateSalt();
     const reg = await registerPrfCredential(salt);
-    const again = await getPrfOutput(reg!.credentialId, salt);
+    const again = await getPrfOutput(reg.credentialId, salt);
     expect(again).not.toBeNull();
-    expect(Array.from(again!)).toEqual(Array.from(reg!.prfOutput));
+    expect(Array.from(again!)).toEqual(Array.from(reg.prfOutput));
   });
 
-  it('returns null when the authenticator lacks PRF support', async () => {
+  it('throws PrfUnsupportedError when the authenticator lacks PRF support', async () => {
     setWebAuthnMode('no-prf');
-    expect(await registerPrfCredential(generateSalt())).toBeNull();
+    await expect(registerPrfCredential(generateSalt())).rejects.toBeInstanceOf(PrfUnsupportedError);
   });
 
-  it('returns null when the user cancels registration or assertion', async () => {
+  it('propagates a cancel as a rejection (register) and null (assertion)', async () => {
     setWebAuthnMode('cancel');
-    expect(await registerPrfCredential(generateSalt())).toBeNull();
+    await expect(registerPrfCredential(generateSalt())).rejects.toBeTruthy();
     expect(await getPrfOutput('Y3JlZA==', generateSalt())).toBeNull();
   });
 });

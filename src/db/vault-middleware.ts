@@ -213,71 +213,72 @@ export const vaultMiddleware: Middleware<DBCore> = {
         return {
           ...downTable,
 
+          // CRITICAL: every method wraps BOTH the IDB call and the crypto in a
+          // single Dexie.waitFor. waitFor begins pinging the transaction
+          // synchronously (the moment it is called), so the transaction stays
+          // alive across the dangerous window *right after* an IDB read resolves
+          // — before the crypto await — where real IndexedDB would otherwise
+          // auto-commit. (Starting waitFor only around the crypto, after already
+          // awaiting the IDB call, leaves that window open: fake-indexeddb
+          // tolerates it, real IndexedDB throws "transaction has finished".)
+
           async mutate(req) {
             const key = getActiveAtRestKey();
             if (key && (req.type === 'add' || req.type === 'put') && req.values) {
-              // crypto.subtle is async; the write must still run inside req.trans
-              // afterwards. Dexie.waitFor keeps the IndexedDB transaction alive
-              // across the await (a bare await would let it auto-commit -> the
-              // downstream mutate would throw InvalidStateError).
-              const values = await Dexie.waitFor(
-                Promise.all((req.values as Row[]).map((v) => encryptRow(tableName, key, v))),
-              );
-              return downTable.mutate({ ...req, values: values as typeof req.values });
+              return Dexie.waitFor((async () => {
+                const values = await Promise.all((req.values as Row[]).map((v) => encryptRow(tableName, key, v)));
+                return downTable.mutate({ ...req, values: values as typeof req.values });
+              })());
             }
             return downTable.mutate(req);
           },
 
-          // Decrypt awaits are wrapped in Dexie.waitFor so the IndexedDB
-          // transaction stays alive when a read is part of a read-modify-write
-          // (e.g. Collection.modify does getMany -> ... -> put in one trans).
-          // For pure reads it is harmless.
-
           async get(req) {
-            const row = await downTable.get(req);
             const key = getActiveAtRestKey();
-            if (!key) return row;
-            return (await Dexie.waitFor(decryptRow(tableName, key, row as Row))) as typeof row;
+            if (!key) return downTable.get(req);
+            return Dexie.waitFor((async () => {
+              const row = await downTable.get(req);
+              return (await decryptRow(tableName, key, row as Row)) as typeof row;
+            })());
           },
 
           async getMany(req) {
-            const rows = await downTable.getMany(req);
             const key = getActiveAtRestKey();
-            if (!key) return rows;
-            return (await Dexie.waitFor(
-              Promise.all((rows as Row[]).map((r) => decryptRow(tableName, key, r))),
-            )) as typeof rows;
+            if (!key) return downTable.getMany(req);
+            return Dexie.waitFor((async () => {
+              const rows = await downTable.getMany(req);
+              return (await Promise.all((rows as Row[]).map((r) => decryptRow(tableName, key, r)))) as typeof rows;
+            })());
           },
 
           async query(req) {
-            const res = await downTable.query(req);
             const key = getActiveAtRestKey();
-            if (!key || req.values === false) return res;
-            const result = await Dexie.waitFor(
-              Promise.all((res.result as Row[]).map((r) => decryptRow(tableName, key, r))),
-            );
-            return { ...res, result: result as typeof res.result };
+            if (!key || req.values === false) return downTable.query(req);
+            return Dexie.waitFor((async () => {
+              const res = await downTable.query(req);
+              const result = await Promise.all((res.result as Row[]).map((r) => decryptRow(tableName, key, r)));
+              return { ...res, result: result as typeof res.result };
+            })());
           },
 
           async openCursor(req) {
             const key = getActiveAtRestKey();
             if (!key || req.values === false) return downTable.openCursor(req);
+            return Dexie.waitFor((async () => {
+              const real = await downTable.openCursor(req);
+              if (!real) return null;
 
-            const real = await downTable.openCursor(req);
-            if (!real) return null;
+              const buffer: BufferedEntry[] = [];
+              await real.start(() => {
+                buffer.push({ key: real.key, primaryKey: real.primaryKey, value: real.value });
+                real.continue();
+              });
 
-            const buffer: BufferedEntry[] = [];
-            await real.start(() => {
-              buffer.push({ key: real.key, primaryKey: real.primaryKey, value: real.value });
-              real.continue();
-            });
+              const decrypted = await Promise.all(buffer.map((e) => decryptRow(tableName, key, e.value as Row)));
+              buffer.forEach((e, idx) => { e.value = decrypted[idx]; });
 
-            const decrypted = await Dexie.waitFor(
-              Promise.all(buffer.map((e) => decryptRow(tableName, key, e.value as Row))),
-            );
-            buffer.forEach((e, idx) => { e.value = decrypted[idx]; });
-
-            return makeBufferedCursor(buffer, req.trans) as unknown as Awaited<ReturnType<typeof downTable.openCursor>>;
+              return makeBufferedCursor(buffer, req.trans) as unknown as Awaited<ReturnType<typeof downTable.openCursor>>;
+            })());
           },
         };
       },

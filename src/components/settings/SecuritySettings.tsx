@@ -70,11 +70,15 @@ function BiometricSection({ hasBiometric }: { hasBiometric: boolean }) {
   async function handleAdd() {
     setBusy(true);
     try {
-      const ok = await addBiometric();
-      if (ok) toast('Biometric unlock added', 'success');
-      else toast('Biometric setup was cancelled or unsupported', 'error');
+      await addBiometric();
+      toast('Biometric unlock added', 'success');
     } catch (e) {
-      toast(e instanceof Error ? e.message : 'Could not add biometric unlock', 'error');
+      // registerPrfCredential throws a specific reason (cancelled / unsupported /
+      // empty PRF). NotAllowedError = the user dismissed the prompt.
+      const msg = e instanceof DOMException && e.name === 'NotAllowedError'
+        ? 'Biometric setup was cancelled'
+        : e instanceof Error ? e.message : 'Could not add biometric unlock';
+      toast(msg, 'error');
     } finally {
       setBusy(false);
     }

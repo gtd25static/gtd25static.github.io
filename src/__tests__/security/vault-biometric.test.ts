@@ -32,7 +32,7 @@ afterEach(() => {
 describe('vault biometric (PRF) unlock', () => {
   it('enrolls a biometric, then unlocks with it after lock', async () => {
     await enableParanoid(PASSPHRASE);
-    expect(await addBiometric()).toBe(true);
+    await addBiometric();
     expect(getVaultSnapshot().hasBiometric).toBe(true);
 
     // Persisted material is present on the vault row.

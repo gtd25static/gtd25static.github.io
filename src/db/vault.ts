@@ -262,14 +262,14 @@ async function finishUnlock(vault: Vault, dek: CryptoKey): Promise<boolean> {
  * a KEK derived from the authenticator's PRF output. Requires the vault to be
  * unlocked. Returns false if WebAuthn/PRF is unavailable or the user cancels.
  */
-export async function addBiometric(): Promise<boolean> {
+export async function addBiometric(): Promise<void> {
   if (!currentDek) throw new Error('Unlock the vault before adding biometric unlock');
   const vault = await db.vault.get('vault');
   if (!vault) throw new Error('Vault not found');
 
   const prfSalt = vault.prfSalt ?? generateSalt();
+  // Throws on cancel / unsupported PRF / empty result — the caller surfaces why.
   const reg = await registerPrfCredential(prfSalt);
-  if (!reg) return false;
 
   const kek = await importKekFromBytes(reg.prfOutput);
   const dekWrappedByPrf = await wrapDek(kek, currentDek);
@@ -280,7 +280,6 @@ export async function addBiometric(): Promise<boolean> {
   });
   setBioFlag(true);
   emit();
-  return true;
 }
 
 /** Drop the enrolled biometric; passphrase remains the only unlock method. */
