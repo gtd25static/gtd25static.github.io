@@ -34,14 +34,14 @@ beforeEach(async () => {
   await resetSyncState();
   __resetVaultStateForTests();
   localStorage.removeItem('gtd25-paranoid');
-  localStorage.removeItem('gtd25-paranoid-bio');
+  localStorage.removeItem('gtd25-paranoid-key');
   await setupSyncCredentials({ githubPat: 'ghp_vaultPAT', encryptionPassword: 'syncpw', deviceId: 'device-A' });
 });
 
 afterEach(() => {
   __resetVaultStateForTests();
   localStorage.removeItem('gtd25-paranoid');
-  localStorage.removeItem('gtd25-paranoid-bio');
+  localStorage.removeItem('gtd25-paranoid-key');
 });
 
 describe('paranoid sync credential routing', () => {

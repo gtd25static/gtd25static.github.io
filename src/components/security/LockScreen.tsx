@@ -1,15 +1,15 @@
 import { useState } from 'react';
 import { Input } from '../ui/Input';
 import { Button } from '../ui/Button';
-import { unlockWithPassphrase, unlockWithPrf } from '../../db/vault';
+import { unlockWithPassphrase, unlockWithSecurityKey } from '../../db/vault';
 import { useVault } from '../../hooks/use-vault';
 import { panicWipe } from '../../lib/panic-wipe';
 
 // Full-screen gate shown when Paranoid Mode is enabled but the vault is locked.
-// Until the passphrase (or, in PR3, biometric) unlocks the DEK, no decrypted data
+// Until the passphrase (or security key) unlocks the DEK, no decrypted data
 // is rendered — the rest of the app is not even mounted.
 export function LockScreen() {
-  const { hasBiometric } = useVault();
+  const { hasSecurityKey } = useVault();
   const [passphrase, setPassphrase] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -34,16 +34,16 @@ export function LockScreen() {
     }
   }
 
-  async function handleBiometric() {
+  async function handleSecurityKey() {
     if (busy) return;
     setBusy(true);
     setError('');
     try {
-      const ok = await unlockWithPrf();
+      const ok = await unlockWithSecurityKey();
       // On success the vault emits -> the app re-renders and unmounts this screen.
-      if (!ok) setError('Biometric unlock failed. Use your passphrase.');
+      if (!ok) setError('Security key unlock failed. Use your passphrase.');
     } catch {
-      setError('Biometric unlock failed. Use your passphrase.');
+      setError('Security key unlock failed. Use your passphrase.');
     } finally {
       setBusy(false);
     }
@@ -66,16 +66,8 @@ export function LockScreen() {
           <h1 className="text-lg font-medium text-zinc-800 dark:text-zinc-100">Vault locked</h1>
         </div>
         <p className="mb-4 text-sm text-zinc-500 dark:text-zinc-400">
-          Paranoid Mode is on. {hasBiometric ? 'Unlock with biometrics or your passphrase' : 'Enter your passphrase'} to decrypt this device&rsquo;s data.
+          Paranoid Mode is on. Enter your passphrase to decrypt this device&rsquo;s data.
         </p>
-
-        {hasBiometric && (
-          <div className="mb-4">
-            <Button type="button" variant="secondary" onClick={handleBiometric} disabled={busy}>
-              {busy ? 'Unlocking…' : '🔓 Unlock with biometrics'}
-            </Button>
-          </div>
-        )}
 
         <Input
           label="Passphrase"
@@ -94,6 +86,19 @@ export function LockScreen() {
             {busy ? 'Unlocking…' : 'Unlock'}
           </Button>
         </div>
+
+        {hasSecurityKey && (
+          <div className="mt-3 text-center">
+            <button
+              type="button"
+              onClick={handleSecurityKey}
+              disabled={busy}
+              className="text-xs text-zinc-500 underline-offset-2 hover:underline disabled:opacity-50 dark:text-zinc-400"
+            >
+              🔑 Use security key instead
+            </button>
+          </div>
+        )}
 
         <div className="mt-6 border-t border-zinc-200 pt-3 dark:border-zinc-800">
           {showWipe ? (

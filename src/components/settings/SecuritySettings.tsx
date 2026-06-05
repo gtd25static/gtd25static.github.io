@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { Input } from '../ui/Input';
 import { Button } from '../ui/Button';
 import { toast } from '../ui/Toast';
@@ -7,9 +7,9 @@ import { useVault } from '../../hooks/use-vault';
 import { useLocalSettings } from '../../hooks/use-settings';
 import {
   enableParanoid, disableParanoid, changePassphrase, configureIdleTimeout, lock,
-  addBiometric, removeBiometric, DEFAULT_IDLE_MINUTES,
+  addSecurityKey, removeSecurityKey, DEFAULT_IDLE_MINUTES,
 } from '../../db/vault';
-import { isPlatformAuthenticatorAvailable } from '../../sync/webauthn-prf';
+import { isWebAuthnSupported } from '../../sync/webauthn-prf';
 import { panicWipe } from '../../lib/panic-wipe';
 
 function clampMinutes(value: string): number {
@@ -57,27 +57,21 @@ function EnableForm() {
   );
 }
 
-function BiometricSection({ hasBiometric }: { hasBiometric: boolean }) {
-  const [available, setAvailable] = useState(false);
+function SecurityKeySection({ hasSecurityKey }: { hasSecurityKey: boolean }) {
   const [busy, setBusy] = useState(false);
-
-  useEffect(() => {
-    let active = true;
-    isPlatformAuthenticatorAvailable().then((ok) => { if (active) setAvailable(ok); });
-    return () => { active = false; };
-  }, []);
+  const available = isWebAuthnSupported();
 
   async function handleAdd() {
     setBusy(true);
     try {
-      await addBiometric();
-      toast('Biometric unlock added', 'success');
+      await addSecurityKey();
+      toast('Security key added', 'success');
     } catch (e) {
       // registerPrfCredential throws a specific reason (cancelled / unsupported /
       // empty PRF). NotAllowedError = the user dismissed the prompt.
       const msg = e instanceof DOMException && e.name === 'NotAllowedError'
-        ? 'Biometric setup was cancelled'
-        : e instanceof Error ? e.message : 'Could not add biometric unlock';
+        ? 'Security key setup was cancelled'
+        : e instanceof Error ? e.message : 'Could not add the security key';
       toast(msg, 'error');
     } finally {
       setBusy(false);
@@ -86,14 +80,14 @@ function BiometricSection({ hasBiometric }: { hasBiometric: boolean }) {
 
   async function handleRemove() {
     const ok = await confirmDialog(
-      'Remove biometric unlock? You will need your passphrase to unlock this device.',
+      'Remove the security key? You will need your passphrase to unlock this device.',
       { confirmLabel: 'Remove', danger: true },
     );
     if (!ok) return;
     setBusy(true);
     try {
-      await removeBiometric();
-      toast('Biometric unlock removed', 'success');
+      await removeSecurityKey();
+      toast('Security key removed', 'success');
     } finally {
       setBusy(false);
     }
@@ -101,34 +95,34 @@ function BiometricSection({ hasBiometric }: { hasBiometric: boolean }) {
 
   return (
     <div className="space-y-2 border-t border-zinc-200 pt-3 dark:border-zinc-700">
-      <h4 className="text-sm font-medium">Biometric unlock</h4>
-      {hasBiometric ? (
+      <h4 className="text-sm font-medium">Security key</h4>
+      {hasSecurityKey ? (
         <>
           <p className="text-xs text-emerald-600 dark:text-emerald-400">
-            Enabled — unlock with Windows Hello / Touch ID on this device.
+            Enabled — unlock by touching your FIDO2 security key (no typing, so a keylogger sees nothing).
           </p>
-          <Button size="sm" variant="secondary" onClick={handleRemove} disabled={busy}>Remove biometric</Button>
+          <Button size="sm" variant="secondary" onClick={handleRemove} disabled={busy}>Remove security key</Button>
         </>
       ) : available ? (
         <>
           <p className="text-xs text-zinc-400 dark:text-zinc-500">
-            Add your device biometric (Windows Hello / Touch ID) as a faster unlock. Your passphrase
-            still works as a fallback.
+            Add a FIDO2 security key (e.g. a YubiKey) as a keylogger-safe unlock. Plug it in, then
+            click below. Your passphrase still works as a fallback.
           </p>
           <Button size="sm" variant="secondary" onClick={handleAdd} disabled={busy}>
-            {busy ? 'Waiting for biometric…' : 'Add biometric unlock'}
+            {busy ? 'Waiting for security key…' : 'Add security key'}
           </Button>
         </>
       ) : (
         <p className="text-xs text-zinc-400 dark:text-zinc-500">
-          No biometric authenticator is available on this device.
+          Security keys are not supported in this browser.
         </p>
       )}
     </div>
   );
 }
 
-function ManageForm({ idleMinutes, hasBiometric }: { idleMinutes: number; hasBiometric: boolean }) {
+function ManageForm({ idleMinutes, hasSecurityKey }: { idleMinutes: number; hasSecurityKey: boolean }) {
   const [idle, setIdle] = useState(String(idleMinutes));
   const [newPass, setNewPass] = useState('');
   const [newPassConfirm, setNewPassConfirm] = useState('');
@@ -203,7 +197,7 @@ function ManageForm({ idleMinutes, hasBiometric }: { idleMinutes: number; hasBio
         <Button size="sm" variant="secondary" onClick={handleChangePass} disabled={busy}>Change passphrase</Button>
       </div>
 
-      <BiometricSection hasBiometric={hasBiometric} />
+      <SecurityKeySection hasSecurityKey={hasSecurityKey} />
 
       <div className="flex flex-wrap gap-2 border-t border-zinc-200 pt-3 dark:border-zinc-700">
         <Button size="sm" variant="secondary" onClick={() => lock()}>Lock now</Button>
@@ -217,13 +211,13 @@ function ManageForm({ idleMinutes, hasBiometric }: { idleMinutes: number; hasBio
 }
 
 export function SecuritySettings() {
-  const { enabled, hasBiometric } = useVault();
+  const { enabled, hasSecurityKey } = useVault();
   const local = useLocalSettings();
   if (!enabled) return <EnableForm />;
   return (
     <ManageForm
       idleMinutes={local.paranoidIdleTimeoutMinutes ?? DEFAULT_IDLE_MINUTES}
-      hasBiometric={hasBiometric}
+      hasSecurityKey={hasSecurityKey}
     />
   );
 }

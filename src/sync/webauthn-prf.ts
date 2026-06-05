@@ -58,7 +58,7 @@ export interface PrfRegistration {
 
 /** Thrown when the authenticator created a credential but does not support PRF. */
 export class PrfUnsupportedError extends Error {
-  constructor(message = 'Biometric unlock is not available in this browser — the authenticator does not expose the required PRF extension. This is a known limitation of Chrome on macOS; try Safari, or use your passphrase.') {
+  constructor(message = 'This security key does not support the PRF (hmac-secret) extension required for unlock. Use a FIDO2 key that supports it (e.g. a recent YubiKey), or use your passphrase.') {
     super(message);
     this.name = 'PrfUnsupportedError';
   }
@@ -72,7 +72,10 @@ export class PrfUnsupportedError extends Error {
  * without PRF support (PrfUnsupportedError — e.g. some synced passkeys), or an
  * empty PRF result. The DOMException / extension results are also logged.
  */
-export async function registerPrfCredential(prfSalt: string): Promise<PrfRegistration> {
+export async function registerPrfCredential(
+  prfSalt: string,
+  attachment: AuthenticatorAttachment = 'cross-platform',
+): Promise<PrfRegistration> {
   if (!isWebAuthnSupported()) {
     throw new PrfUnsupportedError('WebAuthn is not available in this browser');
   }
@@ -94,14 +97,12 @@ export async function registerPrfCredential(prfSalt: string): Promise<PrfRegistr
           { type: 'public-key', alg: -257 }, // RS256
         ],
         authenticatorSelection: {
-          authenticatorAttachment: 'platform',
+          // 'cross-platform' => an external FIDO2 security key (YubiKey etc.),
+          // which exposes hmac-secret/PRF reliably (unlike the macOS platform
+          // authenticator). Device-bound, non-discoverable; we always unlock with
+          // an explicit allowCredentials list.
+          authenticatorAttachment: attachment,
           userVerification: 'required',
-          // Device-bound (non-discoverable), NOT a synced/iCloud passkey. On
-          // Chrome/macOS this routes to Chrome's own platform authenticator,
-          // which exposes the hmac-secret/PRF extension — whereas iCloud
-          // Keychain passkeys (residentKey 'preferred'/'required') do not return
-          // a PRF result via Chrome. We always unlock with an explicit
-          // allowCredentials list, so a non-discoverable credential is fine.
           residentKey: 'discouraged',
         },
         timeout: 60_000,

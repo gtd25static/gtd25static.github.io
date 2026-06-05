@@ -20,9 +20,9 @@ import { registerPrfCredential, getPrfOutput } from '../sync/webauthn-prf';
 import { PARANOID_FLAG, isParanoidFlagSet } from './paranoid-flag';
 import type { Vault } from './models';
 
-// Synchronous mirror of "a biometric credential is enrolled", so the lock screen
-// and settings can render the biometric affordance without awaiting IndexedDB.
-const BIO_FLAG = 'gtd25-paranoid-bio';
+// Synchronous mirror of "a security-key credential is enrolled", so the lock
+// screen and settings can render the affordance without awaiting IndexedDB.
+const KEY_FLAG = 'gtd25-paranoid-key';
 export const DEFAULT_IDLE_MINUTES = 15;
 
 export interface VaultSecrets {
@@ -39,7 +39,7 @@ let idleTimer: ReturnType<typeof setTimeout> | null = null;
 let kdfParams: KdfParams = DEFAULT_ARGON2;
 
 // --- Reactive snapshot for React (useSyncExternalStore) ---
-export interface VaultSnapshot { enabled: boolean; unlocked: boolean; hasBiometric: boolean }
+export interface VaultSnapshot { enabled: boolean; unlocked: boolean; hasSecurityKey: boolean }
 const listeners = new Set<() => void>();
 let snapshot = computeSnapshot();
 
@@ -52,17 +52,17 @@ function setFlag(on: boolean): void {
     else localStorage.removeItem(PARANOID_FLAG);
   } catch { /* ignore */ }
 }
-function readBioFlag(): boolean {
-  try { return localStorage.getItem(BIO_FLAG) === '1'; } catch { return false; }
+function readKeyFlag(): boolean {
+  try { return localStorage.getItem(KEY_FLAG) === '1'; } catch { return false; }
 }
-function setBioFlag(on: boolean): void {
+function setKeyFlag(on: boolean): void {
   try {
-    if (on) localStorage.setItem(BIO_FLAG, '1');
-    else localStorage.removeItem(BIO_FLAG);
+    if (on) localStorage.setItem(KEY_FLAG, '1');
+    else localStorage.removeItem(KEY_FLAG);
   } catch { /* ignore */ }
 }
 function computeSnapshot(): VaultSnapshot {
-  return { enabled: readFlag(), unlocked: currentDek !== null, hasBiometric: readBioFlag() };
+  return { enabled: readFlag(), unlocked: currentDek !== null, hasSecurityKey: readKeyFlag() };
 }
 function emit(): void {
   snapshot = computeSnapshot();
@@ -191,7 +191,7 @@ async function completeDisable(): Promise<void> {
   });
   await db.vault.delete('vault'); // delete LAST so an interrupted disable can resume
   setFlag(false);
-  setBioFlag(false);
+  setKeyFlag(false);
   currentDek = null;
   currentSecrets = null;
   if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
@@ -221,11 +221,11 @@ export async function unlockWithPassphrase(passphrase: string): Promise<boolean>
 }
 
 /**
- * Unlock via a registered WebAuthn biometric credential. Returns false when no
- * biometric is enrolled, the user cancels, or the derived key is wrong — the
- * caller then falls back to the passphrase.
+ * Unlock via a registered FIDO2 security key (PRF). Returns false when no key is
+ * enrolled, the user cancels, or the derived key is wrong — the caller then falls
+ * back to the passphrase.
  */
-export async function unlockWithPrf(): Promise<boolean> {
+export async function unlockWithSecurityKey(): Promise<boolean> {
   const vault = await db.vault.get('vault');
   if (!vault?.dekWrappedByPrf || !vault.webauthnCredentialId || !vault.prfSalt) return false;
 
@@ -268,18 +268,18 @@ async function finishUnlock(vault: Vault, dek: CryptoKey): Promise<boolean> {
 }
 
 /**
- * Enroll a platform biometric as a second way to unlock: wrap the live DEK with
- * a KEK derived from the authenticator's PRF output. Requires the vault to be
- * unlocked. Returns false if WebAuthn/PRF is unavailable or the user cancels.
+ * Enroll a FIDO2 security key as a second way to unlock: wrap the live DEK with a
+ * KEK derived from the key's PRF (hmac-secret) output. Requires the vault to be
+ * unlocked. Throws (with a specific reason) on cancel / unsupported PRF.
  */
-export async function addBiometric(): Promise<void> {
-  if (!currentDek) throw new Error('Unlock the vault before adding biometric unlock');
+export async function addSecurityKey(): Promise<void> {
+  if (!currentDek) throw new Error('Unlock the vault before adding a security key');
   const vault = await db.vault.get('vault');
   if (!vault) throw new Error('Vault not found');
 
   const prfSalt = vault.prfSalt ?? generateSalt();
   // Throws on cancel / unsupported PRF / empty result — the caller surfaces why.
-  const reg = await registerPrfCredential(prfSalt);
+  const reg = await registerPrfCredential(prfSalt, 'cross-platform');
 
   const kek = await importKekFromBytes(reg.prfOutput);
   const dekWrappedByPrf = await wrapDek(kek, currentDek);
@@ -288,15 +288,15 @@ export async function addBiometric(): Promise<void> {
     dekWrappedByPrf,
     webauthnCredentialId: reg.credentialId,
   });
-  setBioFlag(true);
+  setKeyFlag(true);
   emit();
 }
 
-/** Drop the enrolled biometric; passphrase remains the only unlock method. */
-export async function removeBiometric(): Promise<void> {
+/** Drop the enrolled security key; the passphrase remains the unlock method. */
+export async function removeSecurityKey(): Promise<void> {
   // Setting a property to undefined deletes it from the stored row (Dexie).
   await db.vault.update('vault', { dekWrappedByPrf: undefined, webauthnCredentialId: undefined });
-  setBioFlag(false);
+  setKeyFlag(false);
   emit();
 }
 
