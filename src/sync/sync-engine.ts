@@ -10,6 +10,8 @@ import { SYNC_VERSION, isCompatibleVersion, needsMigration } from './version';
 import { runRemoteMigrations } from './migrations';
 import { maybeCreateBackups, BACKUP_FILES } from './remote-backups';
 import type { BackupTier } from './remote-backups';
+import { isParanoidFlagSet } from '../db/paranoid-flag';
+import { getVaultSecrets } from '../db/vault';
 import {
   deriveKey,
   generateSalt,
@@ -383,8 +385,13 @@ export function stopScheduler() {
 
 async function getCredentials() {
   const local = await db.localSettings.get('local');
-  if (!local?.githubPat || !local?.githubRepo || !local.syncEnabled) return null;
-  return { pat: local.githubPat, repo: local.githubRepo, deviceId: local.deviceId ?? 'unknown' };
+  if (!local?.githubRepo || !local.syncEnabled) return null;
+  // In Paranoid Mode the PAT lives only in the (encrypted) vault, available
+  // in-memory while unlocked. Locked -> no PAT -> sync no-ops, which is the
+  // desired gate. Non-paranoid devices keep reading it from localSettings.
+  const pat = isParanoidFlagSet() ? getVaultSecrets()?.githubPat : local.githubPat;
+  if (!pat) return null;
+  return { pat, repo: local.githubRepo, deviceId: local.deviceId ?? 'unknown' };
 }
 
 export async function getLocalSnapshot(): Promise<SyncData> {
@@ -417,7 +424,8 @@ async function resolveEncryptionKey(
   remoteSalt?: string,
 ): Promise<CryptoKey | 'needs-password'> {
   const local = await db.localSettings.get('local');
-  const localPassword = local?.encryptionPassword;
+  // Same split as the PAT: the sync password comes from the vault when paranoid.
+  const localPassword = isParanoidFlagSet() ? getVaultSecrets()?.syncPassword : local?.encryptionPassword;
 
   // Check cached key
   if (hasEncryptionKey()) {

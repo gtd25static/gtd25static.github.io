@@ -6,9 +6,12 @@ import { toast } from '../ui/Toast';
 import { testConnection } from '../../sync/github-api';
 import { syncNow, forcePush, forcePull } from '../../sync/sync-engine';
 import { deriveKey, cacheEncryptionKey, generateSalt } from '../../sync/crypto';
+import { useVault } from '../../hooks/use-vault';
+import { getVaultSecrets, setVaultSecrets } from '../../db/vault';
 
 export function GitHubSettings() {
   const local = useLocalSettings();
+  const { enabled: paranoid, unlocked } = useVault();
   const [pat, setPat] = useState('');
   const [repo, setRepo] = useState('');
   const [encPassword, setEncPassword] = useState('');
@@ -16,18 +19,30 @@ export function GitHubSettings() {
   const [testing, setTesting] = useState(false);
   const [initialized, setInitialized] = useState(false);
 
-  // Sync local state when Dexie data loads
+  // The PAT and sync password live in the vault when Paranoid Mode is on, else
+  // in localSettings. Repo is never secret, so always localSettings.
+  const currentSyncPassword = paranoid ? (getVaultSecrets()?.syncPassword ?? '') : (local.encryptionPassword ?? '');
+
+  // Sync local state when Dexie data (or the unlocked vault) loads.
   useEffect(() => {
-    if (!initialized && local.githubPat !== undefined) {
+    if (initialized) return;
+    if (paranoid) {
+      if (!unlocked) return; // wait until the vault is unlocked to read secrets
+      const secrets = getVaultSecrets();
+      setPat(secrets?.githubPat ?? '');
+      setRepo(local.githubRepo ?? '');
+      setEncPassword(secrets?.syncPassword ?? '');
+      setInitialized(true);
+    } else if (local.githubPat !== undefined) {
       setPat(local.githubPat ?? '');
       setRepo(local.githubRepo ?? '');
       setEncPassword(local.encryptionPassword ?? '');
       setInitialized(true);
     }
-  }, [local.githubPat, local.githubRepo, local.encryptionPassword, initialized]);
+  }, [paranoid, unlocked, local.githubPat, local.githubRepo, local.encryptionPassword, initialized]);
 
   async function handleSave() {
-    const passwordChanged = encPassword.trim() !== (local.encryptionPassword ?? '');
+    const passwordChanged = encPassword.trim() !== currentSyncPassword;
 
     // Require confirmation when setting/changing password
     if (passwordChanged && encPassword.trim()) {
@@ -49,12 +64,25 @@ export function GitHubSettings() {
       await updateLocalSettings({ changelogPruned: undefined });
     }
 
-    await updateLocalSettings({
-      githubPat: pat.trim() || undefined,
-      githubRepo: repo.trim() || undefined,
-      syncEnabled: willEnableSync,
-      encryptionPassword: encPassword.trim() || undefined,
-    });
+    if (paranoid) {
+      if (!unlocked) { toast('Unlock the vault to change sync credentials', 'error'); return; }
+      // Secrets go into the vault; localSettings keeps only the non-secret repo,
+      // and the plaintext credential fields stay cleared.
+      await setVaultSecrets({ githubPat: pat.trim() || undefined, syncPassword: encPassword.trim() || undefined });
+      await updateLocalSettings({
+        githubRepo: repo.trim() || undefined,
+        syncEnabled: willEnableSync,
+        githubPat: undefined,
+        encryptionPassword: undefined,
+      });
+    } else {
+      await updateLocalSettings({
+        githubPat: pat.trim() || undefined,
+        githubRepo: repo.trim() || undefined,
+        syncEnabled: willEnableSync,
+        encryptionPassword: encPassword.trim() || undefined,
+      });
+    }
     toast('Sync settings saved', 'success');
 
     // Password change requires re-encrypting all remote data with new key.
@@ -106,7 +134,7 @@ export function GitHubSettings() {
           onChange={(e) => setEncPassword(e.target.value)}
           placeholder="Required for sync"
         />
-        {encPassword.trim() !== (local.encryptionPassword ?? '') && encPassword.trim() && (
+        {encPassword.trim() !== currentSyncPassword && encPassword.trim() && (
           <div className="mt-2">
             <Input
               label="Confirm Password"

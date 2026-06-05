@@ -6,15 +6,22 @@ import { restoreFromBackup, wipeAllData, importData } from '../../sync/sync-engi
 import { exportToZip, parseImportZip } from '../../db/export-import';
 import { toast } from '../ui/Toast';
 import { confirmDialog } from '../ui/ConfirmDialog';
+import { useVault } from '../../hooks/use-vault';
+import { getVaultSecrets } from '../../db/vault';
 
 export function BackupsSettings() {
   const local = useLocalSettings();
+  const { enabled: paranoid } = useVault();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [backups, setBackups] = useState<BackupInfo[]>([]);
   const [loading, setLoading] = useState(false);
   const [restoringTier, setRestoringTier] = useState<string | null>(null);
 
-  const syncConfigured = local.syncEnabled && !!local.githubPat && !!local.githubRepo;
+  // Paranoid devices keep the PAT in the vault; the remote-backup READ/restore
+  // path still works (only the create path is disabled). Non-paranoid: localSettings.
+  const pat = paranoid ? getVaultSecrets()?.githubPat : local.githubPat;
+  const repo = local.githubRepo;
+  const syncConfigured = local.syncEnabled && !!pat && !!repo;
 
   useEffect(() => {
     if (!syncConfigured) return;
@@ -22,10 +29,10 @@ export function BackupsSettings() {
   }, [syncConfigured]);
 
   async function fetchBackups() {
-    if (!local.githubPat || !local.githubRepo) return;
+    if (!pat || !repo) return;
     setLoading(true);
     try {
-      const result = await listRemoteBackups(local.githubPat, local.githubRepo);
+      const result = await listRemoteBackups(pat, repo);
       setBackups(result);
     } catch {
       // Silently fail — user can retry

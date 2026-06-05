@@ -95,6 +95,19 @@ export function touchVaultActivity(): void { resetIdleTimer(); }
 export function getDEK(): CryptoKey | null { resetIdleTimer(); return currentDek; }
 export function getVaultSecrets(): VaultSecrets | null { return currentSecrets; }
 
+/**
+ * Merge new sync credentials into the encrypted vault (e.g. when the user edits
+ * the PAT or sync password from Settings while in Paranoid Mode). Requires the
+ * vault to be unlocked.
+ */
+export async function setVaultSecrets(patch: VaultSecrets): Promise<void> {
+  if (!currentDek) throw new Error('Unlock the vault before changing credentials');
+  currentSecrets = { ...currentSecrets, ...patch };
+  await db.vault.update('vault', {
+    secrets: await encryptBlob(currentDek, JSON.stringify(currentSecrets)),
+  });
+}
+
 export function lock(): void {
   currentDek = null;
   currentSecrets = null;
@@ -141,7 +154,15 @@ export async function enableParanoid(passphrase: string, idleMinutes = DEFAULT_I
     secrets: await encryptBlob(dek, JSON.stringify(secrets)),
     migrationState: 'done',
   });
-  await db.localSettings.update('local', { paranoidEnabled: true, paranoidIdleTimeoutMinutes: idleMinutes });
+  // Close the at-rest gap: the PAT and sync password now live (encrypted) in the
+  // vault, so strip the plaintext copies from localSettings (which is NOT covered
+  // by the at-rest middleware). Sync reads them from getVaultSecrets() henceforth.
+  await db.localSettings.update('local', {
+    paranoidEnabled: true,
+    paranoidIdleTimeoutMinutes: idleMinutes,
+    githubPat: undefined,
+    encryptionPassword: undefined,
+  });
 
   purgeLocalBackups();
   setFlag(true);
@@ -157,7 +178,13 @@ export async function disableParanoid(): Promise<void> {
 
 async function completeDisable(): Promise<void> {
   await decryptAllAtRest();
-  await db.localSettings.update('local', { paranoidEnabled: false });
+  // Restore the plaintext credentials to localSettings so non-paranoid sync works.
+  const restored = currentSecrets;
+  await db.localSettings.update('local', {
+    paranoidEnabled: false,
+    githubPat: restored?.githubPat,
+    encryptionPassword: restored?.syncPassword,
+  });
   await db.vault.delete('vault'); // delete LAST so an interrupted disable can resume
   setFlag(false);
   setBioFlag(false);
