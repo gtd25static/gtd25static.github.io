@@ -1,6 +1,6 @@
 # GTD25 — Security Review & Threat Model
 
-**Last updated:** 2026-06-05 (commit `2e742b2`)
+**Last updated:** 2026-06-05 (added key sizes / KDFs / brute-force economics)
 **Maintenance:** This document MUST be kept current. See "Keeping this document
 updated" at the end and the corresponding rule in `CLAUDE.md`.
 
@@ -49,6 +49,76 @@ and activity patterns of your data — only the free-text content is protected.
 |---|---|---|---|
 | Sync content | AES‑256‑GCM | PBKDF2‑SHA256, 600k, `syncPassword` | `encryptionVerifier` in snapshot |
 | Vault at-rest | AES‑256‑GCM (random DEK) | DEK wrapped by Argon2id(passphrase) and/or FIDO2‑PRF | `verifier` in vault row |
+
+### Key sizes, KDFs & brute-force economics
+
+**Exact parameters (from the code):**
+
+| Item | Value |
+|---|---|
+| Symmetric cipher | AES‑256‑GCM (256‑bit keys, 96‑bit IV, 128‑bit auth tag) |
+| Random DEK (vault) | 256‑bit, CSPRNG (`crypto.subtle.generateKey`) |
+| FIDO2‑PRF KEK (security key) | 256‑bit, hardware‑derived (hmac‑secret) |
+| Salts | 128‑bit (16 bytes), CSPRNG, unique per vault/remote |
+| Sync KDF | **PBKDF2‑HMAC‑SHA256, 600,000 iterations** → 256‑bit |
+| Vault KDF | **Argon2id, 64 MiB, t=3, p=1** → 256‑bit |
+
+**The keys themselves are not the attack surface.** The DEK, the PRF KEK, and the
+sync key are full‑entropy 256‑bit material — directly brute‑forcing them is 2²⁵⁶,
+i.e. impossible. **The only practical attack is guessing the human secret that
+wraps them** (the `syncPassword` for sync content; the vault `passphrase` for
+local data), validated offline via the `verifier` oracles. The **security‑key
+path has no guessable secret at all** (the 256‑bit PRF output never leaves the
+key) → not brute‑forceable.
+
+So effective strength = **password entropy × per‑guess KDF cost**. Online guessing
+at the lock screen is irrelevant (the failed‑attempt wipe throttles it); the real
+threat is **offline** (a seized disk for the vault, a readable backend/proxy log
+for sync), where the verifier lets the attacker check guesses at full hardware
+speed.
+
+**Per‑guess cost & assumed attacker** (order‑of‑magnitude, deliberately
+attacker‑favourable — a ~100,000‑GPU frontier cluster):
+
+| KDF | ~per‑GPU rate | ~aggregate (100k GPUs) |
+|---|---|---|
+| PBKDF2‑600k | 10⁴–10⁵ guess/s | **~10⁹ guess/s** |
+| Argon2id 64 MiB | 10³–10⁴ guess/s (memory‑hard caps parallelism) | **~10⁸ guess/s** |
+
+**Entropy of common secret styles:** lowercase ≈ 4.7 bits/char · alphanumeric ≈
+5.95 · full‑ASCII ≈ 6.55 · **diceware word ≈ 12.9 bits/word** · digit ≈ 3.32.
+
+**Average time to crack (search half the space) at the rates above:**
+
+| Secret | ~Entropy | Sync `syncPassword` (PBKDF2, ~10⁹/s) | Vault `passphrase` (Argon2id, ~10⁸/s) |
+|---|---|---|---|
+| 6‑digit PIN | ~20 bits | **instant** | **instant** |
+| 8‑char random alnum | ~48 bits | ~28 hours | ~12 days |
+| 4 diceware words | ~52 bits | ~20 days | ~6 months |
+| 10‑char random alnum | ~60 bits | ~13 years | ~130 years |
+| 5 diceware words | ~65 bits | ~440 years | ~4,400 years |
+| 6 diceware words | ~77 bits | ~3.5 million years | ~35 million years |
+
+**Implications (the honest headline):**
+- **Entropy dominates; the KDF is a ~1‑order‑of‑magnitude modifier.** Argon2id
+  buys roughly **10×** over PBKDF2‑600k at scale (its bigger win — capping
+  massive GPU/ASIC *parallelism* via memory‑hardness — is real but conservatively
+  not counted here). **A weak password falls under either KDF; a strong one
+  resists both.** Don't lean on the KDF to rescue a short password.
+- **A 6‑digit (or any low‑entropy) PIN is worthless offline** — broken in
+  well under a second regardless of KDF. This is exactly why the vault uses a
+  full passphrase, not a PIN, for the at‑rest secret.
+- **The `syncPassword` is the weaker‑KDF secret AND it guards the backend/proxy
+  copies** (which an adversary may retain forever). It therefore needs **more**
+  entropy than feels intuitive: target **≥ 5 diceware words (~65 bits)**, ideally
+  6. An 8‑char "complex" password (~48 bits) falls in **hours**.
+- **The vault `passphrase`** should likewise be **≥ 4–5 diceware words**; below
+  ~50 bits it is days/months against a serious adversary with the disk image.
+- **The genuinely unbreakable tier is the security key** (hardware‑bound 256‑bit
+  PRF, no guessable secret). Prefer it where offline attack is a real concern.
+- These figures assume *random* secrets. Human‑memorable, patterned, or
+  dictionary‑derived passwords have far less entropy than their length suggests
+  and can fall orders of magnitude faster (smart mask/rule attacks).
 
 ---
 
