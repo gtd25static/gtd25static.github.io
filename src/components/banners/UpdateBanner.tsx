@@ -4,7 +4,8 @@ import { useServiceWorker } from '../../hooks/use-service-worker';
 
 export function UpdateBanner() {
   const [syncIncompat, setSyncIncompat] = useState(false);
-  const { needRefresh, updateServiceWorker, checkForUpdate } = useServiceWorker();
+  const [updating, setUpdating] = useState(false);
+  const { needRefresh, applyUpdate, checkForUpdate } = useServiceWorker();
 
   useEffect(() => {
     const handler = () => {
@@ -27,12 +28,10 @@ export function UpdateBanner() {
     : 'A new version of GTD25 is available.';
 
   const handleClick = () => {
+    if (updating) return;
     if (needRefresh) {
-      updateServiceWorker(true);
-      // Fallback: in standalone PWA on Windows, controllerchange may not fire,
-      // so the vite-plugin-pwa reload never triggers. Force reload after a delay
-      // to ensure skipWaiting has completed.
-      setTimeout(() => window.location.reload(), 2000);
+      setUpdating(true);
+      applyUpdate(); // skipWaiting + a single guarded reload (no 2s race)
     } else {
       window.location.reload();
     }
@@ -43,9 +42,10 @@ export function UpdateBanner() {
       <span>{message}</span>
       <button
         onClick={handleClick}
-        className="shrink-0 rounded-md bg-white/20 px-3 py-1 text-xs font-bold hover:bg-white/30"
+        disabled={updating}
+        className="shrink-0 rounded-md bg-white/20 px-3 py-1 text-xs font-bold hover:bg-white/30 disabled:opacity-70"
       >
-        {needRefresh ? 'Update now' : 'Reload'}
+        {updating ? 'Updating…' : needRefresh ? 'Update now' : 'Reload'}
       </button>
     </div>
   );
