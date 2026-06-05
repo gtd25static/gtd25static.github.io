@@ -13,7 +13,7 @@ import { SpecialListProvider } from './hooks/use-special-list';
 import { SyncProvider } from './sync/use-sync';
 import { usePomodoroClock } from './hooks/use-pomodoro-clock';
 import { useUrlCapture } from './hooks/use-url-capture';
-import { useNudges } from './hooks/use-nudges';
+import { useNudges, useLockedNudge } from './hooks/use-nudges';
 import { useAppBadge } from './hooks/use-app-badge';
 
 export default function App() {
@@ -21,6 +21,13 @@ export default function App() {
   // locked so the lock screen respects light/dark.
   useTheme();
   const { locked } = useVault();
+
+  // Background tasks that DON'T touch decrypted data run here (always mounted),
+  // so they keep working while the vault is locked:
+  //  - the Pomodoro clock (timer + bell + "Pomodoro Complete" — no task content),
+  //  - a generic, content-free nudge to unlock (no task titles; see useLockedNudge).
+  usePomodoroClock();
+  useLockedNudge();
 
   return (
     <ErrorBoundary>
@@ -72,7 +79,6 @@ function UnlockedApp() {
   }, []);
 
   useKeyboard();
-  usePomodoroClock();
   useUrlCapture();
   useNudges();
   useAppBadge();
