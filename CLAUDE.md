@@ -186,3 +186,11 @@ With each new added functionality, consider whether you are adding some security
 - Handle corner cases gracefully
 - Create security tests when needed
 - Ensure app privacy and security principles are always safeguarded. If we are using end-to-end encryption, ensure all new fields get encrypted when new features are created.
+
+### Threat model maintenance (required)
+
+`THREAT_MODEL.md` is the living security review of this app. Keep it current:
+
+- Whenever a change affects the security posture — cryptography or key derivation; what is encrypted vs. left plaintext (e.g. adding a new field/table); storage locations; the sync/wire format; auth/PAT handling; the lock/unlock, idle-lock, panic-wipe or failed-attempt-wipe flows; backups; or what code runs while the vault is locked — **update `THREAT_MODEL.md` in the same change** (bump its "Last updated" date + commit).
+- **Proactively tell the user** what changed and **which prior threat-model conclusions it impacts** (improves, weakens, or invalidates). Do not let security-relevant changes land silently.
+- If a new feature introduces a threat not covered by the existing scenarios, add a scenario rather than glossing over it. Be honest about residual risks; never overstate protection.
