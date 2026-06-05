@@ -349,6 +349,23 @@ export async function configureIdleTimeout(minutes: number): Promise<void> {
   resetIdleTimer();
 }
 
+/**
+ * Read every encrypted row and count how many could not be decrypted (they come
+ * back quarantined with `_decryptError`). Lets the user confirm their local data
+ * is intact and recoverable. Requires the vault to be unlocked.
+ */
+export async function verifyAtRestIntegrity(): Promise<{ total: number; unreadable: number }> {
+  if (!currentDek) throw new Error('Unlock the vault before verifying integrity');
+  const [lists, tasks, subtasks] = await Promise.all([
+    db.taskLists.toArray(),
+    db.tasks.toArray(),
+    db.subtasks.toArray(),
+  ]);
+  const all = [...lists, ...tasks, ...subtasks] as Array<{ _decryptError?: boolean }>;
+  const unreadable = all.filter((r) => r._decryptError === true).length;
+  return { total: all.length, unreadable };
+}
+
 /** Set the failed-attempt wipe threshold (0 disables it). */
 export async function configureMaxUnlockAttempts(n: number): Promise<void> {
   const max = Math.max(0, Math.floor(n));

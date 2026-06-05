@@ -8,11 +8,12 @@ import { useLocalSettings, updateLocalSettings } from '../../hooks/use-settings'
 import { isSystemIdleSupported, requestSystemIdlePermission } from '../../lib/system-idle';
 import {
   enableParanoid, disableParanoid, changePassphrase, configureIdleTimeout,
-  configureMaxUnlockAttempts, lock, addSecurityKey, removeSecurityKey,
+  configureMaxUnlockAttempts, verifyAtRestIntegrity, lock, addSecurityKey, removeSecurityKey,
   DEFAULT_IDLE_MINUTES, DEFAULT_MAX_ATTEMPTS,
 } from '../../db/vault';
 import { isWebAuthnSupported } from '../../sync/webauthn-prf';
 import { panicWipe } from '../../lib/panic-wipe';
+import { exportToZip } from '../../db/export-import';
 
 function clampMinutes(value: string): number {
   const n = parseInt(value, 10);
@@ -219,6 +220,38 @@ function ManageForm({ idleMinutes, maxAttempts, systemIdleOn, hasSecurityKey }: 
     }
   }
 
+  async function handleVerify() {
+    setBusy(true);
+    try {
+      const { total, unreadable } = await verifyAtRestIntegrity();
+      if (unreadable === 0) toast(`Integrity OK — all ${total} items readable`, 'success');
+      else toast(`${unreadable} of ${total} items unreadable — re-sync from another device to recover`, 'error');
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Verification failed', 'error');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleRecoveryExport() {
+    setBusy(true);
+    try {
+      const blob = await exportToZip();
+      const date = new Date().toISOString().slice(0, 10);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `gtd25-recovery-${date}.zip`;
+      a.click();
+      URL.revokeObjectURL(url);
+      toast('Recovery backup downloaded', 'success');
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Export failed', 'error');
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function handlePanicWipe() {
     const ok = await confirmDialog(
       'Erase ALL local app data on this device — tasks, settings, vault, caches. Data synced to other devices is not affected. This cannot be undone.',
@@ -264,6 +297,18 @@ function ManageForm({ idleMinutes, maxAttempts, systemIdleOn, hasSecurityKey }: 
       <SystemIdleToggle enabled={systemIdleOn} />
 
       <SecurityKeySection hasSecurityKey={hasSecurityKey} />
+
+      <div className="space-y-1 border-t border-zinc-200 pt-3 dark:border-zinc-700">
+        <h4 className="text-sm font-medium">Data safety</h4>
+        <p className="text-xs text-zinc-400 dark:text-zinc-500">
+          Paranoid devices make no automatic backups. Download a recovery backup before disabling or
+          wiping. Verify checks every item still decrypts.
+        </p>
+        <div className="flex flex-wrap gap-2">
+          <Button size="sm" variant="secondary" onClick={handleRecoveryExport} disabled={busy}>Download recovery backup</Button>
+          <Button size="sm" variant="secondary" onClick={handleVerify} disabled={busy}>Verify integrity</Button>
+        </div>
+      </div>
 
       <div className="flex flex-wrap gap-2 border-t border-zinc-200 pt-3 dark:border-zinc-700">
         <Button size="sm" variant="secondary" onClick={() => lock()}>Lock now</Button>
