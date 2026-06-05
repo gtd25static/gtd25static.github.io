@@ -1,13 +1,15 @@
 import { useState } from 'react';
 import { Input } from '../ui/Input';
 import { Button } from '../ui/Button';
-import { unlockWithPassphrase } from '../../db/vault';
+import { unlockWithPassphrase, unlockWithPrf } from '../../db/vault';
+import { useVault } from '../../hooks/use-vault';
 import { db } from '../../db';
 
 // Full-screen gate shown when Paranoid Mode is enabled but the vault is locked.
 // Until the passphrase (or, in PR3, biometric) unlocks the DEK, no decrypted data
 // is rendered — the rest of the app is not even mounted.
 export function LockScreen() {
+  const { hasBiometric } = useVault();
   const [passphrase, setPassphrase] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -27,6 +29,21 @@ export function LockScreen() {
       // On success the vault emits -> the app re-renders and unmounts this screen.
     } catch {
       setError('Could not unlock the vault');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleBiometric() {
+    if (busy) return;
+    setBusy(true);
+    setError('');
+    try {
+      const ok = await unlockWithPrf();
+      // On success the vault emits -> the app re-renders and unmounts this screen.
+      if (!ok) setError('Biometric unlock failed. Use your passphrase.');
+    } catch {
+      setError('Biometric unlock failed. Use your passphrase.');
     } finally {
       setBusy(false);
     }
@@ -58,8 +75,16 @@ export function LockScreen() {
           <h1 className="text-lg font-medium text-zinc-800 dark:text-zinc-100">Vault locked</h1>
         </div>
         <p className="mb-4 text-sm text-zinc-500 dark:text-zinc-400">
-          Paranoid Mode is on. Enter your passphrase to decrypt this device&rsquo;s data.
+          Paranoid Mode is on. {hasBiometric ? 'Unlock with biometrics or your passphrase' : 'Enter your passphrase'} to decrypt this device&rsquo;s data.
         </p>
+
+        {hasBiometric && (
+          <div className="mb-4">
+            <Button type="button" variant="secondary" onClick={handleBiometric} disabled={busy}>
+              {busy ? 'Unlocking…' : '🔓 Unlock with biometrics'}
+            </Button>
+          </div>
+        )}
 
         <Input
           label="Passphrase"
