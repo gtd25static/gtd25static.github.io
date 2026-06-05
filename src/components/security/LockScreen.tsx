@@ -4,6 +4,7 @@ import { Button } from '../ui/Button';
 import { RandomizedKeyboard } from './RandomizedKeyboard';
 import { unlockWithPassphrase, unlockWithSecurityKey } from '../../db/vault';
 import { useVault } from '../../hooks/use-vault';
+import { useServiceWorker } from '../../hooks/use-service-worker';
 import { panicWipe } from '../../lib/panic-wipe';
 import { PomodoroBar } from '../pomodoro/PomodoroBar';
 
@@ -23,6 +24,15 @@ export function LockScreen() {
   const [showWipe, setShowWipe] = useState(false);
   const [attempt, setAttempt] = useState(0);       // bump to reshuffle the on-screen keys
   const [onScreen, setOnScreen] = useState(false); // opt-in keylogger-safe entry
+  const { forceCheck } = useServiceWorker();
+  const [checkingUpdate, setCheckingUpdate] = useState(false);
+
+  function handleCheckUpdate() {
+    if (checkingUpdate) return;
+    setCheckingUpdate(true);
+    forceCheck(); // if a new build exists, AppUpdatePrompt shows the dialog over this screen
+    setTimeout(() => setCheckingUpdate(false), 5000);
+  }
 
   async function handleUnlock() {
     if (!passphrase || busy) return;
@@ -139,6 +149,17 @@ export function LockScreen() {
             gear is hidden here (settings are not available while locked). */}
         <div className="mt-6 flex justify-center border-t border-zinc-200 pt-3 dark:border-zinc-800">
           <PomodoroBar hideSettings />
+        </div>
+
+        <div className="mt-3 text-center">
+          <button
+            type="button"
+            onClick={handleCheckUpdate}
+            disabled={checkingUpdate}
+            className="text-xs text-zinc-400 hover:text-zinc-600 disabled:opacity-50 dark:hover:text-zinc-300"
+          >
+            {checkingUpdate ? 'Checking for updates…' : 'Check for app updates'}
+          </button>
         </div>
 
         <div className="mt-3 border-t border-zinc-200 pt-3 dark:border-zinc-800">

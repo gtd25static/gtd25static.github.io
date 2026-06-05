@@ -3,7 +3,6 @@ import { useShallow } from 'zustand/react/shallow';
 import { useAppState } from '../../stores/app-state';
 import { useTaskLists } from '../../hooks/use-task-lists';
 import { Sidebar } from './Sidebar';
-import { UpdateBanner } from '../banners/UpdateBanner';
 import { TopBanner } from '../banners/TopBanner';
 import { FocusNudgeToast } from '../banners/FocusNudgeToast';
 import { TaskListView } from '../tasks/TaskListView';
@@ -132,7 +131,6 @@ export function AppShell() {
           </div>
         </div>
 
-        <UpdateBanner />
         <TopBanner />
         {searchQuery ? <SearchResults /> : selectedListId === '__special__' ? <SpecialListView /> : <TaskListView />}
       </div>

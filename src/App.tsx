@@ -15,6 +15,8 @@ import { usePomodoroClock } from './hooks/use-pomodoro-clock';
 import { useUrlCapture } from './hooks/use-url-capture';
 import { useNudges, useLockedNudge } from './hooks/use-nudges';
 import { useAppBadge } from './hooks/use-app-badge';
+import { ServiceWorkerProvider } from './hooks/use-service-worker';
+import { AppUpdatePrompt } from './components/banners/AppUpdatePrompt';
 
 export default function App() {
   // Theme is localStorage-only (no DB), safe to apply even while the vault is
@@ -31,7 +33,13 @@ export default function App() {
 
   return (
     <ErrorBoundary>
-      {locked ? <LockScreen /> : <UnlockedApp />}
+      {/* SW update detection + the update prompt run from here (always mounted),
+          so updates can be applied even from the lock screen — no wipe needed if
+          a bug blocks unlock. */}
+      <ServiceWorkerProvider>
+        <AppUpdatePrompt />
+        {locked ? <LockScreen /> : <UnlockedApp />}
+      </ServiceWorkerProvider>
     </ErrorBoundary>
   );
 }

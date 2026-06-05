@@ -1,0 +1,149 @@
+import { useState, useEffect } from 'react';
+import { onVersionIncompatible, offVersionIncompatible, onSyncSuccess, offSyncSuccess } from '../../sync/sync-engine';
+import { useServiceWorker } from '../../hooks/use-service-worker';
+import { GIT_COMMIT } from '../../lib/constants';
+import { Button } from '../ui/Button';
+
+interface VersionInfo {
+  commit: string;
+  message: string;
+  builtAt?: string;
+  log?: Array<{ h: string; s: string }>;
+}
+
+// The commits in the incoming build that are newer than the running one (stop at
+// the current commit). Falls back to just the headline commit when the running
+// commit isn't in the recent log (or no log is available).
+function changelogFor(info: VersionInfo, current: string): Array<{ h: string; s: string }> {
+  if (info.log && info.log.length) {
+    const fresh: Array<{ h: string; s: string }> = [];
+    for (const c of info.log) {
+      if (c.h === current) return fresh;
+      fresh.push(c);
+    }
+    if (fresh.length) return fresh; // current not found in window — show what we have
+  }
+  return info.message ? [{ h: info.commit, s: info.message }] : [];
+}
+
+// App-wide update prompt. Rendered from the always-mounted App (inside
+// ServiceWorkerProvider) so it appears over BOTH the unlocked app and the lock
+// screen — letting a user stuck on a buggy locked build pull a fix without wiping.
+//
+// UX: a centered, overlaying DIALOG by default (to nudge updating); choosing
+// "Later" dismisses the dialog and falls back to a thin top BANNER that stays
+// available but unobtrusive.
+export function AppUpdatePrompt() {
+  const { needRefresh, applyUpdate, checkForUpdate } = useServiceWorker();
+  const [syncIncompat, setSyncIncompat] = useState(false);
+  const [dismissed, setDismissed] = useState(false);
+  const [updating, setUpdating] = useState(false);
+  const [info, setInfo] = useState<VersionInfo | null>(null);
+
+  // Fetch the LIVE version.json (cache-busted, bypassing the SW) to show what the
+  // pending update contains. Best-effort: omitted if offline / not deployed yet.
+  useEffect(() => {
+    if (!needRefresh) return;
+    let active = true;
+    fetch(`/version.json?t=${Date.now()}`, { cache: 'no-store' })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j: VersionInfo | null) => { if (active && j?.commit) setInfo(j); })
+      .catch(() => { /* changelog is optional */ });
+    return () => { active = false; };
+  }, [needRefresh]);
+
+  // A sync that reports an incompatible version means an update is needed.
+  useEffect(() => {
+    const handler = () => { setSyncIncompat(true); checkForUpdate(); };
+    onVersionIncompatible(handler);
+    return () => offVersionIncompatible(handler);
+  }, [checkForUpdate]);
+
+  // Opportunistically check for a new build after each successful sync.
+  useEffect(() => {
+    onSyncSuccess(checkForUpdate);
+    return () => offSyncSuccess(checkForUpdate);
+  }, [checkForUpdate]);
+
+  const available = needRefresh || syncIncompat;
+  if (!available) return null;
+
+  const message = syncIncompat
+    ? 'A newer version of GTD25 is required to sync.'
+    : 'A new version of GTD25 is available.';
+
+  const doUpdate = () => {
+    if (updating) return;
+    if (needRefresh) {
+      setUpdating(true);
+      applyUpdate(); // skipWaiting + single guarded reload
+    } else {
+      window.location.reload();
+    }
+  };
+
+  if (!dismissed) {
+    return (
+      <div
+        className="fixed inset-0 z-[300] flex items-center justify-center bg-black/40 p-4"
+        onClick={() => setDismissed(true)}
+      >
+        <div
+          className="w-full max-w-sm rounded-2xl border border-zinc-200 bg-white p-6 shadow-2xl dark:border-zinc-800 dark:bg-zinc-900"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="mb-2 flex items-center gap-2">
+            <span aria-hidden className="text-xl">⬆️</span>
+            <h2 className="text-lg font-medium text-zinc-800 dark:text-zinc-100">Update available</h2>
+          </div>
+          <p className="mb-3 text-sm text-zinc-500 dark:text-zinc-400">
+            {message} Updating takes a second and keeps all your data.
+          </p>
+
+          {info && (
+            <div className="mb-4 rounded-lg border border-zinc-200 bg-zinc-50 p-2.5 dark:border-zinc-700 dark:bg-zinc-800/60">
+              <p className="mb-1 font-mono text-[11px] text-zinc-400">
+                {GIT_COMMIT} → {info.commit}
+              </p>
+              <ul className="max-h-40 space-y-0.5 overflow-auto">
+                {changelogFor(info, GIT_COMMIT).map((c) => (
+                  <li key={c.h} className="text-xs text-zinc-600 dark:text-zinc-300">
+                    <span className="font-mono text-zinc-400">{c.h}</span> {c.s}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          <div className="flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => setDismissed(true)}
+              className="rounded-lg px-3 py-1.5 text-sm text-zinc-500 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800"
+            >
+              Later
+            </button>
+            <Button size="sm" onClick={doUpdate} disabled={updating}>
+              {updating ? 'Updating…' : 'Update now'}
+            </Button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Dismissed -> unobtrusive top banner that stays available.
+  return (
+    <div className="fixed inset-x-0 top-0 z-[300] flex items-center justify-between gap-3 bg-amber-500 px-4 py-2 text-sm font-medium text-white">
+      <span>{message}</span>
+      <button
+        type="button"
+        onClick={doUpdate}
+        disabled={updating}
+        className="shrink-0 rounded-md bg-white/20 px-3 py-1 text-xs font-bold hover:bg-white/30 disabled:opacity-70"
+      >
+        {updating ? 'Updating…' : 'Update now'}
+      </button>
+    </div>
+  );
+}
