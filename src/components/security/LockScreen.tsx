@@ -5,6 +5,7 @@ import { RandomizedKeyboard } from './RandomizedKeyboard';
 import { unlockWithPassphrase, unlockWithSecurityKey } from '../../db/vault';
 import { useVault } from '../../hooks/use-vault';
 import { panicWipe } from '../../lib/panic-wipe';
+import { PomodoroBar } from '../pomodoro/PomodoroBar';
 
 // Full-screen gate shown when Paranoid Mode is enabled but the vault is locked.
 // Until the passphrase or security key unlocks the DEK, no decrypted data is
@@ -134,7 +135,13 @@ export function LockScreen() {
           </button>
         </div>
 
-        <div className="mt-6 border-t border-zinc-200 pt-3 dark:border-zinc-800">
+        {/* Pomodoro controls — task-data-free, so safe while locked. The settings
+            gear is hidden here (settings are not available while locked). */}
+        <div className="mt-6 flex justify-center border-t border-zinc-200 pt-3 dark:border-zinc-800">
+          <PomodoroBar hideSettings />
+        </div>
+
+        <div className="mt-3 border-t border-zinc-200 pt-3 dark:border-zinc-800">
           {showWipe ? (
             <div className="space-y-2">
               <p className="text-xs text-red-600 dark:text-red-400">

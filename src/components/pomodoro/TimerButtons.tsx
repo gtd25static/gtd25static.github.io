@@ -1,7 +1,7 @@
 import { usePomodoroStore } from '../../stores/pomodoro-store';
 import { useShallow } from 'zustand/react/shallow';
 
-export function TimerButtons() {
+export function TimerButtons({ hideSettings }: { hideSettings?: boolean } = {}) {
   const { timerRunning, ambientPlaying, startPlus25, startColon25, startColon55, stopAll, toggleAmbient, setPomodoroSettingsOpen } =
     usePomodoroStore(
       useShallow((s) => ({
@@ -58,7 +58,8 @@ export function TimerButtons() {
         </button>
       )}
 
-      {/* Settings gear */}
+      {/* Settings gear (hidden where settings aren't available, e.g. lock screen) */}
+      {!hideSettings && (
       <button
         onClick={() => setPomodoroSettingsOpen(true)}
         className="rounded-full p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800 dark:hover:text-zinc-300"
@@ -72,6 +73,7 @@ export function TimerButtons() {
           />
         </svg>
       </button>
+      )}
     </div>
   );
 }
