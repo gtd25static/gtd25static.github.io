@@ -1,3 +1,5 @@
+import type { KdfParams } from './vault-kdf';
+
 export type ListType = 'tasks' | 'follow-ups';
 export type TaskStatus = 'todo' | 'done' | 'blocked' | 'working';
 export type SubtaskStatus = 'todo' | 'done' | 'blocked' | 'working';
@@ -122,7 +124,10 @@ export interface LocalSettings {
 export interface Vault {
   id: string; // always 'vault'
   dekWrappedByPass: string;       // encryptBlob(KEK_passphrase, rawDEK)
-  passSalt: string;               // PBKDF2 salt for the passphrase KEK
+  passSalt: string;               // salt for the passphrase KEK
+  // How the passphrase KEK is derived. Absent => legacy PBKDF2 (pre-Argon2id);
+  // such vaults still unlock and are re-wrapped to Argon2id on next unlock.
+  kdf?: KdfParams;
   dekWrappedByPrf?: string;       // encryptBlob(KEK_webauthn-prf, rawDEK)
   webauthnCredentialId?: string;  // base64 credential id for allowCredentials
   prfSalt?: string;               // salt fed to the WebAuthn PRF extension

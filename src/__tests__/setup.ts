@@ -37,3 +37,8 @@ if (typeof globalThis.window === 'undefined') {
     dispatchEvent: winTarget.dispatchEvent.bind(winTarget),
   }) as unknown as Window & typeof globalThis;
 }
+
+// Use light Argon2id params in tests so vault enable/unlock stays fast while
+// still exercising the real Argon2id code path (production uses ~64 MiB).
+import { __setKdfParamsForTests } from '../db/vault';
+__setKdfParamsForTests({ algo: 'argon2id', memKiB: 1024, iterations: 1, parallelism: 1 });

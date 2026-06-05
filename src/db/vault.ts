@@ -9,9 +9,10 @@
 
 import { db } from './index';
 import {
-  deriveKey, generateSalt, createVerifier, checkVerifier,
+  generateSalt, createVerifier, checkVerifier,
   encryptBlob, decryptBlob, clearEncryptionKey,
 } from '../sync/crypto';
+import { deriveVaultKek, DEFAULT_ARGON2, LEGACY_KDF, type KdfParams } from './vault-kdf';
 import { generateDek, wrapDek, unwrapDek, importKekFromBytes } from './vault-crypto';
 import { setVaultKeyProvider } from './vault-middleware';
 import { encryptAllAtRest, decryptAllAtRest } from './vault-migration';
@@ -34,6 +35,8 @@ let currentDek: CryptoKey | null = null;
 let currentSecrets: VaultSecrets | null = null;
 let idleTimeoutMs = DEFAULT_IDLE_MINUTES * 60_000;
 let idleTimer: ReturnType<typeof setTimeout> | null = null;
+// KDF used when (re)wrapping the DEK under the passphrase; persisted per-vault.
+let kdfParams: KdfParams = DEFAULT_ARGON2;
 
 // --- Reactive snapshot for React (useSyncExternalStore) ---
 export interface VaultSnapshot { enabled: boolean; unlocked: boolean; hasBiometric: boolean }
@@ -124,7 +127,7 @@ export async function enableParanoid(passphrase: string, idleMinutes = DEFAULT_I
 
   const dek = await generateDek();
   const passSalt = generateSalt();
-  const kek = await deriveKey(passphrase, passSalt);
+  const kek = await deriveVaultKek(passphrase, passSalt, kdfParams);
   const dekWrappedByPass = await wrapDek(kek, dek);
   const verifier = await createVerifier(dek);
   const prfSalt = generateSalt();
@@ -142,6 +145,7 @@ export async function enableParanoid(passphrase: string, idleMinutes = DEFAULT_I
     id: 'vault',
     dekWrappedByPass,
     passSalt,
+    kdf: kdfParams,
     prfSalt,
     verifier,
     idleTimeoutMinutes: idleMinutes,
@@ -200,14 +204,20 @@ export async function unlockWithPassphrase(passphrase: string): Promise<boolean>
   const vault = await db.vault.get('vault');
   if (!vault) return false;
 
-  const kek = await deriveKey(passphrase, vault.passSalt);
+  const kek = await deriveVaultKek(passphrase, vault.passSalt, vault.kdf ?? LEGACY_KDF);
   let dek: CryptoKey;
   try {
     dek = await unwrapDek(kek, vault.dekWrappedByPass);
   } catch {
     return false; // wrong passphrase -> AES-GCM auth failure
   }
-  return finishUnlock(vault, dek);
+  const ok = await finishUnlock(vault, dek);
+  // Transparently upgrade a legacy PBKDF2 vault to Argon2id now that we hold the
+  // passphrase (skip if finishUnlock tore the vault down via a resumed disable).
+  if (ok && (vault.kdf?.algo ?? 'pbkdf2') !== DEFAULT_ARGON2.algo) {
+    await rewrapPassphrase(passphrase);
+  }
+  return ok;
 }
 
 /**
@@ -290,14 +300,21 @@ export async function removeBiometric(): Promise<void> {
   emit();
 }
 
+/** Re-wrap the DEK under a (possibly new) passphrase with the current KDF. */
+async function rewrapPassphrase(passphrase: string): Promise<void> {
+  if (!currentDek) return;
+  if (!(await db.vault.get('vault'))) return;
+  const passSalt = generateSalt();
+  const kek = await deriveVaultKek(passphrase, passSalt, kdfParams);
+  const dekWrappedByPass = await wrapDek(kek, currentDek);
+  await db.vault.update('vault', { passSalt, dekWrappedByPass, kdf: kdfParams });
+}
+
 /** Re-wrap the DEK under a new passphrase. Requires the vault to be unlocked. */
 export async function changePassphrase(newPassphrase: string): Promise<void> {
   if (!currentDek) throw new Error('Unlock the vault before changing the passphrase');
   if (!newPassphrase) throw new Error('A passphrase is required');
-  const passSalt = generateSalt();
-  const kek = await deriveKey(newPassphrase, passSalt);
-  const dekWrappedByPass = await wrapDek(kek, currentDek);
-  await db.vault.update('vault', { passSalt, dekWrappedByPass });
+  await rewrapPassphrase(newPassphrase);
 }
 
 export async function configureIdleTimeout(minutes: number): Promise<void> {
@@ -331,4 +348,10 @@ export function __resetVaultStateForTests(): void {
 export function __setIdleTimeoutMsForTests(ms: number): void {
   idleTimeoutMs = ms;
   resetIdleTimer();
+}
+
+// Test-only: use light KDF params so enable/unlock stay fast in the suite while
+// still exercising the real Argon2id code path.
+export function __setKdfParamsForTests(p: KdfParams): void {
+  kdfParams = p;
 }
