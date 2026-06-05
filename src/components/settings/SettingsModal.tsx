@@ -9,8 +9,9 @@ import { ShareSettings } from './ShareSettings';
 import { NotificationSettings } from './NotificationSettings';
 import { BackupsSettings } from './BackupsSettings';
 import { SecuritySettings } from './SecuritySettings';
+import { DiagnosticsSettings } from './DiagnosticsSettings';
 
-type SettingsTab = 'general' | 'security' | 'backups';
+type SettingsTab = 'general' | 'security' | 'backups' | 'diagnostics';
 
 export function SettingsModal() {
   const { settingsOpen, setSettingsOpen } = useAppState(useShallow(s => ({ settingsOpen: s.settingsOpen, setSettingsOpen: s.setSettingsOpen })));
@@ -21,7 +22,7 @@ export function SettingsModal() {
       <div className="space-y-6">
         {/* Tab bar */}
         <div className="flex gap-4 border-b border-zinc-200 dark:border-zinc-700">
-          {([['general', 'General'], ['security', 'Security'], ['backups', 'Backups']] as const).map(([tab, label]) => (
+          {([['general', 'General'], ['security', 'Security'], ['backups', 'Backups'], ['diagnostics', 'Diagnostics']] as const).map(([tab, label]) => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
@@ -51,6 +52,7 @@ export function SettingsModal() {
         )}
         {activeTab === 'security' && <SecuritySettings />}
         {activeTab === 'backups' && <BackupsSettings />}
+        {activeTab === 'diagnostics' && <DiagnosticsSettings />}
       </div>
     </Modal>
   );
