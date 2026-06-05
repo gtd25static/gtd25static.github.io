@@ -1,9 +1,12 @@
 import { db } from './index';
+import { isParanoidFlagSet } from './paranoid-flag';
 
 const BACKUP_KEY_PREFIX = 'gtd25-local-backup-';
 const MAX_BACKUPS = 2;
 
 export async function createLocalBackup(): Promise<void> {
+  // Paranoid devices leave no plaintext backup snapshots on disk.
+  if (isParanoidFlagSet()) return;
   try {
     const [taskLists, tasks, subtasks] = await Promise.all([
       db.taskLists.toArray(),

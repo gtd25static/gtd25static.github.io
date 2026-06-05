@@ -6,6 +6,7 @@ import {
 } from './crypto';
 import { getLocalSnapshot } from './sync-engine';
 import { SYNC_VERSION } from './version';
+import { isParanoidFlagSet } from '../db/paranoid-flag';
 import type { SyncData } from '../db/models';
 
 // --- Types ---
@@ -48,6 +49,9 @@ export async function maybeCreateBackups(
   repo: string,
   encKey: CryptoKey,
 ): Promise<void> {
+  // Paranoid devices initiate no remote backup PUTs — fewer writes for an
+  // inspecting proxy to observe. Other (non-paranoid) devices keep them fresh.
+  if (isParanoidFlagSet()) return;
   // Gate: skip if checked recently
   if (Date.now() - lastBackupCheckAt < BACKUP_CHECK_INTERVAL_MS) return;
   lastBackupCheckAt = Date.now();

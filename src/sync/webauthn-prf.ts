@@ -27,6 +27,13 @@ function bytesToBase64(bytes: Uint8Array): string {
   return btoa(bin);
 }
 
+// The PRF result arrives as a BufferSource (ArrayBuffer or a view). Normalize to
+// a Uint8Array regardless of which the authenticator/runtime hands back.
+function toBytes(src: BufferSource): Uint8Array {
+  if (src instanceof ArrayBuffer) return new Uint8Array(src);
+  return new Uint8Array(src.buffer, src.byteOffset, src.byteLength);
+}
+
 /** True when the browser exposes the WebAuthn API at all. */
 export function isWebAuthnSupported(): boolean {
   return typeof window !== 'undefined'
@@ -91,7 +98,7 @@ export async function registerPrfCredential(prfSalt: string): Promise<PrfRegistr
     // only surface on a subsequent assertion. Fetch it via an immediate get().
     const onCreate = ext.prf.results?.first;
     const prfOutput = onCreate
-      ? new Uint8Array(onCreate)
+      ? toBytes(onCreate)
       : await getPrfOutput(credentialId, prfSalt);
     if (!prfOutput) return null;
 
@@ -122,7 +129,7 @@ export async function getPrfOutput(credentialId: string, prfSalt: string): Promi
     if (!assertion) return null;
 
     const first = assertion.getClientExtensionResults().prf?.results?.first;
-    return first ? new Uint8Array(first) : null;
+    return first ? toBytes(first) : null;
   } catch {
     return null;
   }

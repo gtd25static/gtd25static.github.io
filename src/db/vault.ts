@@ -16,9 +16,9 @@ import { generateDek, wrapDek, unwrapDek, importKekFromBytes } from './vault-cry
 import { setVaultKeyProvider } from './vault-middleware';
 import { encryptAllAtRest, decryptAllAtRest } from './vault-migration';
 import { registerPrfCredential, getPrfOutput } from '../sync/webauthn-prf';
+import { PARANOID_FLAG, isParanoidFlagSet } from './paranoid-flag';
 import type { Vault } from './models';
 
-const PARANOID_FLAG = 'gtd25-paranoid';
 // Synchronous mirror of "a biometric credential is enrolled", so the lock screen
 // and settings can render the biometric affordance without awaiting IndexedDB.
 const BIO_FLAG = 'gtd25-paranoid-bio';
@@ -41,7 +41,7 @@ const listeners = new Set<() => void>();
 let snapshot = computeSnapshot();
 
 function readFlag(): boolean {
-  try { return localStorage.getItem(PARANOID_FLAG) === '1'; } catch { return false; }
+  return isParanoidFlagSet();
 }
 function setFlag(on: boolean): void {
   try {

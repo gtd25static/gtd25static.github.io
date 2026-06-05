@@ -10,6 +10,7 @@ import {
   addBiometric, removeBiometric, DEFAULT_IDLE_MINUTES,
 } from '../../db/vault';
 import { isPlatformAuthenticatorAvailable } from '../../sync/webauthn-prf';
+import { panicWipe } from '../../lib/panic-wipe';
 
 function clampMinutes(value: string): number {
   const n = parseInt(value, 10);
@@ -167,11 +168,24 @@ function ManageForm({ idleMinutes, hasBiometric }: { idleMinutes: number; hasBio
     }
   }
 
+  async function handlePanicWipe() {
+    const ok = await confirmDialog(
+      'Erase ALL local app data on this device — tasks, settings, vault, caches. Data synced to other devices is not affected. This cannot be undone.',
+      { confirmLabel: 'Wipe this device', danger: true },
+    );
+    if (!ok) return;
+    await panicWipe(); // reloads on completion
+  }
+
   return (
     <div className="space-y-4">
       <div className="space-y-1">
         <h3 className="text-sm font-medium">Paranoid Mode</h3>
         <p className="text-xs text-emerald-600 dark:text-emerald-400">Active — local data on this device is encrypted at rest.</p>
+        <p className="text-xs text-zinc-400 dark:text-zinc-500">
+          Backups are disabled on this device (no local snapshots, no remote backup uploads). If
+          every synced device is in Paranoid Mode, remote backups stop refreshing.
+        </p>
       </div>
 
       <div className="flex items-end gap-2">
@@ -192,6 +206,7 @@ function ManageForm({ idleMinutes, hasBiometric }: { idleMinutes: number; hasBio
         <Button size="sm" variant="danger" onClick={handleDisable} disabled={busy}>
           {busy ? 'Working…' : 'Disable Paranoid Mode'}
         </Button>
+        <Button size="sm" variant="danger" onClick={handlePanicWipe} disabled={busy}>Panic wipe</Button>
       </div>
     </div>
   );

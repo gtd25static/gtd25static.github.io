@@ -3,7 +3,7 @@ import { Input } from '../ui/Input';
 import { Button } from '../ui/Button';
 import { unlockWithPassphrase, unlockWithPrf } from '../../db/vault';
 import { useVault } from '../../hooks/use-vault';
-import { db } from '../../db';
+import { panicWipe } from '../../lib/panic-wipe';
 
 // Full-screen gate shown when Paranoid Mode is enabled but the vault is locked.
 // Until the passphrase (or, in PR3, biometric) unlocks the DEK, no decrypted data
@@ -49,19 +49,10 @@ export function LockScreen() {
     }
   }
 
-  // Escape hatch when the passphrase is lost. PR4 replaces this with a full
-  // panic wipe (caches + service worker). Synced data on other devices survives.
+  // Escape hatch when the passphrase is lost: a full panic wipe (IndexedDB,
+  // localStorage, caches, service worker). Synced data on other devices survives.
   async function handleWipe() {
-    db.close();
-    await new Promise<void>((resolve, reject) => {
-      const req = indexedDB.deleteDatabase('gtd25');
-      req.onsuccess = () => resolve();
-      req.onerror = () => reject(req.error);
-    });
-    for (const key of Object.keys(localStorage).filter((k) => k.startsWith('gtd25-'))) {
-      localStorage.removeItem(key);
-    }
-    window.location.reload();
+    await panicWipe();
   }
 
   return (
