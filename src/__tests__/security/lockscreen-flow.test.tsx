@@ -6,7 +6,7 @@ import userEvent from '@testing-library/user-event';
 import '../../__tests__/setup-component';
 import { db } from '../../db';
 import { resetDb } from '../helpers/db-helpers';
-import { lock, isUnlocked, __resetVaultStateForTests } from '../../db/vault';
+import { enableParanoid, lock, isUnlocked, __resetVaultStateForTests } from '../../db/vault';
 import { useVault } from '../../hooks/use-vault';
 import { SecuritySettings } from '../../components/settings/SecuritySettings';
 import { LockScreen } from '../../components/security/LockScreen';
@@ -59,22 +59,35 @@ describe('Paranoid Mode UI flow', () => {
     await waitFor(() => expect(screen.getByText('Vault locked')).toBeInTheDocument());
     expect(screen.queryByText('APP CONTENT')).not.toBeInTheDocument();
 
-    // Passphrase is entered by clicking the on-screen randomized keys, never typed.
-    const tap = async (text: string) => {
-      for (const ch of text) {
-        await user.click(screen.getByRole('button', { name: ch === ' ' ? 'Space' : ch }));
-      }
-    };
-
+    // Default entry is a normal typed passphrase field.
     // Wrong passphrase shows an error and stays locked.
-    await tap('wrong');
+    await user.type(screen.getByLabelText('Passphrase'), 'wrong');
     await user.click(screen.getByRole('button', { name: /^unlock$/i }));
     await waitFor(() => expect(screen.getByText('Incorrect passphrase')).toBeInTheDocument());
     expect(isUnlocked()).toBe(false);
 
-    // Correct passphrase unlocks and restores the app.
-    await tap(PASS);
+    // Correct passphrase unlocks and restores the app (field was cleared on failure).
+    await user.type(screen.getByLabelText('Passphrase'), PASS);
     await user.click(screen.getByRole('button', { name: /^unlock$/i }));
+    await waitFor(() => expect(screen.getByText('APP CONTENT')).toBeInTheDocument());
+    expect(isUnlocked()).toBe(true);
+  });
+
+  it('can unlock via the opt-in on-screen randomized keyboard', async () => {
+    const user = userEvent.setup();
+    await enableParanoid(PASS);
+    lock();
+
+    render(<Gate />);
+    await waitFor(() => expect(screen.getByText('Vault locked')).toBeInTheDocument());
+
+    // Switch to the keylogger-safe on-screen keyboard, then tap the passphrase.
+    await user.click(screen.getByRole('button', { name: /on-screen keyboard/i }));
+    for (const ch of PASS) {
+      await user.click(screen.getByRole('button', { name: ch === ' ' ? 'Space' : ch }));
+    }
+    await user.click(screen.getByRole('button', { name: /^unlock$/i }));
+
     await waitFor(() => expect(screen.getByText('APP CONTENT')).toBeInTheDocument());
     expect(isUnlocked()).toBe(true);
   });

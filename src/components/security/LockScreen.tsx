@@ -1,20 +1,27 @@
 import { useState } from 'react';
+import { Input } from '../ui/Input';
+import { Button } from '../ui/Button';
 import { RandomizedKeyboard } from './RandomizedKeyboard';
 import { unlockWithPassphrase, unlockWithSecurityKey } from '../../db/vault';
 import { useVault } from '../../hooks/use-vault';
 import { panicWipe } from '../../lib/panic-wipe';
 
 // Full-screen gate shown when Paranoid Mode is enabled but the vault is locked.
-// Until the passphrase (or security key) unlocks the DEK, no decrypted data
-// is rendered — the rest of the app is not even mounted. The passphrase is
-// entered on a randomized on-screen keyboard (never typed) to defeat keyloggers.
+// Until the passphrase or security key unlocks the DEK, no decrypted data is
+// rendered — the rest of the app is not even mounted.
+//
+// Unlock strategy: the security key (when enrolled) is the primary, keylogger-
+// safe path — nothing is typed. The passphrase is the fallback, a normal typed
+// field by default (practical), with an OPT-IN randomized on-screen keyboard for
+// the rare time you must enter it on an untrusted machine without it being keyed.
 export function LockScreen() {
   const { hasSecurityKey } = useVault();
   const [passphrase, setPassphrase] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [showWipe, setShowWipe] = useState(false);
-  const [attempt, setAttempt] = useState(0); // bump to reshuffle the keyboard
+  const [attempt, setAttempt] = useState(0);       // bump to reshuffle the on-screen keys
+  const [onScreen, setOnScreen] = useState(false); // opt-in keylogger-safe entry
 
   async function handleUnlock() {
     if (!passphrase || busy) return;
@@ -25,7 +32,7 @@ export function LockScreen() {
       if (!ok) {
         setError('Incorrect passphrase');
         setPassphrase('');
-        setAttempt((n) => n + 1); // reshuffle the keys after a wrong attempt
+        setAttempt((n) => n + 1);
       }
       // On success the vault emits -> the app re-renders and unmounts this screen.
     } catch {
@@ -35,13 +42,17 @@ export function LockScreen() {
     }
   }
 
+  function handleFormSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    void handleUnlock();
+  }
+
   async function handleSecurityKey() {
     if (busy) return;
     setBusy(true);
     setError('');
     try {
       const ok = await unlockWithSecurityKey();
-      // On success the vault emits -> the app re-renders and unmounts this screen.
       if (!ok) setError('Security key unlock failed. Use your passphrase.');
     } catch {
       setError('Security key unlock failed. Use your passphrase.');
@@ -63,34 +74,65 @@ export function LockScreen() {
           <span aria-hidden className="text-xl">🔒</span>
           <h1 className="text-lg font-medium text-zinc-800 dark:text-zinc-100">Vault locked</h1>
         </div>
-        <p className="mb-4 text-sm text-zinc-500 dark:text-zinc-400">
-          Paranoid Mode is on. Tap your passphrase on the on-screen keys (it is never typed, so a
-          keylogger sees nothing).
-        </p>
 
-        <RandomizedKeyboard
-          value={passphrase}
-          onChange={setPassphrase}
-          onSubmit={handleUnlock}
-          disabled={busy}
-          nonce={attempt}
-          submitLabel={busy ? 'Unlocking…' : 'Unlock'}
-        />
+        {hasSecurityKey && (
+          <div className="mb-4 space-y-3">
+            <Button type="button" onClick={handleSecurityKey} disabled={busy}>
+              🔑 {busy ? 'Unlocking…' : 'Unlock with security key'}
+            </Button>
+            <div className="flex items-center gap-2 text-xs text-zinc-400 dark:text-zinc-500">
+              <span className="h-px flex-1 bg-zinc-200 dark:bg-zinc-700" />
+              or use your passphrase
+              <span className="h-px flex-1 bg-zinc-200 dark:bg-zinc-700" />
+            </div>
+          </div>
+        )}
+
+        {onScreen ? (
+          <>
+            <p className="mb-2 text-xs text-zinc-500 dark:text-zinc-400">
+              Tap your passphrase on the on-screen keys — never typed, so a keylogger sees nothing.
+            </p>
+            <RandomizedKeyboard
+              value={passphrase}
+              onChange={setPassphrase}
+              onSubmit={handleUnlock}
+              disabled={busy}
+              nonce={attempt}
+              submitLabel={busy ? 'Unlocking…' : 'Unlock'}
+            />
+          </>
+        ) : (
+          <form onSubmit={handleFormSubmit}>
+            <Input
+              label="Passphrase"
+              type="password"
+              value={passphrase}
+              onChange={(e) => setPassphrase(e.target.value)}
+              placeholder="Enter vault passphrase"
+              autoFocus
+              disabled={busy}
+            />
+            <div className="mt-3">
+              <Button type="submit" disabled={busy || !passphrase}>
+                {busy ? 'Unlocking…' : 'Unlock'}
+              </Button>
+            </div>
+          </form>
+        )}
 
         {error && <p className="mt-2 text-sm text-red-600 dark:text-red-400">{error}</p>}
 
-        {hasSecurityKey && (
-          <div className="mt-3 text-center">
-            <button
-              type="button"
-              onClick={handleSecurityKey}
-              disabled={busy}
-              className="text-xs text-zinc-500 underline-offset-2 hover:underline disabled:opacity-50 dark:text-zinc-400"
-            >
-              🔑 Use security key instead
-            </button>
-          </div>
-        )}
+        <div className="mt-3 text-center">
+          <button
+            type="button"
+            onClick={() => { setOnScreen((v) => !v); setPassphrase(''); setError(''); }}
+            disabled={busy}
+            className="text-xs text-zinc-500 underline-offset-2 hover:underline disabled:opacity-50 dark:text-zinc-400"
+          >
+            {onScreen ? '⌨︎ Use keyboard input' : '🔒 Use on-screen keyboard (keylogger-safe)'}
+          </button>
+        </div>
 
         <div className="mt-6 border-t border-zinc-200 pt-3 dark:border-zinc-800">
           {showWipe ? (
