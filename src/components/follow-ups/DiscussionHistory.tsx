@@ -28,13 +28,13 @@ function localISODate(d = new Date()): string {
 }
 
 const PencilIcon = () => (
-  <svg width="13" height="13" viewBox="0 0 20 20" fill="currentColor">
+  <svg width="18" height="18" viewBox="0 0 20 20" fill="currentColor">
     <path d="M13.586 3.586a2 2 0 112.828 2.828L8 15.828l-3.771.943.943-3.771 8.414-8.414z" />
   </svg>
 );
 
 const TrashIcon = () => (
-  <svg width="13" height="13" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+  <svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
     <path d="M4 6h12M8 6V4h4v2m-6 0v9a1 1 0 001 1h6a1 1 0 001-1V6M8.5 9v5M11.5 9v5" />
   </svg>
 );
@@ -114,17 +114,17 @@ export function DiscussionHistory({ task, open, onClose }: Props) {
                     {formatWhen(entry.at)}
                   </div>
                   {editingId !== entry.id && (
-                    <div className="flex shrink-0 items-center gap-1.5 text-zinc-400 md:opacity-0 md:transition-opacity md:group-hover:opacity-100">
+                    <div className="-mt-1 flex shrink-0 items-center gap-1 text-zinc-400 md:opacity-0 md:transition-opacity md:group-hover:opacity-100">
                       <button
                         onClick={() => startEdit(entry)}
-                        className="rounded p-0.5 hover:text-accent-600 dark:hover:text-accent-400"
+                        className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg hover:bg-zinc-200 hover:text-accent-600 dark:hover:bg-zinc-700 dark:hover:text-accent-400 md:min-h-0 md:min-w-0 md:p-1.5"
                         title="Edit this entry"
                       >
                         <PencilIcon />
                       </button>
                       <button
                         onClick={() => removeEntry(entry)}
-                        className="rounded p-0.5 hover:text-red-600 dark:hover:text-red-400"
+                        className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg hover:bg-zinc-200 hover:text-red-600 dark:hover:bg-zinc-700 dark:hover:text-red-400 md:min-h-0 md:min-w-0 md:p-1.5"
                         title="Delete this entry"
                       >
                         <TrashIcon />
@@ -142,16 +142,16 @@ export function DiscussionHistory({ task, open, onClose }: Props) {
                       autoFocus
                       className={sharedTextarea}
                     />
-                    <div className="mt-1.5 flex justify-end gap-2">
+                    <div className="mt-2 flex justify-end gap-2">
                       <button
                         onClick={() => setEditingId(null)}
-                        className="rounded-lg px-3 py-1 text-xs font-medium text-zinc-500 hover:bg-zinc-200 dark:text-zinc-400 dark:hover:bg-zinc-700"
+                        className="min-h-[44px] rounded-lg px-4 text-sm font-medium text-zinc-500 hover:bg-zinc-200 dark:text-zinc-400 dark:hover:bg-zinc-700 md:min-h-0 md:py-2"
                       >
                         Cancel
                       </button>
                       <button
                         onClick={() => saveEdit(entry.id)}
-                        className="rounded-lg bg-indigo-600 px-3 py-1 text-xs font-medium text-white hover:bg-indigo-700"
+                        className="min-h-[44px] rounded-lg bg-indigo-600 px-5 text-sm font-medium text-white hover:bg-indigo-700 md:min-h-0 md:py-2"
                       >
                         Save
                       </button>
@@ -184,13 +184,13 @@ export function DiscussionHistory({ task, open, onClose }: Props) {
               value={newDate}
               max={localISODate()}
               onChange={(e) => setNewDate(e.target.value)}
-              className="rounded border border-zinc-300 bg-white px-2 py-1 text-xs outline-none focus:border-accent-500 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200"
+              className="min-h-[44px] rounded-lg border border-zinc-300 bg-white px-3 text-sm outline-none focus:border-accent-500 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200 md:min-h-0 md:py-2"
               title="When it was discussed (defaults to today)"
             />
             <button
               onClick={addEntry}
               disabled={!newNote.trim() && !newDate}
-              className="ml-auto rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-indigo-700 disabled:opacity-40"
+              className="ml-auto min-h-[44px] rounded-lg bg-indigo-600 px-5 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-40 md:min-h-0 md:py-2"
             >
               Add entry
             </button>
