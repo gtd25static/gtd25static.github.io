@@ -33,6 +33,7 @@ describe('DiscussedPopover', () => {
 
   it('logs and re-snoozes for the chosen named cadence', async () => {
     const { user, task } = renderPopover();
+    await user.type(screen.getByPlaceholderText('What came of it?'), 'spoke to ops');
     await user.click(screen.getByText('30 days'));
     await user.click(screen.getByText('Log & snooze'));
 
@@ -42,8 +43,20 @@ describe('DiscussedPopover', () => {
     expect(payload.snoozeCadence).toBe('30d');
     expect(payload.pingCooldown).toBe('custom');
     expect(payload.discussionLog).toHaveLength(1);
+    expect(payload.discussionLog[0].note).toBe('spoke to ops');
     expect(payload.pingCooldownUntil).toBeGreaterThan(Date.now() + 29 * DAY);
     expect(payload.pingCooldownUntil).toBeLessThan(Date.now() + 31 * DAY);
+  });
+
+  it('re-snoozes without creating a history entry when no note is written', async () => {
+    const { user } = renderPopover();
+    await user.click(screen.getByText('6 days'));
+    await user.click(screen.getByText('Log & snooze'));
+
+    const [, payload] = mockUpdateTask.mock.calls[0];
+    expect(payload.snoozeCadence).toBe('6d');
+    expect(payload.pingCooldown).toBe('custom');
+    expect(payload.discussionLog).toBeUndefined();
   });
 
   it('custom reveals a date picker and snoozes until that date', async () => {

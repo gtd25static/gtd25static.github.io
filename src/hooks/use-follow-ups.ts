@@ -95,11 +95,12 @@ export function cadenceMs(task: Task): number {
 }
 
 /**
- * Build the update payload for the "Discussed" action: append a discussion-log
- * entry and re-snooze. By default it re-snoozes for the topic's cadence; pass
- * `untilMs` to snooze until a specific absolute time (the "custom date" path).
- * Reversible via the existing wake (which clears the ping fields but leaves the
- * log intact).
+ * Build the update payload for the "Discussed" action: re-snooze, and append a
+ * discussion-log entry *only when a note was written* (a blank note re-snoozes
+ * without creating an empty history row). By default it re-snoozes for the
+ * topic's cadence; pass `untilMs` to snooze until a specific absolute time (the
+ * "custom date" path). Reversible via the existing wake (which clears the ping
+ * fields but leaves the log intact).
  */
 export function applyDiscussed(
   task: Task,
@@ -107,15 +108,15 @@ export function applyDiscussed(
   opts?: { untilMs?: number },
 ): Partial<Task> {
   const now = Date.now();
-  const trimmed = note?.trim();
-  const entry: DiscussionEntry = { id: newId(), at: now, ...(trimmed ? { note: trimmed } : {}) };
-  const log: DiscussionEntry[] = [...(task.discussionLog ?? []), entry];
   const until = opts?.untilMs ?? now + cadenceMs(task);
-  return {
-    discussionLog: log,
+  const snooze: Partial<Task> = {
     pingedAt: now,
     pingCooldown: 'custom',
     pingCooldownCustomMs: undefined,
     pingCooldownUntil: until,
   };
+  const trimmed = note?.trim();
+  if (!trimmed) return snooze;
+  const entry: DiscussionEntry = { id: newId(), at: now, note: trimmed };
+  return { ...snooze, discussionLog: [...(task.discussionLog ?? []), entry] };
 }

@@ -183,15 +183,18 @@ describe('applyDiscussed', () => {
 
   it('preserves prior log entries (append, not replace)', () => {
     const task = makeTask({ discussionLog: [{ id: 'old', at: 5, note: 'first' }] });
-    const update = applyDiscussed(task);
+    const update = applyDiscussed(task, 'second');
     expect(update.discussionLog).toHaveLength(2);
     expect(update.discussionLog![0].id).toBe('old');
-    expect(update.discussionLog![1].note).toBeUndefined(); // empty note omitted
+    expect(update.discussionLog![1].note).toBe('second');
   });
 
-  it('omits an empty/whitespace note', () => {
-    const update = applyDiscussed(makeTask(), '   ');
-    expect(update.discussionLog![0].note).toBeUndefined();
+  it('does not log an entry when the note is empty/whitespace (just re-snoozes)', () => {
+    const task = makeTask({ discussionLog: [{ id: 'old', at: 5, note: 'first' }] });
+    const blank = applyDiscussed(task, '   ');
+    expect(blank.discussionLog).toBeUndefined(); // existing log left untouched
+    expect(blank.pingCooldown).toBe('custom');
+    expect(applyDiscussed(makeTask()).discussionLog).toBeUndefined();
   });
 
   it('snoozes until an explicit untilMs (custom date) instead of the cadence', () => {
