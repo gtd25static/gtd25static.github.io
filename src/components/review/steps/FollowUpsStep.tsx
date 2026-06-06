@@ -1,6 +1,7 @@
 import type { Task, TaskList } from '../../../db/models';
 import { updateTask } from '../../../hooks/use-tasks';
 import { isInCooldown, formatCooldown, cooldownRemaining, applyDiscussed } from '../../../hooks/use-follow-ups';
+import { confirmDialog } from '../../ui/ConfirmDialog';
 import { ReviewStep } from '../ReviewStep';
 
 interface FollowUpEntry {
@@ -58,7 +59,10 @@ export function FollowUpsStep({ followUpLists, onNext, onPrev, onSkip }: Props) 
                   </button>
                 )}
                 <button
-                  onClick={() => updateTask(task.id, { archived: true })}
+                  onClick={async () => {
+                    if (!await confirmDialog('Resolve this follow-up? It moves to the Resolved section and you can reopen it later.', { confirmLabel: 'Resolve' })) return;
+                    await updateTask(task.id, { archived: true });
+                  }}
                   className="rounded px-1.5 py-0.5 text-xs text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-800"
                 >
                   Resolve

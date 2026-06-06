@@ -143,6 +143,13 @@ describe('cadenceMs', () => {
     expect(cadenceMs(makeTask({ snoozeCadence: '1month' }))).toBe(MONTH);
   });
 
+  it('resolves the current preset cadences', () => {
+    expect(cadenceMs(makeTask({ snoozeCadence: '20h' }))).toBe(20 * 60 * 60 * 1000);
+    expect(cadenceMs(makeTask({ snoozeCadence: '6d' }))).toBe(6 * DAY);
+    expect(cadenceMs(makeTask({ snoozeCadence: '30d' }))).toBe(30 * DAY);
+    expect(cadenceMs(makeTask({ snoozeCadence: '12w' }))).toBe(12 * 7 * DAY);
+  });
+
   it('uses custom cadence days', () => {
     expect(cadenceMs(makeTask({ snoozeCadence: 'custom', snoozeCadenceDays: 10 }))).toBe(10 * DAY);
   });
@@ -185,6 +192,14 @@ describe('applyDiscussed', () => {
   it('omits an empty/whitespace note', () => {
     const update = applyDiscussed(makeTask(), '   ');
     expect(update.discussionLog![0].note).toBeUndefined();
+  });
+
+  it('snoozes until an explicit untilMs (custom date) instead of the cadence', () => {
+    const until = Date.now() + 5 * DAY;
+    const update = applyDiscussed(makeTask({ snoozeCadence: '1month' }), 'met up', { untilMs: until });
+    expect(update.pingCooldown).toBe('custom');
+    expect(update.pingCooldownUntil).toBe(until);
+    expect(update.discussionLog).toHaveLength(1);
   });
 });
 

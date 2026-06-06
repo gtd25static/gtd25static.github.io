@@ -96,19 +96,26 @@ export function cadenceMs(task: Task): number {
 
 /**
  * Build the update payload for the "Discussed" action: append a discussion-log
- * entry and re-snooze for the topic's cadence. Reversible via the existing wake
- * (which clears the ping fields but leaves the log intact).
+ * entry and re-snooze. By default it re-snoozes for the topic's cadence; pass
+ * `untilMs` to snooze until a specific absolute time (the "custom date" path).
+ * Reversible via the existing wake (which clears the ping fields but leaves the
+ * log intact).
  */
-export function applyDiscussed(task: Task, note?: string): Partial<Task> {
+export function applyDiscussed(
+  task: Task,
+  note?: string,
+  opts?: { untilMs?: number },
+): Partial<Task> {
   const now = Date.now();
   const trimmed = note?.trim();
   const entry: DiscussionEntry = { id: newId(), at: now, ...(trimmed ? { note: trimmed } : {}) };
   const log: DiscussionEntry[] = [...(task.discussionLog ?? []), entry];
+  const until = opts?.untilMs ?? now + cadenceMs(task);
   return {
     discussionLog: log,
     pingedAt: now,
     pingCooldown: 'custom',
     pingCooldownCustomMs: undefined,
-    pingCooldownUntil: now + cadenceMs(task),
+    pingCooldownUntil: until,
   };
 }

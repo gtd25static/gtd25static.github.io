@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import type { Task, PingCooldown } from '../../db/models';
+import type { Task } from '../../db/models';
 import { updateTask, deleteTask, restoreTask, moveTaskToList } from '../../hooks/use-tasks';
 import { toast } from '../ui/Toast';
 import { confirmDialog } from '../ui/ConfirmDialog';
@@ -16,14 +16,6 @@ import { DropdownMenu } from '../ui/DropdownMenu';
 import { formatDate, dueDateColor } from '../../lib/date-utils';
 import { LinksList } from '../shared/LinksList';
 import { TaskForm } from '../tasks/TaskForm';
-
-const SNOOZE_OPTIONS: { value: PingCooldown; label: string }[] = [
-  { value: '12h', label: '12 hours' },
-  { value: '1week', label: '1 week' },
-  { value: '1month', label: '1 month' },
-  { value: '3months', label: '3 months' },
-  { value: 'custom', label: 'Pick a date...' },
-];
 
 function cadenceLabel(ms: number): string {
   const days = Math.round(ms / (24 * 60 * 60 * 1000));
@@ -51,13 +43,8 @@ export function FollowUpCard({ task, index, dragHandleProps }: Props) {
   const inCooldown = isInCooldown(task);
   const lists = useTaskLists();
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null);
-  const [showSnoozePicker, setShowSnoozePicker] = useState(false);
-  const [showDatePicker, setShowDatePicker] = useState(false);
   const [showDiscussed, setShowDiscussed] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
-  const [pickerAlign, setPickerAlign] = useState<'right' | 'left'>('right');
-  const pickerRef = useRef<HTMLDivElement>(null);
-  const dropdownRef = useRef<HTMLDivElement>(null);
   const discussedRef = useRef<HTMLDivElement>(null);
 
   // React to keyboard-triggered editing
@@ -67,30 +54,6 @@ export function FollowUpCard({ task, index, dragHandleProps }: Props) {
       setEditingTitle(true);
     }
   }, [editingItemId, task.id, task.title]);
-
-  // Adjust picker alignment if it would overflow the viewport
-  useEffect(() => {
-    if (!showSnoozePicker || !dropdownRef.current) return;
-    const rect = dropdownRef.current.getBoundingClientRect();
-    if (rect.right > window.innerWidth - 8) {
-      setPickerAlign('left');
-    } else {
-      setPickerAlign('right');
-    }
-  }, [showSnoozePicker]);
-
-  // Close picker on outside click
-  useEffect(() => {
-    if (!showSnoozePicker) return;
-    function handleClick(e: MouseEvent) {
-      if (pickerRef.current && !pickerRef.current.contains(e.target as Node)) {
-        setShowSnoozePicker(false);
-        setShowDatePicker(false);
-      }
-    }
-    document.addEventListener('mousedown', handleClick);
-    return () => document.removeEventListener('mousedown', handleClick);
-  }, [showSnoozePicker]);
 
   // Close the "Discussed" popover on outside click
   useEffect(() => {
@@ -113,33 +76,7 @@ export function FollowUpCard({ task, index, dragHandleProps }: Props) {
     await updateTask(task.id, { archived: false });
   }
 
-  async function handleSnooze(cd: PingCooldown) {
-    await updateTask(task.id, {
-      pingedAt: Date.now(),
-      pingCooldown: cd,
-      pingCooldownCustomMs: undefined,
-      pingCooldownUntil: undefined,
-    });
-    setShowSnoozePicker(false);
-    setShowDatePicker(false);
-  }
-
-  async function handleSnoozeUntilDate(dateStr: string) {
-    const [year, month, day] = dateStr.split('-').map(Number);
-    if (!year || !month || !day) return;
-    const target = new Date(year, month - 1, day, 23, 59, 59, 999);
-    if (target.getTime() <= Date.now()) return;
-    await updateTask(task.id, {
-      pingedAt: Date.now(),
-      pingCooldown: 'custom',
-      pingCooldownCustomMs: undefined,
-      pingCooldownUntil: target.getTime(),
-    });
-    setShowSnoozePicker(false);
-    setShowDatePicker(false);
-  }
-
-  async function handleWake() {
+  async function handleUnsnooze() {
     await updateTask(task.id, {
       pingedAt: undefined,
       pingCooldown: undefined,
@@ -147,11 +84,6 @@ export function FollowUpCard({ task, index, dragHandleProps }: Props) {
       pingCooldownUntil: undefined,
     });
   }
-
-  // Minimum date for the date picker: tomorrow
-  const tomorrow = new Date();
-  tomorrow.setDate(tomorrow.getDate() + 1);
-  const minDate = tomorrow.toISOString().split('T')[0];
 
   const handleContextMenu = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
@@ -176,9 +108,6 @@ export function FollowUpCard({ task, index, dragHandleProps }: Props) {
     }
     items.push(
       { label: 'Edit', onClick: () => setEditing(true) },
-      task.archived
-        ? { label: 'Reopen', onClick: handleReopen }
-        : { label: 'Resolve', onClick: handleResolve },
       { label: 'Delete', onClick: async () => {
         if (!await confirmDialog('Delete this follow-up?', { confirmLabel: 'Delete' })) return;
         deleteTask(task.id);
@@ -277,13 +206,24 @@ export function FollowUpCard({ task, index, dragHandleProps }: Props) {
         </div>
       </div>
 
-      {/* Discussed button — log a discussion and re-snooze for the topic's cadence */}
+      {/* Unsnooze — one click to wake a snoozed follow-up early */}
+      {!task.archived && inCooldown && (
+        <button
+          onClick={handleUnsnooze}
+          className="shrink-0 rounded-full px-2.5 py-1 text-xs font-medium bg-zinc-100 text-zinc-500 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-400 dark:hover:bg-zinc-700"
+          title="Unsnooze — remove snooze"
+        >
+          Unsnooze · {formatCooldown(cooldownRemaining(task))} left
+        </button>
+      )}
+
+      {/* Discussed button — log a discussion and re-snooze for the chosen cadence */}
       {!task.archived && (
         <div className="relative shrink-0" ref={discussedRef}>
           <button
             onClick={() => setShowDiscussed((v) => !v)}
             className="shrink-0 rounded-full px-2.5 py-1 text-xs font-medium bg-emerald-50 text-emerald-700 hover:bg-emerald-100 dark:bg-emerald-900/30 dark:text-emerald-400 dark:hover:bg-emerald-800/40"
-            title="Log that you discussed this, then snooze for its cadence"
+            title="Log that you discussed this, then snooze for the chosen cadence"
           >
             Discussed
           </button>
@@ -293,59 +233,34 @@ export function FollowUpCard({ task, index, dragHandleProps }: Props) {
         </div>
       )}
 
-      {/* Snooze / Wake button */}
-      {!task.archived && (
-        <div className="relative shrink-0" ref={pickerRef}>
-          {inCooldown ? (
-            <button
-              onClick={handleWake}
-              className="shrink-0 rounded-full px-2.5 py-1 text-xs font-medium bg-zinc-100 text-zinc-500 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-400 dark:hover:bg-zinc-700"
-              title="Wake — remove snooze"
-            >
-              {formatCooldown(cooldownRemaining(task))} left
-            </button>
-          ) : (
-            <button
-              onClick={() => setShowSnoozePicker(!showSnoozePicker)}
-              className="shrink-0 rounded-full px-2.5 py-1 text-xs font-medium bg-indigo-50 text-indigo-600 hover:bg-indigo-100 dark:bg-indigo-900/30 dark:text-indigo-400 dark:hover:bg-indigo-800/40"
-              title="Snooze this follow-up"
-            >
-              Snooze
-            </button>
-          )}
-          {showSnoozePicker && (
-            <div ref={dropdownRef} className={`absolute z-50 mt-1 min-w-[160px] rounded-xl border border-zinc-200 bg-white py-1 shadow-lg dark:border-zinc-700 dark:bg-zinc-900 ${pickerAlign === 'right' ? 'right-0' : 'left-0'}`}>
-              {SNOOZE_OPTIONS.map((opt) => (
-                <button
-                  key={opt.value}
-                  onClick={() => {
-                    if (opt.value === 'custom') {
-                      setShowDatePicker(true);
-                    } else {
-                      handleSnooze(opt.value);
-                    }
-                  }}
-                  className="block w-full px-3 py-1.5 text-left text-xs hover:bg-zinc-100 dark:hover:bg-zinc-800"
-                >
-                  {opt.label}
-                </button>
-              ))}
-              {showDatePicker && (
-                <div className="border-t border-zinc-100 px-3 py-2 dark:border-zinc-800">
-                  <input
-                    type="date"
-                    min={minDate}
-                    onChange={(e) => {
-                      if (e.target.value) handleSnoozeUntilDate(e.target.value);
-                    }}
-                    className="w-full rounded border border-zinc-300 bg-white px-2 py-1 text-xs outline-none focus:border-accent-500 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200"
-                    autoFocus
-                  />
-                </div>
-              )}
-            </div>
-          )}
-        </div>
+      {/* History — shown when there's a discussion log to inspect/edit */}
+      {(task.discussionLog?.length ?? 0) > 0 && (
+        <button
+          onClick={() => setShowHistory(true)}
+          className="shrink-0 rounded-full px-2.5 py-1 text-xs font-medium bg-zinc-100 text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
+          title="View and edit discussion history"
+        >
+          History
+        </button>
+      )}
+
+      {/* Resolve / Unresolve — archive the follow-up (confirm-gated) or reopen it */}
+      {task.archived ? (
+        <button
+          onClick={handleReopen}
+          className="shrink-0 rounded-full px-2.5 py-1 text-xs font-medium bg-indigo-50 text-indigo-600 hover:bg-indigo-100 dark:bg-indigo-900/30 dark:text-indigo-400 dark:hover:bg-indigo-800/40"
+          title="Unresolve — move back to active"
+        >
+          Unresolve
+        </button>
+      ) : (
+        <button
+          onClick={handleResolve}
+          className="shrink-0 rounded-full px-2.5 py-1 text-xs font-medium bg-zinc-100 text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
+          title="Resolve — archive this follow-up"
+        >
+          Resolve
+        </button>
       )}
 
       {/* Star button — always visible when starred */}
@@ -375,9 +290,6 @@ export function FollowUpCard({ task, index, dragHandleProps }: Props) {
             { label: task.hasWarning ? 'Clear warning' : 'Warn', onClick: () => toggleWarning('task', task.id) },
             { label: 'History', onClick: () => setShowHistory(true) },
             { label: 'Edit', onClick: () => setEditing(true) },
-            task.archived
-              ? { label: 'Reopen', onClick: handleReopen }
-              : { label: 'Resolve', onClick: handleResolve },
             { label: 'Delete', onClick: async () => {
               if (!await confirmDialog('Delete this follow-up?', { confirmLabel: 'Delete' })) return;
               deleteTask(task.id);

@@ -3,7 +3,19 @@ import type { KdfParams } from './vault-kdf';
 export type ListType = 'tasks' | 'follow-ups';
 export type TaskStatus = 'todo' | 'done' | 'blocked' | 'working';
 export type SubtaskStatus = 'todo' | 'done' | 'blocked' | 'working';
-export type PingCooldown = '12h' | '1week' | '1month' | '3months' | 'custom';
+// Current UI presets: '20h' | '6d' | '30d' | '12w'. Legacy values
+// ('12h' | '1week' | '1month' | '3months') are kept so already-snoozed tasks
+// still type-check and resolve a cooldown. 'custom' = absolute pingCooldownUntil.
+export type PingCooldown =
+  | '20h'
+  | '6d'
+  | '30d'
+  | '12w'
+  | '12h'
+  | '1week'
+  | '1month'
+  | '3months'
+  | 'custom';
 
 export interface TaskList {
   id: string;

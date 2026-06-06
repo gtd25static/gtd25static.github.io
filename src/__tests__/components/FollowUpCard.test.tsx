@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import '../setup-component';
 import { resetAppState, makeTask, makeTaskList } from '../helpers/component-helpers';
@@ -92,79 +92,49 @@ describe('FollowUpCard', () => {
     );
   });
 
-  it('resolving is confirm-gated and sets archived', async () => {
-    const { user, task, container } = renderCard();
-    fireEvent.contextMenu(container.querySelector('[data-focus-id]')!);
-    await user.click(screen.getByText('Resolve'));
+  it('resolving (visible chip) is confirm-gated and sets archived', async () => {
+    const { user, task } = renderCard();
+    await user.click(screen.getByTitle('Resolve — archive this follow-up'));
     // Confirmation must appear before anything is archived.
     expect(mockUpdateTask).not.toHaveBeenCalled();
-    const confirmBtn = await screen.findByRole('button', { name: 'Resolve' });
-    await user.click(confirmBtn);
+    const dialog = await screen.findByRole('dialog');
+    await user.click(within(dialog).getByRole('button', { name: 'Resolve' }));
     expect(mockUpdateTask).toHaveBeenCalledWith(task.id, { archived: true });
   });
 
-  it('shows discussion history entries', async () => {
-    const { user, container } = renderCard({
+  it('shows Unresolve (no confirm) and reopens an archived item', async () => {
+    const { user, task } = renderCard({ archived: true });
+    expect(screen.queryByTitle('Resolve — archive this follow-up')).not.toBeInTheDocument();
+    await user.click(screen.getByTitle('Unresolve — move back to active'));
+    expect(mockUpdateTask).toHaveBeenCalledWith(task.id, { archived: false });
+  });
+
+  it('shows a History chip only when there is a discussion log', async () => {
+    const { user } = renderCard({
       discussionLog: [{ id: 'd1', at: Date.now(), note: 'talked to ops team' }],
     });
-    fireEvent.contextMenu(container.querySelector('[data-focus-id]')!);
-    await user.click(screen.getByText('History'));
-    expect(await screen.findByText('talked to ops team')).toBeInTheDocument();
+    await user.click(screen.getByTitle('View and edit discussion history'));
+    expect(await screen.findByDisplayValue('talked to ops team')).toBeInTheDocument();
   });
 
-  it('shows Snooze button when not in cooldown', () => {
+  it('hides the History chip when the log is empty', () => {
     renderCard();
-    expect(screen.getByTitle('Snooze this follow-up')).toBeInTheDocument();
+    expect(screen.queryByTitle('View and edit discussion history')).not.toBeInTheDocument();
   });
 
-  it('shows snooze options when Snooze is clicked', async () => {
-    const { user } = renderCard();
-    await user.click(screen.getByTitle('Snooze this follow-up'));
-    expect(screen.getByText('12 hours')).toBeInTheDocument();
-    expect(screen.getByText('1 week')).toBeInTheDocument();
-    expect(screen.getByText('1 month')).toBeInTheDocument();
-    expect(screen.getByText('Pick a date...')).toBeInTheDocument();
+  it('does not render a standalone Snooze button', () => {
+    renderCard();
+    expect(screen.queryByTitle('Snooze this follow-up')).not.toBeInTheDocument();
   });
 
-  it('snoozes for 12h when option is clicked', async () => {
-    const { user, task } = renderCard();
-    await user.click(screen.getByTitle('Snooze this follow-up'));
-    await user.click(screen.getByText('12 hours'));
-    expect(mockUpdateTask).toHaveBeenCalledWith(task.id, {
-      pingedAt: expect.any(Number),
-      pingCooldown: '12h',
-      pingCooldownCustomMs: undefined,
-      pingCooldownUntil: undefined,
-    });
-  });
-
-  it('stores custom snooze dates as absolute end-of-day timestamps', async () => {
-    const { user, task, container } = renderCard();
-    await user.click(screen.getByTitle('Snooze this follow-up'));
-    await user.click(screen.getByText('Pick a date...'));
-
-    const input = container.querySelector('input[type="date"]');
-    expect(input).toBeTruthy();
-    await act(async () => {
-      fireEvent.change(input!, { target: { value: '2099-06-22' } });
-    });
-
-    expect(mockUpdateTask).toHaveBeenCalledWith(task.id, {
-      pingedAt: expect.any(Number),
-      pingCooldown: 'custom',
-      pingCooldownCustomMs: undefined,
-      pingCooldownUntil: new Date(2099, 5, 22, 23, 59, 59, 999).getTime(),
-    });
-  });
-
-  it('shows wake button when in cooldown', () => {
+  it('shows an Unsnooze chip when in cooldown', () => {
     renderCard({ pingedAt: Date.now() });
-    expect(screen.getByTitle('Wake — remove snooze')).toBeInTheDocument();
+    expect(screen.getByTitle('Unsnooze — remove snooze')).toBeInTheDocument();
   });
 
-  it('clears pingedAt when wake is clicked', async () => {
+  it('clears the ping fields when Unsnooze is clicked', async () => {
     const { user, task } = renderCard({ pingedAt: Date.now() });
-    await user.click(screen.getByTitle('Wake — remove snooze'));
+    await user.click(screen.getByTitle('Unsnooze — remove snooze'));
     expect(mockUpdateTask).toHaveBeenCalledWith(task.id, {
       pingedAt: undefined,
       pingCooldown: undefined,

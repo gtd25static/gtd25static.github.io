@@ -1,6 +1,6 @@
 # GTD25 — Security Review & Threat Model
 
-**Last updated:** 2026-06-05 (follow-up discussion log + encrypted export)
+**Last updated:** 2026-06-06 (editable follow-up history; collapse Discussed/Snooze into one snooze path)
 **Maintenance:** This document MUST be kept current. See "Keeping this document
 updated" at the end and the corresponding rule in `CLAUDE.md`.
 
@@ -38,9 +38,11 @@ Encryption is **field-level**. Encrypted fields (`SENSITIVE_FIELDS`):
   The free-text `note` is content, so the **whole array** is encrypted as a unit
   (the per-entry `at` timestamps are encrypted too — they are not exposed as
   metadata). ⚠️ Because field-level sync merge is last-write-wins per field, two
-  devices that each append a discussion between syncs will keep only one device's
-  array — a **data-loss** risk (not a confidentiality one); accepted for a
-  single-user app. A union-by-`id` merge is a possible future hardening.
+  devices that each append **or edit** a discussion between syncs will keep only
+  one device's array — a **data-loss** risk (not a confidentiality one); the
+  in-app history editor (edit past notes / add entries) makes a clobber slightly
+  more likely. Accepted for a single-user app; a union-by-`id` merge is a possible
+  future hardening.
 
 **Always plaintext (metadata), at rest AND on the wire AND on the backend:**
 - task/list/subtask **ids**, `listId`, `taskId`, `status`, `order`, `dueDate`,

@@ -20,6 +20,12 @@ export function isInboxList(list: { name: string; type: string }): boolean {
 }
 
 export const PING_COOLDOWN_MS: Record<string, number> = {
+  // Current presets surfaced in the UI
+  '20h': 20 * 60 * 60 * 1000,
+  '6d': 6 * 24 * 60 * 60 * 1000,
+  '30d': 30 * 24 * 60 * 60 * 1000,
+  '12w': 12 * 7 * 24 * 60 * 60 * 1000,
+  // Legacy presets — kept so already-snoozed tasks still resolve a cooldown
   '12h': 12 * 60 * 60 * 1000,
   '1week': 7 * 24 * 60 * 60 * 1000,
   '1month': 30 * 24 * 60 * 60 * 1000,
