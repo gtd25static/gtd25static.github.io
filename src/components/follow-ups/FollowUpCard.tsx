@@ -29,9 +29,9 @@ function cadenceLabel(ms: number): string {
 }
 
 // Action-chip layout: a 44px tap target on phones (per platform touch guidance),
-// compact on md+ desktop. Colours are appended per chip.
+// a touch more compact on md+ desktop. Colours are appended per chip.
 const chipBase =
-  'inline-flex shrink-0 items-center justify-center rounded-full px-3 text-xs font-medium min-h-[44px] md:min-h-0 md:px-2.5 md:py-1';
+  'inline-flex shrink-0 items-center justify-center rounded-full px-3.5 text-sm font-medium min-h-[44px] md:min-h-0 md:px-3 md:py-1.5';
 
 interface Props {
   task: Task;

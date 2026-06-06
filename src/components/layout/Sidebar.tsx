@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import {
   useDndMonitor,
@@ -28,6 +28,7 @@ import { moveTaskToList } from '../../hooks/use-tasks';
 import { useSpecialListContext } from '../../hooks/use-special-list';
 import { useReviewData } from '../../hooks/use-review-data';
 import { useVault } from '../../hooks/use-vault';
+import { useServiceWorker } from '../../hooks/use-service-worker';
 import { lock as lockVault } from '../../db/vault';
 
 function formatLastReviewed(ts: number): string {
@@ -274,6 +275,25 @@ export function Sidebar() {
   const specialTotal = warningCount + blockedCount + recurringCount;
   const reviewData = useReviewData();
   const { enabled: paranoidEnabled } = useVault();
+
+  const { needRefresh, forceCheck } = useServiceWorker();
+  const [checkingUpdate, setCheckingUpdate] = useState(false);
+  // Read the latest needRefresh inside the post-check timeout without staleness.
+  const needRefreshRef = useRef(needRefresh);
+  useEffect(() => { needRefreshRef.current = needRefresh; }, [needRefresh]);
+
+  function handleCheckForUpdates() {
+    if (checkingUpdate) return;
+    setCheckingUpdate(true);
+    setSidebarOpen(false);
+    forceCheck(); // if a new build exists, AppUpdatePrompt shows the update dialog
+    // Give the service worker a few seconds to detect a waiting build; if none
+    // turned up, reassure the user they're current.
+    setTimeout(() => {
+      setCheckingUpdate(false);
+      if (!needRefreshRef.current) toast('You’re on the latest version', 'success');
+    }, 4000);
+  }
 
   const filteredLists = searchQuery
     ? lists.filter((l) => l.name.toLowerCase().includes(searchQuery.toLowerCase()))
@@ -599,6 +619,17 @@ export function Sidebar() {
             <span className="flex-1 text-left">Lock now</span>
           </button>
         )}
+        <button
+          onClick={handleCheckForUpdates}
+          disabled={checkingUpdate}
+          className="flex w-full items-center gap-3 rounded-full px-3 py-3.5 md:py-2 text-sm text-zinc-600 hover:bg-zinc-100 disabled:opacity-60 dark:text-zinc-400 dark:hover:bg-zinc-800"
+        >
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className={checkingUpdate ? 'animate-spin' : ''}>
+            <path d="M20 11A8 8 0 005.3 6.3M4 13a8 8 0 0014.7 4.7" strokeLinecap="round" />
+            <path d="M20 4v4h-4M4 20v-4h4" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+          <span className="flex-1 text-left">{checkingUpdate ? 'Checking…' : 'Check for app updates'}</span>
+        </button>
         <button
           onClick={() => { setWeeklyReviewOpen(true); setSidebarOpen(false); }}
           className="flex w-full items-center gap-3 rounded-full px-3 py-3.5 md:py-2 text-sm text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800"
