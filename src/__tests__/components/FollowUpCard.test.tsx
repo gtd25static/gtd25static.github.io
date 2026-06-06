@@ -114,7 +114,7 @@ describe('FollowUpCard', () => {
       discussionLog: [{ id: 'd1', at: Date.now(), note: 'talked to ops team' }],
     });
     await user.click(screen.getByTitle('View and edit discussion history'));
-    expect(await screen.findByDisplayValue('talked to ops team')).toBeInTheDocument();
+    expect(await screen.findByText('talked to ops team')).toBeInTheDocument();
   });
 
   it('hides the History chip when the log is empty', () => {

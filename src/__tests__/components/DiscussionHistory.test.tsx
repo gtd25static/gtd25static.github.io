@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event';
 import '../setup-component';
 import { makeTask } from '../helpers/component-helpers';
 import { DiscussionHistory } from '../../components/follow-ups/DiscussionHistory';
+import { ConfirmDialogContainer } from '../../components/ui/ConfirmDialog';
 
 const mockUpdateTask = vi.fn();
 vi.mock('../../hooks/use-tasks', () => ({
@@ -19,28 +20,49 @@ describe('DiscussionHistory (editable)', () => {
       ...overrides,
     });
     const user = userEvent.setup();
-    const result = render(<DiscussionHistory task={task} open onClose={() => {}} />);
+    const result = render(
+      <>
+        <ConfirmDialogContainer />
+        <DiscussionHistory task={task} open onClose={() => {}} />
+      </>,
+    );
     return { task, user, ...result };
   }
 
-  it('saves an edited note on blur', async () => {
+  it('shows the note read-only until the pencil is clicked', () => {
+    renderHistory();
+    expect(screen.getByText('old note')).toBeInTheDocument();
+    expect(screen.queryByDisplayValue('old note')).not.toBeInTheDocument();
+  });
+
+  it('edits a note via the pencil and saves', async () => {
     const { user, task } = renderHistory();
+    await user.click(screen.getByTitle('Edit this entry'));
     const textarea = screen.getByDisplayValue('old note');
     await user.clear(textarea);
     await user.type(textarea, 'edited note');
-    await user.tab(); // blur
+    await user.click(screen.getByText('Save'));
 
     expect(mockUpdateTask).toHaveBeenCalledWith(task.id, {
       discussionLog: [expect.objectContaining({ id: 'd1', note: 'edited note' })],
     });
   });
 
-  it('does not save when the note is unchanged', async () => {
+  it('cancel discards the edit without saving', async () => {
     const { user } = renderHistory();
-    const textarea = screen.getByDisplayValue('old note');
-    await user.click(textarea);
-    await user.tab();
+    await user.click(screen.getByTitle('Edit this entry'));
+    await user.type(screen.getByDisplayValue('old note'), ' changed');
+    await user.click(screen.getByText('Cancel'));
     expect(mockUpdateTask).not.toHaveBeenCalled();
+    expect(screen.getByText('old note')).toBeInTheDocument();
+  });
+
+  it('deletes an entry after confirmation', async () => {
+    const { user, task } = renderHistory();
+    await user.click(screen.getByTitle('Delete this entry'));
+    expect(mockUpdateTask).not.toHaveBeenCalled(); // confirm gate
+    await user.click(await screen.findByRole('button', { name: 'Delete' }));
+    expect(mockUpdateTask).toHaveBeenCalledWith(task.id, { discussionLog: [] });
   });
 
   it('appends a new entry', async () => {
