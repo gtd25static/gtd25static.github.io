@@ -17,6 +17,7 @@ import { TaskForm } from './TaskForm';
 import { ContextMenu, type MenuItem } from '../ui/ContextMenu';
 import { DropdownMenu } from '../ui/DropdownMenu';
 import { LinksList } from '../shared/LinksList';
+import { ExpandableText } from '../shared/ExpandableText';
 
 interface Props {
   task: Task;
@@ -210,8 +211,11 @@ export function TaskCard({ task, index, dragHandleProps }: Props) {
               autoFocus
             />
           ) : (
-            <span
-              className={`text-sm leading-5 line-clamp-3 hover:cursor-text ${
+            <ExpandableText
+              as="span"
+              text={task.title}
+              clamp={3}
+              className={`text-sm leading-5 ${
                 task.status === 'done'
                   ? 'line-through text-zinc-400 dark:text-zinc-500'
                   : 'text-zinc-800 dark:text-zinc-200'
@@ -222,9 +226,7 @@ export function TaskCard({ task, index, dragHandleProps }: Props) {
                 setEditedTitle(task.title);
                 setEditingTitle(true);
               }}
-            >
-              {task.title}
-            </span>
+            />
           )}
 
           {/* Metadata badges on separate row */}

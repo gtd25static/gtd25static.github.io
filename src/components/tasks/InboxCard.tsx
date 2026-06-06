@@ -7,6 +7,7 @@ import { confirmDialog } from '../ui/ConfirmDialog';
 import { DropdownMenu } from '../ui/DropdownMenu';
 import { ContextMenu, type MenuItem } from '../ui/ContextMenu';
 import { LinksList } from '../shared/LinksList';
+import { ExpandableText } from '../shared/ExpandableText';
 import { isInboxList } from '../../lib/constants';
 
 interface Props {
@@ -86,9 +87,12 @@ export function InboxCard({ task, index }: Props) {
 
       {/* Title + link */}
       <div className="flex-1 min-w-0">
-        <span className="text-sm text-zinc-800 dark:text-zinc-200 line-clamp-3">
-          {task.title}
-        </span>
+        <ExpandableText
+          as="span"
+          text={task.title}
+          clamp={3}
+          className="text-sm text-zinc-800 dark:text-zinc-200"
+        />
         {task.link && (
           <div className="mt-0.5">
             <LinksList primaryLink={task.link} primaryTitle={task.linkTitle} links={task.links} />

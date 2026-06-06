@@ -15,6 +15,7 @@ import { ContextMenu, type MenuItem } from '../ui/ContextMenu';
 import { DropdownMenu } from '../ui/DropdownMenu';
 import { formatDate, dueDateColor } from '../../lib/date-utils';
 import { LinksList } from '../shared/LinksList';
+import { ExpandableText } from '../shared/ExpandableText';
 import { TaskForm } from '../tasks/TaskForm';
 
 function cadenceLabel(ms: number): string {
@@ -180,20 +181,26 @@ export function FollowUpCard({ task, index, dragHandleProps }: Props) {
             autoFocus
           />
         ) : (
-          <span
-            className="text-sm text-zinc-800 dark:text-zinc-200 line-clamp-3 hover:cursor-text"
+          <ExpandableText
+            as="span"
+            text={task.title}
+            clamp={3}
+            className="text-sm text-zinc-800 dark:text-zinc-200"
             title="Double-click to edit"
             onDoubleClick={(e) => {
               e.stopPropagation();
               setEditedTitle(task.title);
               setEditingTitle(true);
             }}
-          >
-            {task.title}
-          </span>
+          />
         )}
         {task.description && (
-          <p className="mt-0.5 text-xs text-zinc-500 dark:text-zinc-400 line-clamp-1">{task.description}</p>
+          <ExpandableText
+            as="p"
+            text={task.description}
+            clamp={1}
+            className="mt-0.5 text-xs text-zinc-500 dark:text-zinc-400"
+          />
         )}
         <div className="mt-1 flex items-center gap-2 flex-wrap">
           <PingCooldownBadge task={task} />
