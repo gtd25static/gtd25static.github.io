@@ -28,6 +28,11 @@ function cadenceLabel(ms: number): string {
   return `every ${Math.round(ms / (60 * 60 * 1000))}h`;
 }
 
+// Action-chip layout: a 44px tap target on phones (per platform touch guidance),
+// compact on md+ desktop. Colours are appended per chip.
+const chipBase =
+  'inline-flex shrink-0 items-center justify-center rounded-full px-3 text-xs font-medium min-h-[44px] md:min-h-0 md:px-2.5 md:py-1';
+
 interface Props {
   task: Task;
   index?: number;
@@ -210,7 +215,7 @@ export function FollowUpCard({ task, index, dragHandleProps }: Props) {
       {!task.archived && inCooldown && (
         <button
           onClick={handleUnsnooze}
-          className="shrink-0 rounded-full px-2.5 py-1 text-xs font-medium bg-zinc-100 text-zinc-500 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-400 dark:hover:bg-zinc-700"
+          className={`${chipBase} bg-zinc-100 text-zinc-500 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-400 dark:hover:bg-zinc-700`}
           title="Unsnooze — remove snooze"
         >
           Unsnooze · {formatCooldown(cooldownRemaining(task))} left
@@ -222,7 +227,7 @@ export function FollowUpCard({ task, index, dragHandleProps }: Props) {
         <div className="relative shrink-0" ref={discussedRef}>
           <button
             onClick={() => setShowDiscussed((v) => !v)}
-            className="shrink-0 rounded-full px-2.5 py-1 text-xs font-medium bg-emerald-50 text-emerald-700 hover:bg-emerald-100 dark:bg-emerald-900/30 dark:text-emerald-400 dark:hover:bg-emerald-800/40"
+            className={`${chipBase} bg-emerald-50 text-emerald-700 hover:bg-emerald-100 dark:bg-emerald-900/30 dark:text-emerald-400 dark:hover:bg-emerald-800/40`}
             title="Log that you discussed this, then snooze for the chosen cadence"
           >
             Discussed
@@ -237,7 +242,7 @@ export function FollowUpCard({ task, index, dragHandleProps }: Props) {
       {(task.discussionLog?.length ?? 0) > 0 && (
         <button
           onClick={() => setShowHistory(true)}
-          className="shrink-0 rounded-full px-2.5 py-1 text-xs font-medium bg-zinc-100 text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
+          className={`${chipBase} bg-zinc-100 text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700`}
           title="View and edit discussion history"
         >
           History
@@ -248,7 +253,7 @@ export function FollowUpCard({ task, index, dragHandleProps }: Props) {
       {task.archived ? (
         <button
           onClick={handleReopen}
-          className="shrink-0 rounded-full px-2.5 py-1 text-xs font-medium bg-indigo-50 text-indigo-600 hover:bg-indigo-100 dark:bg-indigo-900/30 dark:text-indigo-400 dark:hover:bg-indigo-800/40"
+          className={`${chipBase} bg-indigo-50 text-indigo-600 hover:bg-indigo-100 dark:bg-indigo-900/30 dark:text-indigo-400 dark:hover:bg-indigo-800/40`}
           title="Unresolve — move back to active"
         >
           Unresolve
@@ -256,7 +261,7 @@ export function FollowUpCard({ task, index, dragHandleProps }: Props) {
       ) : (
         <button
           onClick={handleResolve}
-          className="shrink-0 rounded-full px-2.5 py-1 text-xs font-medium bg-zinc-100 text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
+          className={`${chipBase} bg-zinc-100 text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700`}
           title="Resolve — archive this follow-up"
         >
           Resolve
@@ -266,13 +271,13 @@ export function FollowUpCard({ task, index, dragHandleProps }: Props) {
       {/* Star button — always visible when starred */}
       <button
         onClick={() => updateTask(task.id, { starred: !task.starred })}
-        className={`shrink-0 rounded p-0.5 ${task.starred ? 'text-amber-500' : 'text-zinc-300 hover:text-amber-400 dark:text-zinc-600 dark:hover:text-amber-400 md:opacity-0 md:group-hover:opacity-100'}`}
+        className={`flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-lg md:min-h-0 md:min-w-0 md:p-0.5 ${task.starred ? 'text-amber-500' : 'text-zinc-300 hover:text-amber-400 dark:text-zinc-600 dark:hover:text-amber-400 md:opacity-0 md:group-hover:opacity-100'}`}
         title={task.starred ? 'Unstar' : 'Star'}
       >
         {task.starred ? (
-          <svg width="14" height="14" viewBox="0 0 20 20" fill="currentColor"><path d="M10 1l2.39 6.34H19l-5.19 3.78 1.98 6.34L10 13.68l-5.79 3.78 1.98-6.34L1 7.34h6.61z" /></svg>
+          <svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor"><path d="M10 1l2.39 6.34H19l-5.19 3.78 1.98 6.34L10 13.68l-5.79 3.78 1.98-6.34L1 7.34h6.61z" /></svg>
         ) : (
-          <svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M10 1l2.39 6.34H19l-5.19 3.78 1.98 6.34L10 13.68l-5.79 3.78 1.98-6.34L1 7.34h6.61z" /></svg>
+          <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M10 1l2.39 6.34H19l-5.19 3.78 1.98 6.34L10 13.68l-5.79 3.78 1.98-6.34L1 7.34h6.61z" /></svg>
         )}
       </button>
       {/* Hover actions: edit/delete */}
