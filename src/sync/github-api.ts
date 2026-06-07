@@ -99,6 +99,42 @@ export async function getFile(
   return { data, sha: json.sha };
 }
 
+// Conditional GET for cheap polling: pass the previous ETag as `If-None-Match`.
+// A 304 ("unchanged") does NOT count against the GitHub rate limit, so the lock
+// screen can poll the mailbox tightly. Distinct from getFile() so existing
+// callers and their return shape are untouched.
+export type ConditionalFile =
+  | { status: 'unchanged'; etag: string }
+  | { status: 'ok'; data: string; sha: string; etag: string | null }
+  | { status: 'absent' };
+
+export async function getFileConditional(
+  pat: string,
+  repo: string,
+  path: string,
+  etag?: string | null,
+  signal?: AbortSignal,
+): Promise<ConditionalFile> {
+  const options = etag ? { headers: { 'If-None-Match': etag } } : undefined;
+  const resp = await githubFetch(pat, repo, path, options, signal);
+  if (resp.status === 304) return { status: 'unchanged', etag: etag as string };
+  if (resp.status === 404) return { status: 'absent' };
+  if (!resp.ok) throw new Error(`GitHub API error: ${resp.status}`);
+
+  const newEtag = resp.headers.get('ETag');
+  const json = await resp.json();
+  if (!json || typeof json.content !== 'string' || typeof json.sha !== 'string') {
+    throw new Error(`Malformed GitHub response for ${path}: missing content or sha`);
+  }
+  let data: string;
+  try {
+    data = base64ToUtf8(json.content);
+  } catch (err) {
+    throw new Error(`Failed to decode base64 content for ${path}: ${err instanceof Error ? err.message : err}`);
+  }
+  return { status: 'ok', data, sha: json.sha, etag: newEtag };
+}
+
 export async function putFile(
   pat: string,
   repo: string,
