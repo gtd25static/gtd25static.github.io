@@ -203,6 +203,46 @@ describe('remote wipe', () => {
   });
 });
 
+describe('remote unlock: polling & lifecycle branches', () => {
+  it('pollRemoteCommands is a no-op when there is no command', async () => {
+    await enrollPair();
+    await actAsLaptop();
+    const r = await ru.pollRemoteCommands(PAT, REPO, LAP);
+    expect(r).toEqual({ etag: null, wiped: false });
+    expect(panicSpy).not.toHaveBeenCalled();
+  });
+
+  it('ignores an unlock response that does not match the pending nonce', async () => {
+    await enrollPair();
+    await actAsLaptop();
+    vault.lock();
+    await ru.requestRemoteUnlock(PAT, REPO, LAP);
+    files[ru.unlockRespPath(LAP)] = {
+      data: JSON.stringify({ forNonce: 'some-other-nonce', fromApproverDeviceId: PHONE, ts: Date.now(), respBlob: 'x', sig: 'y' }),
+      sha: 'r1',
+    };
+    const res = await ru.pollRemoteUnlock(PAT, REPO, LAP);
+    expect(res.status).toBe('waiting');
+    expect(vault.isUnlocked()).toBe(false);
+  });
+
+  it('disableRemoteUnlock clears the RUK wrapping and re-locks the PAT away', async () => {
+    await enrollPair();
+    await actAsLaptop();
+    await ru.disableRemoteUnlock();
+    const v = await db.vault.get('vault');
+    expect(v?.dekWrappedByRuk).toBeUndefined();
+    expect(v?.remoteUnlock).toBeUndefined();
+    expect((await db.localSettings.get('local'))?.githubPat).toBeUndefined();
+  });
+
+  it('buildEnrollContext requires sync creds and a cached salt', async () => {
+    await db.localSettings.update('local', { deviceId: LAP, githubRepo: REPO, githubPat: PAT, encryptionPassword: 'p', syncEnabled: true });
+    await vault.enableParanoid(PASS); // unlocked but never synced -> no cached salt
+    await expect(ru.buildEnrollContext()).rejects.toThrow(/sync/i);
+  });
+});
+
 describe('remote unlock: approver inbox enforcement', () => {
   it('a Paranoid device will not accept approver invites', async () => {
     await enrollPair();
