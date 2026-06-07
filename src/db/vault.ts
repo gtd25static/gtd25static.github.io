@@ -203,6 +203,9 @@ export async function enableParanoid(passphrase: string, idleMinutes = DEFAULT_I
     paranoidMaxUnlockAttempts: DEFAULT_MAX_ATTEMPTS,
     githubPat: undefined,
     encryptionPassword: undefined,
+    // A Paranoid device must NOT be a remote-unlock approver — drop any approver
+    // secrets it held (enforcement, alongside the runtime refusals in remote-unlock).
+    remoteApproverFor: undefined,
   });
 
   purgeLocalBackups();
@@ -381,6 +384,41 @@ export async function removeSecurityKey(credentialId?: string): Promise<void> {
     : [];
   await writeSecurityKeys(remaining);
   emit();
+}
+
+// --- Remote unlock (DEK wrapped by a remote-unlock key held by trusted devices) ---
+
+/** Wrap the live DEK with a 32-byte RUK and persist it. Requires the vault unlocked. */
+export async function wrapDekWithRuk(rukRaw: Uint8Array): Promise<void> {
+  if (!currentDek) throw new Error('Unlock the vault before enrolling remote unlock');
+  const kek = await importKekFromBytes(rukRaw);
+  const dekWrappedByRuk = await wrapDek(kek, currentDek);
+  await db.vault.update('vault', { dekWrappedByRuk });
+}
+
+/** Unlock using a remote-unlock key (RUK) relayed from a trusted device. */
+export async function unlockWithRemoteKey(rukRaw: Uint8Array): Promise<boolean> {
+  const vault = await db.vault.get('vault');
+  if (!vault?.dekWrappedByRuk) return false;
+  const kek = await importKekFromBytes(rukRaw);
+  let dek: CryptoKey;
+  try {
+    dek = await unwrapDek(kek, vault.dekWrappedByRuk);
+  } catch {
+    return false; // wrong RUK
+  }
+  return finishUnlock(vault, dek);
+}
+
+/** True once remote unlock is enrolled on this device (a wrapped-by-RUK DEK exists). */
+export async function isRemoteUnlockEnrolled(): Promise<boolean> {
+  const vault = await db.vault.get('vault');
+  return !!vault?.dekWrappedByRuk;
+}
+
+/** Tear down remote-unlock enrollment (drop the RUK-wrapped DEK + cached approvers). */
+export async function clearRemoteUnlock(): Promise<void> {
+  await db.vault.update('vault', { dekWrappedByRuk: undefined, remoteUnlock: undefined });
 }
 
 /** Re-wrap the DEK under a (possibly new) passphrase with the current KDF. */

@@ -8,7 +8,15 @@ import {
   generateIdentityKeys, publicIdentityOf, registryMac, verifyRegistryMac,
   registryEntryBytes, type DeviceIdentity, type PublicIdentity,
 } from './remote-unlock-crypto';
-import { getFile, putFile } from './github-api';
+import { getFile, putFile, deleteFile, getFileConditional, type ConditionalFile } from './github-api';
+import {
+  eciesEncryptTo, eciesDecrypt, signPayload, verifyPayload, verificationCode,
+  b64encode, b64decode, type EciesBlob,
+} from './remote-unlock-crypto';
+import { encryptBlob, decryptBlob } from './crypto';
+import { importKekFromBytes } from '../db/vault-crypto';
+import { isParanoidFlagSet } from '../db/paranoid-flag';
+import { wrapDekWithRuk, unlockWithRemoteKey, clearRemoteUnlock } from '../db/vault';
 
 // --- Mailbox file paths (live in the existing sync repo) ---
 export const REGISTRY_PATH = 'gtd25-devices.json';
@@ -119,5 +127,319 @@ export async function readAuthenticRegistry(pat: string, repo: string, macKey: C
   for (const e of Object.values(reg)) {
     if (await isAuthenticEntry(e, macKey)) out.push(e);
   }
+  return out;
+}
+
+// ===========================================================================
+// Enrollment, remote wipe, and remote unlock protocol
+// ===========================================================================
+
+export const approverInboxPath = (deviceId: string): string => `gtd25-approver-${deviceId}.json`;
+const REQUEST_TTL_MS = 2 * 60_000;
+
+function safeParseObj<T>(s: string): Record<string, T> {
+  try {
+    const v = JSON.parse(s) as unknown;
+    return v && typeof v === 'object' ? (v as Record<string, T>) : {};
+  } catch {
+    return {};
+  }
+}
+
+// --- Canonical byte encodings for signatures (built identically on both ends) ---
+const te = new TextEncoder();
+function wipeBytes(c: { target: string; nonce: string; ts: number }): Uint8Array {
+  return te.encode(`wipe|${c.target}|${c.nonce}|${c.ts}`);
+}
+function requestBytes(r: { fromDeviceId: string; nonce: string; ts: number; kForApprover: Record<string, EciesBlob> }): Uint8Array {
+  const ks = Object.keys(r.kForApprover).sort().map((id) => `${id}:${r.kForApprover[id].epk.x}:${r.kForApprover[id].ct}`).join(',');
+  return te.encode(`req|${r.fromDeviceId}|${r.nonce}|${r.ts}|${ks}`);
+}
+function responseBytes(r: { forNonce: string; fromApproverDeviceId: string; ts: number; respBlob: string }): Uint8Array {
+  return te.encode(`resp|${r.forNonce}|${r.fromApproverDeviceId}|${r.ts}|${r.respBlob}`);
+}
+
+// --- Wire shapes ---
+interface ApproverInvite { fromDeviceId: string; fromName: string; fromEcdsaPub: JsonWebKey; rukEcies: EciesBlob; ts: number }
+interface WipeCommand { target: string; nonce: string; ts: number; from: string; sig: string }
+interface UnlockRequest { fromDeviceId: string; nonce: string; ts: number; kForApprover: Record<string, EciesBlob>; sig: string }
+interface UnlockResponse { forNonce: string; fromApproverDeviceId: string; ts: number; respBlob: string; sig: string }
+
+// === Paranoid device (unlocked): enroll / disable remote unlock+wipe ===
+
+export interface EnrollContext { pat: string; repo: string; deviceId: string; deviceName: string; macKey: CryptoKey }
+
+/**
+ * Enroll the chosen (Paranoid-OFF) approver devices. Publishes this device's
+ * registry entry, wraps the DEK under a fresh RUK, ECIES-delivers RUK to each
+ * approver's inbox, caches approver public keys locally, and keeps the PAT in
+ * plaintext so the locked device can poll the mailbox. Requires the vault unlocked.
+ */
+export async function enableRemoteUnlock(ctx: EnrollContext, approverDeviceIds: string[]): Promise<RegistryEntry[]> {
+  const { pat, repo, deviceId, deviceName, macKey } = ctx;
+  const identity = await ensureDeviceIdentity();
+  await publishRegistryEntry(pat, repo, await buildRegistryEntry(deviceId, deviceName, publicIdentityOf(identity), true, macKey));
+
+  const authentic = await readAuthenticRegistry(pat, repo, macKey);
+  const approvers = authentic.filter((e) => approverDeviceIds.includes(e.deviceId) && !e.paranoid && e.deviceId !== deviceId);
+  if (approvers.length === 0) throw new Error('Select at least one eligible (non-Paranoid) approver device');
+
+  const ruk = crypto.getRandomValues(new Uint8Array(32));
+  try {
+    await wrapDekWithRuk(ruk);
+    for (const a of approvers) {
+      const rukEcies = await eciesEncryptTo(a.ecdhPub, ruk);
+      await postApproverInvite(pat, repo, a.deviceId, {
+        fromDeviceId: deviceId, fromName: deviceName, fromEcdsaPub: identity.ecdsaPub, rukEcies, ts: Date.now(),
+      });
+    }
+  } finally {
+    ruk.fill(0);
+  }
+
+  await db.vault.update('vault', {
+    remoteUnlock: { approvers: approvers.map((a) => ({ deviceId: a.deviceId, name: a.name, ecdhPub: a.ecdhPub, ecdsaPub: a.ecdsaPub })) },
+  });
+  // Keep the PAT plaintext so the locked device can reach the mailbox.
+  await db.localSettings.update('local', { githubPat: pat });
+  return approvers;
+}
+
+/** Tear down remote unlock on this (paranoid) device and re-lock the PAT away. */
+export async function disableRemoteUnlock(): Promise<void> {
+  await clearRemoteUnlock();
+  if (isParanoidFlagSet()) {
+    // PAT goes back to vault-only (it remains encrypted in vault.secrets).
+    await db.localSettings.update('local', { githubPat: undefined });
+  }
+}
+
+async function postApproverInvite(pat: string, repo: string, approverDeviceId: string, invite: ApproverInvite): Promise<void> {
+  const path = approverInboxPath(approverDeviceId);
+  const existing = await getFile(pat, repo, path);
+  const inbox = existing ? safeParseObj<ApproverInvite>(existing.data) : {};
+  inbox[invite.fromDeviceId] = invite;
+  await putFile(pat, repo, path, JSON.stringify(inbox), existing?.sha);
+}
+
+// === Approver device (Paranoid OFF): accept invites, approve, wipe ===
+
+/**
+ * Pick up RUK invites addressed to this device and store them. Refuses entirely
+ * if THIS device is in Paranoid Mode (a Paranoid device must never be an approver).
+ * Returns the number of newly-accepted enrollments.
+ */
+export async function pollApproverInbox(pat: string, repo: string, deviceId: string): Promise<number> {
+  if (isParanoidFlagSet()) return 0;
+  const file = await getFile(pat, repo, approverInboxPath(deviceId));
+  if (!file) return 0;
+  const inbox = safeParseObj<ApproverInvite>(file.data);
+  const identity = await ensureDeviceIdentity();
+  const local = await db.localSettings.get('local');
+  const store = { ...(local?.remoteApproverFor ?? {}) };
+  let accepted = 0;
+  for (const invite of Object.values(inbox)) {
+    if (!invite?.fromDeviceId || store[invite.fromDeviceId]) continue;
+    try {
+      const ruk = await eciesDecrypt(identity.ecdhPriv, invite.rukEcies);
+      store[invite.fromDeviceId] = { ruk: b64encode(ruk), ecdsaPub: invite.fromEcdsaPub, name: invite.fromName };
+      ruk.fill(0);
+      accepted++;
+    } catch { /* not for us / corrupt */ }
+  }
+  if (accepted) await db.localSettings.update('local', { remoteApproverFor: store });
+  return accepted;
+}
+
+/** Devices this (approver) device is enrolled to unlock/wipe. */
+export async function listApprovedDevices(): Promise<Array<{ deviceId: string; name: string }>> {
+  const local = await db.localSettings.get('local');
+  return Object.entries(local?.remoteApproverFor ?? {}).map(([deviceId, v]) => ({ deviceId, name: v.name }));
+}
+
+/** Approver: sign and post a remote-wipe command for an enrolled device. */
+export async function sendRemoteWipe(pat: string, repo: string, targetDeviceId: string): Promise<void> {
+  if (isParanoidFlagSet()) throw new Error('A Paranoid device cannot issue remote-wipe commands');
+  const local = await db.localSettings.get('local');
+  const me = local?.deviceId ?? 'unknown';
+  if (!local?.remoteApproverFor?.[targetDeviceId]) throw new Error('Not enrolled to manage that device');
+  const identity = await ensureDeviceIdentity();
+  const base = { target: targetDeviceId, nonce: crypto.randomUUID(), ts: Date.now() };
+  const sig = await signPayload(identity.ecdsaPriv, wipeBytes(base));
+  const cmd: WipeCommand = { ...base, from: me, sig };
+  const path = cmdPath(targetDeviceId);
+  const existing = await getFile(pat, repo, path);
+  await putFile(pat, repo, path, JSON.stringify(cmd), existing?.sha);
+}
+
+// === Locked device: poll for commands (wipe) and unlock responses ===
+
+/**
+ * Poll this device's command file; if it carries a wipe command validly signed by
+ * ANY enrolled approver, run panicWipe(). Uses a conditional request (etag) so
+ * repeated polls are rate-limit-free; pass the prior etag, store the returned one.
+ */
+export async function pollRemoteCommands(pat: string, repo: string, deviceId: string, etag?: string | null): Promise<{ etag: string | null; wiped: boolean }> {
+  const res: ConditionalFile = await getFileConditional(pat, repo, cmdPath(deviceId), etag);
+  if (res.status === 'unchanged') return { etag: res.etag, wiped: false };
+  if (res.status === 'absent') return { etag: null, wiped: false };
+
+  const cmd = (() => { try { return JSON.parse(res.data) as WipeCommand; } catch { return null; } })();
+  if (cmd && cmd.target === deviceId && typeof cmd.sig === 'string') {
+    const approvers = await approverVerifyKeys();
+    for (const ecdsaPub of approvers) {
+      if (await verifyPayload(ecdsaPub, cmd.sig, wipeBytes({ target: cmd.target, nonce: cmd.nonce, ts: cmd.ts }))) {
+        const { panicWipe } = await import('../lib/panic-wipe');
+        await panicWipe();
+        return { etag: res.etag, wiped: true };
+      }
+    }
+  }
+  return { etag: res.etag, wiped: false };
+}
+
+/** Cached approver verify-keys for THIS protected device (from the vault). */
+async function approverVerifyKeys(): Promise<JsonWebKey[]> {
+  const vault = await db.vault.get('vault');
+  return (vault?.remoteUnlock?.approvers ?? []).map((a) => a.ecdsaPub);
+}
+
+// --- Unlock exchange (laptop side, while locked) ---
+
+let pendingUnlock: { nonce: string; k: Uint8Array; code: string } | null = null;
+
+/** Build + post an unlock request to all enrolled approvers; returns the code to display. */
+export async function requestRemoteUnlock(pat: string, repo: string, deviceId: string): Promise<{ code: string }> {
+  const vault = await db.vault.get('vault');
+  const approvers = vault?.remoteUnlock?.approvers ?? [];
+  if (approvers.length === 0) throw new Error('No trusted devices are enrolled');
+  const local = await db.localSettings.get('local');
+  const identity = local?.deviceIdentity;
+  if (!identity) throw new Error('This device has no identity key');
+
+  const k = crypto.getRandomValues(new Uint8Array(32));
+  const nonce = crypto.randomUUID();
+  const ts = Date.now();
+  const kForApprover: Record<string, EciesBlob> = {};
+  for (const a of approvers) kForApprover[a.deviceId] = await eciesEncryptTo(a.ecdhPub, k);
+
+  const sig = await signPayload(identity.ecdsaPriv, requestBytes({ fromDeviceId: deviceId, nonce, ts, kForApprover }));
+  const req: UnlockRequest = { fromDeviceId: deviceId, nonce, ts, kForApprover, sig };
+  const path = unlockReqPath(deviceId);
+  const existing = await getFile(pat, repo, path);
+  await putFile(pat, repo, path, JSON.stringify(req), existing?.sha);
+
+  const code = await verificationCode(concat(k, te.encode(nonce)));
+  pendingUnlock = { nonce, k, code };
+  return { code };
+}
+
+export function cancelRemoteUnlock(): void {
+  if (pendingUnlock) { pendingUnlock.k.fill(0); pendingUnlock = null; }
+}
+
+/**
+ * Poll for an approver's response to the pending request. On a valid, approver-
+ * signed response, decrypt RUK with the in-RAM session key and unlock. Returns
+ * 'unlocked' | 'waiting'. Uses conditional requests for cheap polling.
+ */
+export async function pollRemoteUnlock(pat: string, repo: string, deviceId: string, etag?: string | null): Promise<{ etag: string | null; status: 'unlocked' | 'waiting' }> {
+  if (!pendingUnlock) return { etag: etag ?? null, status: 'waiting' };
+  const res = await getFileConditional(pat, repo, unlockRespPath(deviceId), etag);
+  if (res.status !== 'ok') return { etag: res.status === 'unchanged' ? res.etag : null, status: 'waiting' };
+
+  const resp = (() => { try { return JSON.parse(res.data) as UnlockResponse; } catch { return null; } })();
+  if (!resp || resp.forNonce !== pendingUnlock.nonce) return { etag: res.etag, status: 'waiting' };
+
+  const vault = await db.vault.get('vault');
+  const approver = (vault?.remoteUnlock?.approvers ?? []).find((a) => a.deviceId === resp.fromApproverDeviceId);
+  if (!approver) return { etag: res.etag, status: 'waiting' };
+  const ok = await verifyPayload(approver.ecdsaPub, resp.sig, responseBytes({
+    forNonce: resp.forNonce, fromApproverDeviceId: resp.fromApproverDeviceId, ts: resp.ts, respBlob: resp.respBlob,
+  }));
+  if (!ok) return { etag: res.etag, status: 'waiting' };
+
+  try {
+    const sessionKey = await importKekFromBytes(pendingUnlock.k);
+    const rukB64 = await decryptBlob(sessionKey, resp.respBlob);
+    const ruk = b64decode(rukB64);
+    const unlocked = await unlockWithRemoteKey(ruk);
+    ruk.fill(0);
+    if (unlocked) {
+      cancelRemoteUnlock();
+      // consume the response so it can't be replayed
+      try { const f = await getFile(pat, repo, unlockRespPath(deviceId)); if (f) await deleteFile(pat, repo, unlockRespPath(deviceId), f.sha); } catch { /* best effort */ }
+      return { etag: res.etag, status: 'unlocked' };
+    }
+  } catch { /* fall through */ }
+  return { etag: res.etag, status: 'waiting' };
+}
+
+// --- Unlock exchange (approver side) ---
+
+export interface PendingApproval { fromDeviceId: string; fromName: string; nonce: string; code: string }
+
+/**
+ * Approver: read a pending unlock request from a managed device, verify its
+ * signature + freshness, and return the request + verification code to show the
+ * user. Returns null if none / invalid / not enrolled / this device is Paranoid.
+ */
+export async function readPendingApproval(pat: string, repo: string, fromDeviceId: string): Promise<PendingApproval | null> {
+  if (isParanoidFlagSet()) return null;
+  const local = await db.localSettings.get('local');
+  const entry = local?.remoteApproverFor?.[fromDeviceId];
+  if (!entry) return null;
+  const file = await getFile(pat, repo, unlockReqPath(fromDeviceId));
+  if (!file) return null;
+  const req = (() => { try { return JSON.parse(file.data) as UnlockRequest; } catch { return null; } })();
+  if (!req || req.fromDeviceId !== fromDeviceId) return null;
+  if (Date.now() - req.ts > REQUEST_TTL_MS) return null; // stale / replay
+  const myId = local?.deviceId ?? '';
+  const myBlob = req.kForApprover[myId];
+  if (!myBlob) return null;
+  if (!(await verifyPayload(entry.ecdsaPub, req.sig, requestBytes({ fromDeviceId: req.fromDeviceId, nonce: req.nonce, ts: req.ts, kForApprover: req.kForApprover })))) {
+    return null;
+  }
+  const identity = await ensureDeviceIdentity();
+  let k: Uint8Array;
+  try { k = await eciesDecrypt(identity.ecdhPriv, myBlob); } catch { return null; }
+  const code = await verificationCode(concat(k, te.encode(req.nonce)));
+  k.fill(0);
+  return { fromDeviceId, fromName: entry.name, nonce: req.nonce, code };
+}
+
+/**
+ * Approver: APPROVE a pending request — re-derive the session key, wrap RUK under
+ * it, sign, and post the response. The user must have matched the code first.
+ */
+export async function approveRemoteUnlock(pat: string, repo: string, fromDeviceId: string): Promise<void> {
+  if (isParanoidFlagSet()) throw new Error('A Paranoid device cannot approve remote unlock');
+  const local = await db.localSettings.get('local');
+  const entry = local?.remoteApproverFor?.[fromDeviceId];
+  if (!entry) throw new Error('Not enrolled for that device');
+  const myId = local?.deviceId ?? '';
+  const file = await getFile(pat, repo, unlockReqPath(fromDeviceId));
+  if (!file) throw new Error('No unlock request found');
+  const req = JSON.parse(file.data) as UnlockRequest;
+  if (Date.now() - req.ts > REQUEST_TTL_MS) throw new Error('Request expired');
+  const identity = await ensureDeviceIdentity();
+  const k = await eciesDecrypt(identity.ecdhPriv, req.kForApprover[myId]);
+  try {
+    const sessionKey = await importKekFromBytes(k);
+    const respBlob = await encryptBlob(sessionKey, entry.ruk); // entry.ruk is base64; recovered as base64 on the other end
+    const ts = Date.now();
+    const sig = await signPayload(identity.ecdsaPriv, responseBytes({ forNonce: req.nonce, fromApproverDeviceId: myId, ts, respBlob }));
+    const resp: UnlockResponse = { forNonce: req.nonce, fromApproverDeviceId: myId, ts, respBlob, sig };
+    const path = unlockRespPath(fromDeviceId);
+    const existing = await getFile(pat, repo, path);
+    await putFile(pat, repo, path, JSON.stringify(resp), existing?.sha);
+  } finally {
+    k.fill(0);
+  }
+}
+
+function concat(a: Uint8Array, b: Uint8Array): Uint8Array {
+  const out = new Uint8Array(a.length + b.length);
+  out.set(a); out.set(b, a.length);
   return out;
 }
