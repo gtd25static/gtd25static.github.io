@@ -47,6 +47,18 @@ export function AppUpdatePrompt() {
     return () => offSyncSuccess(checkForUpdate);
   }, [checkForUpdate]);
 
+  // When the (modal) update prompt is about to show, close any open native <dialog>
+  // (Settings, Pomodoro settings, etc.). Those render in the browser's TOP LAYER —
+  // above any z-index — so the prompt would otherwise be hidden behind them. Closing
+  // fires each dialog's onClose, so React state stays consistent and they don't re-open.
+  useEffect(() => {
+    if ((needRefresh || syncIncompat) && !dismissed) {
+      document.querySelectorAll('dialog[open]').forEach((d) => {
+        try { (d as HTMLDialogElement).close(); } catch { /* ignore */ }
+      });
+    }
+  }, [needRefresh, syncIncompat, dismissed]);
+
   const available = needRefresh || syncIncompat;
   if (!available) return null;
 
