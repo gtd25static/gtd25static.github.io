@@ -12,6 +12,12 @@ import {
   listSecurityKeys, DEFAULT_IDLE_MINUTES, DEFAULT_MAX_ATTEMPTS,
 } from '../../db/vault';
 import { isWebAuthnSupported } from '../../sync/webauthn-prf';
+import {
+  isRemoteUnlockEnrolled, listEnrolledApprovers, listApproverCandidates, buildEnrollContext,
+  enableRemoteUnlock, disableRemoteUnlock, setDeviceName, getDeviceName,
+  listApprovedDevices, sendRemoteWipe, pollApproverInbox, type RegistryEntry,
+} from '../../sync/remote-unlock';
+import { identityFingerprint } from '../../sync/remote-unlock-crypto';
 import { panicWipe } from '../../lib/panic-wipe';
 import { exportToZip } from '../../db/export-import';
 
@@ -334,6 +340,8 @@ function ManageForm({ idleMinutes, maxAttempts, systemIdleOn, hasSecurityKey }: 
 
       <SecurityKeySection hasSecurityKey={hasSecurityKey} />
 
+      <RemoteUnlockSection />
+
       <div className="space-y-1 border-t border-zinc-200 pt-3 dark:border-zinc-700">
         <h4 className="text-sm font-medium">Data safety</h4>
         <p className="text-xs text-zinc-400 dark:text-zinc-500">
@@ -357,10 +365,178 @@ function ManageForm({ idleMinutes, maxAttempts, systemIdleOn, hasSecurityKey }: 
   );
 }
 
+// Protected-device side (Paranoid ON, unlocked): enroll trusted devices that can
+// remotely unlock or wipe THIS device.
+function RemoteUnlockSection() {
+  const [enrolled, setEnrolled] = useState(false);
+  const [approvers, setApprovers] = useState<Array<{ deviceId: string; name: string }>>([]);
+  const [candidates, setCandidates] = useState<Array<{ e: RegistryEntry; fp: string }> | null>(null);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [name, setName] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const reload = useCallback(async () => {
+    setEnrolled(await isRemoteUnlockEnrolled());
+    setApprovers(await listEnrolledApprovers());
+    setName(await getDeviceName());
+  }, []);
+  useEffect(() => { void reload(); }, [reload]);
+
+  async function loadCandidates() {
+    setBusy(true);
+    try {
+      const list = await listApproverCandidates();
+      const withFp = await Promise.all(list.map(async (e) => ({ e, fp: await identityFingerprint({ ecdhPub: e.ecdhPub, ecdsaPub: e.ecdsaPub }) })));
+      setCandidates(withFp);
+      if (withFp.length === 0) toast('No eligible devices. Open the app on a non-Paranoid device and sync first.', 'info');
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Could not load devices', 'error');
+    } finally { setBusy(false); }
+  }
+
+  async function enroll() {
+    if (selected.size === 0) { toast('Select at least one device', 'error'); return; }
+    setBusy(true);
+    try {
+      await setDeviceName(name);
+      await enableRemoteUnlock(await buildEnrollContext(), [...selected]);
+      toast('Remote unlock enabled', 'success');
+      setCandidates(null); setSelected(new Set());
+      await reload();
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Could not enable remote unlock', 'error');
+    } finally { setBusy(false); }
+  }
+
+  async function disable() {
+    const ok = await confirmDialog('Turn off remote unlock? Trusted devices will no longer be able to unlock or wipe this device.', { confirmLabel: 'Turn off', danger: true });
+    if (!ok) return;
+    setBusy(true);
+    try { await disableRemoteUnlock(); toast('Remote unlock disabled', 'success'); await reload(); }
+    finally { setBusy(false); }
+  }
+
+  function toggle(id: string) {
+    setSelected((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+  }
+
+  return (
+    <div className="space-y-2 border-t border-zinc-200 pt-3 dark:border-zinc-700">
+      <h4 className="text-sm font-medium">Remote unlock &amp; wipe</h4>
+      <p className="text-xs text-zinc-400 dark:text-zinc-500">
+        Let a trusted device (e.g. your phone, with Paranoid Mode OFF) unlock this device from the
+        lock screen — or wipe it if lost. You approve each unlock on the trusted device; nothing is
+        typed here. Keeps the GitHub token readable while locked (see the security notes / threat model).
+      </p>
+      {enrolled ? (
+        <>
+          <p className="text-xs text-emerald-600 dark:text-emerald-400">
+            Enabled — approver{approvers.length === 1 ? '' : 's'}: {approvers.map((a) => a.name).join(', ') || '(pending pickup)'}
+          </p>
+          <Button size="sm" variant="secondary" onClick={disable} disabled={busy}>Turn off remote unlock</Button>
+        </>
+      ) : candidates ? (
+        <div className="space-y-2">
+          <Input label="This device's name (shown to approvers)" value={name} onChange={(e) => setName(e.target.value)} disabled={busy} />
+          {candidates.length > 0 && (
+            <ul className="space-y-1">
+              {candidates.map(({ e, fp }) => (
+                <li key={e.deviceId} className="rounded-md bg-zinc-50 p-2 text-xs dark:bg-zinc-800/40">
+                  <label className="flex items-center gap-2">
+                    <input type="checkbox" checked={selected.has(e.deviceId)} onChange={() => toggle(e.deviceId)} disabled={busy} />
+                    <span className="font-medium text-zinc-700 dark:text-zinc-200">{e.name}</span>
+                  </label>
+                  <p className="mt-1 font-mono text-[10px] leading-tight text-zinc-400 dark:text-zinc-500">
+                    Confirm this matches the fingerprint on that device:<br />{fp}
+                  </p>
+                </li>
+              ))}
+            </ul>
+          )}
+          <div className="flex gap-2">
+            <Button size="sm" variant="secondary" onClick={enroll} disabled={busy || selected.size === 0}>Enable for selected</Button>
+            <Button size="sm" variant="secondary" onClick={() => setCandidates(null)} disabled={busy}>Cancel</Button>
+          </div>
+        </div>
+      ) : (
+        <Button size="sm" variant="secondary" onClick={loadCandidates} disabled={busy}>
+          {busy ? 'Loading…' : 'Set up remote unlock'}
+        </Button>
+      )}
+    </div>
+  );
+}
+
+// Approver side (this device is NOT Paranoid): manage devices it can unlock/wipe.
+function ApproverDevicesSection() {
+  const local = useLocalSettings();
+  const [managed, setManaged] = useState<Array<{ deviceId: string; name: string }>>([]);
+  const [busy, setBusy] = useState(false);
+
+  const reload = useCallback(async () => { setManaged(await listApprovedDevices()); }, []);
+  useEffect(() => { void reload(); }, [reload]);
+
+  async function checkInvites() {
+    if (!local.githubPat || !local.githubRepo || !local.deviceId) { toast('Set up GitHub sync first', 'error'); return; }
+    setBusy(true);
+    try {
+      const n = await pollApproverInbox(local.githubPat, local.githubRepo, local.deviceId);
+      await reload();
+      toast(n > 0 ? `Now trusted by ${n} device(s)` : 'No new invitations', 'info');
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Could not check invitations', 'error');
+    } finally { setBusy(false); }
+  }
+
+  async function wipe(deviceId: string, name: string) {
+    const ok = await confirmDialog(`Remotely wipe “${name}”? Its local data is erased the next time it is online with the app open. Synced data is unaffected. Cannot be undone.`, { confirmLabel: 'Send wipe command', danger: true });
+    if (!ok) return;
+    setBusy(true);
+    try {
+      await sendRemoteWipe(local.githubPat!, local.githubRepo!, deviceId);
+      toast('Wipe command sent', 'success');
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Could not send wipe', 'error');
+    } finally { setBusy(false); }
+  }
+
+  return (
+    <div className="space-y-2 border-t border-zinc-200 pt-3 dark:border-zinc-700">
+      <h4 className="text-sm font-medium">Devices you can unlock &amp; wipe</h4>
+      <p className="text-xs text-zinc-400 dark:text-zinc-500">
+        Paranoid devices that trusted this one. You approve their unlock requests here, and can wipe
+        a lost one. (A device in Paranoid Mode cannot act as an approver.)
+      </p>
+      {managed.length > 0 ? (
+        <ul className="space-y-1">
+          {managed.map((m) => (
+            <li key={m.deviceId} className="flex items-center justify-between gap-2 rounded-md bg-zinc-50 px-2 py-1.5 dark:bg-zinc-800/40">
+              <span className="min-w-0 truncate text-xs text-zinc-700 dark:text-zinc-200">{m.name}</span>
+              <Button size="sm" variant="danger" onClick={() => wipe(m.deviceId, m.name)} disabled={busy}>Remote wipe</Button>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="text-xs text-zinc-400 dark:text-zinc-500">No devices yet.</p>
+      )}
+      <Button size="sm" variant="secondary" onClick={checkInvites} disabled={busy}>
+        {busy ? 'Checking…' : 'Check for new invitations'}
+      </Button>
+    </div>
+  );
+}
+
 export function SecuritySettings() {
   const { enabled, hasSecurityKey } = useVault();
   const local = useLocalSettings();
-  if (!enabled) return <EnableForm />;
+  if (!enabled) {
+    return (
+      <div className="space-y-4">
+        <EnableForm />
+        <ApproverDevicesSection />
+      </div>
+    );
+  }
   return (
     <ManageForm
       idleMinutes={local.paranoidIdleTimeoutMinutes ?? DEFAULT_IDLE_MINUTES}

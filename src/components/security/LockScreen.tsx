@@ -4,6 +4,7 @@ import { Button } from '../ui/Button';
 import { RandomizedKeyboard } from './RandomizedKeyboard';
 import { unlockWithPassphrase, unlockWithSecurityKey } from '../../db/vault';
 import { useVault } from '../../hooks/use-vault';
+import { useLockScreenRemote } from '../../hooks/use-remote-unlock';
 import { useServiceWorker } from '../../hooks/use-service-worker';
 import { panicWipe } from '../../lib/panic-wipe';
 import { PomodoroBar } from '../pomodoro/PomodoroBar';
@@ -18,6 +19,7 @@ import { PomodoroBar } from '../pomodoro/PomodoroBar';
 // the rare time you must enter it on an untrusted machine without it being keyed.
 export function LockScreen() {
   const { hasSecurityKey } = useVault();
+  const remote = useLockScreenRemote();
   const [passphrase, setPassphrase] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -91,6 +93,36 @@ export function LockScreen() {
             <Button type="button" onClick={handleSecurityKey} disabled={busy}>
               🔑 {busy ? 'Unlocking…' : 'Unlock with security key or phone'}
             </Button>
+            <div className="flex items-center gap-2 text-xs text-zinc-400 dark:text-zinc-500">
+              <span className="h-px flex-1 bg-zinc-200 dark:bg-zinc-700" />
+              or use your passphrase
+              <span className="h-px flex-1 bg-zinc-200 dark:bg-zinc-700" />
+            </div>
+          </div>
+        )}
+
+        {remote.enrolled && (
+          <div className="mb-4 space-y-2">
+            {remote.code ? (
+              <div className="rounded-lg border border-zinc-200 p-3 dark:border-zinc-700">
+                <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                  Approve on a trusted device. Confirm this code matches the one shown there:
+                </p>
+                <p className="my-1 text-center text-2xl font-semibold tracking-[0.3em] text-zinc-800 dark:text-zinc-100">
+                  {remote.code}
+                </p>
+                <div className="text-center">
+                  <button type="button" onClick={remote.cancel} className="text-xs text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300">
+                    Cancel request
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <Button type="button" variant="secondary" onClick={() => void remote.request()}>
+                📲 Request unlock from a trusted device
+              </Button>
+            )}
+            {remote.error && <p className="text-sm text-red-600 dark:text-red-400">{remote.error}</p>}
             <div className="flex items-center gap-2 text-xs text-zinc-400 dark:text-zinc-500">
               <span className="h-px flex-1 bg-zinc-200 dark:bg-zinc-700" />
               or use your passphrase

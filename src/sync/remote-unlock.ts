@@ -16,7 +16,10 @@ import {
 import { encryptBlob, decryptBlob } from './crypto';
 import { importKekFromBytes } from '../db/vault-crypto';
 import { isParanoidFlagSet } from '../db/paranoid-flag';
-import { wrapDekWithRuk, unlockWithRemoteKey, clearRemoteUnlock } from '../db/vault';
+import { wrapDekWithRuk, unlockWithRemoteKey, clearRemoteUnlock, getVaultSecrets } from '../db/vault';
+export { isRemoteUnlockEnrolled } from '../db/vault'; // re-exported so the UI imports it from one place
+import { getCachedSalt } from './crypto';
+import { deriveRegistryMacKey } from './remote-unlock-crypto';
 
 // --- Mailbox file paths (live in the existing sync repo) ---
 export const REGISTRY_PATH = 'gtd25-devices.json';
@@ -442,4 +445,38 @@ function concat(a: Uint8Array, b: Uint8Array): Uint8Array {
   const out = new Uint8Array(a.length + b.length);
   out.set(a); out.set(b, a.length);
   return out;
+}
+
+// === High-level helpers for the UI ===
+
+/** Registry MAC key from the in-memory syncPassword + the cached sync salt, or null. */
+export async function getRegistryMacKey(): Promise<CryptoKey | null> {
+  const secrets = getVaultSecrets();
+  const salt = getCachedSalt();
+  if (!secrets?.syncPassword || !salt) return null;
+  return deriveRegistryMacKey(secrets.syncPassword, salt);
+}
+
+/** Gather everything needed to enroll approvers (requires unlocked vault + a prior sync). */
+export async function buildEnrollContext(): Promise<EnrollContext> {
+  const local = await db.localSettings.get('local');
+  const secrets = getVaultSecrets();
+  const macKey = await getRegistryMacKey();
+  if (!secrets?.githubPat || !local?.githubRepo || !local.deviceId || !macKey) {
+    throw new Error('Set up sync and sync at least once (so the encryption salt is available), then unlock the vault');
+  }
+  return { pat: secrets.githubPat, repo: local.githubRepo, deviceId: local.deviceId, deviceName: await getDeviceName(), macKey };
+}
+
+/** Authentic, non-Paranoid, OTHER devices eligible to be approvers. */
+export async function listApproverCandidates(): Promise<RegistryEntry[]> {
+  const ctx = await buildEnrollContext();
+  const reg = await readAuthenticRegistry(ctx.pat, ctx.repo, ctx.macKey);
+  return reg.filter((e) => !e.paranoid && e.deviceId !== ctx.deviceId);
+}
+
+/** Cached approver display info for the enrolled (protected) device. */
+export async function listEnrolledApprovers(): Promise<Array<{ deviceId: string; name: string }>> {
+  const vault = await db.vault.get('vault');
+  return (vault?.remoteUnlock?.approvers ?? []).map((a) => ({ deviceId: a.deviceId, name: a.name }));
 }

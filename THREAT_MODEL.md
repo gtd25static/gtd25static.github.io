@@ -1,6 +1,6 @@
 # GTD25 — Security Review & Threat Model
 
-**Last updated:** 2026-06-07 (multiple security keys: enroll N FIDO2/PRF authenticators — incl. a phone over hybrid transport — any one unlocks)
+**Last updated:** 2026-06-07 (remote unlock & wipe: a trusted Paranoid-OFF device can unlock or wipe a locked device via a backend-relayed, forward-secret key exchange)
 **Maintenance:** This document MUST be kept current. See "Keeping this document
 updated" at the end and the corresponding rule in `CLAUDE.md`.
 
@@ -309,6 +309,54 @@ history**.
     standing ciphertext window (does not help an attacker who already cloned/
     proxied it).
 
+### Scenario 8 — Remote unlock & wipe (optional, opt-in per device)
+A Paranoid device may enrol one or more **trusted approver devices** (which MUST be
+Paranoid-OFF) that can, via files relayed through the existing GitHub repo,
+**remotely unlock** the locked device (you approve on the trusted device) or
+**remotely wipe** it if lost. Mechanics: at enrolment a random **RUK** wraps the
+DEK (`dekWrappedByRuk` on disk) and is delivered ECIES-encrypted to each approver's
+identity key; the approver stores RUK. To unlock, the locked device posts a signed
+request carrying an **ephemeral session key K (RAM-only)** ECIES-encrypted to the
+approver; the approver returns RUK encrypted under K; the locked device unwraps the
+DEK. Device identity keys are distributed via a registry **authenticated by a
+syncPassword-derived HMAC**.
+
+- **Confidentiality vs. disk image + fully-logged backend — 🟢 (forward-secret).**
+  K lives only in the locked device's RAM; RUK lives only on the approver; the disk
+  holds only `dekWrappedByRuk`. The backend only ever carries values encrypted to
+  the approver's key or to the ephemeral K. So a seized disk **plus** a complete
+  proxy/git log still cannot reconstruct the DEK.
+- ⚠️ **Cost — the PAT is kept plaintext at rest while remote features are enrolled**
+  (the locked device needs it to reach the mailbox). This **weakens Scenario 2**: a
+  disk-only attacker (theft/loss/border, *without* the proxy) now also gets backend
+  **metadata + tamper/delete** — but **not content** (still syncPassword-gated) and
+  **not the vault** (DEK independent). For the corporate-proxy adversary this is no
+  new exposure (the proxy already had the PAT). Use a least-privilege single-repo PAT.
+- **New standing factor — the approver holds RUK.** **Approver compromise + a disk
+  image of the locked device = DEK.** The approver is therefore a deliberately
+  chosen, trusted device; a **Paranoid device is forbidden from being an approver**
+  (enrolment offers only Paranoid-OFF devices; a device refuses approver duties and
+  drops held RUKs the moment its own Paranoid Mode is enabled).
+- **Forged-request resistance.** A disk-image attacker has the locked device's
+  *signing* key (plaintext, so it can sign while locked) and can post a fake unlock
+  request — but completion requires **you approving on the trusted device**. Requests
+  are single-use, short-TTL and **user-initiated**, and both screens show a
+  **verification code** (derived from K) that must match; an **unexpected prompt is
+  an attack signal → deny**. Residual: this leans on user vigilance (don't approve
+  prompts you didn't initiate; check the code).
+- **Identity-key trust.** The registry MAC (syncPassword-derived) stops a PAT-only
+  attacker from injecting or substituting approver identity keys; enrolment is
+  **owner-gated** (only an unlocked owner can grant an approver — delivering RUK needs
+  the live DEK) and **fingerprint-confirmed**; **revocation re-keys RUK** so a removed
+  approver's copy opens nothing. Residual: trust is only as strong as the
+  syncPassword (the same anchor as content) — the fingerprint match is the backstop.
+- **Remote wipe — recoverable DoS only.** A wipe command is a one-way, approver-
+  *signed* message; a captured **PAT alone cannot forge it**. Worst case (an attacker
+  holding a *trusted device's* signing key) destroys local encrypted data the
+  attacker could not read anyway — recoverable by re-syncing. **Delivery requires the
+  locked device's app to be open and online** (it polls; a powered-off/closed device
+  receives the command on next open).
+
 ---
 
 ## 4. Cross-cutting residual risks (true in multiple scenarios)
@@ -318,7 +366,12 @@ history**.
   Anything ever synced may be retained by an adversary; you cannot retroactively
   un-expose it. Key rotation is **forward-secret only**.
 - **Client-side timed/failure wipes only run when our code runs** — useless
-  against an offline disk image or memory dump.
+  against an offline disk image or memory dump. The same applies to **remote wipe**
+  (Scenario 8): it is delivered only while the locked app is open and online.
+- **What runs while locked is minimal but no longer nil:** if remote unlock/wipe is
+  enrolled (Scenario 8), the lock screen polls the backend mailbox (conditional
+  requests) and can run `panicWipe` on an approver-signed command or unlock on an
+  approved response. It uses the plaintext PAT and never touches the DEK/content.
 - **The two passwords have very different strength floors:** the vault passphrase
   uses Argon2id; the **syncPassword still uses PBKDF2‑600k** (kept for cross-device
   wire compatibility). The backend's confidentiality is bounded by the weaker one.
@@ -346,16 +399,21 @@ history**.
    factor for the disk-seizure case (Scenario 2).
 8. **Encrypt manual ZIP exports** (Export → passphrase or sync password). An
    unencrypted export on disk is plaintext content + metadata (Scenario 2).
+9. **If you enable remote unlock/wipe** (Scenario 8): pick only devices you fully
+   control as approvers, confirm the fingerprint at enrolment, never approve an
+   unlock prompt you did not initiate (and check the verification code), and accept
+   that the PAT is plaintext at rest while it is enabled (use a least-privilege PAT).
 
 ## 6. Summary matrix (content confidentiality)
 | # | Threat | Paranoid OFF | Paranoid ON |
 |---|---|---|---|
-| 2 | Disk imaging | 🔴 plaintext + creds | 🟠 to passphrase/key strength; metadata leaks; forensic residue |
+| 2 | Disk imaging | 🔴 plaintext + creds | 🟠 to passphrase/key strength; metadata leaks; forensic residue (⚠️ PAT plaintext if remote unlock/wipe enrolled — Scenario 8) |
 | 3 | Memory dump | 🔴 | 🔴 if unlocked; 🟠 if locked (not guaranteed) |
 | 4 | TLS interception | 🟠 content safe (sync key); PAT+metadata exposed | 🟠 same (identical wire) |
 | 5 | Keylogger | 🟠 syncPassword/PAT captured | 🟠 passphrase captured; 🟢 if security-key-only & untyped |
 | 6 | Repo name, no PAT | 🟢 if repo private | 🟢 if repo private |
 | 7 | Backend readable | 🟠 content to syncPassword strength; metadata fully exposed | 🟠 same (no effect) |
+| 8 | Remote unlock/wipe (opt-in) | n/a | 🟢 unlock is forward-secret vs disk+backend; ⚠️ PAT plaintext at rest; approver holds RUK (approver+disk = DEK); wipe = recoverable DoS |
 
 ---
 
