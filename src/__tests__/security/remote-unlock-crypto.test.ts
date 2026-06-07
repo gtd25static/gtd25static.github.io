@@ -1,4 +1,5 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
+vi.setConfig({ testTimeout: 20_000 }); // deriveRegistryMacKey uses PBKDF2-600k (slow under load)
 import {
   generateIdentityKeys, publicIdentityOf,
   signPayload, verifyPayload,
