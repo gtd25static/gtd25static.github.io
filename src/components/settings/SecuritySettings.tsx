@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Input } from '../ui/Input';
 import { Button } from '../ui/Button';
 import { toast } from '../ui/Toast';
@@ -9,7 +9,7 @@ import { isSystemIdleSupported, requestSystemIdlePermission } from '../../lib/sy
 import {
   enableParanoid, disableParanoid, changePassphrase, configureIdleTimeout,
   configureMaxUnlockAttempts, verifyAtRestIntegrity, lock, addSecurityKey, removeSecurityKey,
-  DEFAULT_IDLE_MINUTES, DEFAULT_MAX_ATTEMPTS,
+  listSecurityKeys, DEFAULT_IDLE_MINUTES, DEFAULT_MAX_ATTEMPTS,
 } from '../../db/vault';
 import { isWebAuthnSupported } from '../../sync/webauthn-prf';
 import { panicWipe } from '../../lib/panic-wipe';
@@ -62,12 +62,21 @@ function EnableForm() {
 
 function SecurityKeySection({ hasSecurityKey }: { hasSecurityKey: boolean }) {
   const [busy, setBusy] = useState(false);
+  const [label, setLabel] = useState('');
+  const [keys, setKeys] = useState<Array<{ credentialId: string; label?: string; addedAt: number }>>([]);
   const available = isWebAuthnSupported();
+
+  const reload = useCallback(async () => { setKeys(await listSecurityKeys()); }, []);
+  // Reload on mount and whenever the "any key enrolled" flag flips (enable/disable,
+  // first/last key). Adding a 2nd key keeps the flag true, so handlers also reload.
+  useEffect(() => { void reload(); }, [reload, hasSecurityKey]);
 
   async function handleAdd() {
     setBusy(true);
     try {
-      await addSecurityKey();
+      await addSecurityKey(label);
+      setLabel('');
+      await reload();
       toast('Security key added', 'success');
     } catch (e) {
       // registerPrfCredential throws a specific reason (cancelled / unsupported /
@@ -81,15 +90,17 @@ function SecurityKeySection({ hasSecurityKey }: { hasSecurityKey: boolean }) {
     }
   }
 
-  async function handleRemove() {
+  async function handleRemove(credentialId: string, name: string) {
+    const last = keys.length <= 1;
     const ok = await confirmDialog(
-      'Remove the security key? You will need your passphrase to unlock this device.',
+      `Remove "${name}"?${last ? ' You will need your passphrase to unlock this device.' : ''}`,
       { confirmLabel: 'Remove', danger: true },
     );
     if (!ok) return;
     setBusy(true);
     try {
-      await removeSecurityKey();
+      await removeSecurityKey(credentialId);
+      await reload();
       toast('Security key removed', 'success');
     } finally {
       setBusy(false);
@@ -98,28 +109,53 @@ function SecurityKeySection({ hasSecurityKey }: { hasSecurityKey: boolean }) {
 
   return (
     <div className="space-y-2 border-t border-zinc-200 pt-3 dark:border-zinc-700">
-      <h4 className="text-sm font-medium">Security key</h4>
-      {hasSecurityKey ? (
-        <>
-          <p className="text-xs text-emerald-600 dark:text-emerald-400">
-            Enabled — unlock by touching your FIDO2 security key (no typing, so a keylogger sees nothing).
-          </p>
-          <Button size="sm" variant="secondary" onClick={handleRemove} disabled={busy}>Remove security key</Button>
-        </>
-      ) : available ? (
-        <>
-          <p className="text-xs text-zinc-400 dark:text-zinc-500">
-            Add a FIDO2 security key (e.g. a YubiKey) as a keylogger-safe unlock. Plug it in, then
-            click below. Your passphrase still works as a fallback.
-          </p>
-          <Button size="sm" variant="secondary" onClick={handleAdd} disabled={busy}>
-            {busy ? 'Waiting for security key…' : 'Add security key'}
-          </Button>
-        </>
-      ) : (
+      <h4 className="text-sm font-medium">Security keys</h4>
+      {!available ? (
         <p className="text-xs text-zinc-400 dark:text-zinc-500">
           Security keys are not supported in this browser.
         </p>
+      ) : (
+        <>
+          {keys.length > 0 ? (
+            <ul className="space-y-1">
+              {keys.map((k) => (
+                <li key={k.credentialId} className="flex items-center justify-between gap-2 rounded-md bg-zinc-50 px-2 py-1.5 dark:bg-zinc-800/40">
+                  <span className="min-w-0 truncate text-xs text-emerald-600 dark:text-emerald-400">
+                    {k.label || 'Security key'}
+                    {k.addedAt > 0 && (
+                      <span className="text-zinc-400 dark:text-zinc-500"> · added {new Date(k.addedAt).toLocaleDateString()}</span>
+                    )}
+                  </span>
+                  <Button size="sm" variant="secondary" onClick={() => handleRemove(k.credentialId, k.label || 'Security key')} disabled={busy}>
+                    Remove
+                  </Button>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="text-xs text-zinc-400 dark:text-zinc-500">
+              Add a FIDO2 security key (YubiKey) or your phone as a keylogger-safe unlock — no typing,
+              so a keylogger sees nothing. Enroll more than one (e.g. a backup key) so you are never
+              locked out if one is unavailable. Your passphrase still works as a fallback.
+            </p>
+          )}
+          <div className="flex items-end gap-2">
+            <Input
+              label="Name (optional)"
+              value={label}
+              onChange={(e) => setLabel(e.target.value)}
+              placeholder="e.g. YubiKey, Phone"
+              disabled={busy}
+            />
+            <Button size="sm" variant="secondary" onClick={handleAdd} disabled={busy}>
+              {busy ? 'Waiting…' : 'Add security key or phone'}
+            </Button>
+          </div>
+          <p className="text-[11px] leading-snug text-zinc-400 dark:text-zinc-500">
+            To enroll a phone, choose <span className="font-medium">“Use a phone or tablet”</span> in the
+            prompt and scan the QR with it (the phone must support PRF — recent Android does).
+          </p>
+        </>
       )}
     </div>
   );

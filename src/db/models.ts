@@ -146,6 +146,18 @@ export interface LocalSettings {
   paranoidSystemIdleLock?: boolean;     // lock on system-wide idle / screen lock (IdleDetector)
 }
 
+// One enrolled FIDO2/PRF authenticator (a YubiKey, or a phone over hybrid
+// transport). Each credential wraps the same DEK with its own PRF-derived KEK,
+// so ANY enrolled authenticator can unlock. All share the vault's single
+// `prfSalt` (a credential's PRF over that salt is still unique per credential).
+export interface PrfCredential {
+  credentialId: string;                  // base64 rawId, for allowCredentials
+  dekWrappedByPrf: string;               // encryptBlob(KEK_this-key-prf, rawDEK)
+  label?: string;                        // user-facing, e.g. "YubiKey", "Pixel"
+  addedAt: number;
+  transports?: AuthenticatorTransport[]; // hints allowCredentials routing (e.g. 'hybrid')
+}
+
 // Paranoid Mode vault (device-local, NEVER synced or exported). Holds the
 // wrapped data-encryption key (DEK) and at-rest-encrypted secrets. Single row
 // with id='vault'. See src/db/vault.ts.
@@ -156,8 +168,12 @@ export interface Vault {
   // How the passphrase KEK is derived. Absent => legacy PBKDF2 (pre-Argon2id);
   // such vaults still unlock and are re-wrapped to Argon2id on next unlock.
   kdf?: KdfParams;
-  dekWrappedByPrf?: string;       // encryptBlob(KEK_webauthn-prf, rawDEK)
-  webauthnCredentialId?: string;  // base64 credential id for allowCredentials
+  // Enrolled security keys (any one unlocks). Absent on pre-multi-key vaults,
+  // which still carry the single legacy dekWrappedByPrf/webauthnCredentialId
+  // below; vault.ts normalizes those into this array on first read/write.
+  securityKeys?: PrfCredential[];
+  dekWrappedByPrf?: string;       // LEGACY single credential (pre-multi-key)
+  webauthnCredentialId?: string;  // LEGACY base64 credential id (pre-multi-key)
   prfSalt?: string;               // salt fed to the WebAuthn PRF extension
   verifier: string;               // encryptBlob(DEK, VERIFIER_PLAINTEXT)
   secrets?: string;               // encryptBlob(DEK, JSON({githubPat, syncPassword}))

@@ -15,6 +15,15 @@ interface GlobalWithWebAuthn {
 
 let mode: Mode = 'ok';
 let savedNavigator: PropertyDescriptor | undefined;
+let nextRawId: ArrayBuffer | null = null;
+
+/** Force the NEXT create() to return this base64 credential id (one-shot). */
+export function setNextCredentialId(b64: string): void {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  nextRawId = bytes.buffer;
+}
 
 function saltOf(publicKey: { extensions?: AuthenticationExtensionsClientInputs } | undefined): Uint8Array {
   const first = publicKey?.extensions?.prf?.eval?.first;
@@ -48,10 +57,13 @@ export function installWebAuthnMock(): void {
     create: (_options: CredentialCreationOptions) => {
       if (mode === 'cancel') return Promise.reject(new DOMException('cancelled', 'NotAllowedError'));
       const enabled = mode !== 'no-prf';
+      const rawId = nextRawId ?? crypto.getRandomValues(new Uint8Array(16)).buffer;
+      nextRawId = null;
       // Mimic browsers that don't return PRF results on create() — only signal
       // support, forcing the immediate get() fallback in registerPrfCredential.
       return Promise.resolve({
-        rawId: crypto.getRandomValues(new Uint8Array(16)).buffer,
+        rawId,
+        response: {},
         getClientExtensionResults: () => ({ prf: { enabled } }),
       } as unknown as PublicKeyCredential);
     },

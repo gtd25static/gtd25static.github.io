@@ -18,7 +18,7 @@ import { setVaultKeyProvider } from './vault-middleware';
 import { encryptAllAtRest, decryptAllAtRest } from './vault-migration';
 import { registerPrfCredential, getPrfOutput } from '../sync/webauthn-prf';
 import { PARANOID_FLAG, isParanoidFlagSet } from './paranoid-flag';
-import type { Vault } from './models';
+import type { Vault, PrfCredential } from './models';
 
 // Synchronous mirror of "a security-key credential is enrolled", so the lock
 // screen and settings can render the affordance without awaiting IndexedDB.
@@ -98,6 +98,39 @@ export function touchVaultActivity(): void { resetIdleTimer(); }
 
 export function getDEK(): CryptoKey | null { resetIdleTimer(); return currentDek; }
 export function getVaultSecrets(): VaultSecrets | null { return currentSecrets; }
+
+// Normalize the enrolled security keys to the array form, synthesizing a single
+// entry from the legacy (pre-multi-key) `webauthnCredentialId`/`dekWrappedByPrf`
+// fields when present. This is the one source of truth for "which keys unlock".
+function vaultSecurityKeys(vault: Vault): PrfCredential[] {
+  if (vault.securityKeys && vault.securityKeys.length > 0) return vault.securityKeys;
+  if (vault.webauthnCredentialId && vault.dekWrappedByPrf) {
+    return [{
+      credentialId: vault.webauthnCredentialId,
+      dekWrappedByPrf: vault.dekWrappedByPrf,
+      label: 'Security key',
+      addedAt: 0,
+    }];
+  }
+  return [];
+}
+
+/** Persist the security-key list, clearing the legacy single-credential fields. */
+async function writeSecurityKeys(keys: PrfCredential[]): Promise<void> {
+  await db.vault.update('vault', {
+    securityKeys: keys,
+    dekWrappedByPrf: undefined,
+    webauthnCredentialId: undefined,
+  });
+  setKeyFlag(keys.length > 0);
+}
+
+/** Enrolled security keys (metadata only) for the settings UI. */
+export async function listSecurityKeys(): Promise<Array<{ credentialId: string; label?: string; addedAt: number }>> {
+  const vault = await db.vault.get('vault');
+  if (!vault) return [];
+  return vaultSecurityKeys(vault).map(({ credentialId, label, addedAt }) => ({ credentialId, label, addedAt }));
+}
 
 /**
  * Merge new sync credentials into the encrypted vault (e.g. when the user edits
@@ -246,19 +279,29 @@ async function registerFailedAttempt(vault: Vault): Promise<void> {
  */
 export async function unlockWithSecurityKey(): Promise<boolean> {
   const vault = await db.vault.get('vault');
-  if (!vault?.dekWrappedByPrf || !vault.webauthnCredentialId || !vault.prfSalt) return false;
+  if (!vault?.prfSalt) return false;
+  const keys = vaultSecurityKeys(vault);
+  if (keys.length === 0) return false;
 
-  const prfOutput = await getPrfOutput(vault.webauthnCredentialId, vault.prfSalt);
+  // Allow any enrolled key; the responding authenticator (plugged YubiKey or a
+  // phone over hybrid) yields its own PRF output. We don't know which one it was,
+  // so derive the KEK and try to unwrap each enrolled DEK — only the matching
+  // credential's wrap succeeds.
+  const prfOutput = await getPrfOutput(
+    keys.map((k) => k.credentialId),
+    vault.prfSalt,
+    keys.map((k) => k.transports),
+  );
   if (!prfOutput) return false;
 
   const kek = await importKekFromBytes(prfOutput);
-  let dek: CryptoKey;
-  try {
-    dek = await unwrapDek(kek, vault.dekWrappedByPrf);
-  } catch {
-    return false; // PRF output didn't reconstruct the KEK
+  for (const k of keys) {
+    try {
+      const dek = await unwrapDek(kek, k.dekWrappedByPrf);
+      return await finishUnlock(vault, dek);
+    } catch { /* not this credential — try the next */ }
   }
-  return finishUnlock(vault, dek);
+  return false; // PRF output didn't reconstruct any enrolled KEK
 }
 
 // Shared tail of every unlock path: verify the DEK, hydrate in-memory state,
@@ -295,31 +338,48 @@ async function finishUnlock(vault: Vault, dek: CryptoKey): Promise<boolean> {
  * KEK derived from the key's PRF (hmac-secret) output. Requires the vault to be
  * unlocked. Throws (with a specific reason) on cancel / unsupported PRF.
  */
-export async function addSecurityKey(): Promise<void> {
+export async function addSecurityKey(label?: string): Promise<void> {
   if (!currentDek) throw new Error('Unlock the vault before adding a security key');
   const vault = await db.vault.get('vault');
   if (!vault) throw new Error('Vault not found');
 
+  // All credentials share the vault's single PRF salt (per-credential PRF output
+  // is still unique). Reuse the existing one so already-enrolled keys keep working.
   const prfSalt = vault.prfSalt ?? generateSalt();
   // Throws on cancel / unsupported PRF / empty result — the caller surfaces why.
+  // 'cross-platform' lets the OS offer a plugged FIDO2 key OR "use a phone"
+  // (hybrid transport), which routes to a phone's PRF.
   const reg = await registerPrfCredential(prfSalt, 'cross-platform');
 
   const kek = await importKekFromBytes(reg.prfOutput);
-  const dekWrappedByPrf = await wrapDek(kek, currentDek);
-  await db.vault.update('vault', {
-    prfSalt,
-    dekWrappedByPrf,
-    webauthnCredentialId: reg.credentialId,
-  });
-  setKeyFlag(true);
+  const entry: PrfCredential = {
+    credentialId: reg.credentialId,
+    dekWrappedByPrf: await wrapDek(kek, currentDek),
+    label: label?.trim() || undefined,
+    addedAt: Date.now(),
+    transports: reg.transports,
+  };
+  // Append, replacing any existing entry for the same credential (re-enroll).
+  const keys = vaultSecurityKeys(vault).filter((k) => k.credentialId !== entry.credentialId);
+  keys.push(entry);
+
+  if (!vault.prfSalt) await db.vault.update('vault', { prfSalt });
+  await writeSecurityKeys(keys);
   emit();
 }
 
-/** Drop the enrolled security key; the passphrase remains the unlock method. */
-export async function removeSecurityKey(): Promise<void> {
-  // Setting a property to undefined deletes it from the stored row (Dexie).
-  await db.vault.update('vault', { dekWrappedByPrf: undefined, webauthnCredentialId: undefined });
-  setKeyFlag(false);
+/**
+ * Remove an enrolled security key by credential id (or, with no argument, all of
+ * them). The passphrase always remains an unlock method, so removing every key
+ * is safe.
+ */
+export async function removeSecurityKey(credentialId?: string): Promise<void> {
+  const vault = await db.vault.get('vault');
+  if (!vault) return;
+  const remaining = credentialId
+    ? vaultSecurityKeys(vault).filter((k) => k.credentialId !== credentialId)
+    : [];
+  await writeSecurityKeys(remaining);
   emit();
 }
 

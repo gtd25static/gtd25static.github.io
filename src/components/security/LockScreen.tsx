@@ -89,7 +89,7 @@ export function LockScreen() {
         {hasSecurityKey && (
           <div className="mb-4 space-y-3">
             <Button type="button" onClick={handleSecurityKey} disabled={busy}>
-              🔑 {busy ? 'Unlocking…' : 'Unlock with security key'}
+              🔑 {busy ? 'Unlocking…' : 'Unlock with security key or phone'}
             </Button>
             <div className="flex items-center gap-2 text-xs text-zinc-400 dark:text-zinc-500">
               <span className="h-px flex-1 bg-zinc-200 dark:bg-zinc-700" />

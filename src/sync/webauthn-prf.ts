@@ -54,6 +54,7 @@ export async function isPlatformAuthenticatorAvailable(): Promise<boolean> {
 export interface PrfRegistration {
   credentialId: string;  // base64 rawId, stored for allowCredentials on unlock
   prfOutput: Uint8Array; // 32-byte secret used to derive the KEK
+  transports?: AuthenticatorTransport[]; // e.g. 'usb' | 'nfc' | 'hybrid' (phone)
 }
 
 /** Thrown when the authenticator created a credential but does not support PRF. */
@@ -119,10 +120,17 @@ export async function registerPrfCredential(
   console.info('[paranoid] passkey created; prf extension result:', ext.prf);
 
   const credentialId = bytesToBase64(new Uint8Array(cred.rawId));
+  // Transports help the browser route the unlock prompt (e.g. 'hybrid' => offer
+  // "use a phone"). Not all authenticators/runtimes expose them; degrade to none.
+  let transports: AuthenticatorTransport[] | undefined;
+  try {
+    const resp = cred.response as AuthenticatorAttestationResponse;
+    transports = resp.getTransports?.() as AuthenticatorTransport[] | undefined;
+  } catch { /* getTransports unavailable */ }
 
   // If the PRF output came back at creation, use it (no second prompt).
   const onCreate = ext.prf?.results?.first;
-  if (onCreate) return { credentialId, prfOutput: toBytes(onCreate) };
+  if (onCreate) return { credentialId, prfOutput: toBytes(onCreate), transports };
 
   // Otherwise obtain it via an assertion. We deliberately DO NOT gate on
   // ext.prf.enabled: macOS/Chrome platform authenticators provision PRF but
@@ -131,24 +139,35 @@ export async function registerPrfCredential(
   // gating on the creation-time `enabled` produces a false "unsupported".
   let prfOutput: Uint8Array | null;
   try {
-    prfOutput = await requestPrfAssertion(credentialId, prfSalt);
+    prfOutput = await requestPrfAssertion([credentialId], prfSalt);
   } catch (err) {
     console.warn('[paranoid] PRF assertion during enrollment failed:', err);
     throw err; // cancelled / not allowed -> surfaced distinctly from "unsupported"
   }
   if (!prfOutput) throw new PrfUnsupportedError();
-  return { credentialId, prfOutput };
+  return { credentialId, prfOutput, transports };
 }
 
-// Core assertion: prompts the authenticator and returns its PRF output (or null
-// if the authenticator returns no PRF result). Throws on WebAuthn errors
-// (cancel / not-allowed) so callers can distinguish "unsupported" from "cancelled".
-async function requestPrfAssertion(credentialId: string, prfSalt: string): Promise<Uint8Array | null> {
+// Core assertion: prompts the authenticator, allowing ANY of `credentialIds`
+// (so the user can unlock with whichever enrolled key is present), and returns
+// the responding key's PRF output (or null if no PRF result). Throws on WebAuthn
+// errors (cancel / not-allowed) so callers can distinguish "unsupported" from
+// "cancelled". `transports` (optional, parallel to credentialIds) hints routing.
+async function requestPrfAssertion(
+  credentialIds: string[],
+  prfSalt: string,
+  transports?: (AuthenticatorTransport[] | undefined)[],
+): Promise<Uint8Array | null> {
   const saltBytes = base64ToBytes(prfSalt);
+  const allowCredentials: PublicKeyCredentialDescriptor[] = credentialIds.map((id, i) => ({
+    type: 'public-key',
+    id: base64ToBytes(id) as BufferSource,
+    ...(transports?.[i]?.length ? { transports: transports[i] } : {}),
+  }));
   const assertion = (await navigator.credentials.get({
     publicKey: {
       challenge: crypto.getRandomValues(new Uint8Array(32)),
-      allowCredentials: [{ type: 'public-key', id: base64ToBytes(credentialId) as BufferSource }],
+      allowCredentials,
       userVerification: 'required',
       timeout: 60_000,
       extensions: { prf: { eval: { first: saltBytes as BufferSource } } },
@@ -159,14 +178,20 @@ async function requestPrfAssertion(credentialId: string, prfSalt: string): Promi
 }
 
 /**
- * Run an assertion against `credentialId` to obtain the PRF output for
- * `prfSalt`. Returns null on cancel/error so the unlock path can fall back to
- * the passphrase.
+ * Run an assertion allowing any of `credentialIds` to obtain the PRF output for
+ * `prfSalt`. Accepts a single id (back-compat) or a list of enrolled keys.
+ * Returns null on cancel/error so the unlock path can fall back to the passphrase.
  */
-export async function getPrfOutput(credentialId: string, prfSalt: string): Promise<Uint8Array | null> {
+export async function getPrfOutput(
+  credentialIds: string | string[],
+  prfSalt: string,
+  transports?: (AuthenticatorTransport[] | undefined)[],
+): Promise<Uint8Array | null> {
   if (!isWebAuthnSupported()) return null;
+  const ids = Array.isArray(credentialIds) ? credentialIds : [credentialIds];
+  if (ids.length === 0) return null;
   try {
-    return await requestPrfAssertion(credentialId, prfSalt);
+    return await requestPrfAssertion(ids, prfSalt, transports);
   } catch (err) {
     console.warn('[paranoid] biometric assertion failed:', err);
     return null;

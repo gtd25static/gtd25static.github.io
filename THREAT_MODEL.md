@@ -1,6 +1,6 @@
 # GTD25 — Security Review & Threat Model
 
-**Last updated:** 2026-06-06 (editable follow-up history; collapse Discussed/Snooze into one snooze path)
+**Last updated:** 2026-06-07 (multiple security keys: enroll N FIDO2/PRF authenticators — incl. a phone over hybrid transport — any one unlocks)
 **Maintenance:** This document MUST be kept current. See "Keeping this document
 updated" at the end and the corresponding rule in `CLAUDE.md`.
 
@@ -25,9 +25,12 @@ updated" at the end and the corresponding rule in `CLAUDE.md`.
      Paranoid Mode is on or off (cross-compatible).
   2. **At-rest vault (Paranoid Mode, optional, per-device):** sensitive fields in
      IndexedDB are AES‑256‑GCM encrypted with a random **DEK**. The DEK is wrapped
-     by a passphrase KEK = `Argon2id(passphrase, salt, 64 MiB, t=3)` and/or a
-     security-key KEK from a FIDO2 **PRF** output. The PAT + syncPassword are moved
-     into the encrypted vault (and cleared from plaintext storage).
+     by a passphrase KEK = `Argon2id(passphrase, salt, 64 MiB, t=3)` and/or by the
+     PRF KEK of **each enrolled FIDO2 security key** (the DEK is wrapped once per
+     credential; **any one** enrolled authenticator unlocks). Enrolled authenticators
+     may include external keys (YubiKey, USB/NFC) and a **phone over WebAuthn hybrid
+     transport**. The PAT + syncPassword are moved into the encrypted vault (and
+     cleared from plaintext storage).
 
 ### What is encrypted vs. always plaintext (critical)
 
@@ -251,10 +254,27 @@ Captures keystrokes (and, in capable EDR, clipboard).
   is also typed at setup.
   - **Mitigations in place:** (a) **security-key unlock** — nothing is typed; the
     PRF secret never enters the keyboard/clipboard, and the key's PIN *alone* is
-    useless without the physical key; (b) **opt-in randomized on-screen keyboard**
-    — defeats keystroke + mouse-coordinate logging **only if the screen is not
-    captured and memory is not scraped** (narrow, conditional — a full EDR with
-    screenshot/memory access defeats it).
+    useless without the physical key. **Multiple keys may be enrolled** (e.g. a
+    primary YubiKey plus a backup key, and/or a **phone over hybrid transport**), so
+    the keylogger-safe path stays available even when one authenticator is absent.
+    (b) **opt-in randomized on-screen keyboard** — defeats keystroke + mouse-
+    coordinate logging **only if the screen is not captured and memory is not
+    scraped** (narrow, conditional — a full EDR with screenshot/memory access
+    defeats it).
+  - ⚠️ **Phone authenticators are a softer factor than a dedicated FIDO2 key.** An
+    Android passkey is typically **Google-synced**, so its PRF/`hmac-secret` may be
+    backed up to the user's Google account (Google's E2E passkey backup, gated by a
+    device lock-screen knowledge factor). Unlike the hardware-bound YubiKey (no cloud
+    copy, secret never extractable), this makes **"Google account + device PIN"** a
+    potential recovery/attack path *for that authenticator*. It does **not** weaken
+    the laptop directly — nothing is typed there, no secret sits on the laptop disk,
+    and nothing transits the GTD backend — but the phone is a more-exposed, possibly
+    cloud-recoverable key. Device-bound credentials are strictly stronger but cannot
+    be forced from the web. Keep a hardware key as the primary high-assurance factor.
+  - **Enrolling more authenticators widens the unlock surface** (any one unlocks).
+    Per-key removal/rotation is therefore important; remove a lost/retired key
+    promptly in Security settings (re-keying the vault is not required — dropping the
+    credential's wrapped-DEK entry revokes it).
   - **Recommendations:** on an untrusted machine use the **security key** as the
     daily unlock; treat any passphrase/syncPassword typed there as **burned** and
     rotate it on a trusted device; ideally perform setup (where the syncPassword
@@ -314,7 +334,11 @@ history**.
 3. **Use a strong syncPassword** (the backend's only content protection;
    PBKDF2‑600k + offline oracle ⇒ weak passwords fall — Scenario 7).
 4. **On untrusted machines, enable Paranoid Mode and unlock with a security key**
-   (keylogger- and at-rest-strong; Scenarios 2/3/5).
+   (keylogger- and at-rest-strong; Scenarios 2/3/5). **Enroll a backup authenticator**
+   (a second hardware key, or a phone over hybrid transport) so a missing primary key
+   never forces you back to typing the passphrase. Prefer a hardware key as the
+   primary factor; treat a Google-synced phone passkey as a softer, cloud-recoverable
+   convenience factor (Scenario 5). Remove lost/retired keys promptly.
 5. **Keep the idle/auto-lock window short** and lock before stepping away
    (Scenario 3).
 6. **Do setup / passphrase changes on a trusted device** (Scenario 5).
