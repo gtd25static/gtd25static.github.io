@@ -176,7 +176,7 @@ export function useReviewData(): ReviewData | undefined {
 
     // lastReviewedAt from localSettings
     const local = await db.localSettings.get('local');
-    const lastReviewedAt = (local as Record<string, unknown> | undefined)?.lastReviewedAt as number | undefined;
+    const lastReviewedAt = local?.lastReviewedAt;
 
     return {
       inboxTasks,
@@ -191,5 +191,5 @@ export function useReviewData(): ReviewData | undefined {
 }
 
 export async function setLastReviewedAt() {
-  await db.localSettings.update('local', { lastReviewedAt: Date.now() } as Record<string, unknown>);
+  await db.localSettings.update('local', { lastReviewedAt: Date.now() });
 }

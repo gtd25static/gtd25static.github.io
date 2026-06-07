@@ -139,6 +139,7 @@ export interface LocalSettings {
   nudgeWindowEnd?: number;   // hour 0–23
   nudgeSoundEnabled?: boolean;
   lastNudgeAt?: number;
+  lastReviewedAt?: number;   // last weekly-review completion (shown in the sidebar)
   // Paranoid Mode (device-local; not synced). Persistent record of the mode;
   // the synchronous gate flag lives in localStorage ('gtd25-paranoid').
   paranoidEnabled?: boolean;
