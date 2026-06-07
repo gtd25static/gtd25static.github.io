@@ -387,8 +387,7 @@ function RemoteUnlockSection() {
     try {
       const list = await listApproverCandidates();
       const withFp = await Promise.all(list.map(async (e) => ({ e, fp: await identityFingerprint({ ecdhPub: e.ecdhPub, ecdsaPub: e.ecdsaPub }) })));
-      setCandidates(withFp);
-      if (withFp.length === 0) toast('No eligible devices. Open the app on a non-Paranoid device and sync first.', 'info');
+      setCandidates(withFp); // empty array -> the section shows guidance + Refresh
     } catch (e) {
       toast(e instanceof Error ? e.message : 'Could not load devices', 'error');
     } finally { setBusy(false); }
@@ -435,24 +434,34 @@ function RemoteUnlockSection() {
           </p>
           <Button size="sm" variant="secondary" onClick={disable} disabled={busy}>Turn off remote unlock</Button>
         </>
+      ) : candidates && candidates.length === 0 ? (
+        <div className="space-y-2">
+          <p className="text-xs text-amber-600 dark:text-amber-400">
+            No eligible devices found yet. On the device you want to approve from (e.g. your phone,
+            with Paranoid Mode OFF), open this app, make sure GitHub sync is set up and has run once,
+            then refresh.
+          </p>
+          <div className="flex gap-2">
+            <Button size="sm" variant="secondary" onClick={loadCandidates} disabled={busy}>{busy ? 'Refreshing…' : 'Refresh'}</Button>
+            <Button size="sm" variant="secondary" onClick={() => setCandidates(null)} disabled={busy}>Cancel</Button>
+          </div>
+        </div>
       ) : candidates ? (
         <div className="space-y-2">
           <Input label="This device's name (shown to approvers)" value={name} onChange={(e) => setName(e.target.value)} disabled={busy} />
-          {candidates.length > 0 && (
-            <ul className="space-y-1">
-              {candidates.map(({ e, fp }) => (
-                <li key={e.deviceId} className="rounded-md bg-zinc-50 p-2 text-xs dark:bg-zinc-800/40">
-                  <label className="flex items-center gap-2">
-                    <input type="checkbox" checked={selected.has(e.deviceId)} onChange={() => toggle(e.deviceId)} disabled={busy} />
-                    <span className="font-medium text-zinc-700 dark:text-zinc-200">{e.name}</span>
-                  </label>
-                  <p className="mt-1 font-mono text-[10px] leading-tight text-zinc-400 dark:text-zinc-500">
-                    Confirm this matches the fingerprint on that device:<br />{fp}
-                  </p>
-                </li>
-              ))}
-            </ul>
-          )}
+          <ul className="space-y-1">
+            {candidates.map(({ e, fp }) => (
+              <li key={e.deviceId} className="rounded-md bg-zinc-50 p-2 text-xs dark:bg-zinc-800/40">
+                <label className="flex items-center gap-2">
+                  <input type="checkbox" checked={selected.has(e.deviceId)} onChange={() => toggle(e.deviceId)} disabled={busy} />
+                  <span className="font-medium text-zinc-700 dark:text-zinc-200">{e.name}</span>
+                </label>
+                <p className="mt-1 font-mono text-[10px] leading-tight text-zinc-400 dark:text-zinc-500">
+                  Confirm this matches the fingerprint on that device:<br />{fp}
+                </p>
+              </li>
+            ))}
+          </ul>
           <div className="flex gap-2">
             <Button size="sm" variant="secondary" onClick={enroll} disabled={busy || selected.size === 0}>Enable for selected</Button>
             <Button size="sm" variant="secondary" onClick={() => setCandidates(null)} disabled={busy}>Cancel</Button>

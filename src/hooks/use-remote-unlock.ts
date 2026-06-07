@@ -5,7 +5,7 @@ import { isParanoidFlagSet } from '../db/paranoid-flag';
 import { confirmDialog } from '../components/ui/ConfirmDialog';
 import {
   getMailboxPat, getRepo, requestRemoteUnlock, pollRemoteUnlock, pollRemoteCommands, cancelRemoteUnlock,
-  pollApproverInbox, listApprovedDevices, readPendingApproval, approveRemoteUnlock,
+  pollApproverInbox, listApprovedDevices, readPendingApproval, approveRemoteUnlock, publishOwnRegistryEntry,
 } from '../sync/remote-unlock';
 
 const POLL_MS = 12_000;
@@ -107,6 +107,7 @@ export function useLockScreenRemote() {
 export function useRemoteApprovalWatcher() {
   const seen = useRef<Set<string>>(new Set());
   const busy = useRef(false);
+  const published = useRef(false);
 
   useEffect(() => {
     let stop = false;
@@ -119,6 +120,9 @@ export function useRemoteApprovalWatcher() {
         const repo = local?.githubRepo;
         const myId = local?.deviceId;
         if (!pat || !repo || !myId) return;
+        // Advertise this (non-Paranoid) device in the registry once per session so
+        // Paranoid devices can discover + trust it as an approver candidate.
+        if (!published.current) published.current = await publishOwnRegistryEntry();
         await pollApproverInbox(pat, repo, myId);
         const managed = await listApprovedDevices();
         for (const m of managed) {

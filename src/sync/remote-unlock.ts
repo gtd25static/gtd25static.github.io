@@ -449,12 +449,52 @@ function concat(a: Uint8Array, b: Uint8Array): Uint8Array {
 
 // === High-level helpers for the UI ===
 
-/** Registry MAC key from the in-memory syncPassword + the cached sync salt, or null. */
+/**
+ * The sync password, wherever it currently lives: in the unlocked vault (Paranoid
+ * Mode) or plaintext in localSettings (non-Paranoid). Needed by both the protected
+ * device and the approver to derive the registry MAC key.
+ */
+async function getSyncPassword(): Promise<string | null> {
+  const fromVault = getVaultSecrets()?.syncPassword;
+  if (fromVault) return fromVault;
+  const local = await db.localSettings.get('local');
+  return local?.encryptionPassword ?? null;
+}
+
+/** The PAT, wherever it currently lives (vault when Paranoid+unlocked, else localSettings). */
+async function getActivePat(): Promise<string | null> {
+  const fromVault = getVaultSecrets()?.githubPat;
+  if (fromVault) return fromVault;
+  const local = await db.localSettings.get('local');
+  return local?.githubPat ?? null;
+}
+
+/** Registry MAC key from the current syncPassword + the cached sync salt, or null. */
 export async function getRegistryMacKey(): Promise<CryptoKey | null> {
-  const secrets = getVaultSecrets();
+  const sp = await getSyncPassword();
   const salt = getCachedSalt();
-  if (!secrets?.syncPassword || !salt) return null;
-  return deriveRegistryMacKey(secrets.syncPassword, salt);
+  if (!sp || !salt) return null;
+  return deriveRegistryMacKey(sp, salt);
+}
+
+/**
+ * Publish/refresh THIS device's authenticated registry entry so other devices can
+ * discover and trust it (a Paranoid-OFF device becomes an eligible approver
+ * candidate; a Paranoid device advertises itself as ineligible). No-op (returns
+ * false) until sync is set up and the encryption salt is cached. Safe to call
+ * repeatedly; callers throttle.
+ */
+export async function publishOwnRegistryEntry(): Promise<boolean> {
+  const local = await db.localSettings.get('local');
+  const pat = await getActivePat();
+  const repo = local?.githubRepo;
+  const deviceId = local?.deviceId;
+  const macKey = await getRegistryMacKey();
+  if (!pat || !repo || !deviceId || !macKey) return false;
+  const identity = await ensureDeviceIdentity();
+  const entry = await buildRegistryEntry(deviceId, await getDeviceName(), publicIdentityOf(identity), isParanoidFlagSet(), macKey);
+  await publishRegistryEntry(pat, repo, entry);
+  return true;
 }
 
 /** Gather everything needed to enroll approvers (requires unlocked vault + a prior sync). */

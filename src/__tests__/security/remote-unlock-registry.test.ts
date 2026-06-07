@@ -1,12 +1,15 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+vi.setConfig({ testTimeout: 20_000 }); // publishOwnRegistryEntry/getRegistryMacKey use PBKDF2-600k
 import { db } from '../../db';
 import { resetDb } from '../helpers/db-helpers';
 import {
   ensureDeviceIdentity, getPublicIdentity, getMailboxPat, setDeviceName, getDeviceName,
   buildRegistryEntry, isAuthenticEntry, publishRegistryEntry, readAuthenticRegistry,
+  publishOwnRegistryEntry, getRegistryMacKey,
   REGISTRY_PATH, unlockReqPath, cmdPath,
 } from '../../sync/remote-unlock';
 import { generateIdentityKeys, publicIdentityOf } from '../../sync/remote-unlock-crypto';
+import { cacheEncryptionKey, clearEncryptionKey, generateSalt } from '../../sync/crypto';
 
 // Mock the GitHub transport so registry publish/read hit an in-memory file.
 let files: Record<string, { data: string; sha: string }> = {};
@@ -27,8 +30,10 @@ async function fakeMacKey(seed = 1): Promise<CryptoKey> {
 beforeEach(async () => {
   files = {};
   await resetDb();
+  clearEncryptionKey();
+  localStorage.removeItem('gtd25-paranoid');
 });
-afterEach(() => vi.clearAllMocks());
+afterEach(() => { vi.clearAllMocks(); clearEncryptionKey(); });
 
 describe('remote-unlock: device identity', () => {
   it('generates and persists identity once, then returns the same keys', async () => {
@@ -98,5 +103,32 @@ describe('remote-unlock: MAC-authenticated registry', () => {
     const entry = await buildRegistryEntry('dev-A', 'Laptop', publicIdentityOf(id), false, mac);
     const tampered = { ...entry, ecdhPub: evil.ecdhPub }; // swap key, keep old MAC
     expect(await isAuthenticEntry(tampered, mac)).toBe(false);
+  });
+
+  it('publishOwnRegistryEntry advertises a non-Paranoid device, discoverable under the same syncPassword', async () => {
+    // Cache a sync salt (any AES key works — only the salt is used for the MAC KDF).
+    const salt = generateSalt();
+    const aes = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, true, ['encrypt', 'decrypt']);
+    cacheEncryptionKey(aes, salt);
+    await db.localSettings.update('local', { deviceId: 'phone-x', githubRepo: 'me/repo', githubPat: 'pat', encryptionPassword: 'team-sync-pw' });
+
+    expect(await publishOwnRegistryEntry()).toBe(true);
+
+    // Another device that knows the SAME syncPassword derives the matching MAC key
+    // and sees the entry as authentic and non-paranoid.
+    const macKey = await getRegistryMacKey();
+    expect(macKey).not.toBeNull();
+    const reg = await readAuthenticRegistry('pat', 'me/repo', macKey!);
+    const me = reg.find((e) => e.deviceId === 'phone-x');
+    expect(me?.paranoid).toBe(false);
+
+    // A reader without the syncPassword (different key) cannot authenticate it.
+    const wrong = await fakeMacKey(123);
+    expect(await readAuthenticRegistry('pat', 'me/repo', wrong)).toEqual([]);
+  });
+
+  it('publishOwnRegistryEntry is a no-op until sync salt is available', async () => {
+    await db.localSettings.update('local', { deviceId: 'd', githubRepo: 'r', githubPat: 'p', encryptionPassword: 'pw' });
+    expect(await publishOwnRegistryEntry()).toBe(false); // no cached salt yet
   });
 });
