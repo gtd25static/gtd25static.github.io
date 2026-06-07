@@ -17,6 +17,7 @@ import { generateDek, wrapDek, unwrapDek, importKekFromBytes } from './vault-cry
 import { setVaultKeyProvider } from './vault-middleware';
 import { encryptAllAtRest, decryptAllAtRest } from './vault-migration';
 import { registerPrfCredential, getPrfOutput } from '../sync/webauthn-prf';
+import { b64encode, b64decode } from '../sync/remote-unlock-crypto';
 import { PARANOID_FLAG, isParanoidFlagSet } from './paranoid-flag';
 import type { Vault, PrfCredential } from './models';
 
@@ -388,12 +389,22 @@ export async function removeSecurityKey(credentialId?: string): Promise<void> {
 
 // --- Remote unlock (DEK wrapped by a remote-unlock key held by trusted devices) ---
 
-/** Wrap the live DEK with a 32-byte RUK and persist it. Requires the vault unlocked. */
+/** Wrap the live DEK with a 32-byte RUK and persist it (both directions, so the RUK
+ *  can be recovered while unlocked to add more approvers). Requires the vault unlocked. */
 export async function wrapDekWithRuk(rukRaw: Uint8Array): Promise<void> {
   if (!currentDek) throw new Error('Unlock the vault before enrolling remote unlock');
   const kek = await importKekFromBytes(rukRaw);
   const dekWrappedByRuk = await wrapDek(kek, currentDek);
-  await db.vault.update('vault', { dekWrappedByRuk });
+  const rukWrappedByDek = await encryptBlob(currentDek, b64encode(rukRaw));
+  await db.vault.update('vault', { dekWrappedByRuk, rukWrappedByDek });
+}
+
+/** Recover the raw RUK (requires the vault unlocked + remote unlock enrolled), or null. */
+export async function getRukRaw(): Promise<Uint8Array | null> {
+  if (!currentDek) return null;
+  const vault = await db.vault.get('vault');
+  if (!vault?.rukWrappedByDek) return null;
+  return b64decode(await decryptBlob(currentDek, vault.rukWrappedByDek));
 }
 
 /** Unlock using a remote-unlock key (RUK) relayed from a trusted device. */
@@ -418,7 +429,7 @@ export async function isRemoteUnlockEnrolled(): Promise<boolean> {
 
 /** Tear down remote-unlock enrollment (drop the RUK-wrapped DEK + cached approvers). */
 export async function clearRemoteUnlock(): Promise<void> {
-  await db.vault.update('vault', { dekWrappedByRuk: undefined, remoteUnlock: undefined });
+  await db.vault.update('vault', { dekWrappedByRuk: undefined, rukWrappedByDek: undefined, remoteUnlock: undefined });
 }
 
 /** Re-wrap the DEK under a (possibly new) passphrase with the current KDF. */

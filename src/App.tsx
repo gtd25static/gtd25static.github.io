@@ -14,7 +14,7 @@ import { SyncProvider } from './sync/use-sync';
 import { usePomodoroClock } from './hooks/use-pomodoro-clock';
 import { useUrlCapture } from './hooks/use-url-capture';
 import { useNudges, useLockedNudge } from './hooks/use-nudges';
-import { useRemoteApprovalWatcher } from './hooks/use-remote-unlock';
+import { RemoteApprovalPrompt } from './components/security/RemoteApprovalPrompt';
 import { useAppBadge } from './hooks/use-app-badge';
 import { ServiceWorkerProvider } from './hooks/use-service-worker';
 import { AppUpdatePrompt } from './components/banners/AppUpdatePrompt';
@@ -91,13 +91,13 @@ function UnlockedApp() {
   useUrlCapture();
   useNudges();
   useAppBadge();
-  // Approver duties (non-Paranoid devices only): accept RUK invites + surface
-  // remote-unlock approval prompts for managed devices.
-  useRemoteApprovalWatcher();
 
   return (
     <SyncProvider>
       <SpecialListProvider>
+        {/* Approver duties (non-Paranoid devices): accept RUK invites + show an
+            attention-grabbing approval overlay for managed devices' unlock requests. */}
+        <RemoteApprovalPrompt />
         <AppShell />
       </SpecialListProvider>
     </SyncProvider>

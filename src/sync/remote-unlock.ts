@@ -16,7 +16,7 @@ import {
 import { encryptBlob, decryptBlob } from './crypto';
 import { importKekFromBytes } from '../db/vault-crypto';
 import { isParanoidFlagSet } from '../db/paranoid-flag';
-import { wrapDekWithRuk, unlockWithRemoteKey, clearRemoteUnlock, getVaultSecrets } from '../db/vault';
+import { wrapDekWithRuk, unlockWithRemoteKey, clearRemoteUnlock, getVaultSecrets, getRukRaw } from '../db/vault';
 export { isRemoteUnlockEnrolled } from '../db/vault'; // re-exported so the UI imports it from one place
 import { getCachedSalt } from './crypto';
 import { deriveRegistryMacKey } from './remote-unlock-crypto';
@@ -208,6 +208,34 @@ export async function enableRemoteUnlock(ctx: EnrollContext, approverDeviceIds: 
   return approvers;
 }
 
+/**
+ * Add MORE approver devices to an already-enrolled circle WITHOUT re-keying the
+ * existing ones: recover the stable RUK (needs the vault unlocked) and ECIES-deliver
+ * it to each new approver, then append them to the cached approver list.
+ */
+export async function addApprovers(ctx: EnrollContext, approverDeviceIds: string[]): Promise<RegistryEntry[]> {
+  const { pat, repo, deviceId, deviceName, macKey } = ctx;
+  const ruk = await getRukRaw();
+  if (!ruk) throw new Error('Unlock the vault first (remote unlock must already be set up here)');
+  const authentic = await readAuthenticRegistry(pat, repo, macKey);
+  const vault = await db.vault.get('vault');
+  const existing = new Set((vault?.remoteUnlock?.approvers ?? []).map((a) => a.deviceId));
+  const toAdd = authentic.filter((e) => approverDeviceIds.includes(e.deviceId) && !e.paranoid && e.deviceId !== deviceId && !existing.has(e.deviceId));
+  if (toAdd.length === 0) throw new Error('Select at least one new eligible (non-Paranoid) device');
+  const identity = await ensureDeviceIdentity();
+  try {
+    for (const a of toAdd) {
+      const rukEcies = await eciesEncryptTo(a.ecdhPub, ruk);
+      await postApproverInvite(pat, repo, a.deviceId, { fromDeviceId: deviceId, fromName: deviceName, fromEcdsaPub: identity.ecdsaPub, rukEcies, ts: Date.now() });
+    }
+  } finally {
+    ruk.fill(0);
+  }
+  const merged = [...(vault?.remoteUnlock?.approvers ?? []), ...toAdd.map((a) => ({ deviceId: a.deviceId, name: a.name, ecdhPub: a.ecdhPub, ecdsaPub: a.ecdsaPub }))];
+  await db.vault.update('vault', { remoteUnlock: { approvers: merged } });
+  return toAdd;
+}
+
 /** Tear down remote unlock on this (paranoid) device and re-lock the PAT away. */
 export async function disableRemoteUnlock(): Promise<void> {
   await clearRemoteUnlock();
@@ -370,8 +398,10 @@ export async function pollRemoteUnlock(pat: string, repo: string, deviceId: stri
     ruk.fill(0);
     if (unlocked) {
       cancelRemoteUnlock();
-      // consume the response so it can't be replayed
-      try { const f = await getFile(pat, repo, unlockRespPath(deviceId)); if (f) await deleteFile(pat, repo, unlockRespPath(deviceId), f.sha); } catch { /* best effort */ }
+      // Consume the response AND the request so it can't be replayed and so other
+      // trusted devices' prompts detect it was handled (request gone before expiry).
+      try { const r = await getFile(pat, repo, unlockRespPath(deviceId)); if (r) await deleteFile(pat, repo, unlockRespPath(deviceId), r.sha); } catch { /* best effort */ }
+      try { const q = await getFile(pat, repo, unlockReqPath(deviceId)); if (q) await deleteFile(pat, repo, unlockReqPath(deviceId), q.sha); } catch { /* best effort */ }
       return { etag: res.etag, status: 'unlocked' };
     }
   } catch { /* fall through */ }
@@ -380,7 +410,7 @@ export async function pollRemoteUnlock(pat: string, repo: string, deviceId: stri
 
 // --- Unlock exchange (approver side) ---
 
-export interface PendingApproval { fromDeviceId: string; fromName: string; nonce: string; code: string }
+export interface PendingApproval { fromDeviceId: string; fromName: string; nonce: string; code: string; expiresAt: number }
 
 /**
  * Approver: read a pending unlock request from a managed device, verify its
@@ -408,7 +438,7 @@ export async function readPendingApproval(pat: string, repo: string, fromDeviceI
   try { k = await eciesDecrypt(identity.ecdhPriv, myBlob); } catch { return null; }
   const code = await verificationCode(concat(k, te.encode(req.nonce)));
   k.fill(0);
-  return { fromDeviceId, fromName: entry.name, nonce: req.nonce, code };
+  return { fromDeviceId, fromName: entry.name, nonce: req.nonce, code, expiresAt: req.ts + REQUEST_TTL_MS };
 }
 
 /**
@@ -508,11 +538,14 @@ export async function buildEnrollContext(): Promise<EnrollContext> {
   return { pat: secrets.githubPat, repo: local.githubRepo, deviceId: local.deviceId, deviceName: await getDeviceName(), macKey };
 }
 
-/** Authentic, non-Paranoid, OTHER devices eligible to be approvers. */
+/** Authentic, non-Paranoid, OTHER devices eligible to be approvers (excludes ones
+ *  already enrolled, so the same list drives both first-time setup and "add more"). */
 export async function listApproverCandidates(): Promise<RegistryEntry[]> {
   const ctx = await buildEnrollContext();
   const reg = await readAuthenticRegistry(ctx.pat, ctx.repo, ctx.macKey);
-  return reg.filter((e) => !e.paranoid && e.deviceId !== ctx.deviceId);
+  const vault = await db.vault.get('vault');
+  const enrolled = new Set((vault?.remoteUnlock?.approvers ?? []).map((a) => a.deviceId));
+  return reg.filter((e) => !e.paranoid && e.deviceId !== ctx.deviceId && !enrolled.has(e.deviceId));
 }
 
 /** Cached approver display info for the enrolled (protected) device. */

@@ -332,6 +332,10 @@ syncPassword-derived HMAC**.
   **metadata + tamper/delete** — but **not content** (still syncPassword-gated) and
   **not the vault** (DEK independent). For the corporate-proxy adversary this is no
   new exposure (the proxy already had the PAT). Use a least-privilege single-repo PAT.
+- **Adding approvers later** keeps the SAME RUK (stored as `rukWrappedByDek`, i.e.
+  RUK encrypted under the DEK) so existing approvers are not re-keyed. No new at-rest
+  exposure: recovering RUK from `rukWrappedByDek` requires the DEK (an unlocked vault),
+  exactly like reading content.
 - **New standing factor — the approver holds RUK.** **Approver compromise + a disk
   image of the locked device = DEK.** The approver is therefore a deliberately
   chosen, trusted device; a **Paranoid device is forbidden from being an approver**

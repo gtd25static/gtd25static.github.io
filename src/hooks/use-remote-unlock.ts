@@ -2,20 +2,25 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { db } from '../db';
 import { isRemoteUnlockEnrolled } from '../db/vault';
 import { isParanoidFlagSet } from '../db/paranoid-flag';
-import { confirmDialog } from '../components/ui/ConfirmDialog';
+import { toast } from '../components/ui/Toast';
 import {
   getMailboxPat, getRepo, requestRemoteUnlock, pollRemoteUnlock, pollRemoteCommands, cancelRemoteUnlock,
   pollApproverInbox, listApprovedDevices, readPendingApproval, approveRemoteUnlock, publishOwnRegistryEntry,
 } from '../sync/remote-unlock';
 
-const POLL_MS = 12_000;
+const SLOW_POLL_MS = 12_000;   // background cadence (wipe watch / invitations)
+const FAST_POLL_MS = 2_500;    // while an unlock request is pending — keeps approval snappy
+const REFOCUS_POLL_AFTER_MS = 60_000; // only force a poll on refocus after this long hidden
+
+function isHidden(): boolean {
+  return typeof document !== 'undefined' && document.visibilityState === 'hidden';
+}
 
 /**
- * Lock-screen hook: when this device has remote unlock enrolled, run a cheap
- * (conditional-ETag) background poll for a signed remote-WIPE command, and expose
- * a request/cancel flow for remote UNLOCK (showing the verification code to match
- * on the approving device). On a successful unlock the vault emits and the lock
- * screen unmounts; on a wipe, panicWipe reloads.
+ * Lock-screen hook: when this device has remote unlock enrolled, poll (cheap,
+ * conditional-ETag) for a signed remote-WIPE command, and expose a request/cancel
+ * flow for remote UNLOCK with the verification code. While a request is pending we
+ * poll fast so unlocking is near-instant after the approver authorizes.
  */
 export function useLockScreenRemote() {
   const [enrolled, setEnrolled] = useState(false);
@@ -49,7 +54,7 @@ export function useLockScreenRemote() {
       const w = await pollRemoteCommands(c.pat, c.repo, c.deviceId, cmdEtag.current);
       cmdEtag.current = w.etag;
       if (w.wiped) return; // panicWipe reloads the page
-    } catch { /* transient network — keep polling */ }
+    } catch { /* transient */ }
     if (pending.current) {
       try {
         const r = await pollRemoteUnlock(c.pat, c.repo, c.deviceId, reqEtag.current);
@@ -63,7 +68,7 @@ export function useLockScreenRemote() {
     if (!enrolled) return;
     const run = () => { void tick(); };
     run();
-    const timer = setInterval(run, POLL_MS);
+    const timer = setInterval(run, code ? FAST_POLL_MS : SLOW_POLL_MS); // fast while a request is pending
     const onVis = () => { if (document.visibilityState === 'visible') run(); };
     document.addEventListener('visibilitychange', onVis);
     window.addEventListener('online', run);
@@ -72,7 +77,7 @@ export function useLockScreenRemote() {
       document.removeEventListener('visibilitychange', onVis);
       window.removeEventListener('online', run);
     };
-  }, [enrolled, tick]);
+  }, [enrolled, code, tick]);
 
   const request = useCallback(async () => {
     const c = ctx.current;
@@ -98,49 +103,120 @@ export function useLockScreenRemote() {
   return { enrolled, code, error, request, cancel };
 }
 
+export interface ApprovalRequest { deviceId: string; fromName: string; nonce: string; code: string; expiresAt: number }
+
 /**
- * Approver-side watcher (mounted in the unlocked app): on a NON-Paranoid device,
- * periodically accept RUK invites and surface a confirm prompt (with the matching
- * verification code) for any pending unlock request from a managed device. A
- * Paranoid device never acts as an approver.
+ * Approver-side hook (NON-Paranoid devices): accept RUK invites and surface a
+ * pending unlock request for a managed device so the UI can show an attention-
+ * grabbing prompt. Several trusted devices may receive the same request, so a
+ * prompt auto-dismisses once the request expires OR another device handles it
+ * (the requester deletes the request on success) — with a toast explaining why,
+ * deferred until the app is focused. Polls only while visible; on regaining focus
+ * after ≥1 min hidden it forces a catch-up poll (quick toggles don't hammer the API).
  */
-export function useRemoteApprovalWatcher() {
+export function useRemoteApprovals(): { pending: ApprovalRequest | null; approve: () => Promise<void>; deny: () => void } {
+  const [pending, setPending] = useState<ApprovalRequest | null>(null);
   const seen = useRef<Set<string>>(new Set());
   const busy = useRef(false);
   const published = useRef(false);
+  const current = useRef<ApprovalRequest | null>(null); // mirror of `pending` for callbacks
+  const deferredToast = useRef<string | null>(null);     // shown on next focus
+
+  // Clear the on-screen prompt. Toast now if focused; otherwise defer to refocus.
+  const dismiss = useCallback((toastMsg: string | null) => {
+    const cur = current.current;
+    if (cur) seen.current.add(cur.nonce);
+    current.current = null;
+    setPending(null);
+    if (toastMsg) {
+      if (!isHidden()) toast(toastMsg, 'info');
+      else deferredToast.current = toastMsg;
+    }
+  }, []);
+
+  const tick = useCallback(async () => {
+    if (busy.current || isParanoidFlagSet() || isHidden()) return;
+    busy.current = true;
+    try {
+      const local = await db.localSettings.get('local');
+      const pat = local?.githubPat;
+      const repo = local?.githubRepo;
+      const myId = local?.deviceId;
+      if (!pat || !repo || !myId) return;
+
+      // A prompt is already showing -> revalidate it instead of searching for a new
+      // one. If the request is gone (handled by another device) or expired, dismiss.
+      const cur = current.current;
+      if (cur) {
+        const still = await readPendingApproval(pat, repo, cur.deviceId);
+        if (!still || still.nonce !== cur.nonce) {
+          dismiss(Date.now() >= cur.expiresAt
+            ? `Unlock request from “${cur.fromName}” expired`
+            : `Unlock request from “${cur.fromName}” was handled by another device`);
+        }
+        return;
+      }
+
+      if (!published.current) published.current = await publishOwnRegistryEntry();
+      await pollApproverInbox(pat, repo, myId);
+      const managed = await listApprovedDevices();
+      for (const m of managed) {
+        const p = await readPendingApproval(pat, repo, m.deviceId);
+        if (p && !seen.current.has(p.nonce)) {
+          const req: ApprovalRequest = { deviceId: m.deviceId, fromName: p.fromName, nonce: p.nonce, code: p.code, expiresAt: p.expiresAt };
+          current.current = req;
+          setPending(req);
+          break;
+        }
+      }
+    } catch { /* transient */ } finally {
+      busy.current = false;
+    }
+  }, [dismiss]);
 
   useEffect(() => {
     let stop = false;
-    async function tick() {
-      if (stop || busy.current || isParanoidFlagSet()) return;
-      busy.current = true;
-      try {
-        const local = await db.localSettings.get('local');
-        const pat = local?.githubPat;
-        const repo = local?.githubRepo;
-        const myId = local?.deviceId;
-        if (!pat || !repo || !myId) return;
-        // Advertise this (non-Paranoid) device in the registry once per session so
-        // Paranoid devices can discover + trust it as an approver candidate.
-        if (!published.current) published.current = await publishOwnRegistryEntry();
-        await pollApproverInbox(pat, repo, myId);
-        const managed = await listApprovedDevices();
-        for (const m of managed) {
-          const p = await readPendingApproval(pat, repo, m.deviceId);
-          if (!p || seen.current.has(p.nonce)) continue;
-          seen.current.add(p.nonce);
-          const ok = await confirmDialog(
-            `“${p.fromName}” is requesting a remote unlock. Approve ONLY if you started it and the code on that device matches:\n\n${p.code}`,
-            { confirmLabel: 'Approve unlock', danger: true },
-          );
-          if (ok) await approveRemoteUnlock(pat, repo, m.deviceId);
-        }
-      } catch { /* transient */ } finally {
-        busy.current = false;
-      }
+    let lastHidden = 0;
+    const run = () => { if (!stop) void tick(); };
+    run();
+    const timer = setInterval(run, SLOW_POLL_MS);
+    const onVis = () => {
+      if (document.visibilityState === 'hidden') { lastHidden = Date.now(); return; }
+      if (deferredToast.current) { toast(deferredToast.current, 'info'); deferredToast.current = null; }
+      // Always revalidate a showing prompt on refocus; otherwise only catch up after a real absence.
+      if (current.current || Date.now() - lastHidden >= REFOCUS_POLL_AFTER_MS) run();
+    };
+    document.addEventListener('visibilitychange', onVis);
+    window.addEventListener('online', run);
+    return () => {
+      stop = true;
+      clearInterval(timer);
+      document.removeEventListener('visibilitychange', onVis);
+      window.removeEventListener('online', run);
+    };
+  }, [tick]);
+
+  // Auto-expire the showing prompt even while focused/idle (no poll needed).
+  useEffect(() => {
+    if (!pending) return;
+    const t = setTimeout(() => {
+      dismiss(`Unlock request from “${pending.fromName}” expired`);
+    }, Math.max(0, pending.expiresAt - Date.now()));
+    return () => clearTimeout(t);
+  }, [pending, dismiss]);
+
+  const approve = useCallback(async () => {
+    const p = current.current;
+    if (!p) return;
+    try {
+      const local = await db.localSettings.get('local');
+      if (local?.githubPat && local.githubRepo) await approveRemoteUnlock(local.githubPat, local.githubRepo, p.deviceId);
+    } catch { /* requester can retry */ } finally {
+      dismiss(null);
     }
-    void tick();
-    const timer = setInterval(() => void tick(), POLL_MS);
-    return () => { stop = true; clearInterval(timer); };
-  }, []);
+  }, [dismiss]);
+
+  const deny = useCallback(() => { dismiss(null); }, [dismiss]);
+
+  return { pending, approve, deny };
 }

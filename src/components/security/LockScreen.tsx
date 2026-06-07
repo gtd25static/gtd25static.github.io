@@ -26,6 +26,7 @@ export function LockScreen() {
   const [showWipe, setShowWipe] = useState(false);
   const [attempt, setAttempt] = useState(0);       // bump to reshuffle the on-screen keys
   const [onScreen, setOnScreen] = useState(false); // opt-in keylogger-safe entry
+  const [showPass, setShowPass] = useState(false); // passphrase is a hidden last resort
   const { forceCheck } = useServiceWorker();
   const [checkingUpdate, setCheckingUpdate] = useState(false);
 
@@ -80,6 +81,9 @@ export function LockScreen() {
     await panicWipe();
   }
 
+  // A safer unlock method exists -> the passphrase becomes a hidden last resort.
+  const hasOtherMethod = hasSecurityKey || remote.enrolled;
+
   return (
     <div className="fixed inset-0 z-[200] flex items-center justify-center bg-zinc-100 p-4 dark:bg-zinc-950">
       <div className="w-full max-w-sm rounded-2xl border border-zinc-200 bg-white p-6 shadow-2xl dark:border-zinc-800 dark:bg-zinc-900">
@@ -89,15 +93,10 @@ export function LockScreen() {
         </div>
 
         {hasSecurityKey && (
-          <div className="mb-4 space-y-3">
+          <div className="mb-4">
             <Button type="button" onClick={handleSecurityKey} disabled={busy}>
               🔑 {busy ? 'Unlocking…' : 'Unlock with security key or phone'}
             </Button>
-            <div className="flex items-center gap-2 text-xs text-zinc-400 dark:text-zinc-500">
-              <span className="h-px flex-1 bg-zinc-200 dark:bg-zinc-700" />
-              or use your passphrase
-              <span className="h-px flex-1 bg-zinc-200 dark:bg-zinc-700" />
-            </div>
           </div>
         )}
 
@@ -123,59 +122,80 @@ export function LockScreen() {
               </Button>
             )}
             {remote.error && <p className="text-sm text-red-600 dark:text-red-400">{remote.error}</p>}
-            <div className="flex items-center gap-2 text-xs text-zinc-400 dark:text-zinc-500">
-              <span className="h-px flex-1 bg-zinc-200 dark:bg-zinc-700" />
-              or use your passphrase
-              <span className="h-px flex-1 bg-zinc-200 dark:bg-zinc-700" />
-            </div>
           </div>
         )}
 
-        {onScreen ? (
+        {/* Passphrase is a LAST RESORT in Paranoid Mode: typing it on an untrusted
+            machine can expose it. Hide it behind a disclosure whenever a safer method
+            (security key / trusted device) is available; show it directly only when it
+            is the sole way in. */}
+        {(!hasOtherMethod || showPass) ? (
           <>
-            <p className="mb-2 text-xs text-zinc-500 dark:text-zinc-400">
-              Tap your passphrase on the on-screen keys — never typed, so a keylogger sees nothing.
-            </p>
-            <RandomizedKeyboard
-              value={passphrase}
-              onChange={setPassphrase}
-              onSubmit={handleUnlock}
-              disabled={busy}
-              nonce={attempt}
-              submitLabel={busy ? 'Unlocking…' : 'Unlock'}
-            />
+            {hasOtherMethod && (
+              <p className="mb-2 text-xs text-amber-600 dark:text-amber-400">
+                Last resort. Typing your passphrase on an untrusted device can expose it — prefer your
+                security key or a trusted device. Rotate it afterward if this machine isn't trusted.
+              </p>
+            )}
+            {onScreen ? (
+              <>
+                <p className="mb-2 text-xs text-zinc-500 dark:text-zinc-400">
+                  Tap your passphrase on the on-screen keys — never typed, so a keylogger sees nothing.
+                </p>
+                <RandomizedKeyboard
+                  value={passphrase}
+                  onChange={setPassphrase}
+                  onSubmit={handleUnlock}
+                  disabled={busy}
+                  nonce={attempt}
+                  submitLabel={busy ? 'Unlocking…' : 'Unlock'}
+                />
+              </>
+            ) : (
+              <form onSubmit={handleFormSubmit}>
+                <Input
+                  label="Passphrase"
+                  type="password"
+                  value={passphrase}
+                  onChange={(e) => setPassphrase(e.target.value)}
+                  placeholder="Enter vault passphrase"
+                  autoFocus={!hasOtherMethod}
+                  disabled={busy}
+                />
+                <div className="mt-3">
+                  <Button type="submit" disabled={busy || !passphrase}>
+                    {busy ? 'Unlocking…' : 'Unlock'}
+                  </Button>
+                </div>
+              </form>
+            )}
+
+            {error && <p className="mt-2 text-sm text-red-600 dark:text-red-400">{error}</p>}
+
+            <div className="mt-3 text-center">
+              <button
+                type="button"
+                onClick={() => { setOnScreen((v) => !v); setPassphrase(''); setError(''); }}
+                disabled={busy}
+                className="text-xs text-zinc-500 underline-offset-2 hover:underline disabled:opacity-50 dark:text-zinc-400"
+              >
+                {onScreen ? '⌨︎ Use keyboard input' : '🔒 Use on-screen keyboard (keylogger-safe)'}
+              </button>
+            </div>
           </>
         ) : (
-          <form onSubmit={handleFormSubmit}>
-            <Input
-              label="Passphrase"
-              type="password"
-              value={passphrase}
-              onChange={(e) => setPassphrase(e.target.value)}
-              placeholder="Enter vault passphrase"
-              autoFocus
+          <div className="mt-2 text-center">
+            {error && <p className="mb-2 text-sm text-red-600 dark:text-red-400">{error}</p>}
+            <button
+              type="button"
+              onClick={() => { setShowPass(true); setError(''); }}
               disabled={busy}
-            />
-            <div className="mt-3">
-              <Button type="submit" disabled={busy || !passphrase}>
-                {busy ? 'Unlocking…' : 'Unlock'}
-              </Button>
-            </div>
-          </form>
+              className="text-xs text-zinc-400 underline-offset-2 hover:text-zinc-600 hover:underline disabled:opacity-50 dark:text-zinc-500 dark:hover:text-zinc-300"
+            >
+              Enter passphrase instead (last resort)
+            </button>
+          </div>
         )}
-
-        {error && <p className="mt-2 text-sm text-red-600 dark:text-red-400">{error}</p>}
-
-        <div className="mt-3 text-center">
-          <button
-            type="button"
-            onClick={() => { setOnScreen((v) => !v); setPassphrase(''); setError(''); }}
-            disabled={busy}
-            className="text-xs text-zinc-500 underline-offset-2 hover:underline disabled:opacity-50 dark:text-zinc-400"
-          >
-            {onScreen ? '⌨︎ Use keyboard input' : '🔒 Use on-screen keyboard (keylogger-safe)'}
-          </button>
-        </div>
 
         {/* Pomodoro controls — task-data-free, so safe while locked. The settings
             gear is hidden here (settings are not available while locked). */}

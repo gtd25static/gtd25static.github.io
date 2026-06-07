@@ -206,6 +206,10 @@ export interface Vault {
   // Remote unlock: DEK wrapped by a random remote-unlock key (RUK) held by trusted
   // approver devices; present only when remote unlock is enrolled.
   dekWrappedByRuk?: string;
+  // RUK wrapped by the DEK, so an unlocked device can recover RUK to enrol ADDITIONAL
+  // approvers without re-keying the existing ones. No new at-rest exposure: recovering
+  // RUK still requires the DEK (i.e. an unlocked vault).
+  rukWrappedByDek?: string;
   remoteUnlock?: { approvers: RemoteApproverInfo[] };
 }
 

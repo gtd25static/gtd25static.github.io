@@ -94,11 +94,40 @@ describe('remote unlock: enrollment', () => {
     await enrollPair();
     const v = await db.vault.get('vault');
     expect(v?.dekWrappedByRuk).toBeTruthy();
+    expect(v?.rukWrappedByDek).toBeTruthy(); // RUK recoverable while unlocked (for adding approvers)
     expect(v?.remoteUnlock?.approvers.map((a) => a.deviceId)).toEqual([PHONE]);
     // The phone holds RUK; the laptop does not.
     expect(phoneLocal.remoteApproverFor?.[LAP]?.ruk).toBeTruthy();
     // PAT is plaintext (usable while locked).
     expect(laptopLocal.githubPat).toBe(PAT);
+  });
+
+  it('adds another approver without re-keying — existing approver still unlocks', async () => {
+    await enrollPair(); // PHONE enrolled; laptop still unlocked
+    const phone2 = await generateIdentityKeys();
+    const PHONE2 = 'phone-2';
+    await ru.publishRegistryEntry(PAT, REPO, await ru.buildRegistryEntry(PHONE2, 'Tablet', publicIdentityOf(phone2), false, macKey));
+
+    // Laptop (unlocked) adds the second device.
+    await actAsLaptop();
+    const added = await ru.addApprovers({ pat: PAT, repo: REPO, deviceId: LAP, deviceName: 'Work Laptop', macKey }, [PHONE2]);
+    expect(added.map((a) => a.deviceId)).toEqual([PHONE2]);
+    expect((await db.vault.get('vault'))?.remoteUnlock?.approvers.map((a) => a.deviceId).sort()).toEqual([PHONE, PHONE2]);
+
+    // Phone2 picks up its RUK invite.
+    await db.localSettings.put({ id: 'local', syncEnabled: true, syncIntervalMs: 300_000, deviceId: PHONE2, githubRepo: REPO, deviceIdentity: phone2, deviceName: 'Tablet', paranoidEnabled: false });
+    localStorage.removeItem(PARANOID_FLAG);
+    expect(await ru.pollApproverInbox(PAT, REPO, PHONE2)).toBe(1);
+
+    // The ORIGINAL phone (unchanged RUK) still unlocks the laptop.
+    await actAsLaptop();
+    vault.lock();
+    await ru.requestRemoteUnlock(PAT, REPO, LAP);
+    await actAsPhone();
+    expect(await ru.readPendingApproval(PAT, REPO, LAP)).not.toBeNull();
+    await ru.approveRemoteUnlock(PAT, REPO, LAP);
+    await actAsLaptop();
+    expect((await ru.pollRemoteUnlock(PAT, REPO, LAP)).status).toBe('unlocked');
   });
 
   it('refuses to enroll a Paranoid device as an approver', async () => {

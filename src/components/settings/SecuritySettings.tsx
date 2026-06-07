@@ -14,8 +14,8 @@ import {
 import { isWebAuthnSupported } from '../../sync/webauthn-prf';
 import {
   isRemoteUnlockEnrolled, listEnrolledApprovers, listApproverCandidates, buildEnrollContext,
-  enableRemoteUnlock, disableRemoteUnlock, setDeviceName, getDeviceName,
-  listApprovedDevices, sendRemoteWipe, pollApproverInbox, type RegistryEntry,
+  enableRemoteUnlock, addApprovers, disableRemoteUnlock, setDeviceName, getDeviceName,
+  publishOwnRegistryEntry, listApprovedDevices, sendRemoteWipe, pollApproverInbox, type RegistryEntry,
 } from '../../sync/remote-unlock';
 import { identityFingerprint } from '../../sync/remote-unlock-crypto';
 import { panicWipe } from '../../lib/panic-wipe';
@@ -340,6 +340,8 @@ function ManageForm({ idleMinutes, maxAttempts, systemIdleOn, hasSecurityKey }: 
 
       <SecurityKeySection hasSecurityKey={hasSecurityKey} />
 
+      <DeviceNameSection />
+
       <RemoteUnlockSection />
 
       <div className="space-y-1 border-t border-zinc-200 pt-3 dark:border-zinc-700">
@@ -372,20 +374,18 @@ function RemoteUnlockSection() {
   const [approvers, setApprovers] = useState<Array<{ deviceId: string; name: string }>>([]);
   const [candidates, setCandidates] = useState<Array<{ e: RegistryEntry; fp: string }> | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [name, setName] = useState('');
   const [busy, setBusy] = useState(false);
 
   const reload = useCallback(async () => {
     setEnrolled(await isRemoteUnlockEnrolled());
     setApprovers(await listEnrolledApprovers());
-    setName(await getDeviceName());
   }, []);
   useEffect(() => { void reload(); }, [reload]);
 
   async function loadCandidates() {
     setBusy(true);
     try {
-      const list = await listApproverCandidates();
+      const list = await listApproverCandidates(); // excludes already-enrolled approvers
       const withFp = await Promise.all(list.map(async (e) => ({ e, fp: await identityFingerprint({ ecdhPub: e.ecdhPub, ecdsaPub: e.ecdsaPub }) })));
       setCandidates(withFp); // empty array -> the section shows guidance + Refresh
     } catch (e) {
@@ -393,17 +393,22 @@ function RemoteUnlockSection() {
     } finally { setBusy(false); }
   }
 
-  async function enroll() {
+  async function confirm() {
     if (selected.size === 0) { toast('Select at least one device', 'error'); return; }
     setBusy(true);
     try {
-      await setDeviceName(name);
-      await enableRemoteUnlock(await buildEnrollContext(), [...selected]);
-      toast('Remote unlock enabled', 'success');
+      const ctx = await buildEnrollContext();
+      if (enrolled) {
+        await addApprovers(ctx, [...selected]);
+        toast('Trusted device(s) added', 'success');
+      } else {
+        await enableRemoteUnlock(ctx, [...selected]);
+        toast('Remote unlock enabled', 'success');
+      }
       setCandidates(null); setSelected(new Set());
       await reload();
     } catch (e) {
-      toast(e instanceof Error ? e.message : 'Could not enable remote unlock', 'error');
+      toast(e instanceof Error ? e.message : 'Could not save', 'error');
     } finally { setBusy(false); }
   }
 
@@ -411,13 +416,51 @@ function RemoteUnlockSection() {
     const ok = await confirmDialog('Turn off remote unlock? Trusted devices will no longer be able to unlock or wipe this device.', { confirmLabel: 'Turn off', danger: true });
     if (!ok) return;
     setBusy(true);
-    try { await disableRemoteUnlock(); toast('Remote unlock disabled', 'success'); await reload(); }
+    try { await disableRemoteUnlock(); toast('Remote unlock disabled', 'success'); setCandidates(null); await reload(); }
     finally { setBusy(false); }
   }
 
   function toggle(id: string) {
     setSelected((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
   }
+
+  // The candidate picker is shared by first-time setup and "add more devices".
+  const picker = candidates && (
+    candidates.length === 0 ? (
+      <div className="space-y-2">
+        <p className="text-xs text-amber-600 dark:text-amber-400">
+          No eligible devices found yet. On the device you want to approve from (e.g. your phone, with
+          Paranoid Mode OFF), open this app, make sure GitHub sync is set up and has run once, then refresh.
+        </p>
+        <div className="flex gap-2">
+          <Button size="sm" variant="secondary" onClick={loadCandidates} disabled={busy}>{busy ? 'Refreshing…' : 'Refresh'}</Button>
+          <Button size="sm" variant="secondary" onClick={() => setCandidates(null)} disabled={busy}>Cancel</Button>
+        </div>
+      </div>
+    ) : (
+      <div className="space-y-2">
+        <ul className="space-y-1">
+          {candidates.map(({ e, fp }) => (
+            <li key={e.deviceId} className="rounded-md bg-zinc-50 p-2 text-xs dark:bg-zinc-800/40">
+              <label className="flex items-center gap-2">
+                <input type="checkbox" checked={selected.has(e.deviceId)} onChange={() => toggle(e.deviceId)} disabled={busy} />
+                <span className="font-medium text-zinc-700 dark:text-zinc-200">{e.name}</span>
+              </label>
+              <p className="mt-1 font-mono text-[10px] leading-tight text-zinc-400 dark:text-zinc-500">
+                Confirm this matches the fingerprint on that device:<br />{fp}
+              </p>
+            </li>
+          ))}
+        </ul>
+        <div className="flex gap-2">
+          <Button size="sm" variant="secondary" onClick={confirm} disabled={busy || selected.size === 0}>
+            {enrolled ? 'Add selected' : 'Enable for selected'}
+          </Button>
+          <Button size="sm" variant="secondary" onClick={() => setCandidates(null)} disabled={busy}>Cancel</Button>
+        </div>
+      </div>
+    )
+  );
 
   return (
     <div className="space-y-2 border-t border-zinc-200 pt-3 dark:border-zinc-700">
@@ -432,46 +475,50 @@ function RemoteUnlockSection() {
           <p className="text-xs text-emerald-600 dark:text-emerald-400">
             Enabled — approver{approvers.length === 1 ? '' : 's'}: {approvers.map((a) => a.name).join(', ') || '(pending pickup)'}
           </p>
-          <Button size="sm" variant="secondary" onClick={disable} disabled={busy}>Turn off remote unlock</Button>
+          {picker ?? (
+            <div className="flex gap-2">
+              <Button size="sm" variant="secondary" onClick={loadCandidates} disabled={busy}>{busy ? 'Loading…' : 'Add another device'}</Button>
+              <Button size="sm" variant="secondary" onClick={disable} disabled={busy}>Turn off</Button>
+            </div>
+          )}
         </>
-      ) : candidates && candidates.length === 0 ? (
-        <div className="space-y-2">
-          <p className="text-xs text-amber-600 dark:text-amber-400">
-            No eligible devices found yet. On the device you want to approve from (e.g. your phone,
-            with Paranoid Mode OFF), open this app, make sure GitHub sync is set up and has run once,
-            then refresh.
-          </p>
-          <div className="flex gap-2">
-            <Button size="sm" variant="secondary" onClick={loadCandidates} disabled={busy}>{busy ? 'Refreshing…' : 'Refresh'}</Button>
-            <Button size="sm" variant="secondary" onClick={() => setCandidates(null)} disabled={busy}>Cancel</Button>
-          </div>
-        </div>
-      ) : candidates ? (
-        <div className="space-y-2">
-          <Input label="This device's name (shown to approvers)" value={name} onChange={(e) => setName(e.target.value)} disabled={busy} />
-          <ul className="space-y-1">
-            {candidates.map(({ e, fp }) => (
-              <li key={e.deviceId} className="rounded-md bg-zinc-50 p-2 text-xs dark:bg-zinc-800/40">
-                <label className="flex items-center gap-2">
-                  <input type="checkbox" checked={selected.has(e.deviceId)} onChange={() => toggle(e.deviceId)} disabled={busy} />
-                  <span className="font-medium text-zinc-700 dark:text-zinc-200">{e.name}</span>
-                </label>
-                <p className="mt-1 font-mono text-[10px] leading-tight text-zinc-400 dark:text-zinc-500">
-                  Confirm this matches the fingerprint on that device:<br />{fp}
-                </p>
-              </li>
-            ))}
-          </ul>
-          <div className="flex gap-2">
-            <Button size="sm" variant="secondary" onClick={enroll} disabled={busy || selected.size === 0}>Enable for selected</Button>
-            <Button size="sm" variant="secondary" onClick={() => setCandidates(null)} disabled={busy}>Cancel</Button>
-          </div>
-        </div>
-      ) : (
+      ) : picker ?? (
         <Button size="sm" variant="secondary" onClick={loadCandidates} disabled={busy}>
           {busy ? 'Loading…' : 'Set up remote unlock'}
         </Button>
       )}
+    </div>
+  );
+}
+
+// Every install can name itself; the name is published to the registry (shown to
+// other devices when enrolling) and re-published on save.
+function DeviceNameSection() {
+  const [name, setName] = useState('');
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { void (async () => setName(await getDeviceName()))(); }, []);
+
+  async function save() {
+    setBusy(true);
+    try {
+      await setDeviceName(name);
+      const published = await publishOwnRegistryEntry();
+      toast(published ? 'Device name saved' : 'Saved (will publish on next sync)', 'success');
+    } catch {
+      toast('Could not save the name', 'error');
+    } finally { setBusy(false); }
+  }
+
+  return (
+    <div className="space-y-2 border-t border-zinc-200 pt-3 dark:border-zinc-700">
+      <h4 className="text-sm font-medium">Device name</h4>
+      <p className="text-xs text-zinc-400 dark:text-zinc-500">
+        Shown to your other devices when setting up remote unlock.
+      </p>
+      <div className="flex items-end gap-2">
+        <Input label="This device's name" value={name} onChange={(e) => setName(e.target.value)} disabled={busy} />
+        <Button size="sm" variant="secondary" onClick={save} disabled={busy}>Save</Button>
+      </div>
     </div>
   );
 }
@@ -542,6 +589,7 @@ export function SecuritySettings() {
     return (
       <div className="space-y-4">
         <EnableForm />
+        <DeviceNameSection />
         <ApproverDevicesSection />
       </div>
     );
