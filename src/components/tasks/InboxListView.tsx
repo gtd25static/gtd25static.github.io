@@ -12,7 +12,7 @@ export function InboxListView({ listId }: Props) {
   return (
     <div className="flex flex-1 flex-col overflow-hidden">
       <div className="flex-1 overflow-y-auto scrollbar-thin">
-        <div className="mx-auto w-full max-w-3xl px-4 py-4">
+        <div className="mx-auto w-full max-w-3xl lg:max-w-4xl xl:max-w-5xl px-4 py-4">
           {/* Header */}
           <div className="mb-1">
             <h2 className="text-lg font-normal text-zinc-800 dark:text-zinc-200">Inbox</h2>
