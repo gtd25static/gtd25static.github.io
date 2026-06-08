@@ -19,14 +19,41 @@ export interface LoggedError {
 }
 
 const MAX_ERRORS = 100;
+const MAX_MESSAGE_LEN = 2000;
+const MAX_STACK_LEN = 4000;
 const errorLog: LoggedError[] = [];
 const listeners = new Set<() => void>();
+
+function cap(s: string | undefined, max: number): string | undefined {
+  if (s === undefined) return undefined;
+  return s.length > max ? `${s.slice(0, max)}… [+${s.length - max} chars]` : s;
+}
+
+/**
+ * Summarize an unknown thrown value into a non-sensitive message. We deliberately
+ * do NOT JSON.stringify arbitrary objects: an unexpected throw/rejection could carry
+ * an entity payload, and the diagnostics log is user-readable/copyable. Errors and
+ * strings are the only shapes whose text we trust; anything else is reduced to its
+ * type so no structured content can leak into the log.
+ */
+function summarize(err: unknown): { message: string; stack?: string } {
+  if (err instanceof Error) return { message: err.message || err.name || 'Error', stack: err.stack };
+  if (typeof err === 'string') return { message: err };
+  if (err === null || err === undefined) return { message: String(err) };
+  const ctor = (err as { constructor?: { name?: string } })?.constructor?.name;
+  return { message: `[${ctor || typeof err}]` };
+}
 
 /** Record an error against a context label. Never throws. */
 export function recordError(context: string, err: unknown): void {
   try {
-    const e = err instanceof Error ? err : new Error(typeof err === 'string' ? err : JSON.stringify(err));
-    errorLog.push({ at: Date.now(), context, message: e.message || String(err), stack: e.stack });
+    const { message, stack } = summarize(err);
+    errorLog.push({
+      at: Date.now(),
+      context,
+      message: cap(message, MAX_MESSAGE_LEN) || 'unknown error',
+      stack: cap(stack, MAX_STACK_LEN),
+    });
     if (errorLog.length > MAX_ERRORS) errorLog.shift();
     for (const l of listeners) l();
   } catch { /* diagnostics must never make things worse */ }

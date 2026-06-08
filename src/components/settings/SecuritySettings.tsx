@@ -639,7 +639,7 @@ function ApproverDevicesSection() {
   }
 
   async function purge(deviceId: string, name: string) {
-    const ok = await confirmDialog(`Purge “${name}” from this trusted device? This removes the local management entry and best-effort deletes remote wipe command/status files. Synced task data is unaffected.`, { confirmLabel: 'Purge device', danger: true });
+    const ok = await confirmDialog(`Purge “${name}” from all trusted devices? This removes it from every trusted device's list and best-effort deletes the remote wipe command/status and registry files. Synced task data is unaffected.`, { confirmLabel: 'Purge device', danger: true });
     if (!ok) return;
     setBusy(true);
     try {
@@ -653,7 +653,7 @@ function ApproverDevicesSection() {
   }
 
   async function forgetPending(deviceId: string, name: string) {
-    const ok = await confirmDialog(`Forget “${name}” from this trusted device? The remote wipe command stays in GitHub, so the device can still wipe itself if it later comes online. You will no longer see confirmation here.`, { confirmLabel: 'Forget device', danger: true });
+    const ok = await confirmDialog(`Forget “${name}” from all trusted devices? The remote wipe command stays armed in GitHub, so the device can still wipe itself if it later comes online — but it is removed from every trusted device's list and no confirmation will be shown.`, { confirmLabel: 'Forget device', danger: true });
     if (!ok) return;
     setBusy(true);
     try {

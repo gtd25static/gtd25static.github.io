@@ -1,6 +1,6 @@
 # GTD25 — Security Review & Threat Model
 
-**Last updated:** 2026-06-08 (remote wipe polls while unlocked and writes signed best-effort confirmations; remote-unlock invite cleanup; optional 10-minute app-lock grace after OS screen lock)
+**Last updated:** 2026-06-08 (remote-wipe device lifecycle is now derived from shared repo files so all trusted devices converge; registry-entry deletion is the shared "decommission" signal for purge/forget; serialized `remoteApproverFor` writes + backend-error resilience; diagnostics log hardened against payload leaks)
 **Maintenance:** This document MUST be kept current. See "Keeping this document
 updated" at the end and the corresponding rule in `CLAUDE.md`.
 
@@ -366,13 +366,33 @@ locked device unwraps the DEK. Device identity keys are distributed via a regist
   locked or unlocked; a powered-off/closed device receives the command on next open).
   Before wiping, the protected device best-effort writes a **protected-device-signed**
   wipe confirmation (`gtd25-wipe-status-{deviceId}.json`) so the trusted device can
-  show "wipe confirmed" and purge the managed-device entry + remote command/status
-  files. Confirmation is not guaranteed: if the device loses network after receiving
-  a valid command but before writing the status, it still wipes and the trusted
-  device remains at "sent / pending confirmation". The trusted device can also
-  forget an unconfirmed/orphaned device after sending a wipe command; this removes
-  the local management entry but intentionally leaves the remote wipe command in
-  place and is **not** evidence that the wipe ran.
+  show "wipe confirmed". Confirmation is not guaranteed: if the device loses network
+  after receiving a valid command but before writing the status, it still wipes and
+  the trusted device remains at "sent / pending confirmation".
+- **Shared, file-derived wipe lifecycle.** Each trusted (approver) device derives a
+  managed device's lifecycle (idle → wipe sent/pending → confirmed → decommissioned)
+  from the **shared** repo files — the command, the signed wipe-status, and the
+  MAC-authenticated device registry — rather than only its own local notes, so all
+  trusted devices converge on the same view. **Decommission = registry-entry
+  deletion:** *purge* (only after a verified confirmation) deletes the device's
+  registry entry plus the command/status/unlock files; *forget* (no confirmation
+  yet) deletes the registry entry but intentionally leaves the wipe command **armed**
+  so the device still self-wipes if it reappears. Either action removes the device
+  from every trusted device's list on their next refresh. Residual: a *forgotten*
+  device's still-armed command (and any later wipe-status it publishes) become bounded
+  orphan files for that one deviceId — the accepted cost of "forget but stay armed".
+  Any one trusted device can decommission for all of them; this is within the existing
+  mutual-trust boundary (every approver can already unlock/wipe the protected device).
+  Forget is **not** evidence that the wipe ran.
+- **Consistency under concurrency / backend faults.** All `remoteApproverFor` writes
+  are serialized through an async mutex that re-reads the latest map inside the
+  critical section, so the background status-refresh timer can no longer clobber a
+  concurrent purge/forget and resurrect a removed device. Network I/O happens outside
+  the lock. Operations are fault-tolerant: a transient GitHub error (e.g. a 5xx) on a
+  registry/status read is treated conservatively (never a mass-decommission, never a
+  wipe), per-device refresh failures are skipped and retried, purge/forget always
+  remove the local entry even if remote cleanup partially fails, and a failed
+  `sendRemoteWipe` records no false "command sent" state.
 
 ---
 
@@ -382,6 +402,12 @@ locked device unwraps the DEK. Device identity keys are distributed via a regist
 - **Git history + a logging TLS proxy are append-only from the defender's view.**
   Anything ever synced may be retained by an adversary; you cannot retroactively
   un-expose it. Key rotation is **forward-secret only**.
+- **The diagnostics error log is local-only plaintext.** It lives in an in-memory
+  ring buffer (never synced) the user can read/copy from Settings. To keep it from
+  becoming a content sink, `recordError` only ever stores the text of `Error`/string
+  inputs (plus a capped stack); any other thrown/rejected value is reduced to its
+  type (`[Object]`), so an unexpected throw carrying an entity payload cannot leak
+  its fields into the log. Messages/stacks are length-capped.
 - **Client-side timed/failure wipes only run when our code runs** — useless
   against an offline disk image or memory dump. The same applies to **remote wipe**
   (Scenario 8): it is delivered only while the protected app is open and online

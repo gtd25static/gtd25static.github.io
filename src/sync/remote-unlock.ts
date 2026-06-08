@@ -3,7 +3,7 @@
 // lives in ./remote-unlock-crypto; this module is the db + backend glue.
 
 import { db } from '../db';
-import type { RemoteApproverInfo } from '../db/models';
+import type { LocalSettings, RemoteApproverInfo } from '../db/models';
 import {
   generateIdentityKeys, publicIdentityOf, registryMac, verifyRegistryMac,
   registryEntryBytes, type DeviceIdentity, type PublicIdentity,
@@ -317,24 +317,32 @@ export async function pollApproverInbox(pat: string, repo: string, deviceId: str
   const inbox = safeParseObj<ApproverInvite>(file.data);
   const identity = await ensureDeviceIdentity();
   const local = await db.localSettings.get('local');
-  const store = { ...(local?.remoteApproverFor ?? {}) };
+  const existing = local?.remoteApproverFor ?? {};
   const consumedInviteIds = new Set<string>();
+  // ECIES decryption is async, so accepted entries are built here (outside the lock) and
+  // merged into the live map below; the merge re-checks presence against the fresh map.
+  const toAdd: Record<string, ApproverEntry> = {};
   let accepted = 0;
   for (const invite of Object.values(inbox)) {
     if (!invite?.fromDeviceId) continue;
-    if (store[invite.fromDeviceId]) {
+    if (existing[invite.fromDeviceId]) {
       consumedInviteIds.add(invite.fromDeviceId);
       continue;
     }
     try {
       const ruk = await eciesDecrypt(identity.ecdhPriv, invite.rukEcies);
-      store[invite.fromDeviceId] = { ruk: b64encode(ruk), ecdsaPub: invite.fromEcdsaPub, name: invite.fromName };
+      toAdd[invite.fromDeviceId] = { ruk: b64encode(ruk), ecdsaPub: invite.fromEcdsaPub, name: invite.fromName };
       ruk.fill(0);
       consumedInviteIds.add(invite.fromDeviceId);
       accepted++;
     } catch { /* not for us / corrupt */ }
   }
-  if (accepted) await db.localSettings.update('local', { remoteApproverFor: store });
+  if (accepted) {
+    await mutateRemoteApproverFor((cur) => {
+      for (const [id, entry] of Object.entries(toAdd)) if (!cur[id]) cur[id] = entry;
+      return cur;
+    });
+  }
   if (consumedInviteIds.size > 0) {
     for (const id of consumedInviteIds) delete inbox[id];
     try {
@@ -377,18 +385,37 @@ export async function sendRemoteWipe(pat: string, repo: string, targetDeviceId: 
   return base;
 }
 
+type ApproverMap = NonNullable<LocalSettings['remoteApproverFor']>;
+type ApproverEntry = ApproverMap[string];
+
+// Serialize every read-modify-write of `remoteApproverFor`. The approver UI refreshes
+// wipe statuses on a timer that performs slow network IO, while the user can purge/forget
+// in parallel. Without serialization the timer's stale snapshot could clobber a purge and
+// resurrect a removed device (TOCTOU). The mutation `fn` must be synchronous (no IO inside
+// the critical section); compute anything async BEFORE calling this, then merge here against
+// the freshly re-read map. Return null to skip the write.
+let approverMapChain: Promise<void> = Promise.resolve();
+function mutateRemoteApproverFor(fn: (cur: ApproverMap) => ApproverMap | null): Promise<void> {
+  const run = approverMapChain.then(async () => {
+    const local = await db.localSettings.get('local');
+    const cur: ApproverMap = { ...(local?.remoteApproverFor ?? {}) };
+    const next = fn(cur);
+    if (next) await db.localSettings.update('local', { remoteApproverFor: next });
+  });
+  // Keep the chain alive even if one mutation throws, and never reject the chain itself.
+  approverMapChain = run.catch((err) => { recordError('remoteUnlock.mutateApproverMap', err); });
+  return run;
+}
+
 async function updateManagedDevice(
   targetDeviceId: string,
   patch: Partial<ManagedDevice>,
 ): Promise<void> {
-  const local = await db.localSettings.get('local');
-  const entry = local?.remoteApproverFor?.[targetDeviceId];
-  if (!entry) return;
-  await db.localSettings.update('local', {
-    remoteApproverFor: {
-      ...(local?.remoteApproverFor ?? {}),
-      [targetDeviceId]: { ...entry, ...patch },
-    },
+  await mutateRemoteApproverFor((cur) => {
+    const entry = cur[targetDeviceId];
+    if (!entry) return null;
+    cur[targetDeviceId] = { ...entry, ...patch };
+    return cur;
   });
 }
 
@@ -398,6 +425,41 @@ async function deleteRemoteFileIfExists(pat: string, repo: string, path: string)
     if (file) await deleteFile(pat, repo, path, file.sha);
   } catch (err) {
     recordError('remoteUnlock.deleteRemoteFile', err);
+  }
+}
+
+/** Best-effort removal of a device's authenticated registry entry. This is the shared
+ *  "decommissioned" signal: registry entries are durable, so other trusted devices read
+ *  the entry's absence and drop the device from their own managed list. */
+async function removeRegistryEntry(pat: string, repo: string, deviceId: string): Promise<void> {
+  try {
+    const existing = await getFile(pat, repo, REGISTRY_PATH);
+    if (!existing) return;
+    const reg = safeParseRegistry(existing.data);
+    if (!Object.prototype.hasOwnProperty.call(reg, deviceId)) return;
+    delete reg[deviceId];
+    if (Object.keys(reg).length === 0) {
+      await deleteFile(pat, repo, REGISTRY_PATH, existing.sha);
+    } else {
+      await putFile(pat, repo, REGISTRY_PATH, JSON.stringify(reg), existing.sha);
+    }
+  } catch (err) {
+    recordError('remoteUnlock.removeRegistryEntry', err);
+  }
+}
+
+/** Raw registry key presence (NOT MAC-verified) used only to detect decommissioned devices.
+ *  Raw keys avoid false drops if an entry's MAC is transiently unverifiable. `present` is
+ *  false when the file is absent OR unreadable (e.g. a GitHub 5xx) so a transient backend
+ *  failure can never be misread as a mass decommission. */
+async function readRegistryKeys(pat: string, repo: string): Promise<{ present: boolean; ids: Set<string> }> {
+  try {
+    const file = await getFile(pat, repo, REGISTRY_PATH);
+    if (!file) return { present: false, ids: new Set<string>() };
+    return { present: true, ids: new Set(Object.keys(safeParseRegistry(file.data))) };
+  } catch (err) {
+    recordError('remoteUnlock.readRegistryKeys', err);
+    return { present: false, ids: new Set<string>() };
   }
 }
 
@@ -495,114 +557,141 @@ export async function readRemoteWipeStatus(
   };
 }
 
-async function readOwnRemoteWipeCommand(pat: string, repo: string, targetDeviceId: string): Promise<ManagedDevice['lastWipeCommand'] | null> {
-  const local = await db.localSettings.get('local');
-  const identity = local?.deviceIdentity;
-  const me = local?.deviceId;
-  if (!identity || !me) return null;
+/**
+ * Read the (shared) wipe command file for a managed device. Display-only: any approver's
+ * command counts, and the signature is NOT verified here — an approver only holds the
+ * protected device's verify key, not the other approvers'. Authority is unaffected: the
+ * actual wipe runs on the protected device, which verifies the approver signature in
+ * pollRemoteCommands(). This just lets every trusted device show the same "pending" state.
+ */
+async function readRemoteWipeCommand(pat: string, repo: string, targetDeviceId: string): Promise<ManagedDevice['lastWipeCommand'] | null> {
   const file = await getFile(pat, repo, cmdPath(targetDeviceId));
   if (!file) return null;
   const cmd = (() => { try { return JSON.parse(file.data) as WipeCommand; } catch { return null; } })();
-  if (
-    !cmd ||
-    cmd.target !== targetDeviceId ||
-    cmd.from !== me ||
-    typeof cmd.nonce !== 'string' ||
-    typeof cmd.ts !== 'number' ||
-    typeof cmd.sig !== 'string'
-  ) {
+  if (!cmd || cmd.target !== targetDeviceId || typeof cmd.nonce !== 'string' || typeof cmd.ts !== 'number') {
     return null;
   }
-  const ok = await verifyPayload(identity.ecdsaPub, cmd.sig, wipeBytes({ target: cmd.target, nonce: cmd.nonce, ts: cmd.ts }));
-  return ok ? { nonce: cmd.nonce, sentAt: cmd.ts } : null;
+  return { nonce: cmd.nonce, sentAt: cmd.ts };
 }
 
+type LifecycleDecision =
+  | { kind: 'confirmed'; command: ManagedDevice['lastWipeCommand']; ack: ManagedDevice['lastWipeAck'] }
+  | { kind: 'pending'; command: ManagedDevice['lastWipeCommand'] }
+  | { kind: 'idle' }
+  | { kind: 'drop' };
+
+/**
+ * Derive each managed device's lifecycle from the SHARED repo files so all trusted devices
+ * converge on the same view: confirmed (signed wipe-status) > pending (wipe command present)
+ * > decommissioned (gone from the registry, our shared "forgotten/wiped" signal) > idle.
+ * Network reads happen here; the resulting decisions are applied atomically (and without
+ * resurrecting concurrently-removed devices) via mutateRemoteApproverFor.
+ */
 export async function refreshManagedDeviceWipeStatuses(pat: string, repo: string): Promise<ManagedDevice[]> {
   if (isParanoidFlagSet()) return [];
   const local = await db.localSettings.get('local');
-  const current = { ...(local?.remoteApproverFor ?? {}) };
-  let changed = false;
-  for (const [deviceId, entry] of Object.entries(current)) {
-    const status = await readRemoteWipeStatus(pat, repo, deviceId);
-    if (status) {
-      const lastCommand = entry.lastWipeCommand;
-      const isCurrentOrNewer = !lastCommand ||
-        status.commandNonce === lastCommand.nonce ||
-        status.commandTs >= lastCommand.sentAt;
-      if (!isCurrentOrNewer) continue;
-      current[deviceId] = {
-        ...entry,
-        lastWipeAck: {
-          commandNonce: status.commandNonce,
-          wipedAt: status.wipedAt,
-          verifiedAt: Date.now(),
-        },
-      };
-      changed = true;
+  const snapshot = local?.remoteApproverFor ?? {};
+  const registry = await readRegistryKeys(pat, repo);
+
+  const decisions: Record<string, LifecycleDecision> = {};
+  for (const deviceId of Object.keys(snapshot)) {
+    // Decommission wins over everything: a device removed from the registry by any trusted
+    // device is gone for all of them — even if a "forgotten" device still has an armed wipe
+    // command file. Only act when the registry file actually exists (a missing file is
+    // transient, not a signal to mass-drop every managed device).
+    if (registry.present && !registry.ids.has(deviceId)) {
+      decisions[deviceId] = { kind: 'drop' };
       continue;
     }
-
-    if (entry.lastWipeAck) continue;
-    const command = await readOwnRemoteWipeCommand(pat, repo, deviceId);
-    if (!command) continue;
-    const lastCommand = entry.lastWipeCommand;
-    const isNewCommand = !lastCommand ||
-      command.nonce !== lastCommand.nonce ||
-      command.sentAt !== lastCommand.sentAt;
-    if (!isNewCommand) continue;
-    current[deviceId] = {
-      ...entry,
-      lastWipeCommand: command,
-      lastWipeAck: undefined,
-    };
-    changed = true;
+    // Per-device read failures (e.g. a transient GitHub 5xx) must not abort the whole refresh
+    // or wipe out this device's cached state — skip it this cycle and retry on the next.
+    try {
+      const status = await readRemoteWipeStatus(pat, repo, deviceId);
+      if (status) {
+        decisions[deviceId] = {
+          kind: 'confirmed',
+          command: { nonce: status.commandNonce, sentAt: status.commandTs },
+          ack: { commandNonce: status.commandNonce, wipedAt: status.wipedAt, verifiedAt: Date.now() },
+        };
+        continue;
+      }
+      const command = await readRemoteWipeCommand(pat, repo, deviceId);
+      if (command) {
+        decisions[deviceId] = { kind: 'pending', command };
+        continue;
+      }
+      decisions[deviceId] = { kind: 'idle' };
+    } catch (err) {
+      recordError('remoteUnlock.refreshDevice', err);
+    }
   }
-  if (changed) await db.localSettings.update('local', { remoteApproverFor: current });
+
+  await mutateRemoteApproverFor((cur) => {
+    let changed = false;
+    for (const [deviceId, decision] of Object.entries(decisions)) {
+      const entry = cur[deviceId];
+      if (!entry) continue; // concurrently purged/forgotten — do not resurrect
+      if (decision.kind === 'drop') {
+        delete cur[deviceId];
+        changed = true;
+      } else if (decision.kind === 'confirmed') {
+        cur[deviceId] = { ...entry, lastWipeCommand: decision.command, lastWipeAck: decision.ack };
+        changed = true;
+      } else if (decision.kind === 'pending') {
+        cur[deviceId] = { ...entry, lastWipeCommand: decision.command, lastWipeAck: undefined };
+        changed = true;
+      } else if (entry.lastWipeCommand || entry.lastWipeAck) {
+        cur[deviceId] = { ...entry, lastWipeCommand: undefined, lastWipeAck: undefined };
+        changed = true;
+      }
+    }
+    return changed ? cur : null;
+  });
   return listApprovedDevices();
 }
 
 export async function purgeManagedDevice(pat: string, repo: string, targetDeviceId: string): Promise<void> {
   if (isParanoidFlagSet()) throw new Error('A Paranoid device cannot manage remote wipe records');
-  const status = await readRemoteWipeStatus(pat, repo, targetDeviceId);
-  if (status) {
-    await updateManagedDevice(targetDeviceId, {
-      lastWipeAck: { commandNonce: status.commandNonce, wipedAt: status.wipedAt, verifiedAt: Date.now() },
-    });
-  }
   const local = await db.localSettings.get('local');
-  const current = { ...(local?.remoteApproverFor ?? {}) };
-  const entry = current[targetDeviceId];
-  if (!entry?.lastWipeAck) throw new Error('Purge is only available after a verified wipe confirmation');
-  if (!local?.deviceId) throw new Error('This trusted device has no device ID');
+  if (!local?.remoteApproverFor?.[targetDeviceId]) throw new Error('Not enrolled to manage that device');
+  if (!local.deviceId) throw new Error('This trusted device has no device ID');
+  const status = await readRemoteWipeStatus(pat, repo, targetDeviceId);
+  if (!status) throw new Error('Purge is only available after a verified wipe confirmation');
 
-  await removeApproverInvite(pat, repo, local.deviceId, targetDeviceId);
+  // Best-effort remote cleanup; the local entry is removed regardless (so a transient GitHub
+  // failure can never leave a phantom device on this trusted device's list).
+  await removeApproverInvite(pat, repo, local.deviceId, targetDeviceId).catch((err) => recordError('remoteUnlock.purge.removeInvite', err));
+  await removeRegistryEntry(pat, repo, targetDeviceId);
   await Promise.all([
     deleteRemoteFileIfExists(pat, repo, cmdPath(targetDeviceId)),
     deleteRemoteFileIfExists(pat, repo, wipeStatusPath(targetDeviceId)),
     deleteRemoteFileIfExists(pat, repo, unlockReqPath(targetDeviceId)),
     deleteRemoteFileIfExists(pat, repo, unlockRespPath(targetDeviceId)),
   ]);
-  delete current[targetDeviceId];
-  await db.localSettings.update('local', { remoteApproverFor: current });
+  await mutateRemoteApproverFor((cur) => { delete cur[targetDeviceId]; return cur; });
 }
 
 export async function forgetManagedDeviceAfterWipeCommand(pat: string, repo: string, targetDeviceId: string): Promise<void> {
   if (isParanoidFlagSet()) throw new Error('A Paranoid device cannot manage remote wipe records');
   const local = await db.localSettings.get('local');
-  const current = { ...(local?.remoteApproverFor ?? {}) };
-  const entry = current[targetDeviceId];
-  const recoveredCommand = entry ? await readOwnRemoteWipeCommand(pat, repo, targetDeviceId) : null;
-  if (!entry?.lastWipeCommand && !recoveredCommand) throw new Error('Send a wipe command before forgetting this device');
-  if (entry?.lastWipeAck) throw new Error('Use purge for confirmed wiped devices');
-  if (!local?.deviceId) throw new Error('This trusted device has no device ID');
+  const entry = local?.remoteApproverFor?.[targetDeviceId];
+  if (!entry) throw new Error('Not enrolled to manage that device');
+  if (!local.deviceId) throw new Error('This trusted device has no device ID');
+  const status = await readRemoteWipeStatus(pat, repo, targetDeviceId);
+  if (status) throw new Error('Use purge for confirmed wiped devices');
+  const recoveredCommand = await readRemoteWipeCommand(pat, repo, targetDeviceId);
+  if (!entry.lastWipeCommand && !recoveredCommand) throw new Error('Send a wipe command before forgetting this device');
 
-  await removeApproverInvite(pat, repo, local.deviceId, targetDeviceId);
+  // Decommission across all trusted devices (registry-entry removal) but KEEP the wipe command
+  // armed so the target still self-wipes if it ever comes back online. Best-effort remote ops;
+  // local entry always removed.
+  await removeApproverInvite(pat, repo, local.deviceId, targetDeviceId).catch((err) => recordError('remoteUnlock.forget.removeInvite', err));
+  await removeRegistryEntry(pat, repo, targetDeviceId);
   await Promise.all([
     deleteRemoteFileIfExists(pat, repo, unlockReqPath(targetDeviceId)),
     deleteRemoteFileIfExists(pat, repo, unlockRespPath(targetDeviceId)),
   ]);
-  delete current[targetDeviceId];
-  await db.localSettings.update('local', { remoteApproverFor: current });
+  await mutateRemoteApproverFor((cur) => { delete cur[targetDeviceId]; return cur; });
 }
 
 // --- Unlock exchange (laptop side, while locked) ---

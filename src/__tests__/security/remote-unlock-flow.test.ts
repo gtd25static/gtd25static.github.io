@@ -8,18 +8,29 @@ import * as ru from '../../sync/remote-unlock';
 import { generateIdentityKeys, publicIdentityOf, signPayload } from '../../sync/remote-unlock-crypto';
 import type { LocalSettings } from '../../db/models';
 
-// In-memory GitHub mailbox.
+// In-memory GitHub mailbox. The fail* sets simulate unexpected backend errors (e.g. a GitHub
+// 5xx) on specific paths so we can assert that atomic operations stay consistent under them.
 let files: Record<string, { data: string; sha: string }> = {};
 let failPutPaths: Set<string> = new Set();
+let failGetPaths: Set<string> = new Set();
+let failDeletePaths: Set<string> = new Set();
 vi.mock('../../sync/github-api', () => ({
-  getFile: vi.fn((_p: string, _r: string, path: string) => Promise.resolve(files[path] ? { ...files[path] } : null)),
+  getFile: vi.fn((_p: string, _r: string, path: string) => {
+    if (failGetPaths.has(path)) return Promise.reject(new Error(`get failed (500): ${path}`));
+    return Promise.resolve(files[path] ? { ...files[path] } : null);
+  }),
   putFile: vi.fn((_p: string, _r: string, path: string, content: string) => {
-    if (failPutPaths.has(path)) return Promise.reject(new Error(`put failed: ${path}`));
+    if (failPutPaths.has(path)) return Promise.reject(new Error(`put failed (500): ${path}`));
     files[path] = { data: content, sha: `sha-${Math.random()}` };
     return Promise.resolve(files[path].sha);
   }),
-  deleteFile: vi.fn((_p: string, _r: string, path: string) => { delete files[path]; return Promise.resolve(); }),
+  deleteFile: vi.fn((_p: string, _r: string, path: string) => {
+    if (failDeletePaths.has(path)) return Promise.reject(new Error(`delete failed (500): ${path}`));
+    delete files[path];
+    return Promise.resolve();
+  }),
   getFileConditional: vi.fn((_p: string, _r: string, path: string, etag?: string | null) => {
+    if (failGetPaths.has(path)) return Promise.reject(new Error(`get failed (500): ${path}`));
     const f = files[path];
     if (!f) return Promise.resolve({ status: 'absent' });
     if (etag && etag === f.sha) return Promise.resolve({ status: 'unchanged', etag });
@@ -33,6 +44,7 @@ vi.mock('../../lib/panic-wipe', () => ({ panicWipe: (...a: unknown[]) => panicSp
 const PARANOID_FLAG = 'gtd25-paranoid';
 const LAP = 'laptop-1';
 const PHONE = 'phone-1';
+const PHONE2 = 'phone-2';
 const PASS = 'remote unlock test passphrase';
 const REPO = 'me/repo';
 const PAT = 'ghp_test';
@@ -43,8 +55,10 @@ async function fastMacKey(seed = 9): Promise<CryptoKey> {
 
 let macKey: CryptoKey;
 let phoneIdentity: Awaited<ReturnType<typeof generateIdentityKeys>>;
+let phone2Identity: Awaited<ReturnType<typeof generateIdentityKeys>>;
 let laptopLocal: LocalSettings;
 let phoneLocal: LocalSettings;
+let phone2Local: LocalSettings;
 
 async function snapshotLocal(): Promise<LocalSettings> {
   return { ...(await db.localSettings.get('local'))! };
@@ -87,9 +101,43 @@ async function repostLaptopInviteToPhone(): Promise<void> {
   await actAsPhone();
 }
 
+async function actAsPhone2(): Promise<void> {
+  await db.localSettings.put(phone2Local);
+  localStorage.removeItem(PARANOID_FLAG);
+}
+
+// Steady state with the laptop (paranoid) enrolling TWO non-paranoid approvers, both of
+// which have accepted. Used to assert the shared, file-derived lifecycle across devices.
+async function enrollTwoApprovers(): Promise<void> {
+  await db.localSettings.update('local', {
+    deviceId: LAP, githubRepo: REPO, githubPat: PAT, encryptionPassword: 'syncpw', syncEnabled: true,
+  });
+  await vault.enableParanoid(PASS);
+  await ru.publishRegistryEntry(PAT, REPO, await ru.buildRegistryEntry(PHONE, 'My Phone', publicIdentityOf(phoneIdentity), false, macKey));
+  await ru.publishRegistryEntry(PAT, REPO, await ru.buildRegistryEntry(PHONE2, 'Tablet', publicIdentityOf(phone2Identity), false, macKey));
+  await ru.enableRemoteUnlock({ pat: PAT, repo: REPO, deviceId: LAP, deviceName: 'Work Laptop', macKey }, [PHONE, PHONE2]);
+  laptopLocal = await snapshotLocal();
+
+  phoneLocal = { id: 'local', syncEnabled: true, syncIntervalMs: 300_000, deviceId: PHONE, githubRepo: REPO, githubPat: PAT, deviceIdentity: phoneIdentity, deviceName: 'My Phone', paranoidEnabled: false };
+  await actAsPhone();
+  expect(await ru.pollApproverInbox(PAT, REPO, PHONE)).toBe(1);
+  phoneLocal = await snapshotLocal();
+
+  phone2Local = { id: 'local', syncEnabled: true, syncIntervalMs: 300_000, deviceId: PHONE2, githubRepo: REPO, githubPat: PAT, deviceIdentity: phone2Identity, deviceName: 'Tablet', paranoidEnabled: false };
+  await actAsPhone2();
+  expect(await ru.pollApproverInbox(PAT, REPO, PHONE2)).toBe(1);
+  phone2Local = await snapshotLocal();
+}
+
+function managedIds(devices: ru.ManagedDevice[]): string[] {
+  return devices.map((d) => d.deviceId);
+}
+
 beforeEach(async () => {
   files = {};
   failPutPaths = new Set();
+  failGetPaths = new Set();
+  failDeletePaths = new Set();
   panicSpy.mockClear();
   localStorage.removeItem(PARANOID_FLAG);
   localStorage.removeItem('gtd25-paranoid-key');
@@ -97,6 +145,7 @@ beforeEach(async () => {
   vault.__resetVaultStateForTests();
   macKey = await fastMacKey();
   phoneIdentity = await generateIdentityKeys();
+  phone2Identity = await generateIdentityKeys();
 });
 
 describe('remote unlock: enrollment', () => {
@@ -379,6 +428,225 @@ describe('remote wipe', () => {
     await actAsPhone();
     localStorage.setItem(PARANOID_FLAG, '1');
     await expect(ru.sendRemoteWipe(PAT, REPO, LAP)).rejects.toThrow(/Paranoid device cannot issue/);
+  });
+});
+
+describe('remote wipe: shared lifecycle across trusted devices', () => {
+  it('shows a pending wipe to a second approver that did not send it', async () => {
+    await enrollTwoApprovers();
+
+    // Phone 1 issues the wipe.
+    await actAsPhone();
+    const command = await ru.sendRemoteWipe(PAT, REPO, LAP);
+    phoneLocal = await snapshotLocal();
+
+    // Phone 2 (never acted) derives the same "pending" state from the shared command file.
+    await actAsPhone2();
+    const refreshed = await ru.refreshManagedDeviceWipeStatuses(PAT, REPO);
+    const dev = refreshed.find((d) => d.deviceId === LAP);
+    expect(dev?.lastWipeCommand?.nonce).toBe(command.nonce);
+    expect(dev?.lastWipeAck).toBeUndefined();
+    phone2Local = await snapshotLocal();
+  });
+
+  it('converges both approvers to confirmed after the target wipes', async () => {
+    await enrollTwoApprovers();
+    await actAsPhone();
+    const command = await ru.sendRemoteWipe(PAT, REPO, LAP);
+    phoneLocal = await snapshotLocal();
+
+    // Target self-wipes and publishes the signed status.
+    await actAsLaptop();
+    expect((await ru.pollRemoteCommands(PAT, REPO, LAP)).wiped).toBe(true);
+
+    await actAsPhone2();
+    const r2 = await ru.refreshManagedDeviceWipeStatuses(PAT, REPO);
+    expect(r2.find((d) => d.deviceId === LAP)?.lastWipeAck?.commandNonce).toBe(command.nonce);
+    phone2Local = await snapshotLocal();
+
+    await actAsPhone();
+    const r1 = await ru.refreshManagedDeviceWipeStatuses(PAT, REPO);
+    expect(r1.find((d) => d.deviceId === LAP)?.lastWipeAck?.commandNonce).toBe(command.nonce);
+  });
+
+  it('purge by one approver decommissions the device for the others', async () => {
+    await enrollTwoApprovers();
+    await actAsPhone();
+    await ru.sendRemoteWipe(PAT, REPO, LAP);
+    phoneLocal = await snapshotLocal();
+    await actAsLaptop();
+    await ru.pollRemoteCommands(PAT, REPO, LAP);
+
+    // Phone 1 confirms then purges.
+    await actAsPhone();
+    await ru.refreshManagedDeviceWipeStatuses(PAT, REPO);
+    await ru.purgeManagedDevice(PAT, REPO, LAP);
+    phoneLocal = await snapshotLocal();
+    expect(phoneLocal.remoteApproverFor?.[LAP]).toBeUndefined();
+
+    // Phone 2 still has the local entry, but a refresh drops it (registry entry + files gone).
+    await actAsPhone2();
+    expect((await db.localSettings.get('local'))?.remoteApproverFor?.[LAP]).toBeTruthy();
+    const r = await ru.refreshManagedDeviceWipeStatuses(PAT, REPO);
+    expect(managedIds(r)).not.toContain(LAP);
+    expect((await db.localSettings.get('local'))?.remoteApproverFor?.[LAP]).toBeUndefined();
+  });
+
+  it('forget by one approver decommissions the device for the others while keeping the wipe armed', async () => {
+    await enrollTwoApprovers();
+    await actAsPhone();
+    await ru.sendRemoteWipe(PAT, REPO, LAP);
+    phoneLocal = await snapshotLocal();
+
+    await ru.forgetManagedDeviceAfterWipeCommand(PAT, REPO, LAP);
+    phoneLocal = await snapshotLocal();
+    expect(phoneLocal.remoteApproverFor?.[LAP]).toBeUndefined();
+    expect(files[ru.cmdPath(LAP)]).toBeTruthy(); // still armed
+
+    // Phone 2 drops it on refresh even though the command file is still present.
+    await actAsPhone2();
+    const r = await ru.refreshManagedDeviceWipeStatuses(PAT, REPO);
+    expect(managedIds(r)).not.toContain(LAP);
+
+    // The target still self-wipes from the armed command.
+    await actAsLaptop();
+    expect((await ru.pollRemoteCommands(PAT, REPO, LAP)).wiped).toBe(true);
+  });
+
+  it('does not resurrect a device when a refresh and a purge run concurrently', async () => {
+    await enrollTwoApprovers();
+    await actAsPhone();
+    await ru.sendRemoteWipe(PAT, REPO, LAP);
+    await actAsLaptop();
+    await ru.pollRemoteCommands(PAT, REPO, LAP);
+    await actAsPhone();
+    await ru.refreshManagedDeviceWipeStatuses(PAT, REPO); // record the confirmed ack
+
+    // Kick off a refresh (which has already snapshotted state) and a purge together.
+    const refresh = ru.refreshManagedDeviceWipeStatuses(PAT, REPO);
+    const purge = ru.purgeManagedDevice(PAT, REPO, LAP);
+    await Promise.all([refresh, purge]);
+
+    expect((await db.localSettings.get('local'))?.remoteApproverFor?.[LAP]).toBeUndefined();
+  });
+
+  it('does not drop managed devices when the registry file is missing entirely', async () => {
+    await enrollTwoApprovers();
+    delete files[ru.REGISTRY_PATH];
+    await actAsPhone();
+    const r = await ru.refreshManagedDeviceWipeStatuses(PAT, REPO);
+    expect(managedIds(r)).toContain(LAP);
+  });
+
+  it('removes the local entry even when remote cleanup fails (purge)', async () => {
+    await enrollTwoApprovers();
+    await actAsPhone();
+    await ru.sendRemoteWipe(PAT, REPO, LAP);
+    await actAsLaptop();
+    await ru.pollRemoteCommands(PAT, REPO, LAP);
+    await actAsPhone();
+    await ru.refreshManagedDeviceWipeStatuses(PAT, REPO);
+
+    // A 409-style failure on the registry rewrite must not abort the local removal.
+    failPutPaths.add(ru.REGISTRY_PATH);
+    await ru.purgeManagedDevice(PAT, REPO, LAP);
+    expect((await db.localSettings.get('local'))?.remoteApproverFor?.[LAP]).toBeUndefined();
+  });
+
+  it('removes the local entry even when remote cleanup fails (forget)', async () => {
+    await enrollTwoApprovers();
+    await actAsPhone();
+    await ru.sendRemoteWipe(PAT, REPO, LAP);
+
+    failPutPaths.add(ru.REGISTRY_PATH);
+    await ru.forgetManagedDeviceAfterWipeCommand(PAT, REPO, LAP);
+    expect((await db.localSettings.get('local'))?.remoteApproverFor?.[LAP]).toBeUndefined();
+  });
+});
+
+describe('remote wipe: resilience to unexpected backend errors', () => {
+  it('refresh tolerates a 500 reading a device status and keeps its cached state', async () => {
+    await enrollTwoApprovers();
+    await actAsPhone();
+    const command = await ru.sendRemoteWipe(PAT, REPO, LAP);
+    await ru.refreshManagedDeviceWipeStatuses(PAT, REPO); // cache "pending"
+
+    // GitHub returns 500 for the status read on the next refresh.
+    failGetPaths.add(ru.wipeStatusPath(LAP));
+    const r = await ru.refreshManagedDeviceWipeStatuses(PAT, REPO);
+
+    // No throw; the device is retained with its previously-cached command metadata.
+    const dev = r.find((d) => d.deviceId === LAP);
+    expect(dev).toBeTruthy();
+    expect(dev?.lastWipeCommand?.nonce).toBe(command.nonce);
+  });
+
+  it('refresh does not drop devices when the registry read returns 500', async () => {
+    await enrollTwoApprovers();
+    await actAsPhone();
+    failGetPaths.add(ru.REGISTRY_PATH);
+
+    const r = await ru.refreshManagedDeviceWipeStatuses(PAT, REPO);
+    expect(managedIds(r)).toContain(LAP);
+  });
+
+  it('purge aborts without local changes when the confirmation read returns 500', async () => {
+    await enrollTwoApprovers();
+    await actAsPhone();
+    await ru.sendRemoteWipe(PAT, REPO, LAP);
+    await actAsLaptop();
+    await ru.pollRemoteCommands(PAT, REPO, LAP);
+    await actAsPhone();
+    await ru.refreshManagedDeviceWipeStatuses(PAT, REPO);
+
+    failGetPaths.add(ru.wipeStatusPath(LAP));
+    await expect(ru.purgeManagedDevice(PAT, REPO, LAP)).rejects.toThrow();
+    // The managed entry must survive a failed purge so the user can retry.
+    expect((await db.localSettings.get('local'))?.remoteApproverFor?.[LAP]).toBeTruthy();
+  });
+
+  it('purge still removes the local entry when a remote delete returns 500', async () => {
+    await enrollTwoApprovers();
+    await actAsPhone();
+    await ru.sendRemoteWipe(PAT, REPO, LAP);
+    await actAsLaptop();
+    await ru.pollRemoteCommands(PAT, REPO, LAP);
+    await actAsPhone();
+    await ru.refreshManagedDeviceWipeStatuses(PAT, REPO);
+
+    failDeletePaths.add(ru.cmdPath(LAP));
+    await ru.purgeManagedDevice(PAT, REPO, LAP);
+    expect((await db.localSettings.get('local'))?.remoteApproverFor?.[LAP]).toBeUndefined();
+  });
+
+  it('forget still removes the local entry when a remote delete returns 500', async () => {
+    await enrollTwoApprovers();
+    await actAsPhone();
+    await ru.sendRemoteWipe(PAT, REPO, LAP);
+
+    failDeletePaths.add(ru.unlockReqPath(LAP));
+    await ru.forgetManagedDeviceAfterWipeCommand(PAT, REPO, LAP);
+    expect((await db.localSettings.get('local'))?.remoteApproverFor?.[LAP]).toBeUndefined();
+  });
+
+  it('sendRemoteWipe surfaces a 500 and records no false "command sent" state', async () => {
+    await enrollTwoApprovers();
+    await actAsPhone();
+
+    failPutPaths.add(ru.cmdPath(LAP));
+    await expect(ru.sendRemoteWipe(PAT, REPO, LAP)).rejects.toThrow();
+    expect((await db.localSettings.get('local'))?.remoteApproverFor?.[LAP]?.lastWipeCommand).toBeUndefined();
+  });
+
+  it('a backend 500 on the command poll never triggers a wipe', async () => {
+    await enrollTwoApprovers();
+    await actAsPhone();
+    await ru.sendRemoteWipe(PAT, REPO, LAP);
+
+    await actAsLaptop();
+    failGetPaths.add(ru.cmdPath(LAP));
+    await expect(ru.pollRemoteCommands(PAT, REPO, LAP)).rejects.toThrow();
+    expect(panicSpy).not.toHaveBeenCalled();
   });
 });
 

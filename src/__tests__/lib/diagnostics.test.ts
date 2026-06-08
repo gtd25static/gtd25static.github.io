@@ -31,6 +31,24 @@ describe('diagnostics: error log', () => {
     expect(getErrorLog().length).toBe(2);
   });
 
+  it('never serializes an arbitrary object payload into the log (no content leak)', () => {
+    // A stray throw/rejection could carry an entity-shaped object; its fields must not
+    // end up in the user-readable diagnostics log.
+    recordError('ctx', { taskTitle: 'Buy the secret gift', notes: 'meet at 5pm' });
+    const msg = getErrorLog()[0].message;
+    expect(msg).not.toContain('secret gift');
+    expect(msg).not.toContain('meet at 5pm');
+    expect(msg).toBe('[Object]');
+  });
+
+  it('truncates an over-long error message', () => {
+    recordError('ctx', new Error('x'.repeat(5000)));
+    const msg = getErrorLog()[0].message;
+    expect(msg.length).toBeLessThan(5000);
+    expect(msg).toContain('+');
+    expect(msg).toContain('chars]');
+  });
+
   it('caps the ring buffer at 100 entries', () => {
     for (let i = 0; i < 150; i++) recordError('ctx', new Error(`e${i}`));
     expect(getErrorLog()).toHaveLength(100);
