@@ -10,6 +10,7 @@ import { confirmDialog } from '../ui/ConfirmDialog';
 import { promptPassword } from '../ui/PasswordPrompt';
 import { useVault } from '../../hooks/use-vault';
 import { getVaultSecrets } from '../../db/vault';
+import { recordError } from '../../lib/diagnostics';
 
 export function BackupsSettings() {
   const local = useLocalSettings();
@@ -38,7 +39,8 @@ export function BackupsSettings() {
     try {
       const result = await listRemoteBackups(pat, repo);
       setBackups(result);
-    } catch {
+    } catch (err) {
+      recordError('backups.listRemote', err);
       // Silently fail — user can retry
     } finally {
       setLoading(false);
@@ -73,6 +75,7 @@ export function BackupsSettings() {
       await importData(data);
     } catch (err) {
       console.error('Import failed:', err);
+      recordError('backups.importFile', err);
       toast(err instanceof Error ? err.message : 'Import failed', 'error');
     }
   }

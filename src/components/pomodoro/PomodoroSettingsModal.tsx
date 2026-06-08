@@ -8,6 +8,7 @@ import { importSoundsFromZip, type ImportResult } from '../../db/sound-import';
 import { audioEngine } from '../../lib/audio-engine';
 import { toast } from '../ui/Toast';
 import { newId } from '../../lib/id';
+import { recordError } from '../../lib/diagnostics';
 import type { SoundVolumeLevel, SoundPreset } from '../../db/models';
 
 const VOLUME_LEVELS: SoundVolumeLevel[] = ['low', 'medium', 'high'];
@@ -108,6 +109,7 @@ export function PomodoroSettingsModal() {
         setImportResult(result);
         toast(`Imported ${result.imported.length} sounds`, 'success');
       } catch (err) {
+        recordError('pomodoro.importSounds', err);
         toast(`Import failed: ${err instanceof Error ? err.message : 'Unknown error'}`, 'error');
       } finally {
         setImporting(false);

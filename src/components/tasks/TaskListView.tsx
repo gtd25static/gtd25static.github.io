@@ -23,7 +23,7 @@ import { FollowUpList } from '../follow-ups/FollowUpList';
 import { BulkActionBar } from './BulkActionBar';
 import { InboxListView } from './InboxListView';
 import { isInboxList } from '../../lib/constants';
-import { sortTasksForDisplay, sortTasksByDate, sortTasksByName } from '../../lib/task-sort';
+import { sortTasksForDisplay, sortTasksByDate, sortTasksByName, sortCompletedTasksForDisplay } from '../../lib/task-sort';
 
 type SortMode = 'default' | 'date' | 'name';
 
@@ -130,7 +130,7 @@ export function TaskListView() {
     ? sortFn(tasks.filter((t) => t.status !== 'done' || recentlyDone.has(t.id)))
     : [];
   const completedTasks = selectedList
-    ? tasks.filter((t) => t.status === 'done' && !recentlyDone.has(t.id))
+    ? sortCompletedTasksForDisplay(tasks.filter((t) => t.status === 'done' && !recentlyDone.has(t.id)))
     : [];
 
   // Handle intra-list task reorder via shared DndContext

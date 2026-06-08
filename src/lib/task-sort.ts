@@ -52,7 +52,19 @@ export function sortTasksByName(tasks: Task[]): Task[] {
 }
 
 /**
- * Sort follow-ups for display: starred first, then not snoozed (by order), then snoozed (by order).
+ * Sort completed tasks with the newest completion first.
+ */
+export function sortCompletedTasksForDisplay(tasks: Task[]): Task[] {
+  return [...tasks].sort((a, b) => {
+    const aCompleted = a.completedAt ?? a.updatedAt;
+    const bCompleted = b.completedAt ?? b.updatedAt;
+    if (aCompleted !== bCompleted) return bCompleted - aCompleted;
+    return b.order - a.order;
+  });
+}
+
+/**
+ * Sort follow-ups for display: starred first, then not snoozed (newest order first), then snoozed (newest order first).
  */
 export function sortFollowUpsForDisplay(tasks: Task[]): Task[] {
   return [...tasks].sort((a, b) => {
@@ -64,6 +76,6 @@ export function sortFollowUpsForDisplay(tasks: Task[]): Task[] {
     const bCool = isInCooldown(b) ? 1 : 0;
     if (aCool !== bCool) return aCool - bCool;
 
-    return a.order - b.order;
+    return b.order - a.order;
   });
 }

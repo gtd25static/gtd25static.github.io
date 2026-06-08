@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { sortTasksForDisplay, sortFollowUpsForDisplay } from '../../lib/task-sort';
+import { sortTasksForDisplay, sortFollowUpsForDisplay, sortCompletedTasksForDisplay } from '../../lib/task-sort';
 import type { Task } from '../../db/models';
 
 function makeTask(overrides: Partial<Task> & { id: string; order: number }): Task {
@@ -118,7 +118,7 @@ describe('sortFollowUpsForDisplay', () => {
       makeTask({ id: 'c', order: 2 }),
     ];
     const sorted = sortFollowUpsForDisplay(tasks);
-    expect(sorted.map((t) => t.id)).toEqual(['b', 'a', 'c']);
+    expect(sorted.map((t) => t.id)).toEqual(['b', 'c', 'a']);
   });
 
   it('puts snoozed (in cooldown) tasks last', () => {
@@ -129,7 +129,7 @@ describe('sortFollowUpsForDisplay', () => {
       makeTask({ id: 'c', order: 2 }),
     ];
     const sorted = sortFollowUpsForDisplay(tasks);
-    expect(sorted.map((t) => t.id)).toEqual(['b', 'c', 'a']);
+    expect(sorted.map((t) => t.id)).toEqual(['c', 'b', 'a']);
   });
 
   it('starred snoozed task goes to top', () => {
@@ -140,10 +140,10 @@ describe('sortFollowUpsForDisplay', () => {
       makeTask({ id: 'c', order: 2 }),
     ];
     const sorted = sortFollowUpsForDisplay(tasks);
-    expect(sorted.map((t) => t.id)).toEqual(['b', 'a', 'c']);
+    expect(sorted.map((t) => t.id)).toEqual(['b', 'c', 'a']);
   });
 
-  it('preserves manual order within each tier', () => {
+  it('uses newest manual order within each tier', () => {
     const now = Date.now();
     const tasks = [
       makeTask({ id: 'a', order: 0, pingedAt: now, pingCooldown: '1week' }),
@@ -152,8 +152,8 @@ describe('sortFollowUpsForDisplay', () => {
       makeTask({ id: 'd', order: 3 }),
     ];
     const sorted = sortFollowUpsForDisplay(tasks);
-    // Not snoozed by order: b(1), d(3) then snoozed by order: a(0), c(2)
-    expect(sorted.map((t) => t.id)).toEqual(['b', 'd', 'a', 'c']);
+    // Not snoozed newest first: d(3), b(1), then snoozed newest first: c(2), a(0)
+    expect(sorted.map((t) => t.id)).toEqual(['d', 'b', 'c', 'a']);
   });
 
   it('does not mutate original array', () => {
@@ -164,6 +164,44 @@ describe('sortFollowUpsForDisplay', () => {
     ];
     const original = [...tasks];
     sortFollowUpsForDisplay(tasks);
+    expect(tasks.map((t) => t.id)).toEqual(original.map((t) => t.id));
+  });
+});
+
+describe('sortCompletedTasksForDisplay', () => {
+  it('puts newest completed tasks first', () => {
+    const tasks = [
+      makeTask({ id: 'old', order: 0, status: 'done', completedAt: 100 }),
+      makeTask({ id: 'new', order: 1, status: 'done', completedAt: 300 }),
+      makeTask({ id: 'middle', order: 2, status: 'done', completedAt: 200 }),
+    ];
+
+    const sorted = sortCompletedTasksForDisplay(tasks);
+
+    expect(sorted.map((t) => t.id)).toEqual(['new', 'middle', 'old']);
+  });
+
+  it('falls back to updatedAt and then newest order', () => {
+    const tasks = [
+      makeTask({ id: 'a', order: 0, status: 'done', updatedAt: 100 }),
+      makeTask({ id: 'b', order: 1, status: 'done', updatedAt: 100 }),
+      makeTask({ id: 'c', order: 2, status: 'done', updatedAt: 200 }),
+    ];
+
+    const sorted = sortCompletedTasksForDisplay(tasks);
+
+    expect(sorted.map((t) => t.id)).toEqual(['c', 'b', 'a']);
+  });
+
+  it('does not mutate original array', () => {
+    const tasks = [
+      makeTask({ id: 'a', order: 0, status: 'done', completedAt: 100 }),
+      makeTask({ id: 'b', order: 1, status: 'done', completedAt: 200 }),
+    ];
+    const original = [...tasks];
+
+    sortCompletedTasksForDisplay(tasks);
+
     expect(tasks.map((t) => t.id)).toEqual(original.map((t) => t.id));
   });
 });

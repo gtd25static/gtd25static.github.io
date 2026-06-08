@@ -53,6 +53,12 @@ interface Props {
 export function FollowUpList({ listId, listName }: Props) {
   const { active: rawActive, archived } = useFollowUps(listId);
   const active = sortFollowUpsForDisplay(rawActive);
+  const resolved = [...archived].sort((a, b) => {
+    const aResolved = a.updatedAt ?? a.order;
+    const bResolved = b.updatedAt ?? b.order;
+    if (aResolved !== bResolved) return bResolved - aResolved;
+    return b.order - a.order;
+  });
   const { navigateToTaskId, setNavigateToTaskId, creatingTask, setCreatingTask, focusedItemId, focusZone } = useAppState(useShallow(s => ({ navigateToTaskId: s.navigateToTaskId, setNavigateToTaskId: s.setNavigateToTaskId, creatingTask: s.creatingTask, setCreatingTask: s.setCreatingTask, focusedItemId: s.focusedItemId, focusZone: s.focusZone })));
   const [creating, setCreating] = useState(false);
 
@@ -93,7 +99,7 @@ export function FollowUpList({ listId, listName }: Props) {
       const newOrder = [...active];
       const [moved] = newOrder.splice(oldIndex, 1);
       newOrder.splice(newIndex, 0, moved);
-      reorderTasks(newOrder.map((t) => t.id));
+      reorderTasks([...newOrder].reverse().map((t) => t.id));
     },
   });
 
@@ -152,7 +158,7 @@ export function FollowUpList({ listId, listName }: Props) {
             </SortableContext>
           )}
 
-          {archived.length > 0 && (
+          {resolved.length > 0 && (
             <div className="mt-4">
               <button
                 onClick={() => setShowArchived(!showArchived)}
@@ -167,11 +173,11 @@ export function FollowUpList({ listId, listName }: Props) {
                 >
                   <path d="M6 3l5 5-5 5z" />
                 </svg>
-                Resolved ({archived.length})
+                Resolved ({resolved.length})
               </button>
               {showArchived && (
                 <div>
-                  {archived.map((task, i) => (
+                  {resolved.map((task, i) => (
                     <div key={task.id} className="opacity-50">
                       <FollowUpCard task={task} index={i} />
                     </div>

@@ -12,6 +12,7 @@ import { maybeCreateBackups, BACKUP_FILES } from './remote-backups';
 import type { BackupTier } from './remote-backups';
 import { isParanoidFlagSet } from '../db/paranoid-flag';
 import { getVaultSecrets } from '../db/vault';
+import { recordError } from '../lib/diagnostics';
 import {
   deriveKey,
   generateSalt,
@@ -100,8 +101,13 @@ function safeParseJson<T>(raw: string, label: string): { ok: true; value: T } | 
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.warn(`Failed to parse ${label}: ${msg}`);
+    recordError(`sync.parse.${label}`, err);
     return { ok: false, error: msg };
   }
+}
+
+function recordSyncMessage(context: string, message: string): void {
+  recordError(`sync.${context}`, new Error(message));
 }
 
 let syncStartedAt: number | null = null;
@@ -503,6 +509,7 @@ async function backupRemoteSnapshot(
     await pruneRemoteBackups(pat, repo);
   } catch (err) {
     console.warn('Failed to create remote backup:', err);
+    recordError('sync.remoteBackup.create', err);
     // Non-critical — proceed with migration
   }
 }
@@ -728,6 +735,7 @@ export async function syncNow(manual = false, pushLimit?: number): Promise<numbe
 
       if (!isCompatibleVersion(remoteVersion)) {
         // Remote is ahead — block sync, notify UI
+        recordSyncMessage('versionIncompatible', `Remote sync version ${remoteVersion ?? 'unknown'} requires a newer app version`);
         notifyVersionIncompatible();
         reportProgress('error', 'Update required', 0);
         if (manual) toast('Remote data requires a newer app version', 'error');
@@ -925,6 +933,7 @@ export async function syncNow(manual = false, pushLimit?: number): Promise<numbe
           if (err instanceof Error && err.message === 'CONFLICT') {
             retries++;
             if (retries >= MAX_RETRIES) {
+              recordSyncMessage('conflict', `Exceeded ${MAX_RETRIES} retries while pushing changelog`);
               toast('Sync conflict — will retry later', 'error');
               reportProgress('error', 'Sync conflict', 0.8);
               return -1;
@@ -1026,6 +1035,7 @@ export async function syncNow(manual = false, pushLimit?: number): Promise<numbe
       } catch (pomErr) {
         // Non-critical — next sync or compaction will push pomodoro data
         console.warn('Pomodoro snapshot push failed:', pomErr);
+        recordError('sync.pomodoroSnapshotPush', pomErr);
       }
     }
 
@@ -1067,7 +1077,9 @@ export async function syncNow(manual = false, pushLimit?: number): Promise<numbe
     if (manual) toast('Sync complete', 'success');
 
     // Fire-and-forget: attempt backup creation (15-min gate makes this instant 99% of the time)
-    maybeCreateBackups(creds.pat, creds.repo, encKey).catch(() => {});
+    maybeCreateBackups(creds.pat, creds.repo, encKey).catch((err) => {
+      recordError('sync.remoteBackups', err);
+    });
 
     return remaining;
   } catch (err) {
@@ -1075,6 +1087,7 @@ export async function syncNow(manual = false, pushLimit?: number): Promise<numbe
 
     // Rate limit handling — pause scheduler until reset
     if (err instanceof RateLimitError) {
+      recordError('sync.rateLimit', err);
       const waitMs = Math.max(0, err.resetAtMs - Date.now());
       const waitMin = Math.ceil(waitMs / 60_000);
       reportProgress('error', `Rate limited — retrying in ${waitMin}m`, 0);
@@ -1093,6 +1106,7 @@ export async function syncNow(manual = false, pushLimit?: number): Promise<numbe
 
     consecutiveErrors++;
     console.error('Sync failed:', err);
+    recordError('sync.syncNow', err);
 
     // Server error backoff (5xx) — double interval, cap at 5min, throttle toasts
     const msg = err instanceof Error ? err.message : 'Sync failed';
@@ -1263,6 +1277,7 @@ async function compactSnapshot(pat: string, repo: string, encKey: CryptoKey) {
     }
   } catch (err) {
     console.error('Compaction failed:', err);
+    recordError('sync.compactSnapshot', err);
     // Non-critical, sync still works
   }
 }
@@ -1354,6 +1369,7 @@ export async function forcePush() {
   } catch (err) {
     if (err instanceof DOMException && err.name === 'AbortError') return;
     console.error('Force push failed:', err);
+    recordError('sync.forcePush', err);
     reportProgress('error', 'Force push failed', 0);
     toast('Force push failed', 'error');
   } finally {
@@ -1390,6 +1406,7 @@ export async function forcePull() {
     let snapshot = pullParsed.value;
 
     if (!isCompatibleVersion(snapshot.syncVersion)) {
+      recordSyncMessage('forcePull.versionIncompatible', `Remote sync version ${snapshot.syncVersion ?? 'unknown'} requires a newer app version`);
       notifyVersionIncompatible();
       reportProgress('error', 'Update required', 0);
       toast('Remote data requires a newer app version', 'error');
@@ -1461,6 +1478,7 @@ export async function forcePull() {
   } catch (err) {
     if (err instanceof DOMException && err.name === 'AbortError') return;
     console.error('Force pull failed:', err);
+    recordError('sync.forcePull', err);
     reportProgress('error', 'Force pull failed', 0);
     toast('Force pull failed', 'error');
   } finally {
@@ -1532,6 +1550,7 @@ export async function wipeAllData() {
   } catch (err) {
     if (err instanceof DOMException && err.name === 'AbortError') return;
     console.error('Wipe failed:', err);
+    recordError('sync.wipeAllData', err);
     toast('Wipe failed', 'error');
   } finally {
     releaseSyncLock();
@@ -1620,6 +1639,7 @@ export async function importData(data: ImportData) {
   } catch (err) {
     if (err instanceof DOMException && err.name === 'AbortError') return;
     console.error('Import failed:', err);
+    recordError('sync.importData', err);
     toast('Import failed', 'error');
   } finally {
     releaseSyncLock();
@@ -1750,6 +1770,7 @@ export async function restoreFromBackup(tier: BackupTier) {
   } catch (err) {
     if (err instanceof DOMException && err.name === 'AbortError') return;
     console.error('Restore failed:', err);
+    recordError('sync.restoreFromBackup', err);
     toast('Restore failed', 'error');
   } finally {
     releaseSyncLock();

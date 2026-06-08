@@ -50,6 +50,7 @@ import {
   encryptSyncData,
   createVerifier,
 } from '../../sync/crypto';
+import { clearErrorLog, getErrorLog } from '../../lib/diagnostics';
 
 const mockGetFile = getFile as Mock;
 const mockPutFile = putFile as Mock;
@@ -66,6 +67,7 @@ beforeAll(async () => {
 
 beforeEach(async () => {
   vi.clearAllMocks();
+  clearErrorLog();
   await resetSyncState();
 });
 
@@ -443,6 +445,12 @@ describe('syncNow — errors', () => {
     const result = await syncNow();
     expect(result).toBe(-1);
     expect(mockToast).toHaveBeenCalledWith('Sync failed', 'error');
+    expect(getErrorLog()).toEqual([
+      expect.objectContaining({
+        context: 'sync.syncNow',
+        message: 'Network error',
+      }),
+    ]);
   });
 
   it('always releases lock after error', async () => {

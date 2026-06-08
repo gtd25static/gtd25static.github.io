@@ -5,6 +5,7 @@ import { getOrCreateInbox } from '../../hooks/use-task-lists';
 import { toast } from '../ui/Toast';
 import { MAX_TITLE_LENGTH } from '../../lib/constants';
 import { extractUrl } from '../../lib/link-utils';
+import { recordError } from '../../lib/diagnostics';
 
 export function QuickCapture() {
   const open = useAppState((s) => s.quickCaptureOpen);
@@ -30,7 +31,8 @@ export function QuickCapture() {
         setTitle(trimmed);
         inputRef.current?.focus();
       }
-    } catch {
+    } catch (err) {
+      recordError('quickCapture.clipboardRead', err);
       toast('Clipboard access denied', 'error');
     }
   }

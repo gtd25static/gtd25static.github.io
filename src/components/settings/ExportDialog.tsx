@@ -4,6 +4,7 @@ import { Button } from '../ui/Button';
 import { Input } from '../ui/Input';
 import { exportToZip, type ExportKeySource } from '../../db/export-import';
 import { toast } from '../ui/Toast';
+import { recordError } from '../../lib/diagnostics';
 
 type Mode = 'plain' | 'passphrase' | 'sync';
 
@@ -56,6 +57,7 @@ export function ExportDialog({ open, onClose, syncPassword, defaultEncrypted }: 
       onClose();
     } catch (err) {
       console.error('Export failed:', err);
+      recordError('backups.export', err);
       setError(err instanceof Error ? err.message : 'Export failed');
       toast('Export failed', 'error');
     } finally {

@@ -8,6 +8,7 @@ import { syncNow, forcePush, forcePull } from '../../sync/sync-engine';
 import { deriveKey, cacheEncryptionKey, generateSalt } from '../../sync/crypto';
 import { useVault } from '../../hooks/use-vault';
 import { getVaultSecrets, setVaultSecrets } from '../../db/vault';
+import { recordError } from '../../lib/diagnostics';
 
 export function GitHubSettings() {
   const local = useLocalSettings();
@@ -102,8 +103,10 @@ export function GitHubSettings() {
     setTesting(true);
     try {
       const ok = await testConnection(pat.trim(), repo.trim());
+      if (!ok) recordError('github.connectionTest', new Error('Connection test returned a non-OK response'));
       toast(ok ? 'Connection successful!' : 'Connection failed', ok ? 'success' : 'error');
-    } catch {
+    } catch (err) {
+      recordError('github.connectionTest', err);
       toast('Connection failed', 'error');
     } finally {
       setTesting(false);

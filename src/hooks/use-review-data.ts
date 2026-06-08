@@ -3,6 +3,7 @@ import { db } from '../db';
 import type { Task, Subtask, TaskList } from '../db/models';
 import { INBOX_LIST_NAME, DUE_SOON_DAYS } from '../lib/constants';
 import { collectDueItems, taskListIds as activeTaskListIds } from '../lib/attention';
+import { sortFollowUpsForDisplay } from '../lib/task-sort';
 
 export interface ReviewData {
   inboxTasks: Task[];
@@ -111,9 +112,9 @@ export function useReviewData(): ReviewData | undefined {
     const fuLists = liveLists.filter((l) => l.type === 'follow-ups');
     const followUpLists = fuLists.map((list) => {
       const tasks = liveTasks
-        .filter((t) => t.listId === list.id && !t.archived)
-        .sort((a, b) => a.order - b.order);
-      return { list, tasks };
+        .filter((t) => t.listId === list.id && !t.archived);
+      const sortedTasks = sortFollowUpsForDisplay(tasks);
+      return { list, tasks: sortedTasks };
     }).filter((entry) => entry.tasks.length > 0);
 
     // 4. Blocked items

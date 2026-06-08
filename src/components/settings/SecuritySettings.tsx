@@ -20,6 +20,7 @@ import {
 import { identityFingerprint } from '../../sync/remote-unlock-crypto';
 import { panicWipe } from '../../lib/panic-wipe';
 import { exportToZip } from '../../db/export-import';
+import { recordError } from '../../lib/diagnostics';
 
 function clampMinutes(value: string): number {
   const n = parseInt(value, 10);
@@ -42,6 +43,7 @@ function EnableForm() {
       toast('Paranoid Mode enabled — local data is now encrypted', 'success');
       setPass(''); setConfirm('');
     } catch (e) {
+      recordError('security.enableParanoid', e);
       toast(e instanceof Error ? e.message : 'Could not enable Paranoid Mode', 'error');
     } finally {
       setBusy(false);
@@ -87,6 +89,9 @@ function SecurityKeySection({ hasSecurityKey }: { hasSecurityKey: boolean }) {
     } catch (e) {
       // registerPrfCredential throws a specific reason (cancelled / unsupported /
       // empty PRF). NotAllowedError = the user dismissed the prompt.
+      if (!(e instanceof DOMException && e.name === 'NotAllowedError')) {
+        recordError('security.addSecurityKey', e);
+      }
       const msg = e instanceof DOMException && e.name === 'NotAllowedError'
         ? 'Security key setup was cancelled'
         : e instanceof Error ? e.message : 'Could not add the security key';
@@ -239,6 +244,7 @@ function ManageForm({ idleMinutes, maxAttempts, systemIdleOn, hasSecurityKey }: 
       toast('Passphrase changed', 'success');
       setNewPass(''); setNewPassConfirm('');
     } catch (e) {
+      recordError('security.changePassphrase', e);
       toast(e instanceof Error ? e.message : 'Could not change passphrase', 'error');
     } finally {
       setBusy(false);
@@ -256,6 +262,7 @@ function ManageForm({ idleMinutes, maxAttempts, systemIdleOn, hasSecurityKey }: 
       await disableParanoid();
       toast('Paranoid Mode disabled — local data decrypted', 'success');
     } catch (e) {
+      recordError('security.disableParanoid', e);
       toast(e instanceof Error ? e.message : 'Could not disable Paranoid Mode', 'error');
     } finally {
       setBusy(false);
@@ -267,8 +274,12 @@ function ManageForm({ idleMinutes, maxAttempts, systemIdleOn, hasSecurityKey }: 
     try {
       const { total, unreadable } = await verifyAtRestIntegrity();
       if (unreadable === 0) toast(`Integrity OK — all ${total} items readable`, 'success');
-      else toast(`${unreadable} of ${total} items unreadable — re-sync from another device to recover`, 'error');
+      else {
+        recordError('security.verifyAtRestIntegrity', new Error(`${unreadable} of ${total} items unreadable`));
+        toast(`${unreadable} of ${total} items unreadable — re-sync from another device to recover`, 'error');
+      }
     } catch (e) {
+      recordError('security.verifyAtRestIntegrity', e);
       toast(e instanceof Error ? e.message : 'Verification failed', 'error');
     } finally {
       setBusy(false);
@@ -288,6 +299,7 @@ function ManageForm({ idleMinutes, maxAttempts, systemIdleOn, hasSecurityKey }: 
       URL.revokeObjectURL(url);
       toast('Recovery backup downloaded', 'success');
     } catch (e) {
+      recordError('security.recoveryExport', e);
       toast(e instanceof Error ? e.message : 'Export failed', 'error');
     } finally {
       setBusy(false);
@@ -389,6 +401,7 @@ function RemoteUnlockSection() {
       const withFp = await Promise.all(list.map(async (e) => ({ e, fp: await identityFingerprint({ ecdhPub: e.ecdhPub, ecdsaPub: e.ecdsaPub }) })));
       setCandidates(withFp); // empty array -> the section shows guidance + Refresh
     } catch (e) {
+      recordError('remoteUnlock.loadCandidates', e);
       toast(e instanceof Error ? e.message : 'Could not load devices', 'error');
     } finally { setBusy(false); }
   }
@@ -408,6 +421,7 @@ function RemoteUnlockSection() {
       setCandidates(null); setSelected(new Set());
       await reload();
     } catch (e) {
+      recordError('remoteUnlock.saveEnrollment', e);
       toast(e instanceof Error ? e.message : 'Could not save', 'error');
     } finally { setBusy(false); }
   }
@@ -504,7 +518,8 @@ function DeviceNameSection() {
       await setDeviceName(name);
       const published = await publishOwnRegistryEntry();
       toast(published ? 'Device name saved' : 'Saved (will publish on next sync)', 'success');
-    } catch {
+    } catch (e) {
+      recordError('remoteUnlock.setDeviceName', e);
       toast('Could not save the name', 'error');
     } finally { setBusy(false); }
   }
@@ -540,6 +555,7 @@ function ApproverDevicesSection() {
       await reload();
       toast(n > 0 ? `Now trusted by ${n} device(s)` : 'No new invitations', 'info');
     } catch (e) {
+      recordError('remoteUnlock.checkInvitations', e);
       toast(e instanceof Error ? e.message : 'Could not check invitations', 'error');
     } finally { setBusy(false); }
   }
@@ -552,6 +568,7 @@ function ApproverDevicesSection() {
       await sendRemoteWipe(local.githubPat!, local.githubRepo!, deviceId);
       toast('Wipe command sent', 'success');
     } catch (e) {
+      recordError('remoteUnlock.sendWipe', e);
       toast(e instanceof Error ? e.message : 'Could not send wipe', 'error');
     } finally { setBusy(false); }
   }
