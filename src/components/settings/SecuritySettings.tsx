@@ -212,9 +212,10 @@ function SystemIdleToggle({ enabled, graceEnabled }: { enabled: boolean; graceEn
                 type="checkbox"
                 checked={graceEnabled}
                 onChange={async (e) => {
-                  await updateLocalSettings({ paranoidSystemLockGraceEnabled: e.target.checked });
+                  const enabled = e.currentTarget.checked;
+                  await updateLocalSettings({ paranoidSystemLockGraceEnabled: enabled });
                   toast(
-                    e.target.checked
+                    enabled
                       ? 'Will wait 10 minutes after screen lock before locking GTD25'
                       : 'Will lock GTD25 immediately on screen lock',
                     'success',
