@@ -1,7 +1,9 @@
 import { toast } from '../components/ui/Toast';
+import { recordError } from './diagnostics';
 
 export function handleDbError(error: unknown, operation: string): void {
   console.error(`DB ${operation} failed:`, error);
+  recordError(`db.${operation}`, error);
 
   if (error instanceof DOMException && error.name === 'QuotaExceededError') {
     toast('Storage full — delete old tasks or export data.', 'error');

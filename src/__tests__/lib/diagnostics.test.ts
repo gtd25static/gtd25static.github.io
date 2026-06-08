@@ -3,6 +3,7 @@ import {
   recordError, getErrorLog, clearErrorLog, subscribeErrors,
   detectFeatures, requestPersistentStorage, isStoragePersisted, getBuildInfo,
 } from '../../lib/diagnostics';
+import { handleDbError } from '../../lib/db-error';
 
 interface NavWithStorage { storage?: { persist?: () => Promise<boolean>; persisted?: () => Promise<boolean> } }
 let savedStorage: PropertyDescriptor | undefined;
@@ -41,6 +42,20 @@ describe('diagnostics: error log', () => {
     recordError('ctx', new Error('x'));
     clearErrorLog();
     expect(getErrorLog()).toHaveLength(0);
+  });
+
+  it('captures handled database errors shown as toasts', () => {
+    const err = new Error('transaction closed');
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    handleDbError(err, 'update task');
+
+    expect(getErrorLog()).toHaveLength(1);
+    expect(getErrorLog()[0]).toMatchObject({
+      context: 'db.update task',
+      message: 'transaction closed',
+    });
+    spy.mockRestore();
   });
 });
 

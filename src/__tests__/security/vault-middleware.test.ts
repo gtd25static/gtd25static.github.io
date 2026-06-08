@@ -6,6 +6,7 @@ import {
   setMigrationBypass,
 } from '../../db/vault-middleware';
 import type { Task, Subtask, TaskList, ChangeEntry } from '../../db/models';
+import { setTaskStatus } from '../../hooks/use-tasks';
 
 let dek: CryptoKey;
 
@@ -99,6 +100,26 @@ describe('vault-middleware: at-rest encryption', () => {
     expect(got?.status).toBe('done');
     expect(got?.title).toBe('keepme');
     expect(got?.description).toBe('keepdesc');
+  });
+
+  it('marks a task done and records an encrypted changelog entry while unlocked', async () => {
+    await db.tasks.add(makeTask({ id: 'done-task', title: 'complete me' }));
+
+    await setTaskStatus('done-task', 'done');
+
+    const got = await db.tasks.get('done-task');
+    expect(got?.status).toBe('done');
+    expect(got?.completedAt).toEqual(expect.any(Number));
+    expect(got?.title).toBe('complete me');
+
+    const changes = (await db.changeLog.toArray()).filter((entry) => entry.entityId === 'done-task');
+    expect(changes).toHaveLength(1);
+    expect(changes[0].operation).toBe('upsert');
+    expect(changes[0].data?.title).toBe('complete me');
+
+    const rawChanges = await rawGet<ChangeEntry>('changeLog', changes[0].id);
+    expect(rawChanges?.data?._enc).toBeTruthy();
+    expect(rawChanges?.data?.title).toBeUndefined();
   });
 
   it('cursor reads via .filter().toArray() return decrypted values', async () => {

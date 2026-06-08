@@ -2,7 +2,7 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../db';
 import type { Task, TaskStatus, TaskLink } from '../db/models';
 import { newId } from '../lib/id';
-import { recordChangeInTx, recordChangeBatchInTx, ensureDeviceId } from '../sync/change-log';
+import { recordChange, recordChangeInTx, recordChangeBatchInTx, ensureDeviceId } from '../sync/change-log';
 import { scheduleSyncDebounced } from '../sync/sync-engine';
 import { computeNextOccurrence } from './use-recurring';
 import { handleDbError } from '../lib/db-error';
@@ -84,20 +84,21 @@ export async function createTask(
 export async function updateTask(id: string, updates: Partial<Task>) {
   try {
     await ensureDeviceId();
-    await db.transaction('rw', [db.tasks, db.changeLog], async () => {
-      const existing = await db.tasks.get(id);
-      const now = Date.now();
-      const fieldTimestamps = stampUpdatedFields(
-        existing?.fieldTimestamps,
-        Object.keys(updates),
-        now,
-      );
-      await db.tasks.update(id, { ...updates, updatedAt: now, fieldTimestamps });
-      const updated = await db.tasks.get(id);
-      if (updated) {
-        await recordChangeInTx('task', id, 'upsert', updated as unknown as Record<string, unknown>);
-      }
-    });
+    const existing = await db.tasks.get(id);
+    if (!existing) return;
+    const now = Date.now();
+    const fieldTimestamps = stampUpdatedFields(
+      existing.fieldTimestamps,
+      Object.keys(updates),
+      now,
+    );
+    const updated: Task = { ...existing, ...updates, updatedAt: now, fieldTimestamps };
+
+    // Keep each encrypted write in its own short transaction. Safari can close a
+    // write transaction while the Paranoid middleware awaits Web Crypto, which
+    // made the old read-update-read-changelog transaction fail on task completion.
+    await db.tasks.put(updated);
+    await recordChange('task', id, 'upsert', updated as unknown as Record<string, unknown>);
     scheduleSyncDebounced();
   } catch (error) {
     handleDbError(error, 'update task');
