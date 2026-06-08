@@ -368,7 +368,10 @@ syncPassword-derived HMAC**.
   show "wipe confirmed" and purge the managed-device entry + remote command/status
   files. Confirmation is not guaranteed: if the device loses network after receiving
   a valid command but before writing the status, it still wipes and the trusted
-  device remains at "sent / pending confirmation".
+  device remains at "sent / pending confirmation". The trusted device can also
+  forget an unconfirmed/orphaned device after sending a wipe command; this removes
+  the local management entry but intentionally leaves the remote wipe command in
+  place and is **not** evidence that the wipe ran.
 
 ---
 

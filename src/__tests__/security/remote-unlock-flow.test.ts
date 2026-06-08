@@ -295,6 +295,7 @@ describe('remote wipe', () => {
     await enrollPair();
     await actAsPhone();
     await ru.sendRemoteWipe(PAT, REPO, LAP);
+    phoneLocal = await snapshotLocal();
     await actAsLaptop();
     await ru.pollRemoteCommands(PAT, REPO, LAP);
 
@@ -307,6 +308,41 @@ describe('remote wipe', () => {
     expect((await db.localSettings.get('local'))?.remoteApproverFor?.[LAP]).toBeUndefined();
     expect(files[ru.cmdPath(LAP)]).toBeUndefined();
     expect(files[ru.wipeStatusPath(LAP)]).toBeUndefined();
+  });
+
+  it('forgets an unconfirmed device locally while leaving the wipe command pending', async () => {
+    await enrollPair();
+    await actAsPhone();
+    const command = await ru.sendRemoteWipe(PAT, REPO, LAP);
+    expect(files[ru.cmdPath(LAP)]).toBeTruthy();
+
+    await ru.forgetManagedDeviceAfterWipeCommand(PAT, REPO, LAP);
+
+    expect((await db.localSettings.get('local'))?.remoteApproverFor?.[LAP]).toBeUndefined();
+    expect(files[ru.cmdPath(LAP)]).toBeTruthy();
+    expect(JSON.parse(files[ru.cmdPath(LAP)].data).nonce).toBe(command.nonce);
+  });
+
+  it('refuses to forget a confirmed wiped device so purge can clean remote status files', async () => {
+    await enrollPair();
+    await actAsPhone();
+    await ru.sendRemoteWipe(PAT, REPO, LAP);
+    phoneLocal = await snapshotLocal();
+    await actAsLaptop();
+    await ru.pollRemoteCommands(PAT, REPO, LAP);
+    await actAsPhone();
+    await ru.refreshManagedDeviceWipeStatuses(PAT, REPO);
+
+    await expect(ru.forgetManagedDeviceAfterWipeCommand(PAT, REPO, LAP)).rejects.toThrow(/Use purge/);
+    expect((await db.localSettings.get('local'))?.remoteApproverFor?.[LAP]).toBeTruthy();
+  });
+
+  it('refuses to forget a managed device before a wipe command has been sent', async () => {
+    await enrollPair();
+    await actAsPhone();
+
+    await expect(ru.forgetManagedDeviceAfterWipeCommand(PAT, REPO, LAP)).rejects.toThrow(/Send a wipe command/);
+    expect((await db.localSettings.get('local'))?.remoteApproverFor?.[LAP]).toBeTruthy();
   });
 
   it('a Paranoid device refuses to issue a wipe', async () => {

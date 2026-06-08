@@ -513,6 +513,22 @@ export async function purgeManagedDevice(pat: string, repo: string, targetDevice
   await db.localSettings.update('local', { remoteApproverFor: current });
 }
 
+export async function forgetManagedDeviceAfterWipeCommand(pat: string, repo: string, targetDeviceId: string): Promise<void> {
+  if (isParanoidFlagSet()) throw new Error('A Paranoid device cannot manage remote wipe records');
+  const local = await db.localSettings.get('local');
+  const current = { ...(local?.remoteApproverFor ?? {}) };
+  const entry = current[targetDeviceId];
+  if (!entry?.lastWipeCommand) throw new Error('Send a wipe command before forgetting this device');
+  if (entry.lastWipeAck) throw new Error('Use purge for confirmed wiped devices');
+
+  await Promise.all([
+    deleteRemoteFileIfExists(pat, repo, unlockReqPath(targetDeviceId)),
+    deleteRemoteFileIfExists(pat, repo, unlockRespPath(targetDeviceId)),
+  ]);
+  delete current[targetDeviceId];
+  await db.localSettings.update('local', { remoteApproverFor: current });
+}
+
 // --- Unlock exchange (laptop side, while locked) ---
 
 let pendingUnlock: { nonce: string; k: Uint8Array; code: string } | null = null;

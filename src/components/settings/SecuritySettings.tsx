@@ -16,7 +16,8 @@ import {
   isRemoteUnlockEnrolled, listEnrolledApprovers, listApproverCandidates, buildEnrollContext,
   enableRemoteUnlock, addApprovers, disableRemoteUnlock, setDeviceName, getDeviceName,
   publishOwnRegistryEntry, listApprovedDevices, sendRemoteWipe, pollApproverInbox,
-  refreshManagedDeviceWipeStatuses, purgeManagedDevice, type RegistryEntry, type ManagedDevice,
+  refreshManagedDeviceWipeStatuses, purgeManagedDevice, forgetManagedDeviceAfterWipeCommand,
+  type RegistryEntry, type ManagedDevice,
 } from '../../sync/remote-unlock';
 import { identityFingerprint } from '../../sync/remote-unlock-crypto';
 import { panicWipe } from '../../lib/panic-wipe';
@@ -650,6 +651,20 @@ function ApproverDevicesSection() {
     } finally { setBusy(false); }
   }
 
+  async function forgetPending(deviceId: string, name: string) {
+    const ok = await confirmDialog(`Forget “${name}” from this trusted device? The remote wipe command stays in GitHub, so the device can still wipe itself if it later comes online. You will no longer see confirmation here.`, { confirmLabel: 'Forget device', danger: true });
+    if (!ok) return;
+    setBusy(true);
+    try {
+      await forgetManagedDeviceAfterWipeCommand(local.githubPat!, local.githubRepo!, deviceId);
+      await reload();
+      toast('Device forgotten; pending wipe command left in place', 'success');
+    } catch (e) {
+      recordError('remoteUnlock.forgetPendingWipeDevice', e);
+      toast(e instanceof Error ? e.message : 'Could not forget device', 'error');
+    } finally { setBusy(false); }
+  }
+
   function wipeStatus(m: ManagedDevice): string {
     if (m.lastWipeAck) return `Wipe confirmed ${formatRemoteWipeTime(m.lastWipeAck.wipedAt)}`;
     if (m.lastWipeCommand) return `Wipe command sent ${formatRemoteWipeTime(m.lastWipeCommand.sentAt)} · awaiting confirmation`;
@@ -681,6 +696,11 @@ function ApproverDevicesSection() {
                   {m.lastWipeAck && (
                     <Button size="sm" variant="secondary" onClick={() => purge(m.deviceId, m.name)} disabled={busy}>
                       Purge
+                    </Button>
+                  )}
+                  {m.lastWipeCommand && !m.lastWipeAck && (
+                    <Button size="sm" variant="secondary" onClick={() => forgetPending(m.deviceId, m.name)} disabled={busy}>
+                      Forget
                     </Button>
                   )}
                 </div>
