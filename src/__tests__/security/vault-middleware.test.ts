@@ -4,6 +4,7 @@ import {
   setVaultKeyProvider,
   clearVaultKeyProvider,
   setMigrationBypass,
+  encryptRow,
 } from '../../db/vault-middleware';
 import type { Task, Subtask, TaskList, ChangeEntry } from '../../db/models';
 import { setTaskStatus } from '../../hooks/use-tasks';
@@ -120,6 +121,20 @@ describe('vault-middleware: at-rest encryption', () => {
     const rawChanges = await rawGet<ChangeEntry>('changeLog', changes[0].id);
     expect(rawChanges?.data?._enc).toBeTruthy();
     expect(rawChanges?.data?.title).toBeUndefined();
+  });
+
+  it('writes already encrypted rows without double-encrypting them', async () => {
+    const task = makeTask({ id: 'pre-encrypted', title: 'pre encrypted' });
+    const encryptedTask = await encryptRow('tasks', dek, task as unknown as Record<string, unknown>);
+
+    await db.tasks.put(encryptedTask as unknown as Task);
+
+    const got = await db.tasks.get('pre-encrypted');
+    expect(got?.title).toBe('pre encrypted');
+
+    const raw = await rawGet<Record<string, unknown>>('tasks', 'pre-encrypted');
+    expect(raw?._enc).toBe((encryptedTask as Record<string, unknown>)._enc);
+    expect(JSON.stringify(raw)).not.toContain('pre encrypted');
   });
 
   it('cursor reads via .filter().toArray() return decrypted values', async () => {

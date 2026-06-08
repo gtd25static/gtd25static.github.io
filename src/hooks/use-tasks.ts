@@ -1,12 +1,14 @@
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../db';
-import type { Task, TaskStatus, TaskLink } from '../db/models';
+import type { ChangeEntry, Task, TaskStatus, TaskLink } from '../db/models';
 import { newId } from '../lib/id';
-import { recordChange, recordChangeInTx, recordChangeBatchInTx, ensureDeviceId } from '../sync/change-log';
+import { recordChangeInTx, recordChangeBatchInTx, ensureDeviceId } from '../sync/change-log';
 import { scheduleSyncDebounced } from '../sync/sync-engine';
 import { computeNextOccurrence } from './use-recurring';
 import { handleDbError } from '../lib/db-error';
 import { initFieldTimestamps, stampUpdatedFields } from '../sync/field-timestamps';
+import { encryptRow, getActiveAtRestKey } from '../db/vault-middleware';
+import { SYNC_VERSION } from '../sync/version';
 
 export function useTasks(listId: string | null) {
   return useLiveQuery(
@@ -83,7 +85,7 @@ export async function createTask(
 
 export async function updateTask(id: string, updates: Partial<Task>) {
   try {
-    await ensureDeviceId();
+    const deviceId = await ensureDeviceId();
     const existing = await db.tasks.get(id);
     if (!existing) return;
     const now = Date.now();
@@ -93,12 +95,37 @@ export async function updateTask(id: string, updates: Partial<Task>) {
       now,
     );
     const updated: Task = { ...existing, ...updates, updatedAt: now, fieldTimestamps };
+    const change: ChangeEntry = {
+      id: newId(),
+      deviceId,
+      timestamp: now,
+      entityType: 'task',
+      entityId: id,
+      operation: 'upsert',
+      data: updated as unknown as Record<string, unknown>,
+      v: SYNC_VERSION,
+    };
 
-    // Keep each encrypted write in its own short transaction. Safari can close a
-    // write transaction while the Paranoid middleware awaits Web Crypto, which
-    // made the old read-update-read-changelog transaction fail on task completion.
-    await db.tasks.put(updated);
-    await recordChange('task', id, 'upsert', updated as unknown as Record<string, unknown>);
+    let taskRow = updated as unknown as Record<string, unknown>;
+    let changeRow = change as unknown as Record<string, unknown>;
+    const atRestKey = getActiveAtRestKey();
+    if (atRestKey) {
+      const [encryptedTask, encryptedChange] = await Promise.all([
+        encryptRow('tasks', atRestKey, taskRow),
+        encryptRow('changeLog', atRestKey, changeRow),
+      ]);
+      if (!encryptedTask || !encryptedChange) throw new Error('Failed to encrypt task update');
+      taskRow = encryptedTask;
+      changeRow = encryptedChange;
+    }
+
+    // Safari can close a write transaction while the Paranoid middleware awaits
+    // Web Crypto. Pre-encrypt outside IndexedDB, then write already-encrypted rows
+    // in one short transaction that the middleware fast-passes synchronously.
+    await db.transaction('rw', [db.tasks, db.changeLog], async () => {
+      await db.tasks.put(taskRow as unknown as Task);
+      await db.changeLog.add(changeRow as unknown as ChangeEntry);
+    });
     scheduleSyncDebounced();
   } catch (error) {
     handleDbError(error, 'update task');

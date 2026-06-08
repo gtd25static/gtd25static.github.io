@@ -38,6 +38,14 @@ function isHandledTable(name: string): boolean {
   return name === 'changeLog' || name in ENTITY_TYPE_BY_TABLE;
 }
 
+function needsEncryption(table: string, row: Row): boolean {
+  if (table === 'changeLog') {
+    if (row.operation !== 'upsert' || row.data == null) return false;
+    return !(row.data as Row)._enc;
+  }
+  return !!ENTITY_TYPE_BY_TABLE[table] && !row._enc;
+}
+
 // --- Key provider + migration bypass ---
 
 let keyProvider: () => CryptoKey | null = () => null;
@@ -263,8 +271,10 @@ export const vaultMiddleware: Middleware<DBCore> = {
           async mutate(req) {
             const key = getActiveAtRestKey();
             if (key && (req.type === 'add' || req.type === 'put') && req.values) {
+              const rows = req.values as Row[];
+              if (!rows.some((v) => needsEncryption(tableName, v))) return downTable.mutate(req);
               return Dexie.waitFor((async () => {
-                const values = await Promise.all((req.values as Row[]).map((v) => encryptRow(tableName, key, v)));
+                const values = await Promise.all(rows.map((v) => encryptRow(tableName, key, v)));
                 return downTable.mutate({ ...req, values: values as typeof req.values });
               })());
             }
