@@ -27,6 +27,7 @@ const VERSION_JSON = {
   message: 'New thing',
   log: [{ h: 'new1', s: 'New thing' }, { h: 'dev', s: 'current' }],
 };
+const PARANOID_UPDATE_NOTICE_KEY = 'gtd25-paranoid-update-notice';
 
 beforeEach(() => {
   h.sw.needRefresh = true;
@@ -34,6 +35,7 @@ beforeEach(() => {
   h.sw.forceCheck = vi.fn();
   h.vault = { enabled: false, unlocked: false, locked: false, hasSecurityKey: false };
   h.incompatHandlers.length = 0;
+  localStorage.removeItem(PARANOID_UPDATE_NOTICE_KEY);
   global.fetch = vi.fn().mockResolvedValue({
     ok: true,
     json: async () => VERSION_JSON,
@@ -79,6 +81,38 @@ describe('AppUpdatePrompt', () => {
     rerender(<AppUpdatePrompt />);
 
     await waitFor(() => expect(h.sw.applyUpdate).toHaveBeenCalled());
+    expect(JSON.parse(localStorage.getItem(PARANOID_UPDATE_NOTICE_KEY) ?? '{}')).toMatchObject({
+      from: 'dev',
+      to: 'new1',
+    });
+  });
+
+  it('shows a post-update Paranoid notice after the build changes', () => {
+    h.sw.needRefresh = false;
+    localStorage.setItem(PARANOID_UPDATE_NOTICE_KEY, JSON.stringify({
+      from: 'old1',
+      to: 'dev',
+      at: Date.now(),
+    }));
+
+    render(<AppUpdatePrompt />);
+
+    expect(screen.getByText('GTD25 updated. Your Paranoid vault is locked for safety.')).toBeInTheDocument();
+    expect(localStorage.getItem(PARANOID_UPDATE_NOTICE_KEY)).toBeNull();
+  });
+
+  it('does not show the post-update Paranoid notice before the build changes', () => {
+    h.sw.needRefresh = false;
+    localStorage.setItem(PARANOID_UPDATE_NOTICE_KEY, JSON.stringify({
+      from: 'dev',
+      to: 'new1',
+      at: Date.now(),
+    }));
+
+    const { container } = render(<AppUpdatePrompt />);
+
+    expect(container).toBeEmptyDOMElement();
+    expect(localStorage.getItem(PARANOID_UPDATE_NOTICE_KEY)).not.toBeNull();
   });
 
   it('"Later" dismisses the dialog and falls back to a top banner', async () => {

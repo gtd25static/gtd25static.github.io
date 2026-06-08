@@ -1,6 +1,6 @@
 # GTD25 — Security Review & Threat Model
 
-**Last updated:** 2026-06-08 (locked-screen update recovery: same-commit service-worker refreshes are suppressed; unlocked Paranoid updates defer until lock)
+**Last updated:** 2026-06-08 (locked-screen update recovery: same-commit service-worker refreshes are suppressed; unlocked Paranoid updates defer until lock and confirm after install)
 **Maintenance:** This document MUST be kept current. See "Keeping this document
 updated" at the end and the corresponding rule in `CLAUDE.md`.
 
@@ -380,7 +380,10 @@ syncPassword-derived HMAC**.
   worker refresh signals are suppressed to avoid update-banner loops. If an update
   is detected while a Paranoid vault is **unlocked**, applying it is deferred until
   the vault is already locked; the app does **not** persist or carry the DEK across
-  reloads to preserve the unlocked state. If remote unlock/wipe is enrolled
+  reloads to preserve the unlocked state. To make the lock/reload explicit, the app
+  stores a short-lived, non-sensitive local marker before a Paranoid update
+  (`from`/`to` build commits + timestamp only) and shows an "updated; vault locked"
+  banner after the running build changes. If remote unlock/wipe is enrolled
   (Scenario 8), the lock screen also polls the backend mailbox
   (conditional requests) and can run `panicWipe` on an approver-signed command or
   unlock on an approved response. That remote path uses the plaintext PAT and

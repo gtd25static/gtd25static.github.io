@@ -6,6 +6,52 @@ import { GIT_COMMIT } from '../../lib/constants';
 import { changelogFor, parseVersionInfo, type VersionInfo } from '../../lib/changelog';
 import { Button } from '../ui/Button';
 
+const PARANOID_UPDATE_NOTICE_KEY = 'gtd25-paranoid-update-notice';
+const PARANOID_UPDATE_NOTICE_TTL_MS = 24 * 60 * 60 * 1000;
+
+type ParanoidUpdateNotice = {
+  from: string;
+  to?: string;
+  at: number;
+};
+
+function readCompletedParanoidUpdateNotice(): boolean {
+  const raw = localStorage.getItem(PARANOID_UPDATE_NOTICE_KEY);
+  if (!raw) return false;
+
+  let notice: Partial<ParanoidUpdateNotice>;
+  try {
+    notice = JSON.parse(raw) as Partial<ParanoidUpdateNotice>;
+  } catch {
+    localStorage.removeItem(PARANOID_UPDATE_NOTICE_KEY);
+    return false;
+  }
+
+  if (typeof notice.from !== 'string' || typeof notice.at !== 'number') {
+    localStorage.removeItem(PARANOID_UPDATE_NOTICE_KEY);
+    return false;
+  }
+
+  if (Date.now() - notice.at > PARANOID_UPDATE_NOTICE_TTL_MS) {
+    localStorage.removeItem(PARANOID_UPDATE_NOTICE_KEY);
+    return false;
+  }
+
+  if (notice.from === GIT_COMMIT) return false;
+
+  localStorage.removeItem(PARANOID_UPDATE_NOTICE_KEY);
+  return true;
+}
+
+function armParanoidUpdateNotice(targetCommit?: string): void {
+  const notice: ParanoidUpdateNotice = {
+    from: GIT_COMMIT,
+    to: targetCommit,
+    at: Date.now(),
+  };
+  localStorage.setItem(PARANOID_UPDATE_NOTICE_KEY, JSON.stringify(notice));
+}
+
 // App-wide update prompt. Rendered from the always-mounted App (inside
 // ServiceWorkerProvider) so it appears over BOTH the unlocked app and the lock
 // screen — letting a user stuck on a buggy locked build pull a fix without wiping.
@@ -22,6 +68,7 @@ export function AppUpdatePrompt() {
   const [info, setInfo] = useState<VersionInfo | null>(null);
   const [versionChecked, setVersionChecked] = useState(false);
   const [deferUntilLocked, setDeferUntilLocked] = useState(false);
+  const [updateInstalledNoticeVisible, setUpdateInstalledNoticeVisible] = useState(() => readCompletedParanoidUpdateNotice());
 
   // Fetch the LIVE version.json (cache-busted, bypassing the SW) to show what the
   // pending update contains — for BOTH a detected new build and a sync-required
@@ -67,18 +114,33 @@ export function AppUpdatePrompt() {
   }, [needRefresh, syncIncompat, dismissed]);
 
   useEffect(() => {
-    if (deferUntilLocked && vault.locked) {
+    if (deferUntilLocked && vault.locked && !updating) {
       setUpdating(true);
+      armParanoidUpdateNotice(info?.commit);
       if (needRefresh) applyUpdate();
       else window.location.reload();
     }
-  }, [applyUpdate, deferUntilLocked, needRefresh, vault.locked]);
+  }, [applyUpdate, deferUntilLocked, info?.commit, needRefresh, updating, vault.locked]);
 
   const changes = info ? changelogFor(info, GIT_COMMIT) : [];
   const sameCommit = info?.commit === GIT_COMMIT;
   const sameCommitRefresh = needRefresh && !syncIncompat && versionChecked && sameCommit && changes.length === 0;
   const waitingForVersionCheck = needRefresh && !syncIncompat && !versionChecked;
   const available = (needRefresh || syncIncompat) && !sameCommitRefresh;
+  if (updateInstalledNoticeVisible) {
+    return (
+      <div className="fixed inset-x-0 top-0 z-[300] flex items-center justify-between gap-3 bg-green-600 px-4 py-2 text-sm font-medium text-white">
+        <span>GTD25 updated. Your Paranoid vault is locked for safety.</span>
+        <button
+          type="button"
+          onClick={() => setUpdateInstalledNoticeVisible(false)}
+          className="shrink-0 rounded-md bg-white/20 px-3 py-1 text-xs font-bold hover:bg-white/30"
+        >
+          Dismiss
+        </button>
+      </div>
+    );
+  }
   if (!available || waitingForVersionCheck) return null;
 
   const message = deferUntilLocked
@@ -97,8 +159,10 @@ export function AppUpdatePrompt() {
     }
     if (needRefresh) {
       setUpdating(true);
+      if (vault.enabled) armParanoidUpdateNotice(info?.commit);
       applyUpdate(); // skipWaiting + single guarded reload
     } else {
+      if (vault.enabled) armParanoidUpdateNotice(info?.commit);
       window.location.reload();
     }
   };
