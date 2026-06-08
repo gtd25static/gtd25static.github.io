@@ -1,6 +1,6 @@
 # GTD25 — Security Review & Threat Model
 
-**Last updated:** 2026-06-07 (remote unlock & wipe: a trusted Paranoid-OFF device can unlock or wipe a locked device via a backend-relayed, forward-secret key exchange)
+**Last updated:** 2026-06-08 (locked-screen update recovery: same-commit service-worker refreshes are non-modal and activation now awaits `skipWaiting`)
 **Maintenance:** This document MUST be kept current. See "Keeping this document
 updated" at the end and the corresponding rule in `CLAUDE.md`.
 
@@ -372,10 +372,15 @@ syncPassword-derived HMAC**.
 - **Client-side timed/failure wipes only run when our code runs** — useless
   against an offline disk image or memory dump. The same applies to **remote wipe**
   (Scenario 8): it is delivered only while the locked app is open and online.
-- **What runs while locked is minimal but no longer nil:** if remote unlock/wipe is
-  enrolled (Scenario 8), the lock screen polls the backend mailbox (conditional
-  requests) and can run `panicWipe` on an approver-signed command or unlock on an
-  approved response. It uses the plaintext PAT and never touches the DEK/content.
+- **What runs while locked is minimal but no longer nil:** the app-wide service
+  worker update detector/prompt stays mounted on the lock screen so a broken
+  locked build can be refreshed without wiping. It can check public update
+  metadata, ask a waiting service worker to activate, and reload; it does **not**
+  access the DEK, decrypted content, syncPassword, or PAT. If remote unlock/wipe
+  is enrolled (Scenario 8), the lock screen also polls the backend mailbox
+  (conditional requests) and can run `panicWipe` on an approver-signed command or
+  unlock on an approved response. That remote path uses the plaintext PAT and
+  never touches decrypted content before unlock.
 - **The two passwords have very different strength floors:** the vault passphrase
   uses Argon2id; the **syncPassword still uses PBKDF2‑600k** (kept for cross-device
   wire compatibility). The backend's confidentiality is bounded by the weaker one.

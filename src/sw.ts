@@ -45,7 +45,7 @@ self.addEventListener('notificationclick', (event) => {
 self.addEventListener('message', (event) => {
   if (event.data && event.data.type === 'SKIP_WAITING') {
     console.debug('[SW] SKIP_WAITING message received');
-    self.skipWaiting();
+    event.waitUntil(self.skipWaiting());
   }
 });
 

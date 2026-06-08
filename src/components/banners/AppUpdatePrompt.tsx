@@ -62,8 +62,13 @@ export function AppUpdatePrompt() {
   const available = needRefresh || syncIncompat;
   if (!available) return null;
 
+  const changes = info ? changelogFor(info, GIT_COMMIT) : [];
+  const sameCommit = info?.commit === GIT_COMMIT;
+  const sameCommitRefresh = needRefresh && !syncIncompat && sameCommit && changes.length === 0;
   const message = syncIncompat
     ? 'A newer version of GTD25 is required to sync.'
+    : sameCommitRefresh
+      ? 'A refreshed copy of this build is available.'
     : 'A new version of GTD25 is available.';
 
   const doUpdate = () => {
@@ -76,7 +81,7 @@ export function AppUpdatePrompt() {
     }
   };
 
-  if (!dismissed) {
+  if (!dismissed && !sameCommitRefresh) {
     return (
       <div className="fixed inset-0 z-[300] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
         <div className="w-full max-w-sm rounded-2xl border border-zinc-200 bg-white p-6 shadow-2xl dark:border-zinc-800 dark:bg-zinc-900">
@@ -93,15 +98,21 @@ export function AppUpdatePrompt() {
           {info && (
             <div className="mb-4 rounded-lg border border-zinc-200 bg-zinc-50 p-2.5 dark:border-zinc-700 dark:bg-zinc-800/60">
               <p className="mb-1 font-mono text-[11px] text-zinc-400">
-                {GIT_COMMIT} → {info.commit}
+                {sameCommit ? `Current commit ${GIT_COMMIT}` : `${GIT_COMMIT} → ${info.commit}`}
               </p>
-              <ul className="max-h-40 space-y-0.5 overflow-auto">
-                {changelogFor(info, GIT_COMMIT).map((c) => (
-                  <li key={c.h} className="text-xs text-zinc-600 dark:text-zinc-300">
-                    <span className="font-mono text-zinc-400">{c.h}</span> {c.s}
-                  </li>
-                ))}
-              </ul>
+              {changes.length > 0 ? (
+                <ul className="max-h-40 space-y-0.5 overflow-auto">
+                  {changes.map((c) => (
+                    <li key={c.h} className="text-xs text-zinc-600 dark:text-zinc-300">
+                      <span className="font-mono text-zinc-400">{c.h}</span> {c.s}
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="text-xs text-zinc-600 dark:text-zinc-300">
+                  {sameCommit ? 'No newer deployed commit was found.' : 'No changelog entries are available.'}
+                </p>
+              )}
             </div>
           )}
 

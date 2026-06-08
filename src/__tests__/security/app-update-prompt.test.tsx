@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { vi } from 'vitest';
-import { render, screen, act } from '@testing-library/react';
+import { render, screen, act, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import '../../__tests__/setup-component';
 
@@ -68,6 +68,23 @@ describe('AppUpdatePrompt', () => {
     expect(screen.getByRole('button', { name: /update now/i })).toBeInTheDocument(); // banner remains
   });
 
+  it('uses a non-modal refresh banner for same-commit service worker updates', async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        commit: 'dev',
+        message: 'current',
+        log: [{ h: 'dev', s: 'current' }],
+      }),
+    }) as unknown as typeof fetch;
+
+    render(<AppUpdatePrompt />);
+
+    expect(await screen.findByText('A refreshed copy of this build is available.')).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByText('Update available')).not.toBeInTheDocument());
+    expect(screen.queryByText('dev → dev')).not.toBeInTheDocument();
+  });
+
   it('shows "Update required" for a sync-incompatible version', async () => {
     h.sw.needRefresh = false;
     render(<AppUpdatePrompt />);
@@ -75,5 +92,24 @@ describe('AppUpdatePrompt', () => {
     act(() => { h.incompatHandlers.forEach((cb) => cb()); });
     expect(await screen.findByText('Update required')).toBeInTheDocument();
     expect(h.sw.forceCheck).toHaveBeenCalled(); // forces an immediate SW check
+  });
+
+  it('does not render an equal commit range for sync-incompatible metadata', async () => {
+    h.sw.needRefresh = false;
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        commit: 'dev',
+        message: 'current',
+        log: [{ h: 'dev', s: 'current' }],
+      }),
+    }) as unknown as typeof fetch;
+
+    render(<AppUpdatePrompt />);
+    act(() => { h.incompatHandlers.forEach((cb) => cb()); });
+
+    expect(await screen.findByText('Update required')).toBeInTheDocument();
+    expect(await screen.findByText('Current commit dev')).toBeInTheDocument();
+    expect(screen.queryByText('dev → dev')).not.toBeInTheDocument();
   });
 });
