@@ -285,6 +285,24 @@ async function postApproverInvite(pat: string, repo: string, approverDeviceId: s
   await putFile(pat, repo, path, JSON.stringify(inbox), existing?.sha);
 }
 
+async function writeApproverInbox(pat: string, repo: string, approverDeviceId: string, inbox: Record<string, ApproverInvite>, sha: string): Promise<void> {
+  const path = approverInboxPath(approverDeviceId);
+  if (Object.keys(inbox).length === 0) {
+    await deleteFile(pat, repo, path, sha);
+  } else {
+    await putFile(pat, repo, path, JSON.stringify(inbox), sha);
+  }
+}
+
+async function removeApproverInvite(pat: string, repo: string, approverDeviceId: string, fromDeviceId: string): Promise<void> {
+  const file = await getFile(pat, repo, approverInboxPath(approverDeviceId));
+  if (!file) return;
+  const inbox = safeParseObj<ApproverInvite>(file.data);
+  if (!Object.prototype.hasOwnProperty.call(inbox, fromDeviceId)) return;
+  delete inbox[fromDeviceId];
+  await writeApproverInbox(pat, repo, approverDeviceId, inbox, file.sha);
+}
+
 // === Approver device (Paranoid OFF): accept invites, approve, wipe ===
 
 /**
@@ -300,17 +318,31 @@ export async function pollApproverInbox(pat: string, repo: string, deviceId: str
   const identity = await ensureDeviceIdentity();
   const local = await db.localSettings.get('local');
   const store = { ...(local?.remoteApproverFor ?? {}) };
+  const consumedInviteIds = new Set<string>();
   let accepted = 0;
   for (const invite of Object.values(inbox)) {
-    if (!invite?.fromDeviceId || store[invite.fromDeviceId]) continue;
+    if (!invite?.fromDeviceId) continue;
+    if (store[invite.fromDeviceId]) {
+      consumedInviteIds.add(invite.fromDeviceId);
+      continue;
+    }
     try {
       const ruk = await eciesDecrypt(identity.ecdhPriv, invite.rukEcies);
       store[invite.fromDeviceId] = { ruk: b64encode(ruk), ecdsaPub: invite.fromEcdsaPub, name: invite.fromName };
       ruk.fill(0);
+      consumedInviteIds.add(invite.fromDeviceId);
       accepted++;
     } catch { /* not for us / corrupt */ }
   }
   if (accepted) await db.localSettings.update('local', { remoteApproverFor: store });
+  if (consumedInviteIds.size > 0) {
+    for (const id of consumedInviteIds) delete inbox[id];
+    try {
+      await writeApproverInbox(pat, repo, deviceId, inbox, file.sha);
+    } catch (err) {
+      recordError('remoteUnlock.consumeApproverInvite', err);
+    }
+  }
   return accepted;
 }
 
@@ -463,6 +495,28 @@ export async function readRemoteWipeStatus(
   };
 }
 
+async function readOwnRemoteWipeCommand(pat: string, repo: string, targetDeviceId: string): Promise<ManagedDevice['lastWipeCommand'] | null> {
+  const local = await db.localSettings.get('local');
+  const identity = local?.deviceIdentity;
+  const me = local?.deviceId;
+  if (!identity || !me) return null;
+  const file = await getFile(pat, repo, cmdPath(targetDeviceId));
+  if (!file) return null;
+  const cmd = (() => { try { return JSON.parse(file.data) as WipeCommand; } catch { return null; } })();
+  if (
+    !cmd ||
+    cmd.target !== targetDeviceId ||
+    cmd.from !== me ||
+    typeof cmd.nonce !== 'string' ||
+    typeof cmd.ts !== 'number' ||
+    typeof cmd.sig !== 'string'
+  ) {
+    return null;
+  }
+  const ok = await verifyPayload(identity.ecdsaPub, cmd.sig, wipeBytes({ target: cmd.target, nonce: cmd.nonce, ts: cmd.ts }));
+  return ok ? { nonce: cmd.nonce, sentAt: cmd.ts } : null;
+}
+
 export async function refreshManagedDeviceWipeStatuses(pat: string, repo: string): Promise<ManagedDevice[]> {
   if (isParanoidFlagSet()) return [];
   const local = await db.localSettings.get('local');
@@ -470,19 +524,36 @@ export async function refreshManagedDeviceWipeStatuses(pat: string, repo: string
   let changed = false;
   for (const [deviceId, entry] of Object.entries(current)) {
     const status = await readRemoteWipeStatus(pat, repo, deviceId);
-    if (!status) continue;
+    if (status) {
+      const lastCommand = entry.lastWipeCommand;
+      const isCurrentOrNewer = !lastCommand ||
+        status.commandNonce === lastCommand.nonce ||
+        status.commandTs >= lastCommand.sentAt;
+      if (!isCurrentOrNewer) continue;
+      current[deviceId] = {
+        ...entry,
+        lastWipeAck: {
+          commandNonce: status.commandNonce,
+          wipedAt: status.wipedAt,
+          verifiedAt: Date.now(),
+        },
+      };
+      changed = true;
+      continue;
+    }
+
+    if (entry.lastWipeAck) continue;
+    const command = await readOwnRemoteWipeCommand(pat, repo, deviceId);
+    if (!command) continue;
     const lastCommand = entry.lastWipeCommand;
-    const isCurrentOrNewer = !lastCommand ||
-      status.commandNonce === lastCommand.nonce ||
-      status.commandTs >= lastCommand.sentAt;
-    if (!isCurrentOrNewer) continue;
+    const isNewCommand = !lastCommand ||
+      command.nonce !== lastCommand.nonce ||
+      command.sentAt !== lastCommand.sentAt;
+    if (!isNewCommand) continue;
     current[deviceId] = {
       ...entry,
-      lastWipeAck: {
-        commandNonce: status.commandNonce,
-        wipedAt: status.wipedAt,
-        verifiedAt: Date.now(),
-      },
+      lastWipeCommand: command,
+      lastWipeAck: undefined,
     };
     changed = true;
   }
@@ -502,7 +573,9 @@ export async function purgeManagedDevice(pat: string, repo: string, targetDevice
   const current = { ...(local?.remoteApproverFor ?? {}) };
   const entry = current[targetDeviceId];
   if (!entry?.lastWipeAck) throw new Error('Purge is only available after a verified wipe confirmation');
+  if (!local?.deviceId) throw new Error('This trusted device has no device ID');
 
+  await removeApproverInvite(pat, repo, local.deviceId, targetDeviceId);
   await Promise.all([
     deleteRemoteFileIfExists(pat, repo, cmdPath(targetDeviceId)),
     deleteRemoteFileIfExists(pat, repo, wipeStatusPath(targetDeviceId)),
@@ -518,9 +591,12 @@ export async function forgetManagedDeviceAfterWipeCommand(pat: string, repo: str
   const local = await db.localSettings.get('local');
   const current = { ...(local?.remoteApproverFor ?? {}) };
   const entry = current[targetDeviceId];
-  if (!entry?.lastWipeCommand) throw new Error('Send a wipe command before forgetting this device');
-  if (entry.lastWipeAck) throw new Error('Use purge for confirmed wiped devices');
+  const recoveredCommand = entry ? await readOwnRemoteWipeCommand(pat, repo, targetDeviceId) : null;
+  if (!entry?.lastWipeCommand && !recoveredCommand) throw new Error('Send a wipe command before forgetting this device');
+  if (entry?.lastWipeAck) throw new Error('Use purge for confirmed wiped devices');
+  if (!local?.deviceId) throw new Error('This trusted device has no device ID');
 
+  await removeApproverInvite(pat, repo, local.deviceId, targetDeviceId);
   await Promise.all([
     deleteRemoteFileIfExists(pat, repo, unlockReqPath(targetDeviceId)),
     deleteRemoteFileIfExists(pat, repo, unlockRespPath(targetDeviceId)),

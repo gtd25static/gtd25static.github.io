@@ -606,6 +606,7 @@ function ApproverDevicesSection() {
 
   useEffect(() => {
     if (!local.githubPat || !local.githubRepo || managed.length === 0) return;
+    void refreshStatuses(true);
     const timer = setInterval(() => { void refreshStatuses(true); }, 12_000);
     return () => clearInterval(timer);
   }, [local.githubPat, local.githubRepo, managed.length, refreshStatuses]);

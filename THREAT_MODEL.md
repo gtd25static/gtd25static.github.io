@@ -1,6 +1,6 @@
 # GTD25 — Security Review & Threat Model
 
-**Last updated:** 2026-06-08 (remote wipe polls while unlocked and writes signed best-effort confirmations; optional 10-minute app-lock grace after OS screen lock)
+**Last updated:** 2026-06-08 (remote wipe polls while unlocked and writes signed best-effort confirmations; remote-unlock invite cleanup; optional 10-minute app-lock grace after OS screen lock)
 **Maintenance:** This document MUST be kept current. See "Keeping this document
 updated" at the end and the corresponding rule in `CLAUDE.md`.
 
@@ -318,11 +318,12 @@ Paranoid-OFF) that can, via files relayed through the existing GitHub repo,
 **remotely unlock** the locked device (you approve on the trusted device) or
 **remotely wipe** it if lost. Mechanics: at enrolment a random **RUK** wraps the
 DEK (`dekWrappedByRuk` on disk) and is delivered ECIES-encrypted to each approver's
-identity key; the approver stores RUK. To unlock, the locked device posts a signed
-request carrying an **ephemeral session key K (RAM-only)** ECIES-encrypted to the
-approver; the approver returns RUK encrypted under K; the locked device unwraps the
-DEK. Device identity keys are distributed via a registry **authenticated by a
-syncPassword-derived HMAC**.
+identity key; the approver stores RUK and prunes accepted/stale invite mailbox
+entries so forgotten devices are not silently re-created. To unlock, the locked
+device posts a signed request carrying an **ephemeral session key K (RAM-only)**
+ECIES-encrypted to the approver; the approver returns RUK encrypted under K; the
+locked device unwraps the DEK. Device identity keys are distributed via a registry
+**authenticated by a syncPassword-derived HMAC**.
 
 - **Confidentiality vs. disk image + fully-logged backend — 🟢 (forward-secret).**
   K lives only in the locked device's RAM; RUK lives only on the approver; the disk

@@ -80,6 +80,13 @@ async function enrollPair(): Promise<void> {
   phoneLocal = await snapshotLocal();
 }
 
+async function repostLaptopInviteToPhone(): Promise<void> {
+  await actAsLaptop();
+  await ru.enableRemoteUnlock({ pat: PAT, repo: REPO, deviceId: LAP, deviceName: 'Work Laptop', macKey }, [PHONE]);
+  expect(files[ru.approverInboxPath(PHONE)]).toBeTruthy();
+  await actAsPhone();
+}
+
 beforeEach(async () => {
   files = {};
   failPutPaths = new Set();
@@ -293,6 +300,7 @@ describe('remote wipe', () => {
 
   it('purges a confirmed wiped device locally and cleans remote wipe files', async () => {
     await enrollPair();
+    await repostLaptopInviteToPhone();
     await actAsPhone();
     await ru.sendRemoteWipe(PAT, REPO, LAP);
     phoneLocal = await snapshotLocal();
@@ -306,12 +314,14 @@ describe('remote wipe', () => {
     await ru.purgeManagedDevice(PAT, REPO, LAP);
 
     expect((await db.localSettings.get('local'))?.remoteApproverFor?.[LAP]).toBeUndefined();
+    expect(files[ru.approverInboxPath(PHONE)]).toBeUndefined();
     expect(files[ru.cmdPath(LAP)]).toBeUndefined();
     expect(files[ru.wipeStatusPath(LAP)]).toBeUndefined();
   });
 
   it('forgets an unconfirmed device locally while leaving the wipe command pending', async () => {
     await enrollPair();
+    await repostLaptopInviteToPhone();
     await actAsPhone();
     const command = await ru.sendRemoteWipe(PAT, REPO, LAP);
     expect(files[ru.cmdPath(LAP)]).toBeTruthy();
@@ -319,8 +329,27 @@ describe('remote wipe', () => {
     await ru.forgetManagedDeviceAfterWipeCommand(PAT, REPO, LAP);
 
     expect((await db.localSettings.get('local'))?.remoteApproverFor?.[LAP]).toBeUndefined();
+    expect(files[ru.approverInboxPath(PHONE)]).toBeUndefined();
     expect(files[ru.cmdPath(LAP)]).toBeTruthy();
     expect(JSON.parse(files[ru.cmdPath(LAP)].data).nonce).toBe(command.nonce);
+    expect(await ru.pollApproverInbox(PAT, REPO, PHONE)).toBe(0);
+    expect((await db.localSettings.get('local'))?.remoteApproverFor?.[LAP]).toBeUndefined();
+  });
+
+  it('recovers pending wipe metadata for a device that was recreated from a stale invite', async () => {
+    await enrollPair();
+    await repostLaptopInviteToPhone();
+    const command = await ru.sendRemoteWipe(PAT, REPO, LAP);
+    await db.localSettings.update('local', { remoteApproverFor: undefined });
+
+    expect(await ru.pollApproverInbox(PAT, REPO, PHONE)).toBe(1);
+    expect((await db.localSettings.get('local'))?.remoteApproverFor?.[LAP]?.lastWipeCommand).toBeUndefined();
+
+    const refreshed = await ru.refreshManagedDeviceWipeStatuses(PAT, REPO);
+
+    expect(refreshed.find((d) => d.deviceId === LAP)?.lastWipeCommand?.nonce).toBe(command.nonce);
+    await ru.forgetManagedDeviceAfterWipeCommand(PAT, REPO, LAP);
+    expect((await db.localSettings.get('local'))?.remoteApproverFor?.[LAP]).toBeUndefined();
   });
 
   it('refuses to forget a confirmed wiped device so purge can clean remote status files', async () => {
@@ -394,12 +423,22 @@ describe('remote unlock: polling & lifecycle branches', () => {
 });
 
 describe('remote unlock: approver inbox enforcement', () => {
+  it('consumes accepted and stale approver invites so they cannot recreate forgotten devices', async () => {
+    await enrollPair();
+    expect(files[ru.approverInboxPath(PHONE)]).toBeUndefined();
+
+    await repostLaptopInviteToPhone();
+    expect(await ru.pollApproverInbox(PAT, REPO, PHONE)).toBe(0);
+
+    expect(files[ru.approverInboxPath(PHONE)]).toBeUndefined();
+  });
+
   it('a Paranoid device will not accept approver invites', async () => {
     await enrollPair();
-    // Re-invite (laptop) so there is a pending invite, then have the phone go paranoid.
-    await actAsPhone();
+    await repostLaptopInviteToPhone();
     await db.localSettings.update('local', { remoteApproverFor: undefined }); // forget prior acceptance
     localStorage.setItem(PARANOID_FLAG, '1');
     expect(await ru.pollApproverInbox(PAT, REPO, PHONE)).toBe(0);
+    expect(files[ru.approverInboxPath(PHONE)]).toBeTruthy();
   });
 });
