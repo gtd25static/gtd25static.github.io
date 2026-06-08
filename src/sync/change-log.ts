@@ -4,6 +4,10 @@ import { newId } from '../lib/id';
 import { SYNC_VERSION } from './version';
 import { migrateEntryData } from './migrations';
 import { mergeEntity, stampUpdatedFields } from './field-timestamps';
+import { prepareEntityRowsForAtRest } from './at-rest-writes';
+import type { Subtask, Task, TaskList } from '../db/models';
+
+type EntityRow = TaskList | Task | Subtask;
 
 async function getDeviceId(): Promise<string> {
   const local = await db.localSettings.get('local');
@@ -125,6 +129,12 @@ const tableForEntity = {
   subtask: () => db.subtasks,
 } as const;
 
+const tableNameForEntity = {
+  taskList: 'taskLists',
+  task: 'tasks',
+  subtask: 'subtasks',
+} as const;
+
 const requiredFields: Record<ChangeEntry['entityType'], string[]> = {
   taskList: ['id', 'name', 'order', 'createdAt', 'updatedAt'],
   task: ['id', 'listId', 'title', 'status', 'order', 'createdAt', 'updatedAt'],
@@ -143,53 +153,94 @@ function validateEntityShape(data: Record<string, unknown> | undefined, entityTy
 export async function applyRemoteEntries(entries: ChangeEntry[]) {
   // Sort by timestamp ascending so later entries win
   const sorted = [...entries].sort((a, b) => a.timestamp - b.timestamp);
+  const localState: Record<ChangeEntry['entityType'], Map<string, EntityRow | null>> = {
+    taskList: new Map<string, EntityRow | null>(),
+    task: new Map<string, EntityRow | null>(),
+    subtask: new Map<string, EntityRow | null>(),
+  };
+  const writes: Record<ChangeEntry['entityType'], Map<string, EntityRow>> = {
+    taskList: new Map<string, EntityRow>(),
+    task: new Map<string, EntityRow>(),
+    subtask: new Map<string, EntityRow>(),
+  };
 
-  await db.transaction('rw', [db.taskLists, db.tasks, db.subtasks], async () => {
-    for (const entry of sorted) {
-      const table = tableForEntity[entry.entityType]();
+  async function getCurrent(entityType: ChangeEntry['entityType'], entityId: string): Promise<EntityRow | null> {
+    const cache = localState[entityType];
+    if (cache.has(entityId)) return cache.get(entityId) ?? null;
+    const existing = await tableForEntity[entityType]().get(entityId) ?? null;
+    cache.set(entityId, existing as EntityRow | null);
+    return existing as EntityRow | null;
+  }
 
-      if (entry.operation === 'delete') {
-        const existing = await table.get(entry.entityId);
-        if (existing) {
-          const localUpdatedAt = (existing as { updatedAt?: number }).updatedAt ?? 0;
-          if (entry.timestamp >= localUpdatedAt) {
-            const ft = stampUpdatedFields(
+  function setChanged(entityType: ChangeEntry['entityType'], entityId: string, row: EntityRow): void {
+    localState[entityType].set(entityId, row);
+    writes[entityType].set(entityId, row);
+  }
+
+  for (const entry of sorted) {
+    if (entry.operation === 'delete') {
+      const existing = await getCurrent(entry.entityType, entry.entityId);
+      if (existing) {
+        const localUpdatedAt = existing.updatedAt ?? 0;
+        if (entry.timestamp >= localUpdatedAt) {
+          const updated = {
+            ...existing,
+            deletedAt: entry.timestamp,
+            updatedAt: entry.timestamp,
+            fieldTimestamps: stampUpdatedFields(
               (existing as unknown as Record<string, unknown>).fieldTimestamps as Record<string, number> | undefined,
               ['deletedAt'],
               entry.timestamp,
-            );
-            await table.update(entry.entityId, {
-              deletedAt: entry.timestamp,
-              updatedAt: entry.timestamp,
-              fieldTimestamps: ft,
-            });
-          }
-        }
-      } else {
-        // Migrate entry data from older format versions
-        const data = entry.data ? migrateEntryData(entry.data, entry.entityType, entry.v) : entry.data;
-
-        // Validate entity shape before writing
-        if (!validateEntityShape(data, entry.entityType)) {
-          console.warn(`Skipping malformed ${entry.entityType} entry ${entry.id}: missing required fields`);
-          continue;
-        }
-
-        // upsert with field-level merge
-        const existing = await table.get(entry.entityId);
-        if (existing) {
-          const merged = mergeEntity(
-            existing as unknown as Record<string, unknown>,
-            data as Record<string, unknown>,
-            entry.timestamp,
-          );
-          if (merged) {
-            await table.put(merged as never);
-          }
-        } else {
-          await table.put(data as never);
+            ),
+          };
+          setChanged(entry.entityType, entry.entityId, updated as EntityRow);
         }
       }
+      continue;
+    }
+
+    // Migrate entry data from older format versions
+    const data = entry.data ? migrateEntryData(entry.data, entry.entityType, entry.v) : entry.data;
+
+    // Validate entity shape before writing
+    if (!validateEntityShape(data, entry.entityType)) {
+      console.warn(`Skipping malformed ${entry.entityType} entry ${entry.id}: missing required fields`);
+      continue;
+    }
+
+    // upsert with field-level merge
+    const existing = await getCurrent(entry.entityType, entry.entityId);
+    if (existing) {
+      const merged = mergeEntity(
+        existing as unknown as Record<string, unknown>,
+        data as Record<string, unknown>,
+        entry.timestamp,
+      );
+      if (merged) {
+        setChanged(entry.entityType, entry.entityId, merged as unknown as EntityRow);
+      }
+    } else {
+      setChanged(entry.entityType, entry.entityId, data as unknown as EntityRow);
+    }
+  }
+
+  const [taskLists, tasks, subtasks] = await Promise.all([
+    prepareEntityRowsForAtRest(tableNameForEntity.taskList, Array.from(writes.taskList.values()) as TaskList[]),
+    prepareEntityRowsForAtRest(tableNameForEntity.task, Array.from(writes.task.values()) as Task[]),
+    prepareEntityRowsForAtRest(tableNameForEntity.subtask, Array.from(writes.subtask.values()) as Subtask[]),
+  ]);
+
+  if (taskLists.length === 0 && tasks.length === 0 && subtasks.length === 0) return;
+
+  await db.transaction('rw', [db.taskLists, db.tasks, db.subtasks], async () => {
+    if (taskLists.length > 0) {
+      await db.taskLists.bulkPut(taskLists);
+    }
+    if (tasks.length > 0) {
+      await db.tasks.bulkPut(tasks);
+    }
+    if (subtasks.length > 0) {
+      await db.subtasks.bulkPut(subtasks);
     }
   });
 }

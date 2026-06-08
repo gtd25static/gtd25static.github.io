@@ -13,6 +13,7 @@ import type { BackupTier } from './remote-backups';
 import { isParanoidFlagSet } from '../db/paranoid-flag';
 import { getVaultSecrets } from '../db/vault';
 import { recordError } from '../lib/diagnostics';
+import { prepareEntityRowsForAtRest, prepareSyncDataForAtRest } from './at-rest-writes';
 import {
   deriveKey,
   generateSalt,
@@ -40,35 +41,48 @@ const SYNC_TIMEOUT_MS = 45_000;
 
 // --- Snapshot reconciliation (catches compaction gaps) ---
 async function reconcileFromSnapshot(snapshot: SyncData) {
-  await db.transaction('rw', [db.taskLists, db.tasks, db.subtasks], async () => {
-    // Helper: reconcile a collection using field-level merge
-    async function reconcileCollection<T extends { id: string; updatedAt: number }>(
-      table: import('dexie').Table<T, string>,
-      remoteEntities: T[],
-    ) {
-      const localMap = new Map<string, T>();
-      for (const e of await table.toArray()) localMap.set(e.id, e);
+  // Helper: reconcile a collection using field-level merge. Crypto for Paranoid
+  // at-rest storage is done before the write transaction so Safari cannot
+  // auto-close the transaction during a crypto.subtle await.
+  async function reconcileCollection<T extends { id: string; updatedAt: number }>(
+    table: import('dexie').Table<T, string>,
+    remoteEntities: T[],
+  ): Promise<T[]> {
+    const localMap = new Map<string, T>();
+    for (const e of await table.toArray()) localMap.set(e.id, e);
 
-      const toPut: T[] = [];
-      for (const remote of remoteEntities) {
-        const local = localMap.get(remote.id);
-        if (!local) {
-          toPut.push(remote);
-        } else {
-          const merged = mergeEntity(
-            local as unknown as Record<string, unknown>,
-            remote as unknown as Record<string, unknown>,
-            remote.updatedAt,
-          );
-          if (merged) toPut.push(merged as unknown as T);
-        }
+    const toPut: T[] = [];
+    for (const remote of remoteEntities) {
+      const local = localMap.get(remote.id);
+      if (!local) {
+        toPut.push(remote);
+      } else {
+        const merged = mergeEntity(
+          local as unknown as Record<string, unknown>,
+          remote as unknown as Record<string, unknown>,
+          remote.updatedAt,
+        );
+        if (merged) toPut.push(merged as unknown as T);
       }
-      if (toPut.length > 0) await table.bulkPut(toPut);
     }
+    return toPut;
+  }
 
-    await reconcileCollection(db.taskLists, snapshot.taskLists);
-    await reconcileCollection(db.tasks, snapshot.tasks);
-    await reconcileCollection(db.subtasks, snapshot.subtasks);
+  const [taskListsToPut, tasksToPut, subtasksToPut] = await Promise.all([
+    reconcileCollection(db.taskLists, snapshot.taskLists),
+    reconcileCollection(db.tasks, snapshot.tasks),
+    reconcileCollection(db.subtasks, snapshot.subtasks),
+  ]);
+  const [taskLists, tasks, subtasks] = await Promise.all([
+    prepareEntityRowsForAtRest('taskLists', taskListsToPut),
+    prepareEntityRowsForAtRest('tasks', tasksToPut),
+    prepareEntityRowsForAtRest('subtasks', subtasksToPut),
+  ]);
+
+  await db.transaction('rw', [db.taskLists, db.tasks, db.subtasks], async () => {
+    if (taskLists.length > 0) await db.taskLists.bulkPut(taskLists);
+    if (tasks.length > 0) await db.tasks.bulkPut(tasks);
+    if (subtasks.length > 0) await db.subtasks.bulkPut(subtasks);
   });
 
   // Reconcile pomodoro settings (outside entity transaction)
@@ -91,6 +105,18 @@ async function reconcileFromSnapshot(snapshot: SyncData) {
       }
     }
   }
+}
+
+async function replaceLocalEntitiesFromSnapshot(snapshot: Pick<SyncData, 'taskLists' | 'tasks' | 'subtasks'>): Promise<void> {
+  const prepared = await prepareSyncDataForAtRest(snapshot);
+  await db.transaction('rw', [db.taskLists, db.tasks, db.subtasks], async () => {
+    await db.taskLists.clear();
+    await db.tasks.clear();
+    await db.subtasks.clear();
+    await db.taskLists.bulkPut(prepared.taskLists);
+    await db.tasks.bulkPut(prepared.tasks);
+    await db.subtasks.bulkPut(prepared.subtasks);
+  });
 }
 
 // --- Safe JSON parsing ---
@@ -678,14 +704,7 @@ export async function syncNow(manual = false, pushLimit?: number): Promise<numbe
         snapshot = await decryptSyncData(encKey, snapshot);
       }
 
-      await db.transaction('rw', [db.taskLists, db.tasks, db.subtasks], async () => {
-        await db.taskLists.clear();
-        await db.tasks.clear();
-        await db.subtasks.clear();
-        await db.taskLists.bulkPut(snapshot.taskLists);
-        await db.tasks.bulkPut(snapshot.tasks);
-        await db.subtasks.bulkPut(snapshot.subtasks);
-      });
+      await replaceLocalEntitiesFromSnapshot(snapshot);
       if (snapshot.pomodoroSettings) {
         await db.pomodoroSettings.put(snapshot.pomodoroSettings);
       }
@@ -777,14 +796,7 @@ export async function syncNow(manual = false, pushLimit?: number): Promise<numbe
           snapshot = await decryptSyncData(encKey, snapshot);
         }
 
-        await db.transaction('rw', [db.taskLists, db.tasks, db.subtasks], async () => {
-          await db.taskLists.clear();
-          await db.tasks.clear();
-          await db.subtasks.clear();
-          await db.taskLists.bulkPut(snapshot.taskLists);
-          await db.tasks.bulkPut(snapshot.tasks);
-          await db.subtasks.bulkPut(snapshot.subtasks);
-        });
+        await replaceLocalEntitiesFromSnapshot(snapshot);
         if (snapshot.pomodoroSettings) {
           await db.pomodoroSettings.put(snapshot.pomodoroSettings);
         }
@@ -1431,14 +1443,7 @@ export async function forcePull() {
     reportProgress('applying', 'Applying data...', 0.6);
 
     // Apply snapshot as full state
-    await db.transaction('rw', [db.taskLists, db.tasks, db.subtasks], async () => {
-      await db.taskLists.clear();
-      await db.tasks.clear();
-      await db.subtasks.clear();
-      await db.taskLists.bulkPut(snapshot.taskLists);
-      await db.tasks.bulkPut(snapshot.tasks);
-      await db.subtasks.bulkPut(snapshot.subtasks);
-    });
+    await replaceLocalEntitiesFromSnapshot(snapshot);
     if (snapshot.pomodoroSettings) {
       await db.pomodoroSettings.put(snapshot.pomodoroSettings);
     }
@@ -1575,13 +1580,10 @@ export async function importData(data: ImportData) {
     }
 
     // Replace local data
-    await db.transaction('rw', [db.taskLists, db.tasks, db.subtasks], async () => {
-      await db.taskLists.clear();
-      await db.tasks.clear();
-      await db.subtasks.clear();
-      await db.taskLists.bulkPut(data.taskLists);
-      await db.tasks.bulkPut(validTasks);
-      await db.subtasks.bulkPut(validSubtasks);
+    await replaceLocalEntitiesFromSnapshot({
+      taskLists: data.taskLists,
+      tasks: validTasks,
+      subtasks: validSubtasks,
     });
     if (data.pomodoroSettings) {
       await db.pomodoroSettings.put(data.pomodoroSettings);
@@ -1710,14 +1712,7 @@ export async function restoreFromBackup(tier: BackupTier) {
     }
 
     // Replace local data
-    await db.transaction('rw', [db.taskLists, db.tasks, db.subtasks], async () => {
-      await db.taskLists.clear();
-      await db.tasks.clear();
-      await db.subtasks.clear();
-      await db.taskLists.bulkPut(backupData.taskLists);
-      await db.tasks.bulkPut(backupData.tasks);
-      await db.subtasks.bulkPut(backupData.subtasks);
-    });
+    await replaceLocalEntitiesFromSnapshot(backupData);
     if (backupData.pomodoroSettings) {
       await db.pomodoroSettings.put(backupData.pomodoroSettings);
     }
