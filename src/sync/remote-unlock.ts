@@ -20,12 +20,14 @@ import { wrapDekWithRuk, unlockWithRemoteKey, clearRemoteUnlock, getVaultSecrets
 export { isRemoteUnlockEnrolled } from '../db/vault'; // re-exported so the UI imports it from one place
 import { getCachedSalt } from './crypto';
 import { deriveRegistryMacKey } from './remote-unlock-crypto';
+import { recordError } from '../lib/diagnostics';
 
 // --- Mailbox file paths (live in the existing sync repo) ---
 export const REGISTRY_PATH = 'gtd25-devices.json';
 export const unlockReqPath = (deviceId: string): string => `gtd25-unlock-req-${deviceId}.json`;
 export const unlockRespPath = (deviceId: string): string => `gtd25-unlock-resp-${deviceId}.json`;
 export const cmdPath = (deviceId: string): string => `gtd25-cmd-${deviceId}.json`;
+export const wipeStatusPath = (deviceId: string): string => `gtd25-wipe-status-${deviceId}.json`;
 
 // --- Device identity (persisted plaintext in localSettings) ---
 
@@ -154,6 +156,16 @@ const te = new TextEncoder();
 function wipeBytes(c: { target: string; nonce: string; ts: number }): Uint8Array {
   return te.encode(`wipe|${c.target}|${c.nonce}|${c.ts}`);
 }
+function wipeStatusBytes(s: {
+  target: string;
+  commandNonce: string;
+  commandTs: number;
+  wipedAt: number;
+  fromApproverDeviceId: string;
+  protectedDeviceId: string;
+}): Uint8Array {
+  return te.encode(`wipe-status|${s.target}|${s.commandNonce}|${s.commandTs}|${s.wipedAt}|${s.fromApproverDeviceId}|${s.protectedDeviceId}`);
+}
 function requestBytes(r: { fromDeviceId: string; nonce: string; ts: number; kForApprover: Record<string, EciesBlob> }): Uint8Array {
   const ks = Object.keys(r.kForApprover).sort().map((id) => `${id}:${r.kForApprover[id].epk.x}:${r.kForApprover[id].ct}`).join(',');
   return te.encode(`req|${r.fromDeviceId}|${r.nonce}|${r.ts}|${ks}`);
@@ -165,8 +177,28 @@ function responseBytes(r: { forNonce: string; fromApproverDeviceId: string; ts: 
 // --- Wire shapes ---
 interface ApproverInvite { fromDeviceId: string; fromName: string; fromEcdsaPub: JsonWebKey; rukEcies: EciesBlob; ts: number }
 interface WipeCommand { target: string; nonce: string; ts: number; from: string; sig: string }
+interface WipeStatus { target: string; commandNonce: string; commandTs: number; wipedAt: number; fromApproverDeviceId: string; protectedDeviceId: string; sig: string }
 interface UnlockRequest { fromDeviceId: string; nonce: string; ts: number; kForApprover: Record<string, EciesBlob>; sig: string }
 interface UnlockResponse { forNonce: string; fromApproverDeviceId: string; ts: number; respBlob: string; sig: string }
+
+export interface ManagedDevice {
+  deviceId: string;
+  name: string;
+  lastWipeCommand?: { nonce: string; sentAt: number };
+  lastWipeAck?: { commandNonce: string; wipedAt: number; verifiedAt: number };
+}
+
+export interface WipeCommandReceipt {
+  nonce: string;
+  ts: number;
+}
+
+export interface VerifiedWipeStatus {
+  commandNonce: string;
+  commandTs: number;
+  wipedAt: number;
+  fromApproverDeviceId: string;
+}
 
 // === Paranoid device (unlocked): enroll / disable remote unlock+wipe ===
 
@@ -283,13 +315,18 @@ export async function pollApproverInbox(pat: string, repo: string, deviceId: str
 }
 
 /** Devices this (approver) device is enrolled to unlock/wipe. */
-export async function listApprovedDevices(): Promise<Array<{ deviceId: string; name: string }>> {
+export async function listApprovedDevices(): Promise<ManagedDevice[]> {
   const local = await db.localSettings.get('local');
-  return Object.entries(local?.remoteApproverFor ?? {}).map(([deviceId, v]) => ({ deviceId, name: v.name }));
+  return Object.entries(local?.remoteApproverFor ?? {}).map(([deviceId, v]) => ({
+    deviceId,
+    name: v.name,
+    lastWipeCommand: v.lastWipeCommand,
+    lastWipeAck: v.lastWipeAck,
+  }));
 }
 
 /** Approver: sign and post a remote-wipe command for an enrolled device. */
-export async function sendRemoteWipe(pat: string, repo: string, targetDeviceId: string): Promise<void> {
+export async function sendRemoteWipe(pat: string, repo: string, targetDeviceId: string): Promise<WipeCommandReceipt> {
   if (isParanoidFlagSet()) throw new Error('A Paranoid device cannot issue remote-wipe commands');
   const local = await db.localSettings.get('local');
   const me = local?.deviceId ?? 'unknown';
@@ -301,6 +338,35 @@ export async function sendRemoteWipe(pat: string, repo: string, targetDeviceId: 
   const path = cmdPath(targetDeviceId);
   const existing = await getFile(pat, repo, path);
   await putFile(pat, repo, path, JSON.stringify(cmd), existing?.sha);
+  await updateManagedDevice(targetDeviceId, {
+    lastWipeCommand: { nonce: base.nonce, sentAt: base.ts },
+    lastWipeAck: undefined,
+  });
+  return base;
+}
+
+async function updateManagedDevice(
+  targetDeviceId: string,
+  patch: Partial<ManagedDevice>,
+): Promise<void> {
+  const local = await db.localSettings.get('local');
+  const entry = local?.remoteApproverFor?.[targetDeviceId];
+  if (!entry) return;
+  await db.localSettings.update('local', {
+    remoteApproverFor: {
+      ...(local?.remoteApproverFor ?? {}),
+      [targetDeviceId]: { ...entry, ...patch },
+    },
+  });
+}
+
+async function deleteRemoteFileIfExists(pat: string, repo: string, path: string): Promise<void> {
+  try {
+    const file = await getFile(pat, repo, path);
+    if (file) await deleteFile(pat, repo, path, file.sha);
+  } catch (err) {
+    recordError('remoteUnlock.deleteRemoteFile', err);
+  }
 }
 
 // === Locked device: poll for commands (wipe) and unlock responses ===
@@ -318,8 +384,13 @@ export async function pollRemoteCommands(pat: string, repo: string, deviceId: st
   const cmd = (() => { try { return JSON.parse(res.data) as WipeCommand; } catch { return null; } })();
   if (cmd && cmd.target === deviceId && typeof cmd.sig === 'string') {
     const approvers = await approverVerifyKeys();
-    for (const ecdsaPub of approvers) {
-      if (await verifyPayload(ecdsaPub, cmd.sig, wipeBytes({ target: cmd.target, nonce: cmd.nonce, ts: cmd.ts }))) {
+    for (const approver of approvers) {
+      if (await verifyPayload(approver.ecdsaPub, cmd.sig, wipeBytes({ target: cmd.target, nonce: cmd.nonce, ts: cmd.ts }))) {
+        try {
+          await publishWipeStatus(pat, repo, cmd, approver.deviceId, deviceId);
+        } catch (err) {
+          recordError('remoteUnlock.publishWipeStatus', err);
+        }
         const { panicWipe } = await import('../lib/panic-wipe');
         await panicWipe();
         return { etag: res.etag, wiped: true };
@@ -330,9 +401,116 @@ export async function pollRemoteCommands(pat: string, repo: string, deviceId: st
 }
 
 /** Cached approver verify-keys for THIS protected device (from the vault). */
-async function approverVerifyKeys(): Promise<JsonWebKey[]> {
+async function approverVerifyKeys(): Promise<Array<{ deviceId: string; ecdsaPub: JsonWebKey }>> {
   const vault = await db.vault.get('vault');
-  return (vault?.remoteUnlock?.approvers ?? []).map((a) => a.ecdsaPub);
+  return (vault?.remoteUnlock?.approvers ?? []).map((a) => ({ deviceId: a.deviceId, ecdsaPub: a.ecdsaPub }));
+}
+
+async function publishWipeStatus(
+  pat: string,
+  repo: string,
+  cmd: WipeCommand,
+  fromApproverDeviceId: string,
+  protectedDeviceId: string,
+): Promise<void> {
+  const local = await db.localSettings.get('local');
+  const identity = local?.deviceIdentity;
+  if (!identity) throw new Error('This device has no identity key for wipe confirmation');
+  const base = {
+    target: protectedDeviceId,
+    commandNonce: cmd.nonce,
+    commandTs: cmd.ts,
+    wipedAt: Date.now(),
+    fromApproverDeviceId,
+    protectedDeviceId,
+  };
+  const sig = await signPayload(identity.ecdsaPriv, wipeStatusBytes(base));
+  const status: WipeStatus = { ...base, sig };
+  const path = wipeStatusPath(protectedDeviceId);
+  const existing = await getFile(pat, repo, path);
+  await putFile(pat, repo, path, JSON.stringify(status), existing?.sha, undefined, { keepalive: true });
+}
+
+export async function readRemoteWipeStatus(
+  pat: string,
+  repo: string,
+  targetDeviceId: string,
+): Promise<VerifiedWipeStatus | null> {
+  if (isParanoidFlagSet()) return null;
+  const local = await db.localSettings.get('local');
+  const entry = local?.remoteApproverFor?.[targetDeviceId];
+  if (!entry) return null;
+  const file = await getFile(pat, repo, wipeStatusPath(targetDeviceId));
+  if (!file) return null;
+  const status = (() => { try { return JSON.parse(file.data) as WipeStatus; } catch { return null; } })();
+  if (!status || status.target !== targetDeviceId || status.protectedDeviceId !== targetDeviceId || typeof status.sig !== 'string') {
+    return null;
+  }
+  const ok = await verifyPayload(entry.ecdsaPub, status.sig, wipeStatusBytes({
+    target: status.target,
+    commandNonce: status.commandNonce,
+    commandTs: status.commandTs,
+    wipedAt: status.wipedAt,
+    fromApproverDeviceId: status.fromApproverDeviceId,
+    protectedDeviceId: status.protectedDeviceId,
+  }));
+  if (!ok) return null;
+  return {
+    commandNonce: status.commandNonce,
+    commandTs: status.commandTs,
+    wipedAt: status.wipedAt,
+    fromApproverDeviceId: status.fromApproverDeviceId,
+  };
+}
+
+export async function refreshManagedDeviceWipeStatuses(pat: string, repo: string): Promise<ManagedDevice[]> {
+  if (isParanoidFlagSet()) return [];
+  const local = await db.localSettings.get('local');
+  const current = { ...(local?.remoteApproverFor ?? {}) };
+  let changed = false;
+  for (const [deviceId, entry] of Object.entries(current)) {
+    const status = await readRemoteWipeStatus(pat, repo, deviceId);
+    if (!status) continue;
+    const lastCommand = entry.lastWipeCommand;
+    const isCurrentOrNewer = !lastCommand ||
+      status.commandNonce === lastCommand.nonce ||
+      status.commandTs >= lastCommand.sentAt;
+    if (!isCurrentOrNewer) continue;
+    current[deviceId] = {
+      ...entry,
+      lastWipeAck: {
+        commandNonce: status.commandNonce,
+        wipedAt: status.wipedAt,
+        verifiedAt: Date.now(),
+      },
+    };
+    changed = true;
+  }
+  if (changed) await db.localSettings.update('local', { remoteApproverFor: current });
+  return listApprovedDevices();
+}
+
+export async function purgeManagedDevice(pat: string, repo: string, targetDeviceId: string): Promise<void> {
+  if (isParanoidFlagSet()) throw new Error('A Paranoid device cannot manage remote wipe records');
+  const status = await readRemoteWipeStatus(pat, repo, targetDeviceId);
+  if (status) {
+    await updateManagedDevice(targetDeviceId, {
+      lastWipeAck: { commandNonce: status.commandNonce, wipedAt: status.wipedAt, verifiedAt: Date.now() },
+    });
+  }
+  const local = await db.localSettings.get('local');
+  const current = { ...(local?.remoteApproverFor ?? {}) };
+  const entry = current[targetDeviceId];
+  if (!entry?.lastWipeAck) throw new Error('Purge is only available after a verified wipe confirmation');
+
+  await Promise.all([
+    deleteRemoteFileIfExists(pat, repo, cmdPath(targetDeviceId)),
+    deleteRemoteFileIfExists(pat, repo, wipeStatusPath(targetDeviceId)),
+    deleteRemoteFileIfExists(pat, repo, unlockReqPath(targetDeviceId)),
+    deleteRemoteFileIfExists(pat, repo, unlockRespPath(targetDeviceId)),
+  ]);
+  delete current[targetDeviceId];
+  await db.localSettings.update('local', { remoteApproverFor: current });
 }
 
 // --- Unlock exchange (laptop side, while locked) ---

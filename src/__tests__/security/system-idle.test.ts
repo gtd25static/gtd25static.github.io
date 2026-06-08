@@ -23,6 +23,7 @@ function installFakeIdleDetector(permission: PermissionState) {
 
 afterEach(() => {
   delete (globalThis as GlobalWithIdle).IdleDetector;
+  vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
@@ -61,5 +62,68 @@ describe('system-idle (IdleDetector)', () => {
     detector.screenState = 'locked';
     detector.cb();                  // screen locked -> lock
     expect(onLock).toHaveBeenCalledTimes(2);
+  });
+
+  it('defers screen-lock app lock when a grace period is configured', async () => {
+    vi.useFakeTimers();
+    const detector = installFakeIdleDetector('granted');
+    const onLock = vi.fn();
+
+    await startSystemIdleLock(60_000, onLock, { screenLockGraceMs: 10 * 60_000 });
+
+    detector.screenState = 'locked';
+    detector.cb();
+    expect(onLock).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(10 * 60_000 - 1);
+    expect(onLock).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(1);
+    expect(onLock).toHaveBeenCalledTimes(1);
+  });
+
+  it('cancels deferred screen-lock app lock when the screen unlocks', async () => {
+    vi.useFakeTimers();
+    const detector = installFakeIdleDetector('granted');
+    const onLock = vi.fn();
+
+    await startSystemIdleLock(60_000, onLock, { screenLockGraceMs: 10 * 60_000 });
+
+    detector.screenState = 'locked';
+    detector.cb();
+    detector.screenState = 'unlocked';
+    detector.userState = 'active';
+    detector.cb();
+
+    vi.advanceTimersByTime(10 * 60_000);
+    expect(onLock).not.toHaveBeenCalled();
+  });
+
+  it('still locks immediately on system idle when screen-lock grace is configured', async () => {
+    vi.useFakeTimers();
+    const detector = installFakeIdleDetector('granted');
+    const onLock = vi.fn();
+
+    await startSystemIdleLock(60_000, onLock, { screenLockGraceMs: 10 * 60_000 });
+
+    detector.userState = 'idle';
+    detector.cb();
+
+    expect(onLock).toHaveBeenCalledTimes(1);
+  });
+
+  it('clears a pending screen-lock timer when stopped', async () => {
+    vi.useFakeTimers();
+    const detector = installFakeIdleDetector('granted');
+    const onLock = vi.fn();
+
+    const stop = await startSystemIdleLock(60_000, onLock, { screenLockGraceMs: 10 * 60_000 });
+    detector.screenState = 'locked';
+    detector.cb();
+
+    stop();
+    vi.advanceTimersByTime(10 * 60_000);
+
+    expect(onLock).not.toHaveBeenCalled();
   });
 });

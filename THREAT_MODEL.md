@@ -1,6 +1,6 @@
 # GTD25 — Security Review & Threat Model
 
-**Last updated:** 2026-06-08 (locked-screen update recovery: same-commit service-worker refreshes are suppressed; unlocked Paranoid updates defer until lock and confirm after install)
+**Last updated:** 2026-06-08 (remote wipe polls while unlocked and writes signed best-effort confirmations; optional 10-minute app-lock grace after OS screen lock)
 **Maintenance:** This document MUST be kept current. See "Keeping this document
 updated" at the end and the corresponding rule in `CLAUDE.md`.
 
@@ -212,7 +212,10 @@ cache.
 - **Paranoid ON + UNLOCKED — 🔴.** While unlocked, the **DEK**, decrypted data,
   PAT, syncPassword and the derived sync key are in memory. At-rest encryption
   does **not** defend a live memory capture. This is the fundamental limit of
-  any in-browser scheme.
+  any in-browser scheme. If the optional **10-minute screen-lock grace** is enabled,
+  an OS screen-lock event does not immediately drop the DEK; the app remains in this
+  unlocked category until the grace expires, unless the screen unlocks/activity
+  resumes first (which cancels the pending app lock) or another lock path fires.
 - **Paranoid ON + LOCKED — 🟠.** On lock the app drops the DEK (`currentDek=null`),
   clears cached secrets, and clears the sync key; the encrypted data lives in
   IndexedDB, not necessarily in the heap. A dump taken while locked recovers
@@ -358,8 +361,14 @@ syncPassword-derived HMAC**.
   *signed* message; a captured **PAT alone cannot forge it**. Worst case (an attacker
   holding a *trusted device's* signing key) destroys local encrypted data the
   attacker could not read anyway — recoverable by re-syncing. **Delivery requires the
-  locked device's app to be open and online** (it polls; a powered-off/closed device
-  receives the command on next open).
+  protected device's app to be open and online** (it polls whether the vault is
+  locked or unlocked; a powered-off/closed device receives the command on next open).
+  Before wiping, the protected device best-effort writes a **protected-device-signed**
+  wipe confirmation (`gtd25-wipe-status-{deviceId}.json`) so the trusted device can
+  show "wipe confirmed" and purge the managed-device entry + remote command/status
+  files. Confirmation is not guaranteed: if the device loses network after receiving
+  a valid command but before writing the status, it still wipes and the trusted
+  device remains at "sent / pending confirmation".
 
 ---
 
@@ -371,7 +380,8 @@ syncPassword-derived HMAC**.
   un-expose it. Key rotation is **forward-secret only**.
 - **Client-side timed/failure wipes only run when our code runs** — useless
   against an offline disk image or memory dump. The same applies to **remote wipe**
-  (Scenario 8): it is delivered only while the locked app is open and online.
+  (Scenario 8): it is delivered only while the protected app is open and online
+  (locked or unlocked).
 - **What runs while locked is minimal but no longer nil:** the app-wide service
   worker update detector/prompt stays mounted on the lock screen so a broken
   locked build can be refreshed without wiping. It can check public update
@@ -384,10 +394,13 @@ syncPassword-derived HMAC**.
   stores a short-lived, non-sensitive local marker before a Paranoid update
   (`from`/`to` build commits + timestamp only) and shows an "updated; vault locked"
   banner after the running build changes. If remote unlock/wipe is enrolled
-  (Scenario 8), the lock screen also polls the backend mailbox
-  (conditional requests) and can run `panicWipe` on an approver-signed command or
-  unlock on an approved response. That remote path uses the plaintext PAT and
-  never touches decrypted content before unlock.
+  (Scenario 8), an always-mounted wipe watcher polls the backend mailbox
+  (conditional requests) and can run `panicWipe` on an approver-signed command while
+  the app is locked **or unlocked**; the lock screen separately polls for approved
+  unlock responses. That remote path uses the plaintext PAT and does not read
+  decrypted task content. If the optional 10-minute screen-lock grace is enabled,
+  screen-lock events schedule an app lock instead of dropping the DEK immediately;
+  system-idle events still lock normally. This is a convenience/security tradeoff.
 - **The two passwords have very different strength floors:** the vault passphrase
   uses Argon2id; the **syncPassword still uses PBKDF2‑600k** (kept for cross-device
   wire compatibility). The backend's confidentiality is bounded by the weaker one.
@@ -409,7 +422,8 @@ syncPassword-derived HMAC**.
    primary factor; treat a Google-synced phone passkey as a softer, cloud-recoverable
    convenience factor (Scenario 5). Remove lost/retired keys promptly.
 5. **Keep the idle/auto-lock window short** and lock before stepping away
-   (Scenario 3).
+   (Scenario 3). If you enable the 10-minute screen-lock grace, understand that
+   GTD25 may remain unlocked in browser memory during that grace.
 6. **Do setup / passphrase changes on a trusted device** (Scenario 5).
 7. Treat a complex passphrase as essential; a low-entropy one is the limiting
    factor for the disk-seizure case (Scenario 2).
@@ -419,6 +433,8 @@ syncPassword-derived HMAC**.
    control as approvers, confirm the fingerprint at enrolment, never approve an
    unlock prompt you did not initiate (and check the verification code), and accept
    that the PAT is plaintext at rest while it is enabled (use a least-privilege PAT).
+   Wipe confirmations are best-effort; a pending command may still have wiped the
+   device if it lost network before writing the signed status.
 
 ## 6. Summary matrix (content confidentiality)
 | # | Threat | Paranoid OFF | Paranoid ON |
@@ -429,7 +445,7 @@ syncPassword-derived HMAC**.
 | 5 | Keylogger | 🟠 syncPassword/PAT captured | 🟠 passphrase captured; 🟢 if security-key-only & untyped |
 | 6 | Repo name, no PAT | 🟢 if repo private | 🟢 if repo private |
 | 7 | Backend readable | 🟠 content to syncPassword strength; metadata fully exposed | 🟠 same (no effect) |
-| 8 | Remote unlock/wipe (opt-in) | n/a | 🟢 unlock is forward-secret vs disk+backend; ⚠️ PAT plaintext at rest; approver holds RUK (approver+disk = DEK); wipe = recoverable DoS |
+| 8 | Remote unlock/wipe (opt-in) | n/a | 🟢 unlock is forward-secret vs disk+backend; ⚠️ PAT plaintext at rest; approver holds RUK (approver+disk = DEK); wipe = recoverable DoS with best-effort signed confirmation |
 
 ---
 

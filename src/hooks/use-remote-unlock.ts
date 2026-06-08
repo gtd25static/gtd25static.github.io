@@ -28,7 +28,6 @@ export function useLockScreenRemote() {
   const [error, setError] = useState('');
   const ctx = useRef<{ pat: string; repo: string; deviceId: string } | null>(null);
   const reqEtag = useRef<string | null>(null);
-  const cmdEtag = useRef<string | null>(null);
   const pending = useRef(false);
 
   useEffect(() => {
@@ -50,11 +49,6 @@ export function useLockScreenRemote() {
   const tick = useCallback(async () => {
     const c = ctx.current;
     if (!c) return;
-    try {
-      const w = await pollRemoteCommands(c.pat, c.repo, c.deviceId, cmdEtag.current);
-      cmdEtag.current = w.etag;
-      if (w.wiped) return; // panicWipe reloads the page
-    } catch { /* transient */ }
     if (pending.current) {
       try {
         const r = await pollRemoteUnlock(c.pat, c.repo, c.deviceId, reqEtag.current);
@@ -101,6 +95,66 @@ export function useLockScreenRemote() {
   }, []);
 
   return { enrolled, code, error, request, cancel };
+}
+
+async function loadRemoteWipeContext(): Promise<{ pat: string; repo: string; deviceId: string } | null> {
+  if (!isParanoidFlagSet()) return null;
+  const [pat, repo, on] = await Promise.all([getMailboxPat(), getRepo(), isRemoteUnlockEnrolled()]);
+  const local = await db.localSettings.get('local');
+  if (!pat || !repo || !local?.deviceId || !on) return null;
+  return { pat, repo, deviceId: local.deviceId };
+}
+
+/**
+ * Protected-device hook: poll for approver-signed remote wipe commands while the
+ * app is open, whether the vault is locked or unlocked. It deliberately avoids
+ * decrypted task data; it only uses the plaintext mailbox PAT kept for enrolled
+ * remote unlock/wipe devices.
+ */
+export function useRemoteWipeCommands() {
+  const etag = useRef<string | null>(null);
+  const lastKey = useRef('');
+  const busy = useRef(false);
+
+  const tick = useCallback(async () => {
+    if (busy.current) return;
+    busy.current = true;
+    try {
+      const ctx = await loadRemoteWipeContext();
+      if (!ctx) {
+        etag.current = null;
+        lastKey.current = '';
+        return;
+      }
+      const key = `${ctx.repo}:${ctx.deviceId}`;
+      if (key !== lastKey.current) {
+        etag.current = null;
+        lastKey.current = key;
+      }
+      const w = await pollRemoteCommands(ctx.pat, ctx.repo, ctx.deviceId, etag.current);
+      etag.current = w.etag;
+    } catch {
+      // Transient DB/network errors are retried on the next cadence.
+    } finally {
+      busy.current = false;
+    }
+  }, []);
+
+  useEffect(() => {
+    let stopped = false;
+    const run = () => { if (!stopped) void tick(); };
+    run();
+    const timer = setInterval(run, SLOW_POLL_MS);
+    const onVis = () => { if (document.visibilityState === 'visible') run(); };
+    document.addEventListener('visibilitychange', onVis);
+    window.addEventListener('online', run);
+    return () => {
+      stopped = true;
+      clearInterval(timer);
+      document.removeEventListener('visibilitychange', onVis);
+      window.removeEventListener('online', run);
+    };
+  }, [tick]);
 }
 
 export interface ApprovalRequest { deviceId: string; fromName: string; nonce: string; code: string; expiresAt: number }

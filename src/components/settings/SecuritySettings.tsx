@@ -15,7 +15,8 @@ import { isWebAuthnSupported } from '../../sync/webauthn-prf';
 import {
   isRemoteUnlockEnrolled, listEnrolledApprovers, listApproverCandidates, buildEnrollContext,
   enableRemoteUnlock, addApprovers, disableRemoteUnlock, setDeviceName, getDeviceName,
-  publishOwnRegistryEntry, listApprovedDevices, sendRemoteWipe, pollApproverInbox, type RegistryEntry,
+  publishOwnRegistryEntry, listApprovedDevices, sendRemoteWipe, pollApproverInbox,
+  refreshManagedDeviceWipeStatuses, purgeManagedDevice, type RegistryEntry, type ManagedDevice,
 } from '../../sync/remote-unlock';
 import { identityFingerprint } from '../../sync/remote-unlock-crypto';
 import { panicWipe } from '../../lib/panic-wipe';
@@ -172,7 +173,7 @@ function SecurityKeySection({ hasSecurityKey }: { hasSecurityKey: boolean }) {
   );
 }
 
-function SystemIdleToggle({ enabled }: { enabled: boolean }) {
+function SystemIdleToggle({ enabled, graceEnabled }: { enabled: boolean; graceEnabled: boolean }) {
   const supported = isSystemIdleSupported();
   const [busy, setBusy] = useState(false);
 
@@ -205,6 +206,30 @@ function SystemIdleToggle({ enabled }: { enabled: boolean }) {
           <Button size="sm" variant="secondary" onClick={toggle} disabled={busy}>
             {enabled ? 'Disable system idle lock' : 'Enable system idle lock'}
           </Button>
+          {enabled && (
+            <label className="flex items-start gap-2 rounded-md bg-zinc-50 p-2 text-xs text-zinc-600 dark:bg-zinc-800/40 dark:text-zinc-300">
+              <input
+                type="checkbox"
+                checked={graceEnabled}
+                onChange={async (e) => {
+                  await updateLocalSettings({ paranoidSystemLockGraceEnabled: e.target.checked });
+                  toast(
+                    e.target.checked
+                      ? 'Will wait 10 minutes after screen lock before locking GTD25'
+                      : 'Will lock GTD25 immediately on screen lock',
+                    'success',
+                  );
+                }}
+                className="mt-0.5 rounded accent-accent-600"
+              />
+              <span>
+                Delay GTD25 lock for 10 minutes after screen lock
+                <span className="block text-[11px] text-zinc-400 dark:text-zinc-500">
+                  Avoids a full app unlock for brief macOS locks. System idle still locks normally.
+                </span>
+              </span>
+            </label>
+          )}
         </>
       ) : (
         <p className="text-xs text-zinc-400 dark:text-zinc-500">
@@ -215,7 +240,7 @@ function SystemIdleToggle({ enabled }: { enabled: boolean }) {
   );
 }
 
-function ManageForm({ idleMinutes, maxAttempts, systemIdleOn, hasSecurityKey }: { idleMinutes: number; maxAttempts: number; systemIdleOn: boolean; hasSecurityKey: boolean }) {
+function ManageForm({ idleMinutes, maxAttempts, systemIdleOn, systemLockGraceOn, hasSecurityKey }: { idleMinutes: number; maxAttempts: number; systemIdleOn: boolean; systemLockGraceOn: boolean; hasSecurityKey: boolean }) {
   const [idle, setIdle] = useState(String(idleMinutes));
   const [attempts, setAttempts] = useState(String(maxAttempts));
   const [newPass, setNewPass] = useState('');
@@ -356,7 +381,7 @@ function ManageForm({ idleMinutes, maxAttempts, systemIdleOn, hasSecurityKey }: 
         <Button size="sm" variant="secondary" onClick={handleChangePass} disabled={busy}>Change passphrase</Button>
       </div>
 
-      <SystemIdleToggle enabled={systemIdleOn} />
+      <SystemIdleToggle enabled={systemIdleOn} graceEnabled={systemLockGraceOn} />
 
       <SecurityKeySection hasSecurityKey={hasSecurityKey} />
 
@@ -546,14 +571,42 @@ function DeviceNameSection() {
   );
 }
 
+function formatRemoteWipeTime(ts: number): string {
+  return new Date(ts).toLocaleString();
+}
+
 // Approver side (this device is NOT Paranoid): manage devices it can unlock/wipe.
 function ApproverDevicesSection() {
   const local = useLocalSettings();
-  const [managed, setManaged] = useState<Array<{ deviceId: string; name: string }>>([]);
+  const [managed, setManaged] = useState<ManagedDevice[]>([]);
   const [busy, setBusy] = useState(false);
 
   const reload = useCallback(async () => { setManaged(await listApprovedDevices()); }, []);
   useEffect(() => { void reload(); }, [reload]);
+
+  const refreshStatuses = useCallback(async (quiet = false) => {
+    if (!local.githubPat || !local.githubRepo) {
+      if (!quiet) toast('Set up GitHub sync first', 'error');
+      return;
+    }
+    if (!quiet) setBusy(true);
+    try {
+      const next = await refreshManagedDeviceWipeStatuses(local.githubPat, local.githubRepo);
+      setManaged(next);
+      if (!quiet) toast('Wipe status refreshed', 'info');
+    } catch (e) {
+      recordError('remoteUnlock.refreshWipeStatus', e);
+      if (!quiet) toast(e instanceof Error ? e.message : 'Could not refresh wipe status', 'error');
+    } finally {
+      if (!quiet) setBusy(false);
+    }
+  }, [local.githubPat, local.githubRepo]);
+
+  useEffect(() => {
+    if (!local.githubPat || !local.githubRepo || managed.length === 0) return;
+    const timer = setInterval(() => { void refreshStatuses(true); }, 12_000);
+    return () => clearInterval(timer);
+  }, [local.githubPat, local.githubRepo, managed.length, refreshStatuses]);
 
   async function checkInvites() {
     if (!local.githubPat || !local.githubRepo || !local.deviceId) { toast('Set up GitHub sync first', 'error'); return; }
@@ -568,17 +621,38 @@ function ApproverDevicesSection() {
     } finally { setBusy(false); }
   }
 
-  async function wipe(deviceId: string, name: string) {
-    const ok = await confirmDialog(`Remotely wipe “${name}”? Its local data is erased the next time it is online with the app open. Synced data is unaffected. Cannot be undone.`, { confirmLabel: 'Send wipe command', danger: true });
+  async function wipe(deviceId: string, name: string, resend = false) {
+    const ok = await confirmDialog(`${resend ? 'Resend the remote wipe command to' : 'Remotely wipe'} “${name}”? Its local data is erased the next time it is online with the app open. Synced data is unaffected. Cannot be undone.`, { confirmLabel: resend ? 'Resend wipe command' : 'Send wipe command', danger: true });
     if (!ok) return;
     setBusy(true);
     try {
       await sendRemoteWipe(local.githubPat!, local.githubRepo!, deviceId);
+      await reload();
       toast('Wipe command sent', 'success');
     } catch (e) {
       recordError('remoteUnlock.sendWipe', e);
       toast(e instanceof Error ? e.message : 'Could not send wipe', 'error');
     } finally { setBusy(false); }
+  }
+
+  async function purge(deviceId: string, name: string) {
+    const ok = await confirmDialog(`Purge “${name}” from this trusted device? This removes the local management entry and best-effort deletes remote wipe command/status files. Synced task data is unaffected.`, { confirmLabel: 'Purge device', danger: true });
+    if (!ok) return;
+    setBusy(true);
+    try {
+      await purgeManagedDevice(local.githubPat!, local.githubRepo!, deviceId);
+      await reload();
+      toast('Wiped device purged', 'success');
+    } catch (e) {
+      recordError('remoteUnlock.purgeManagedDevice', e);
+      toast(e instanceof Error ? e.message : 'Could not purge device', 'error');
+    } finally { setBusy(false); }
+  }
+
+  function wipeStatus(m: ManagedDevice): string {
+    if (m.lastWipeAck) return `Wipe confirmed ${formatRemoteWipeTime(m.lastWipeAck.wipedAt)}`;
+    if (m.lastWipeCommand) return `Wipe command sent ${formatRemoteWipeTime(m.lastWipeCommand.sentAt)} · awaiting confirmation`;
+    return 'No wipe command sent';
   }
 
   return (
@@ -591,9 +665,25 @@ function ApproverDevicesSection() {
       {managed.length > 0 ? (
         <ul className="space-y-1">
           {managed.map((m) => (
-            <li key={m.deviceId} className="flex items-center justify-between gap-2 rounded-md bg-zinc-50 px-2 py-1.5 dark:bg-zinc-800/40">
-              <span className="min-w-0 truncate text-xs text-zinc-700 dark:text-zinc-200">{m.name}</span>
-              <Button size="sm" variant="danger" onClick={() => wipe(m.deviceId, m.name)} disabled={busy}>Remote wipe</Button>
+            <li key={m.deviceId} className="flex flex-col gap-2 rounded-md bg-zinc-50 px-2 py-1.5 dark:bg-zinc-800/40">
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <p className="truncate text-xs font-medium text-zinc-700 dark:text-zinc-200">{m.name}</p>
+                  <p className={`text-[11px] ${m.lastWipeAck ? 'text-emerald-600 dark:text-emerald-400' : 'text-zinc-400 dark:text-zinc-500'}`}>
+                    {wipeStatus(m)}
+                  </p>
+                </div>
+                <div className="flex shrink-0 flex-wrap justify-end gap-1">
+                  <Button size="sm" variant="danger" onClick={() => wipe(m.deviceId, m.name, !!m.lastWipeCommand)} disabled={busy}>
+                    {m.lastWipeCommand ? 'Resend' : 'Remote wipe'}
+                  </Button>
+                  {m.lastWipeAck && (
+                    <Button size="sm" variant="secondary" onClick={() => purge(m.deviceId, m.name)} disabled={busy}>
+                      Purge
+                    </Button>
+                  )}
+                </div>
+              </div>
             </li>
           ))}
         </ul>
@@ -603,6 +693,11 @@ function ApproverDevicesSection() {
       <Button size="sm" variant="secondary" onClick={checkInvites} disabled={busy}>
         {busy ? 'Checking…' : 'Check for new invitations'}
       </Button>
+      {managed.length > 0 && (
+        <Button size="sm" variant="secondary" onClick={() => void refreshStatuses()} disabled={busy}>
+          Refresh wipe status
+        </Button>
+      )}
     </div>
   );
 }
@@ -624,6 +719,7 @@ export function SecuritySettings() {
       idleMinutes={local.paranoidIdleTimeoutMinutes ?? DEFAULT_IDLE_MINUTES}
       maxAttempts={local.paranoidMaxUnlockAttempts ?? DEFAULT_MAX_ATTEMPTS}
       systemIdleOn={!!local.paranoidSystemIdleLock}
+      systemLockGraceOn={!!local.paranoidSystemLockGraceEnabled}
       hasSecurityKey={hasSecurityKey}
     />
   );

@@ -18,6 +18,10 @@ interface IdleDetectorCtor {
   requestPermission(): Promise<PermissionState>;
 }
 
+export interface SystemIdleLockOptions {
+  screenLockGraceMs?: number;
+}
+
 function getCtor(): IdleDetectorCtor | null {
   return (globalThis as { IdleDetector?: IdleDetectorCtor }).IdleDetector ?? null;
 }
@@ -38,22 +42,54 @@ export async function requestSystemIdlePermission(): Promise<boolean> {
 }
 
 /**
- * Start watching for system idle / screen lock; calls onLock() when either is
- * reached. Returns a stop() function. No-op (returns a no-op stop) when the API
- * is unavailable or permission was not granted.
+ * Start watching for system idle / screen lock; calls onLock() when system idle
+ * is reached, and either immediately or after an optional grace when the screen
+ * locks. Returns a stop() function. No-op (returns a no-op stop) when the API is
+ * unavailable or permission was not granted.
  */
-export async function startSystemIdleLock(thresholdMs: number, onLock: () => void): Promise<() => void> {
+export async function startSystemIdleLock(
+  thresholdMs: number,
+  onLock: () => void,
+  options: SystemIdleLockOptions = {},
+): Promise<() => void> {
   const Ctor = getCtor();
   if (!Ctor) return () => {};
   try {
     const controller = new AbortController();
     const detector = new Ctor();
+    const screenLockGraceMs = Math.max(0, options.screenLockGraceMs ?? 0);
+    let screenLockTimer: ReturnType<typeof setTimeout> | null = null;
+    const clearScreenLockTimer = () => {
+      if (screenLockTimer) {
+        clearTimeout(screenLockTimer);
+        screenLockTimer = null;
+      }
+    };
+    const lockNow = () => {
+      clearScreenLockTimer();
+      onLock();
+    };
     detector.addEventListener('change', () => {
-      if (detector.userState === 'idle' || detector.screenState === 'locked') onLock();
+      if (detector.userState === 'idle') {
+        lockNow();
+        return;
+      }
+      if (detector.screenState === 'locked') {
+        if (screenLockGraceMs === 0) {
+          lockNow();
+        } else if (!screenLockTimer) {
+          screenLockTimer = setTimeout(lockNow, screenLockGraceMs);
+        }
+        return;
+      }
+      clearScreenLockTimer();
     });
     // The spec floors the threshold at 60s.
     await detector.start({ threshold: Math.max(60_000, thresholdMs), signal: controller.signal });
-    return () => controller.abort();
+    return () => {
+      clearScreenLockTimer();
+      controller.abort();
+    };
   } catch {
     return () => {};
   }

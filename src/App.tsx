@@ -2,7 +2,7 @@ import { useEffect } from 'react';
 import { AppShell } from './components/layout/AppShell';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { LockScreen } from './components/security/LockScreen';
-import { db, ensureDefaults } from './db';
+import { ensureDefaults } from './db';
 import { useKeyboard } from './hooks/use-keyboard';
 import { useTheme } from './components/settings/ThemeSettings';
 import { useVault } from './hooks/use-vault';
@@ -14,10 +14,12 @@ import { SyncProvider } from './sync/use-sync';
 import { usePomodoroClock } from './hooks/use-pomodoro-clock';
 import { useUrlCapture } from './hooks/use-url-capture';
 import { useNudges, useLockedNudge } from './hooks/use-nudges';
+import { useRemoteWipeCommands } from './hooks/use-remote-unlock';
 import { RemoteApprovalPrompt } from './components/security/RemoteApprovalPrompt';
 import { useAppBadge } from './hooks/use-app-badge';
 import { ServiceWorkerProvider } from './hooks/use-service-worker';
 import { AppUpdatePrompt } from './components/banners/AppUpdatePrompt';
+import { useLocalSettings } from './hooks/use-settings';
 
 export default function App() {
   // Theme is localStorage-only (no DB), safe to apply even while the vault is
@@ -31,6 +33,7 @@ export default function App() {
   //  - a generic, content-free nudge to unlock (no task titles; see useLockedNudge).
   usePomodoroClock();
   useLockedNudge();
+  useRemoteWipeCommands();
 
   return (
     <ErrorBoundary>
@@ -49,6 +52,8 @@ export default function App() {
 // it runs while the vault is locked — the DEK is guaranteed available once this
 // mounts (or Paranoid Mode is off entirely).
 function UnlockedApp() {
+  const localSettings = useLocalSettings();
+
   useEffect(() => {
     ensureDefaults();
   }, []);
@@ -78,14 +83,18 @@ function UnlockedApp() {
     let stop = () => {};
     let cancelled = false;
     void (async () => {
-      const local = await db.localSettings.get('local');
-      if (!isParanoidEnabled() || !local?.paranoidSystemIdleLock) return;
-      const thresholdMs = (local.paranoidIdleTimeoutMinutes ?? DEFAULT_IDLE_MINUTES) * 60_000;
-      const s = await startSystemIdleLock(thresholdMs, () => lock());
+      if (!isParanoidEnabled() || !localSettings.paranoidSystemIdleLock) return;
+      const thresholdMs = (localSettings.paranoidIdleTimeoutMinutes ?? DEFAULT_IDLE_MINUTES) * 60_000;
+      const screenLockGraceMs = localSettings.paranoidSystemLockGraceEnabled ? 10 * 60_000 : 0;
+      const s = await startSystemIdleLock(thresholdMs, () => lock(), { screenLockGraceMs });
       if (cancelled) s(); else stop = s;
     })();
     return () => { cancelled = true; stop(); };
-  }, []);
+  }, [
+    localSettings.paranoidIdleTimeoutMinutes,
+    localSettings.paranoidSystemIdleLock,
+    localSettings.paranoidSystemLockGraceEnabled,
+  ]);
 
   useKeyboard();
   useUrlCapture();

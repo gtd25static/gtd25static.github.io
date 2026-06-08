@@ -10,9 +10,11 @@ import type { LocalSettings } from '../../db/models';
 
 // In-memory GitHub mailbox.
 let files: Record<string, { data: string; sha: string }> = {};
+let failPutPaths: Set<string> = new Set();
 vi.mock('../../sync/github-api', () => ({
   getFile: vi.fn((_p: string, _r: string, path: string) => Promise.resolve(files[path] ? { ...files[path] } : null)),
   putFile: vi.fn((_p: string, _r: string, path: string, content: string) => {
+    if (failPutPaths.has(path)) return Promise.reject(new Error(`put failed: ${path}`));
     files[path] = { data: content, sha: `sha-${Math.random()}` };
     return Promise.resolve(files[path].sha);
   }),
@@ -80,6 +82,7 @@ async function enrollPair(): Promise<void> {
 
 beforeEach(async () => {
   files = {};
+  failPutPaths = new Set();
   panicSpy.mockClear();
   localStorage.removeItem(PARANOID_FLAG);
   localStorage.removeItem('gtd25-paranoid-key');
@@ -198,16 +201,25 @@ describe('remote unlock: full exchange', () => {
 });
 
 describe('remote wipe', () => {
-  it('wipes when an enrolled approver signs the command', async () => {
+  it('wipes when an enrolled approver signs the command and publishes a verified ack', async () => {
     await enrollPair();
     // Phone issues the wipe.
     await actAsPhone();
-    await ru.sendRemoteWipe(PAT, REPO, LAP);
+    const command = await ru.sendRemoteWipe(PAT, REPO, LAP);
+    phoneLocal = await snapshotLocal();
+    expect(phoneLocal.remoteApproverFor?.[LAP]?.lastWipeCommand?.nonce).toBe(command.nonce);
     // Laptop polls its command file and wipes.
     await actAsLaptop();
     const r = await ru.pollRemoteCommands(PAT, REPO, LAP);
     expect(r.wiped).toBe(true);
     expect(panicSpy).toHaveBeenCalledTimes(1);
+    expect(files[ru.wipeStatusPath(LAP)]).toBeTruthy();
+
+    await actAsPhone();
+    const status = await ru.readRemoteWipeStatus(PAT, REPO, LAP);
+    expect(status?.commandNonce).toBe(command.nonce);
+    const refreshed = await ru.refreshManagedDeviceWipeStatuses(PAT, REPO);
+    expect(refreshed.find((d) => d.deviceId === LAP)?.lastWipeAck?.commandNonce).toBe(command.nonce);
   });
 
   it('ignores a wipe command signed by a non-approver (forged)', async () => {
@@ -222,6 +234,79 @@ describe('remote wipe', () => {
     const r = await ru.pollRemoteCommands(PAT, REPO, LAP);
     expect(r.wiped).toBe(false);
     expect(panicSpy).not.toHaveBeenCalled();
+  });
+
+  it('ignores a forged wipe confirmation status', async () => {
+    await enrollPair();
+    await actAsPhone();
+    const stranger = await generateIdentityKeys();
+    const status = {
+      target: LAP,
+      commandNonce: 'nonce-1',
+      commandTs: Date.now(),
+      wipedAt: Date.now() + 1,
+      fromApproverDeviceId: PHONE,
+      protectedDeviceId: LAP,
+    };
+    const bytes = new TextEncoder().encode(`wipe-status|${status.target}|${status.commandNonce}|${status.commandTs}|${status.wipedAt}|${status.fromApproverDeviceId}|${status.protectedDeviceId}`);
+    const sig = await signPayload(stranger.ecdsaPriv, bytes);
+    files[ru.wipeStatusPath(LAP)] = { data: JSON.stringify({ ...status, sig }), sha: 'fake-status' };
+
+    expect(await ru.readRemoteWipeStatus(PAT, REPO, LAP)).toBeNull();
+  });
+
+  it('still wipes if publishing the confirmation ack fails', async () => {
+    await enrollPair();
+    await actAsPhone();
+    await ru.sendRemoteWipe(PAT, REPO, LAP);
+    failPutPaths.add(ru.wipeStatusPath(LAP));
+
+    await actAsLaptop();
+    const r = await ru.pollRemoteCommands(PAT, REPO, LAP);
+
+    expect(r.wiped).toBe(true);
+    expect(panicSpy).toHaveBeenCalledTimes(1);
+    expect(files[ru.wipeStatusPath(LAP)]).toBeUndefined();
+  });
+
+  it('resends wipe commands by replacing local command metadata and clearing stale ack', async () => {
+    await enrollPair();
+    await actAsPhone();
+    const first = await ru.sendRemoteWipe(PAT, REPO, LAP);
+    await db.localSettings.update('local', {
+      remoteApproverFor: {
+        ...(await db.localSettings.get('local'))!.remoteApproverFor,
+        [LAP]: {
+          ...(await db.localSettings.get('local'))!.remoteApproverFor![LAP],
+          lastWipeAck: { commandNonce: first.nonce, wipedAt: Date.now(), verifiedAt: Date.now() },
+        },
+      },
+    });
+
+    const second = await ru.sendRemoteWipe(PAT, REPO, LAP);
+    const entry = (await db.localSettings.get('local'))?.remoteApproverFor?.[LAP];
+
+    expect(second.nonce).not.toBe(first.nonce);
+    expect(entry?.lastWipeCommand?.nonce).toBe(second.nonce);
+    expect(entry?.lastWipeAck).toBeUndefined();
+  });
+
+  it('purges a confirmed wiped device locally and cleans remote wipe files', async () => {
+    await enrollPair();
+    await actAsPhone();
+    await ru.sendRemoteWipe(PAT, REPO, LAP);
+    await actAsLaptop();
+    await ru.pollRemoteCommands(PAT, REPO, LAP);
+
+    await actAsPhone();
+    await ru.refreshManagedDeviceWipeStatuses(PAT, REPO);
+    expect((await db.localSettings.get('local'))?.remoteApproverFor?.[LAP]?.lastWipeAck).toBeTruthy();
+
+    await ru.purgeManagedDevice(PAT, REPO, LAP);
+
+    expect((await db.localSettings.get('local'))?.remoteApproverFor?.[LAP]).toBeUndefined();
+    expect(files[ru.cmdPath(LAP)]).toBeUndefined();
+    expect(files[ru.wipeStatusPath(LAP)]).toBeUndefined();
   });
 
   it('a Paranoid device refuses to issue a wipe', async () => {

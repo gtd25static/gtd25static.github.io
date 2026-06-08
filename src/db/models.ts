@@ -146,6 +146,7 @@ export interface LocalSettings {
   paranoidIdleTimeoutMinutes?: number;
   paranoidMaxUnlockAttempts?: number;   // device-local mirror of Vault.maxUnlockAttempts
   paranoidSystemIdleLock?: boolean;     // lock on system-wide idle / screen lock (IdleDetector)
+  paranoidSystemLockGraceEnabled?: boolean; // device-local 10-minute app-lock grace after screen lock
   // Remote unlock & wipe (device-local; not synced as-is). This device's long-term
   // identity keypairs (P-256). Plaintext: the ECDSA private key must sign unlock
   // requests while the vault is LOCKED, and it unlocks nothing on its own.
@@ -153,7 +154,13 @@ export interface LocalSettings {
   deviceName?: string;                  // friendly name shown to approvers
   // Approver side: this (Paranoid-OFF) device can approve/wipe these protected
   // devices. RUK + the protected device's verify key + name, keyed by its deviceId.
-  remoteApproverFor?: Record<string, { ruk: string; ecdsaPub: JsonWebKey; name: string }>;
+  remoteApproverFor?: Record<string, {
+    ruk: string;
+    ecdsaPub: JsonWebKey;
+    name: string;
+    lastWipeCommand?: { nonce: string; sentAt: number };
+    lastWipeAck?: { commandNonce: string; wipedAt: number; verifiedAt: number };
+  }>;
 }
 
 // A protected device's enrolled approver (public info cached locally so the
