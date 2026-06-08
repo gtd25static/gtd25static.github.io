@@ -7,9 +7,11 @@ import '../../__tests__/setup-component';
 // Controllable mocks for the SW hook and the sync-engine version events.
 const h = vi.hoisted(() => ({
   sw: { needRefresh: true, applyUpdate: vi.fn(), checkForUpdate: vi.fn(), forceCheck: vi.fn() },
+  vault: { enabled: false, unlocked: false, locked: false, hasSecurityKey: false },
   incompatHandlers: [] as Array<() => void>,
 }));
 vi.mock('../../hooks/use-service-worker', () => ({ useServiceWorker: () => h.sw }));
+vi.mock('../../hooks/use-vault', () => ({ useVault: () => h.vault }));
 vi.mock('../../sync/sync-engine', () => ({
   onVersionIncompatible: (cb: () => void) => { h.incompatHandlers.push(cb); },
   offVersionIncompatible: () => {},
@@ -30,6 +32,7 @@ beforeEach(() => {
   h.sw.needRefresh = true;
   h.sw.applyUpdate = vi.fn();
   h.sw.forceCheck = vi.fn();
+  h.vault = { enabled: false, unlocked: false, locked: false, hasSecurityKey: false };
   h.incompatHandlers.length = 0;
   global.fetch = vi.fn().mockResolvedValue({
     ok: true,
@@ -59,6 +62,23 @@ describe('AppUpdatePrompt', () => {
     await screen.findByText('Update available');
     await user.click(screen.getByRole('button', { name: /update now/i }));
     expect(h.sw.applyUpdate).toHaveBeenCalled();
+  });
+
+  it('defers updates while a Paranoid vault is unlocked', async () => {
+    const user = userEvent.setup();
+    h.vault = { enabled: true, unlocked: true, locked: false, hasSecurityKey: false };
+    const { rerender } = render(<AppUpdatePrompt />);
+    await screen.findByText('Update available');
+
+    await user.click(screen.getByRole('button', { name: /update when locked/i }));
+
+    expect(h.sw.applyUpdate).not.toHaveBeenCalled();
+    expect(screen.getByText('Update queued. It will install after the vault locks.')).toBeInTheDocument();
+
+    h.vault = { enabled: true, unlocked: false, locked: true, hasSecurityKey: false };
+    rerender(<AppUpdatePrompt />);
+
+    await waitFor(() => expect(h.sw.applyUpdate).toHaveBeenCalled());
   });
 
   it('"Later" dismisses the dialog and falls back to a top banner', async () => {
@@ -95,6 +115,21 @@ describe('AppUpdatePrompt', () => {
     act(() => { h.incompatHandlers.forEach((cb) => cb()); });
     expect(await screen.findByText('Update required')).toBeInTheDocument();
     expect(h.sw.forceCheck).toHaveBeenCalled(); // forces an immediate SW check
+  });
+
+  it('defers sync-required reloads while a Paranoid vault is unlocked', async () => {
+    const user = userEvent.setup();
+    h.sw.needRefresh = false;
+    h.vault = { enabled: true, unlocked: true, locked: false, hasSecurityKey: false };
+    render(<AppUpdatePrompt />);
+
+    act(() => { h.incompatHandlers.forEach((cb) => cb()); });
+    expect(await screen.findByText('Update required')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: /update when locked/i }));
+
+    expect(screen.getByText('Update queued. It will install after the vault locks.')).toBeInTheDocument();
+    expect(h.sw.applyUpdate).not.toHaveBeenCalled();
   });
 
   it('does not render an equal commit range for sync-incompatible metadata', async () => {

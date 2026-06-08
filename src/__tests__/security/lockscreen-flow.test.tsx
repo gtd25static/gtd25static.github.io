@@ -91,4 +91,28 @@ describe('Paranoid Mode UI flow', () => {
     await waitFor(() => expect(screen.getByText('APP CONTENT')).toBeInTheDocument());
     expect(isUnlocked()).toBe(true);
   });
+
+  it('shows and persists the configured idle timeout minutes', async () => {
+    const user = userEvent.setup();
+    await enableParanoid(PASS, 42);
+
+    const { unmount } = render(<SecuritySettings />);
+    const idleInput = await screen.findByLabelText('Auto-lock after (minutes idle)');
+
+    await waitFor(() => expect(idleInput).toHaveValue(42));
+
+    await user.clear(idleInput);
+    await user.type(idleInput, '7');
+    await user.click(screen.getAllByRole('button', { name: /^save$/i })[0]);
+
+    await waitFor(async () => {
+      expect((await db.localSettings.get('local'))?.paranoidIdleTimeoutMinutes).toBe(7);
+      expect((await db.vault.get('vault'))?.idleTimeoutMinutes).toBe(7);
+    });
+
+    unmount();
+    render(<SecuritySettings />);
+
+    await waitFor(() => expect(screen.getByLabelText('Auto-lock after (minutes idle)')).toHaveValue(7));
+  });
 });

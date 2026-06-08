@@ -222,6 +222,14 @@ function ManageForm({ idleMinutes, maxAttempts, systemIdleOn, hasSecurityKey }: 
   const [newPassConfirm, setNewPassConfirm] = useState('');
   const [busy, setBusy] = useState(false);
 
+  useEffect(() => {
+    setIdle(String(idleMinutes));
+  }, [idleMinutes]);
+
+  useEffect(() => {
+    setAttempts(String(maxAttempts));
+  }, [maxAttempts]);
+
   async function handleSaveIdle() {
     await configureIdleTimeout(clampMinutes(idle));
     setIdle(String(clampMinutes(idle)));

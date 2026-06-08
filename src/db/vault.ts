@@ -19,7 +19,7 @@ import { encryptAllAtRest, decryptAllAtRest } from './vault-migration';
 import { registerPrfCredential, getPrfOutput } from '../sync/webauthn-prf';
 import { b64encode, b64decode } from '../sync/remote-unlock-crypto';
 import { PARANOID_FLAG, isParanoidFlagSet } from './paranoid-flag';
-import type { Vault, PrfCredential } from './models';
+import type { LocalSettings, Vault, PrfCredential } from './models';
 
 // Synchronous mirror of "a security-key credential is enrolled", so the lock
 // screen and settings can render the affordance without awaiting IndexedDB.
@@ -81,6 +81,17 @@ export function getVaultSnapshot(): VaultSnapshot {
 
 export function isParanoidEnabled(): boolean { return readFlag(); }
 export function isUnlocked(): boolean { return currentDek !== null; }
+
+async function patchLocalSettings(updates: Partial<LocalSettings>): Promise<void> {
+  const existing = await db.localSettings.get('local');
+  await db.localSettings.put({
+    id: 'local',
+    syncEnabled: false,
+    syncIntervalMs: 300_000,
+    ...existing,
+    ...updates,
+  });
+}
 
 // Feed the at-rest key to the DBCore middleware. Reading the key counts as
 // activity so active DB use defers the idle re-lock.
@@ -454,7 +465,7 @@ export async function configureIdleTimeout(minutes: number): Promise<void> {
   if (await db.vault.get('vault')) {
     await db.vault.update('vault', { idleTimeoutMinutes: minutes });
   }
-  await db.localSettings.update('local', { paranoidIdleTimeoutMinutes: minutes });
+  await patchLocalSettings({ paranoidIdleTimeoutMinutes: minutes });
   resetIdleTimer();
 }
 
@@ -481,7 +492,7 @@ export async function configureMaxUnlockAttempts(n: number): Promise<void> {
   if (await db.vault.get('vault')) {
     await db.vault.update('vault', { maxUnlockAttempts: max });
   }
-  await db.localSettings.update('local', { paranoidMaxUnlockAttempts: max });
+  await patchLocalSettings({ paranoidMaxUnlockAttempts: max });
 }
 
 function purgeLocalBackups(): void {

@@ -1,6 +1,6 @@
 # GTD25 — Security Review & Threat Model
 
-**Last updated:** 2026-06-08 (locked-screen update recovery: same-commit service-worker refreshes are non-modal and activation now awaits `skipWaiting`)
+**Last updated:** 2026-06-08 (locked-screen update recovery: same-commit service-worker refreshes are suppressed; unlocked Paranoid updates defer until lock)
 **Maintenance:** This document MUST be kept current. See "Keeping this document
 updated" at the end and the corresponding rule in `CLAUDE.md`.
 
@@ -376,8 +376,12 @@ syncPassword-derived HMAC**.
   worker update detector/prompt stays mounted on the lock screen so a broken
   locked build can be refreshed without wiping. It can check public update
   metadata, ask a waiting service worker to activate, and reload; it does **not**
-  access the DEK, decrypted content, syncPassword, or PAT. If remote unlock/wipe
-  is enrolled (Scenario 8), the lock screen also polls the backend mailbox
+  access the DEK, decrypted content, syncPassword, or PAT. Same-commit service
+  worker refresh signals are suppressed to avoid update-banner loops. If an update
+  is detected while a Paranoid vault is **unlocked**, applying it is deferred until
+  the vault is already locked; the app does **not** persist or carry the DEK across
+  reloads to preserve the unlocked state. If remote unlock/wipe is enrolled
+  (Scenario 8), the lock screen also polls the backend mailbox
   (conditional requests) and can run `panicWipe` on an approver-signed command or
   unlock on an approved response. That remote path uses the plaintext PAT and
   never touches decrypted content before unlock.

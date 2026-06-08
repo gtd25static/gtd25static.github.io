@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { onVersionIncompatible, offVersionIncompatible, onSyncSuccess, offSyncSuccess } from '../../sync/sync-engine';
 import { useServiceWorker } from '../../hooks/use-service-worker';
+import { useVault } from '../../hooks/use-vault';
 import { GIT_COMMIT } from '../../lib/constants';
 import { changelogFor, parseVersionInfo, type VersionInfo } from '../../lib/changelog';
 import { Button } from '../ui/Button';
@@ -14,11 +15,13 @@ import { Button } from '../ui/Button';
 // available but unobtrusive.
 export function AppUpdatePrompt() {
   const { needRefresh, applyUpdate, checkForUpdate, forceCheck } = useServiceWorker();
+  const vault = useVault();
   const [syncIncompat, setSyncIncompat] = useState(false);
   const [dismissed, setDismissed] = useState(false);
   const [updating, setUpdating] = useState(false);
   const [info, setInfo] = useState<VersionInfo | null>(null);
   const [versionChecked, setVersionChecked] = useState(false);
+  const [deferUntilLocked, setDeferUntilLocked] = useState(false);
 
   // Fetch the LIVE version.json (cache-busted, bypassing the SW) to show what the
   // pending update contains — for BOTH a detected new build and a sync-required
@@ -63,6 +66,14 @@ export function AppUpdatePrompt() {
     }
   }, [needRefresh, syncIncompat, dismissed]);
 
+  useEffect(() => {
+    if (deferUntilLocked && vault.locked) {
+      setUpdating(true);
+      if (needRefresh) applyUpdate();
+      else window.location.reload();
+    }
+  }, [applyUpdate, deferUntilLocked, needRefresh, vault.locked]);
+
   const changes = info ? changelogFor(info, GIT_COMMIT) : [];
   const sameCommit = info?.commit === GIT_COMMIT;
   const sameCommitRefresh = needRefresh && !syncIncompat && versionChecked && sameCommit && changes.length === 0;
@@ -70,12 +81,20 @@ export function AppUpdatePrompt() {
   const available = (needRefresh || syncIncompat) && !sameCommitRefresh;
   if (!available || waitingForVersionCheck) return null;
 
-  const message = syncIncompat
-    ? 'A newer version of GTD25 is required to sync.'
-    : 'A new version of GTD25 is available.';
+  const message = deferUntilLocked
+    ? 'Update queued. It will install after the vault locks.'
+    : syncIncompat
+      ? 'A newer version of GTD25 is required to sync.'
+      : 'A new version of GTD25 is available.';
+  const deferUpdate = vault.enabled && vault.unlocked && (needRefresh || syncIncompat);
 
   const doUpdate = () => {
     if (updating) return;
+    if (deferUpdate) {
+      setDeferUntilLocked(true);
+      setDismissed(true);
+      return;
+    }
     if (needRefresh) {
       setUpdating(true);
       applyUpdate(); // skipWaiting + single guarded reload
@@ -128,7 +147,7 @@ export function AppUpdatePrompt() {
               Later
             </button>
             <Button size="sm" onClick={doUpdate} disabled={updating}>
-              {updating ? 'Updating…' : 'Update now'}
+              {updating ? 'Updating…' : deferUpdate ? 'Update when locked' : 'Update now'}
             </Button>
           </div>
         </div>
@@ -146,7 +165,7 @@ export function AppUpdatePrompt() {
         disabled={updating}
         className="shrink-0 rounded-md bg-white/20 px-3 py-1 text-xs font-bold hover:bg-white/30 disabled:opacity-70"
       >
-        {updating ? 'Updating…' : 'Update now'}
+        {updating ? 'Updating…' : deferUpdate ? 'Update when locked' : 'Update now'}
       </button>
     </div>
   );
