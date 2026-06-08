@@ -3,30 +3,8 @@ import { usePomodoroStore } from '../stores/pomodoro-store';
 import { audioEngine } from '../lib/audio-engine';
 import { showTimerNotification, requestNotificationPermission } from '../lib/notifications';
 import { TICK_SOUND_CODE, BELL_SOUND_CODE } from '../lib/pomodoro-sounds';
-import { db } from '../db';
-import type { SoundVolumeLevel } from '../db/models';
 import { updateMediaSession, clearMediaSession, registerMediaSessionHandlers } from '../lib/media-session';
-
-async function loadSettings() {
-  return db.pomodoroSettings.get('pomodoro');
-}
-
-async function startAmbientFromPreset() {
-  const settings = await loadSettings();
-  if (!settings?.activePresetId) return;
-  const preset = await db.soundPresets.get(settings.activePresetId);
-  if (!preset || preset.deletedAt) return;
-
-  audioEngine.stopAllAmbient();
-  audioEngine.setMasterVolume(settings.masterVolume);
-  for (const [code, level] of Object.entries(preset.sounds)) {
-    if (level !== 'off') {
-      await audioEngine.playAmbientSound(code, level as SoundVolumeLevel);
-    }
-  }
-  // Enable dynamic mix if configured
-  audioEngine.setDynamicMix(settings.dynamicMixEnabled ?? false);
-}
+import { loadPomodoroSettings, startAmbientFromActivePreset } from '../lib/pomodoro-audio';
 
 export function usePomodoroClock() {
   const prevTimerRunning = useRef(false);
@@ -78,7 +56,7 @@ export function usePomodoroClock() {
       if (!wasRunning && isRunning) {
         // Timer just started
         requestNotificationPermission();
-        loadSettings().then((settings) => {
+        loadPomodoroSettings().then((settings) => {
           if (settings?.tickingEnabled) {
             audioEngine.startTicking(TICK_SOUND_CODE);
           }
@@ -108,7 +86,7 @@ export function usePomodoroClock() {
       const isPlaying = state.ambientPlaying;
 
       if (!wasPlaying && isPlaying) {
-        startAmbientFromPreset();
+        startAmbientFromActivePreset();
         updateMediaSession({
           title: state.timerRunning ? 'Pomodoro Timer' : 'Ambient Sounds',
           playing: true,
@@ -146,7 +124,7 @@ export function usePomodoroClock() {
 
 async function handleCompletion() {
   audioEngine.stopTicking();
-  const settings = await loadSettings();
+  const settings = await loadPomodoroSettings();
   if (settings?.bellEnabled) {
     audioEngine.playBell(BELL_SOUND_CODE);
   }

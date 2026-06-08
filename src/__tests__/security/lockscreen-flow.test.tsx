@@ -11,6 +11,7 @@ import { useVault } from '../../hooks/use-vault';
 import { SecuritySettings } from '../../components/settings/SecuritySettings';
 import { LockScreen } from '../../components/security/LockScreen';
 import type { Task } from '../../db/models';
+import { usePomodoroStore } from '../../stores/pomodoro-store';
 
 const PASS = 'integration passphrase';
 
@@ -24,6 +25,13 @@ beforeEach(async () => {
   await resetDb();
   __resetVaultStateForTests();
   localStorage.removeItem('gtd25-paranoid');
+  usePomodoroStore.setState({
+    timerRunning: false,
+    timerEndTime: null,
+    displaySeconds: 0,
+    ambientPlaying: false,
+    pomodoroSettingsOpen: false,
+  });
   const now = Date.now();
   await db.tasks.add({ id: 't1', listId: 'l1', title: 'visible task', status: 'todo', order: 1, createdAt: now, updatedAt: now } as Task);
 });
@@ -114,5 +122,29 @@ describe('Paranoid Mode UI flow', () => {
     render(<SecuritySettings />);
 
     await waitFor(() => expect(screen.getByLabelText('Auto-lock after (minutes idle)')).toHaveValue(7));
+  });
+
+  it('keeps the Pomodoro timer and ambient state when the vault locks', async () => {
+    await enableParanoid(PASS);
+    const endTime = Date.now() + 25 * 60 * 1000;
+    usePomodoroStore.setState({
+      timerRunning: true,
+      timerEndTime: endTime,
+      displaySeconds: 25 * 60,
+      ambientPlaying: true,
+    });
+
+    render(<Gate />);
+    expect(screen.getByText('APP CONTENT')).toBeInTheDocument();
+
+    act(() => { lock(); });
+    await waitFor(() => expect(screen.getByText('Vault locked')).toBeInTheDocument());
+
+    const pomodoro = usePomodoroStore.getState();
+    expect(pomodoro.timerRunning).toBe(true);
+    expect(pomodoro.timerEndTime).toBe(endTime);
+    expect(pomodoro.displaySeconds).toBe(25 * 60);
+    expect(pomodoro.ambientPlaying).toBe(true);
+    expect(screen.getByTitle('Stop all')).toBeInTheDocument();
   });
 });

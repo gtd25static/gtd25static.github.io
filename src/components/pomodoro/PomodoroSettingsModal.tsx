@@ -6,6 +6,7 @@ import { db } from '../../db';
 import { AMBIENT_SOUNDS, SOUND_CATEGORIES, TICK_SOUND_CODE, BELL_SOUND_CODE } from '../../lib/pomodoro-sounds';
 import { importSoundsFromZip, type ImportResult } from '../../db/sound-import';
 import { audioEngine } from '../../lib/audio-engine';
+import { startAmbientFromActivePreset } from '../../lib/pomodoro-audio';
 import { toast } from '../ui/Toast';
 import { newId } from '../../lib/id';
 import { recordError } from '../../lib/diagnostics';
@@ -28,9 +29,42 @@ export function PomodoroSettingsModal() {
   const [previewingSound, setPreviewingSound] = useState<string | null>(null);
   const [previewingMix, setPreviewingMix] = useState(false);
   const [debugOn, setDebugOn] = useState(() => audioEngine.getDynamicMixDebug());
+  const previewStateRef = useRef<{ sound: string | null; mix: boolean }>({ sound: null, mix: false });
 
   // Current sound levels (from active preset or empty)
   const [soundLevels, setSoundLevels] = useState<Record<string, SoundVolumeLevel>>({});
+
+  const setSoundPreview = useCallback((sound: string | null) => {
+    previewStateRef.current.sound = sound;
+    setPreviewingSound(sound);
+  }, []);
+
+  const setMixPreview = useCallback((mix: boolean) => {
+    previewStateRef.current.mix = mix;
+    setPreviewingMix(mix);
+  }, []);
+
+  const stopPreviewAudio = useCallback(({
+    updateState = true,
+    restoreActiveAmbient = true,
+  }: { updateState?: boolean; restoreActiveAmbient?: boolean } = {}) => {
+    const { sound, mix } = previewStateRef.current;
+    if (!sound && !mix) return;
+
+    audioEngine.stopAllAmbient();
+    previewStateRef.current = { sound: null, mix: false };
+    if (updateState) {
+      setPreviewingMix(false);
+      setPreviewingSound(null);
+    }
+    if (restoreActiveAmbient && usePomodoroStore.getState().ambientPlaying) {
+      void startAmbientFromActivePreset({ stopExisting: false });
+    }
+  }, []);
+
+  useEffect(() => {
+    previewStateRef.current = { sound: previewingSound, mix: previewingMix };
+  }, [previewingSound, previewingMix]);
 
   // Load sound levels from active preset
   useEffect(() => {
@@ -47,12 +81,12 @@ export function PomodoroSettingsModal() {
   const prevOpenRef = useRef(open);
   useEffect(() => {
     if (prevOpenRef.current && !open) {
-      audioEngine.stopAllAmbient();
-      setPreviewingMix(false);
-      setPreviewingSound(null);
+      stopPreviewAudio();
     }
     prevOpenRef.current = open;
-  }, [open]);
+  }, [open, stopPreviewAudio]);
+
+  useEffect(() => () => stopPreviewAudio({ updateState: false }), [stopPreviewAudio]);
 
   const updateSettings = useCallback(
     (patch: Record<string, unknown>) => {
@@ -164,15 +198,14 @@ export function PomodoroSettingsModal() {
 
   function handlePreviewMix() {
     if (previewingMix) {
-      audioEngine.stopAllAmbient();
-      setPreviewingMix(false);
+      stopPreviewAudio();
     } else {
       // Stop individual preview
       if (previewingSound) {
-        audioEngine.stopAmbientSound(previewingSound);
-        setPreviewingSound(null);
+        stopPreviewAudio({ restoreActiveAmbient: false });
+      } else {
+        audioEngine.stopAllAmbient();
       }
-      audioEngine.stopAllAmbient();
       audioEngine.setMasterVolume(settings?.masterVolume ?? 0.7);
       audioEngine.setDynamicMix(settings?.dynamicMixEnabled ?? false);
       for (const [code, level] of Object.entries(soundLevels)) {
@@ -180,7 +213,7 @@ export function PomodoroSettingsModal() {
           audioEngine.playAmbientSound(code, level as SoundVolumeLevel);
         }
       }
-      setPreviewingMix(true);
+      setMixPreview(true);
     }
   }
 
@@ -378,16 +411,14 @@ export function PomodoroSettingsModal() {
                           onClick={() => {
                             // Stop mix preview if active
                             if (previewingMix) {
-                              audioEngine.stopAllAmbient();
-                              setPreviewingMix(false);
+                              stopPreviewAudio({ restoreActiveAmbient: false });
                             }
                             if (isPreviewing) {
-                              audioEngine.stopAmbientSound(sound.code);
-                              setPreviewingSound(null);
+                              stopPreviewAudio();
                             } else {
                               if (previewingSound) audioEngine.stopAmbientSound(previewingSound);
                               audioEngine.playAmbientSound(sound.code, 'medium');
-                              setPreviewingSound(sound.code);
+                              setSoundPreview(sound.code);
                             }
                           }}
                           className={`shrink-0 rounded p-0.5 transition-colors ${
