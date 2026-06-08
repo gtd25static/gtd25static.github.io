@@ -48,7 +48,7 @@ describe('AppUpdatePrompt', () => {
 
   it('shows the dialog with the changelog of commits newer than the current build', async () => {
     render(<AppUpdatePrompt />);
-    expect(screen.getByText('Update available')).toBeInTheDocument();
+    expect(await screen.findByText('Update available')).toBeInTheDocument();
     expect(await screen.findByText('New thing')).toBeInTheDocument(); // fetched changelog
     expect(screen.queryByText('current')).not.toBeInTheDocument();    // stops at current (dev)
   });
@@ -56,6 +56,7 @@ describe('AppUpdatePrompt', () => {
   it('"Update now" applies the update', async () => {
     const user = userEvent.setup();
     render(<AppUpdatePrompt />);
+    await screen.findByText('Update available');
     await user.click(screen.getByRole('button', { name: /update now/i }));
     expect(h.sw.applyUpdate).toHaveBeenCalled();
   });
@@ -63,12 +64,13 @@ describe('AppUpdatePrompt', () => {
   it('"Later" dismisses the dialog and falls back to a top banner', async () => {
     const user = userEvent.setup();
     render(<AppUpdatePrompt />);
+    await screen.findByText('Update available');
     await user.click(screen.getByRole('button', { name: /later/i }));
     expect(screen.queryByText('Update available')).not.toBeInTheDocument(); // dialog title gone
     expect(screen.getByRole('button', { name: /update now/i })).toBeInTheDocument(); // banner remains
   });
 
-  it('uses a non-modal refresh banner for same-commit service worker updates', async () => {
+  it('suppresses same-commit service worker update signals', async () => {
     global.fetch = vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({
@@ -78,10 +80,11 @@ describe('AppUpdatePrompt', () => {
       }),
     }) as unknown as typeof fetch;
 
-    render(<AppUpdatePrompt />);
+    const { container } = render(<AppUpdatePrompt />);
 
-    expect(await screen.findByText('A refreshed copy of this build is available.')).toBeInTheDocument();
-    await waitFor(() => expect(screen.queryByText('Update available')).not.toBeInTheDocument());
+    await waitFor(() => expect(global.fetch).toHaveBeenCalled());
+    await waitFor(() => expect(container).toBeEmptyDOMElement());
+    expect(screen.queryByRole('button', { name: /update now/i })).not.toBeInTheDocument();
     expect(screen.queryByText('dev → dev')).not.toBeInTheDocument();
   });
 

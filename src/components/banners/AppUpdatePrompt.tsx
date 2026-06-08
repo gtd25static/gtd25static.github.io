@@ -18,17 +18,21 @@ export function AppUpdatePrompt() {
   const [dismissed, setDismissed] = useState(false);
   const [updating, setUpdating] = useState(false);
   const [info, setInfo] = useState<VersionInfo | null>(null);
+  const [versionChecked, setVersionChecked] = useState(false);
 
   // Fetch the LIVE version.json (cache-busted, bypassing the SW) to show what the
   // pending update contains — for BOTH a detected new build and a sync-required
   // update. Best-effort: omitted if offline / not deployed yet.
   useEffect(() => {
+    setInfo(null);
+    setVersionChecked(false);
     if (!needRefresh && !syncIncompat) return;
     let active = true;
     fetch(`${import.meta.env.BASE_URL}version.json?t=${Date.now()}`, { cache: 'no-store' })
       .then((r) => (r.ok ? r.json() : null))
       .then((j: unknown) => { const v = parseVersionInfo(j); if (active && v) setInfo(v); })
-      .catch(() => { /* changelog is optional */ });
+      .catch(() => { /* changelog is optional */ })
+      .finally(() => { if (active) setVersionChecked(true); });
     return () => { active = false; };
   }, [needRefresh, syncIncompat]);
 
@@ -59,16 +63,15 @@ export function AppUpdatePrompt() {
     }
   }, [needRefresh, syncIncompat, dismissed]);
 
-  const available = needRefresh || syncIncompat;
-  if (!available) return null;
-
   const changes = info ? changelogFor(info, GIT_COMMIT) : [];
   const sameCommit = info?.commit === GIT_COMMIT;
-  const sameCommitRefresh = needRefresh && !syncIncompat && sameCommit && changes.length === 0;
+  const sameCommitRefresh = needRefresh && !syncIncompat && versionChecked && sameCommit && changes.length === 0;
+  const waitingForVersionCheck = needRefresh && !syncIncompat && !versionChecked;
+  const available = (needRefresh || syncIncompat) && !sameCommitRefresh;
+  if (!available || waitingForVersionCheck) return null;
+
   const message = syncIncompat
     ? 'A newer version of GTD25 is required to sync.'
-    : sameCommitRefresh
-      ? 'A refreshed copy of this build is available.'
     : 'A new version of GTD25 is available.';
 
   const doUpdate = () => {
@@ -81,7 +84,7 @@ export function AppUpdatePrompt() {
     }
   };
 
-  if (!dismissed && !sameCommitRefresh) {
+  if (!dismissed) {
     return (
       <div className="fixed inset-0 z-[300] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
         <div className="w-full max-w-sm rounded-2xl border border-zinc-200 bg-white p-6 shadow-2xl dark:border-zinc-800 dark:bg-zinc-900">
