@@ -7,15 +7,16 @@ export class RateLimitError extends Error {
   }
 }
 
-async function githubFetch(
+// Low-level fetch against a full api.github.com URL, with auth, timeout and
+// rate-limit detection. Used by both the Contents helpers and the Git Data API
+// helpers (which live under /git/... rather than /contents/...).
+async function apiFetch(
   pat: string,
-  repo: string,
-  path: string,
+  url: string,
   options?: RequestInit,
   signal?: AbortSignal,
   keepalive?: boolean,
 ) {
-  const url = `https://api.github.com/repos/${repo}/contents/${path}`;
   // keepalive requests outlive the page — skip timeout/abort signal
   const fetchSignal = keepalive
     ? undefined
@@ -46,6 +47,17 @@ async function githubFetch(
   }
 
   return resp;
+}
+
+async function githubFetch(
+  pat: string,
+  repo: string,
+  path: string,
+  options?: RequestInit,
+  signal?: AbortSignal,
+  keepalive?: boolean,
+) {
+  return apiFetch(pat, `https://api.github.com/repos/${repo}/contents/${path}`, options, signal, keepalive);
 }
 
 function utf8ToBase64(str: string): string {
@@ -179,13 +191,13 @@ export async function deleteFile(
   path: string,
   sha: string,
   signal?: AbortSignal,
+  branch?: string,
 ): Promise<void> {
+  const body: Record<string, string> = { message: `gtd25: remove ${path}`, sha };
+  if (branch) body.branch = branch;
   const resp = await githubFetch(pat, repo, path, {
     method: 'DELETE',
-    body: JSON.stringify({
-      message: `gtd25: remove ${path}`,
-      sha,
-    }),
+    body: JSON.stringify(body),
   }, signal);
   if (!resp.ok && resp.status !== 404) {
     throw new Error(`GitHub API error deleting ${path}: ${resp.status}`);
@@ -205,12 +217,14 @@ export async function putBinaryFile(
   bytes: Uint8Array,
   sha?: string,
   signal?: AbortSignal,
+  branch?: string,
 ): Promise<string> {
   const body: Record<string, string> = {
     message: `gtd25 sync: ${path}`,
     content: bytesToBase64(bytes),
   };
   if (sha) body.sha = sha;
+  if (branch) body.branch = branch;
 
   const resp = await githubFetch(pat, repo, path, {
     method: 'PUT',
@@ -229,11 +243,12 @@ export async function getBinaryFile(
   repo: string,
   path: string,
   signal?: AbortSignal,
+  ref?: string,
 ): Promise<Uint8Array | null> {
   const resp = await githubFetch(
     pat,
     repo,
-    path,
+    ref ? `${path}?ref=${encodeURIComponent(ref)}` : path,
     { headers: { Accept: 'application/vnd.github.raw' } },
     signal,
   );
@@ -248,14 +263,106 @@ export async function getFileSha(
   repo: string,
   path: string,
   signal?: AbortSignal,
+  ref?: string,
 ): Promise<string | null> {
-  const resp = await githubFetch(pat, repo, path, undefined, signal);
+  const resp = await githubFetch(pat, repo, ref ? `${path}?ref=${encodeURIComponent(ref)}` : path, undefined, signal);
   if (resp.status === 404) return null;
   if (!resp.ok) throw new Error(`GitHub API error: ${resp.status}`);
   const json = await resp.json();
   if (!json || typeof json.sha !== 'string') {
     throw new Error(`Malformed GitHub response for ${path}: missing sha`);
   }
+  return json.sha;
+}
+
+// --- Git Data API (branch/tree/commit plumbing for blob history compaction) ---
+// These hit /repos/{repo}/git/... rather than /contents/..., so they bypass
+// githubFetch and use apiFetch directly.
+
+const gitUrl = (repo: string, sub: string) => `https://api.github.com/repos/${repo}/${sub}`;
+
+export interface GitTreeEntry {
+  path: string;
+  mode: string;     // e.g. '100644'
+  type: 'blob' | 'tree' | 'commit';
+  sha: string | null;
+}
+
+/** Resolve a branch to its head commit SHA, or null if the branch doesn't exist. */
+export async function getRef(pat: string, repo: string, branch: string, signal?: AbortSignal): Promise<string | null> {
+  const resp = await apiFetch(pat, gitUrl(repo, `git/ref/heads/${encodeURIComponent(branch)}`), undefined, signal);
+  if (resp.status === 404) return null;
+  if (!resp.ok) throw new Error(`GitHub API error (getRef ${branch}): ${resp.status}`);
+  const json = await resp.json();
+  return json?.object?.sha ?? null;
+}
+
+export async function createRef(pat: string, repo: string, branch: string, sha: string, signal?: AbortSignal): Promise<void> {
+  const resp = await apiFetch(pat, gitUrl(repo, 'git/refs'), {
+    method: 'POST',
+    body: JSON.stringify({ ref: `refs/heads/${branch}`, sha }),
+  }, signal);
+  if (!resp.ok) throw new Error(`GitHub API error (createRef ${branch}): ${resp.status}`);
+}
+
+export async function updateRef(pat: string, repo: string, branch: string, sha: string, force: boolean, signal?: AbortSignal): Promise<void> {
+  const resp = await apiFetch(pat, gitUrl(repo, `git/refs/heads/${encodeURIComponent(branch)}`), {
+    method: 'PATCH',
+    body: JSON.stringify({ sha, force }),
+  }, signal);
+  if (!resp.ok) throw new Error(`GitHub API error (updateRef ${branch}): ${resp.status}`);
+}
+
+export async function getCommit(pat: string, repo: string, sha: string, signal?: AbortSignal): Promise<{ treeSha: string }> {
+  const resp = await apiFetch(pat, gitUrl(repo, `git/commits/${sha}`), undefined, signal);
+  if (!resp.ok) throw new Error(`GitHub API error (getCommit): ${resp.status}`);
+  const json = await resp.json();
+  if (!json?.tree?.sha) throw new Error('Malformed commit response: missing tree');
+  return { treeSha: json.tree.sha };
+}
+
+export async function getTree(pat: string, repo: string, treeSha: string, recursive: boolean, signal?: AbortSignal): Promise<{ entries: GitTreeEntry[]; truncated: boolean }> {
+  const resp = await apiFetch(pat, gitUrl(repo, `git/trees/${treeSha}${recursive ? '?recursive=1' : ''}`), undefined, signal);
+  if (!resp.ok) throw new Error(`GitHub API error (getTree): ${resp.status}`);
+  const json = await resp.json();
+  return { entries: (json?.tree ?? []) as GitTreeEntry[], truncated: !!json?.truncated };
+}
+
+export async function createTree(pat: string, repo: string, entries: GitTreeEntry[], signal?: AbortSignal): Promise<string> {
+  const resp = await apiFetch(pat, gitUrl(repo, 'git/trees'), {
+    method: 'POST',
+    body: JSON.stringify({ tree: entries }),
+  }, signal);
+  if (!resp.ok) throw new Error(`GitHub API error (createTree): ${resp.status}`);
+  const json = await resp.json();
+  if (!json?.sha) throw new Error('Malformed createTree response: missing sha');
+  return json.sha;
+}
+
+export async function createCommit(
+  pat: string,
+  repo: string,
+  params: { message: string; tree: string; parents: string[] },
+  signal?: AbortSignal,
+): Promise<string> {
+  const resp = await apiFetch(pat, gitUrl(repo, 'git/commits'), {
+    method: 'POST',
+    body: JSON.stringify(params),
+  }, signal);
+  if (!resp.ok) throw new Error(`GitHub API error (createCommit): ${resp.status}`);
+  const json = await resp.json();
+  if (!json?.sha) throw new Error('Malformed createCommit response: missing sha');
+  return json.sha;
+}
+
+export async function createBlobBase64(pat: string, repo: string, base64: string, signal?: AbortSignal): Promise<string> {
+  const resp = await apiFetch(pat, gitUrl(repo, 'git/blobs'), {
+    method: 'POST',
+    body: JSON.stringify({ content: base64, encoding: 'base64' }),
+  }, signal);
+  if (!resp.ok) throw new Error(`GitHub API error (createBlob): ${resp.status}`);
+  const json = await resp.json();
+  if (!json?.sha) throw new Error('Malformed createBlob response: missing sha');
   return json.sha;
 }
 

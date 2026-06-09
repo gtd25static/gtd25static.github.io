@@ -14,6 +14,7 @@ import { isParanoidFlagSet } from '../db/paranoid-flag';
 import { getVaultSecrets } from '../db/vault';
 import { recordError } from '../lib/diagnostics';
 import { prepareEntityRowsForAtRest, prepareSyncDataForAtRest } from './at-rest-writes';
+import { maybeCompactBlobBranch, compactBlobBranch } from './shared-blobs';
 import {
   deriveKey,
   generateSalt,
@@ -1109,6 +1110,12 @@ export async function syncNow(manual = false, pushLimit?: number): Promise<numbe
       recordError('sync.remoteBackups', err);
     });
 
+    // Fire-and-forget: reclaim repo space by purging deleted shared-folder blobs
+    // from git history (gated: only when there are pending deletes or periodically).
+    maybeCompactBlobBranch(creds.pat, creds.repo).catch((err) => {
+      recordError('sync.blobCompaction', err);
+    });
+
     return remaining;
   } catch (err) {
     if (err instanceof DOMException && err.name === 'AbortError') return -1;
@@ -1564,6 +1571,14 @@ export async function wipeAllData() {
       const changelog = await getFile(creds.pat, creds.repo, CHANGELOG_FILE, signal);
       if (changelog) {
         await deleteFile(creds.pat, creds.repo, CHANGELOG_FILE, changelog.sha);
+      }
+
+      // Purge all shared-folder blob bytes: history-squash the blob branch down to
+      // only its placeholder. Best-effort — a failure here must not abort the wipe.
+      try {
+        await compactBlobBranch(creds, new Set<string>());
+      } catch (err) {
+        recordError('sync.wipeBlobBranch', err);
       }
     }
 

@@ -1,6 +1,6 @@
 # GTD25 — Security Review & Threat Model
 
-**Last updated:** 2026-06-09 (added the **Shared Folder**: an E2E-encrypted link/file/snippet store synced across the user's devices; item metadata — type/name/size/url/blobId/mimeType — is encrypted with only opaque id/order/timestamps plaintext; file/snippet bytes are sync-key encrypted on the wire and DEK-encrypted at rest under Paranoid; residual leak is per-blob count + ciphertext size to a backend reader. Prior: remote-wipe device lifecycle derived from shared repo files; registry-entry deletion as decommission signal; serialized `remoteApproverFor` writes + backend-error resilience; diagnostics log hardened against payload leaks)
+**Last updated:** 2026-06-09 (Shared Folder blobs now live on a dedicated orphan branch `gtd25-blobs` that is periodically **history-squashed** (single orphan commit + force-update) to purge deleted files so the sync repo stops growing; only that branch is ever force-rewritten, and GitHub GCs the freed bytes on its own schedule; wipe empties the branch. Earlier 2026-06-09: added the **Shared Folder**: an E2E-encrypted link/file/snippet store synced across the user's devices; item metadata — type/name/size/url/blobId/mimeType — is encrypted with only opaque id/order/timestamps plaintext; file/snippet bytes are sync-key encrypted on the wire and DEK-encrypted at rest under Paranoid; residual leak is per-blob count + ciphertext size to a backend reader. Prior: remote-wipe device lifecycle derived from shared repo files; registry-entry deletion as decommission signal; serialized `remoteApproverFor` writes + backend-error resilience; diagnostics log hardened against payload leaks)
 **Maintenance:** This document MUST be kept current. See "Keeping this document
 updated" at the end and the corresponding rule in `CLAUDE.md`.
 
@@ -75,8 +75,17 @@ sharing; same single sync key as everything else).
   metadata file. `blobId` is encrypted so a backend observer cannot link a metadata
   entry to its blob object.
 - **File/snippet bytes** live in separate opaque backend objects at
-  `gtd25-shared/{random-id}` (no extension → no type leak). On the wire they are
-  AES-GCM encrypted with the sync key (`encryptBytes`).
+  `gtd25-shared/{random-id}` (no extension → no type leak) on a **dedicated orphan
+  branch `gtd25-blobs`**, kept off the default branch so blob churn never bloats the
+  task/snapshot history. On the wire they are AES-GCM encrypted with the sync key
+  (`encryptBytes`).
+- **History reclamation:** deleting a file removes it from the branch tip and flags
+  a compaction; the next sync **history-squashes `gtd25-blobs`** — rebuilds it as a
+  single orphan commit referencing only live blobs (reusing their git blob SHAs) and
+  force-updates the ref, so deleted/old blobs become unreachable. We make history
+  *unreferenced*; GitHub reclaims the bytes on its own GC schedule (we can't force
+  it), so the repo stops growing and shrinks eventually, not instantly. Only the
+  blob branch is ever force-rewritten — the default data branch is untouched.
 - **At rest** (the device-local `sharedBlobs` cache): bytes are **DEK/Argon2id-encrypted
   when Paranoid Mode is on**, plaintext when off (same posture as tasks). The cache is
   dropped and re-downloaded whenever Paranoid is toggled, so the at-rest regime never
@@ -89,10 +98,9 @@ sharing; same single sync key as everything else).
   sees the **number** of blob objects and each one's **approximate ciphertext size**,
   plus the count/timestamps of `sharedItem` metadata rows. This is the per-file-blob
   trade-off (chosen for efficient incremental sync); it never reveals filenames,
-  types, URLs, or content. "Wipe All Data" clears local items/blobs and pushes an
-  empty snapshot, but previously-uploaded encrypted blob objects may linger as
-  orphans in the repo (still E2E-encrypted) until removed — consistent with the
-  existing recoverable-wipe design.
+  types, URLs, or content. "Wipe All Data" clears local items/blobs, pushes an empty
+  snapshot, **and history-squashes `gtd25-blobs` down to its placeholder** so blob
+  bytes are purged from the branch (then GC'd by GitHub on its schedule).
 
 ### Crypto inventory
 | Purpose | Algo | Key derivation | Verifier (oracle) |

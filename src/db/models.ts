@@ -154,6 +154,11 @@ export interface SyncMeta {
   lastPushedAt?: number;
   pendingChanges: boolean;
   pomodoroSyncedAt?: number;
+  // Shared Folder blob-branch history compaction (local bookkeeping, not synced):
+  // count of blob deletions on this device since the last compaction, and when we
+  // last compacted. Gate `maybeCompactBlobBranch`. See src/sync/shared-blobs.ts.
+  pendingBlobDeletes?: number;
+  lastBlobCompactionAt?: number;
 }
 
 export interface LocalSettings {
