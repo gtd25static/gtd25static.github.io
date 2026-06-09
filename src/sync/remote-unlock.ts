@@ -170,8 +170,10 @@ function requestBytes(r: { fromDeviceId: string; nonce: string; ts: number; kFor
   const ks = Object.keys(r.kForApprover).sort().map((id) => `${id}:${r.kForApprover[id].epk.x}:${r.kForApprover[id].ct}`).join(',');
   return te.encode(`req|${r.fromDeviceId}|${r.nonce}|${r.ts}|${ks}`);
 }
-function responseBytes(r: { forNonce: string; fromApproverDeviceId: string; ts: number; respBlob: string }): Uint8Array {
-  return te.encode(`resp|${r.forNonce}|${r.fromApproverDeviceId}|${r.ts}|${r.respBlob}`);
+// The approver's signature also covers the digest of the exact request being answered,
+// so a response is end-to-end bound to the request the user verified (ACR-001).
+function responseBytes(r: { forNonce: string; fromApproverDeviceId: string; ts: number; respBlob: string; requestDigest: string }): Uint8Array {
+  return te.encode(`resp|${r.forNonce}|${r.fromApproverDeviceId}|${r.ts}|${r.respBlob}|${r.requestDigest}`);
 }
 // Canonical bytes an approver-invite is signed over. Binds the invite to THIS recipient
 // (so it can't be re-targeted), the sender, the timestamp, and the exact ECIES blob
@@ -197,7 +199,7 @@ interface ApproverInvite { fromDeviceId: string; fromName: string; fromEcdsaPub:
 interface WipeCommand { target: string; nonce: string; ts: number; from: string; sig: string }
 interface WipeStatus { target: string; commandNonce: string; commandTs: number; wipedAt: number; fromApproverDeviceId: string; protectedDeviceId: string; sig: string }
 interface UnlockRequest { fromDeviceId: string; nonce: string; ts: number; kForApprover: Record<string, EciesBlob>; sig: string }
-interface UnlockResponse { forNonce: string; fromApproverDeviceId: string; ts: number; respBlob: string; sig: string }
+interface UnlockResponse { forNonce: string; fromApproverDeviceId: string; ts: number; respBlob: string; requestDigest: string; sig: string }
 
 export interface ManagedDevice {
   deviceId: string;
@@ -739,7 +741,7 @@ export async function forgetManagedDeviceAfterWipeCommand(pat: string, repo: str
 
 // --- Unlock exchange (laptop side, while locked) ---
 
-let pendingUnlock: { nonce: string; k: Uint8Array; code: string; expiresAt: number } | null = null;
+let pendingUnlock: { nonce: string; k: Uint8Array; code: string; expiresAt: number; requestDigest: string } | null = null;
 
 /** Build + post an unlock request to all enrolled approvers; returns the code to display. */
 export async function requestRemoteUnlock(pat: string, repo: string, deviceId: string): Promise<{ code: string }> {
@@ -763,7 +765,8 @@ export async function requestRemoteUnlock(pat: string, repo: string, deviceId: s
   await putFile(pat, repo, path, JSON.stringify(req), existing?.sha);
 
   const code = await verificationCode(concat(k, te.encode(nonce)));
-  pendingUnlock = { nonce, k, code, expiresAt: ts + REQUEST_TTL_MS };
+  const digest = await requestDigest({ fromDeviceId: deviceId, nonce, ts, kForApprover });
+  pendingUnlock = { nonce, k, code, expiresAt: ts + REQUEST_TTL_MS, requestDigest: digest };
   return { code };
 }
 
@@ -801,12 +804,15 @@ export async function pollRemoteUnlock(pat: string, repo: string, deviceId: stri
 
   const resp = (() => { try { return JSON.parse(res.data) as UnlockResponse; } catch { return null; } })();
   if (!resp || resp.forNonce !== pendingUnlock.nonce) return { etag: res.etag, status: 'waiting' };
+  // The signed response must answer the EXACT request this device posted (ACR-001):
+  // a response bound to any other request digest is ignored, even if approver-signed.
+  if (resp.requestDigest !== pendingUnlock.requestDigest) return { etag: res.etag, status: 'waiting' };
 
   const vault = await db.vault.get('vault');
   const approver = (vault?.remoteUnlock?.approvers ?? []).find((a) => a.deviceId === resp.fromApproverDeviceId);
   if (!approver) return { etag: res.etag, status: 'waiting' };
   const ok = await verifyPayload(approver.ecdsaPub, resp.sig, responseBytes({
-    forNonce: resp.forNonce, fromApproverDeviceId: resp.fromApproverDeviceId, ts: resp.ts, respBlob: resp.respBlob,
+    forNonce: resp.forNonce, fromApproverDeviceId: resp.fromApproverDeviceId, ts: resp.ts, respBlob: resp.respBlob, requestDigest: resp.requestDigest,
   }));
   if (!ok) return { etag: res.etag, status: 'waiting' };
 
@@ -897,8 +903,8 @@ export async function approveRemoteUnlock(pat: string, repo: string, fromDeviceI
     const sessionKey = await importKekFromBytes(k);
     const respBlob = await encryptBlob(sessionKey, entry.ruk); // entry.ruk is base64; recovered as base64 on the other end
     const ts = Date.now();
-    const sig = await signPayload(identity.ecdsaPriv, responseBytes({ forNonce: req.nonce, fromApproverDeviceId: myId, ts, respBlob }));
-    const resp: UnlockResponse = { forNonce: req.nonce, fromApproverDeviceId: myId, ts, respBlob, sig };
+    const sig = await signPayload(identity.ecdsaPriv, responseBytes({ forNonce: req.nonce, fromApproverDeviceId: myId, ts, respBlob, requestDigest: expectedDigest }));
+    const resp: UnlockResponse = { forNonce: req.nonce, fromApproverDeviceId: myId, ts, respBlob, requestDigest: expectedDigest, sig };
     const path = unlockRespPath(fromDeviceId);
     const existing = await getFile(pat, repo, path);
     await putFile(pat, repo, path, JSON.stringify(resp), existing?.sha);

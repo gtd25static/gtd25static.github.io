@@ -306,6 +306,65 @@ describe('remote unlock: full exchange', () => {
     await expect(ru.approveRemoteUnlock(PAT, REPO, LAP, shown!.requestDigest)).rejects.toThrow(/changed since it was shown/);
     expect(files[ru.unlockRespPath(LAP)]).toBeUndefined();
   });
+
+  it('signs the request digest into the response; tampered or stripped digests are rejected (ACR-001)', async () => {
+    await enrollPair();
+    await actAsLaptop();
+    vault.lock();
+    await ru.requestRemoteUnlock(PAT, REPO, LAP);
+
+    await actAsPhone();
+    const pending = await ru.readPendingApproval(PAT, REPO, LAP);
+    await ru.approveRemoteUnlock(PAT, REPO, LAP, pending!.requestDigest);
+
+    // The published response carries the digest of the approved request.
+    const respPath = ru.unlockRespPath(LAP);
+    const genuine = JSON.parse(files[respPath].data);
+    expect(genuine.requestDigest).toBe(pending!.requestDigest);
+
+    // Tampered digest -> the laptop ignores the response and stays locked.
+    await actAsLaptop();
+    files[respPath] = { data: JSON.stringify({ ...genuine, requestDigest: 'bm90LXRoZS1kaWdlc3Q=' }), sha: 'tampered' };
+    expect((await ru.pollRemoteUnlock(PAT, REPO, LAP)).status).toBe('waiting');
+    expect(vault.isUnlocked()).toBe(false);
+
+    // Stripped digest (legacy/forged shape) -> ignored too.
+    const { requestDigest: _drop, ...stripped } = genuine;
+    files[respPath] = { data: JSON.stringify(stripped), sha: 'stripped' };
+    expect((await ru.pollRemoteUnlock(PAT, REPO, LAP)).status).toBe('waiting');
+    expect(vault.isUnlocked()).toBe(false);
+
+    // The untouched genuine response still unlocks.
+    files[respPath] = { data: JSON.stringify(genuine), sha: 'genuine' };
+    expect((await ru.pollRemoteUnlock(PAT, REPO, LAP)).status).toBe('unlocked');
+    expect(vault.isUnlocked()).toBe(true);
+  });
+
+  it('ignores an approver-signed response bound to a different request digest (ACR-001)', async () => {
+    await enrollPair();
+    await actAsLaptop();
+    vault.lock();
+    await ru.requestRemoteUnlock(PAT, REPO, LAP);
+    const req = JSON.parse(files[ru.unlockReqPath(LAP)].data);
+
+    // A coerced/buggy approver signs a response for the right nonce but for the WRONG
+    // request digest. The signature itself is valid (real approver key), so only the
+    // requester-side digest binding can reject it.
+    const ts = Date.now();
+    const respBlob = 'Z2FyYmFnZS1ibG9i';
+    const wrongDigest = 'd3JvbmctZGlnZXN0LXZhbHVl';
+    const sig = await signPayload(
+      phoneIdentity.ecdsaPriv,
+      new TextEncoder().encode(`resp|${req.nonce}|${PHONE}|${ts}|${respBlob}|${wrongDigest}`),
+    );
+    files[ru.unlockRespPath(LAP)] = {
+      data: JSON.stringify({ forNonce: req.nonce, fromApproverDeviceId: PHONE, ts, respBlob, requestDigest: wrongDigest, sig }),
+      sha: 'wrong-digest',
+    };
+
+    expect((await ru.pollRemoteUnlock(PAT, REPO, LAP)).status).toBe('waiting');
+    expect(vault.isUnlocked()).toBe(false);
+  });
 });
 
 describe('remote wipe', () => {
