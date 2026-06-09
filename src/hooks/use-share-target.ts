@@ -5,7 +5,7 @@ import { useAppState } from '../stores/app-state';
 import { createFileItem } from './use-shared-items';
 import { sanitize, formatCaptureResult, captureToInbox } from './use-url-capture';
 import {
-  SHARE_CACHE, SHARE_META_PATH, shareFilePath, SHARE_TARGET_FLAG, type SharedPayloadMeta,
+  SHARE_CACHE, SHARE_META_PATH, shareFilePath, SHARE_TARGET_FLAG, SHARE_STASH_TTL_MS, type SharedPayloadMeta,
 } from '../lib/share-target';
 
 const SHARED_FOLDER_LIST_ID = '__shared__';
@@ -25,29 +25,47 @@ function cleanUrl(): void {
  * become an Inbox task (the link stays clickable). Mounted in UnlockedApp, so for a
  * Paranoid device the stash simply waits in Cache Storage until the vault is unlocked
  * and this runs.
+ *
+ * Runs on EVERY unlocked start, not only on the ?shareTarget redirect: the stash is
+ * plaintext, so an orphaned one (redirect lost — tab closed while locked, app next
+ * opened from the launcher) must still be consumed if fresh or purged if older than
+ * SHARE_STASH_TTL_MS, instead of lingering indefinitely (ACR-017).
  */
 export function useShareTarget(): void {
   const handled = useRef(false);
 
   useEffect(() => {
     if (handled.current) return;
+    handled.current = true;
     const params = new URLSearchParams(window.location.search);
     const flag = params.get(SHARE_TARGET_FLAG);
-    if (!flag) return;
-    handled.current = true;
 
     void (async () => {
+      if (typeof caches === 'undefined') {
+        if (flag) { toast('Could not read the shared content', 'error'); cleanUrl(); }
+        return;
+      }
       // The SW redirects with ?shareTarget=error when it couldn't read the POST body.
-      if (flag === 'error' || typeof caches === 'undefined') {
+      // Its stash may be PARTIAL (meta written before a file put failed) — clear it.
+      if (flag === 'error') {
         toast('Could not read the shared content', 'error');
+        await clearStash();
         cleanUrl();
         return;
       }
       try {
+        // Cheap existence probe first: on a normal launch with nothing stashed this
+        // must not caches.open() (which CREATES the cache) only for the finally to
+        // delete it again. Early returns below rely on the finally for cleanup.
+        if (!(await caches.has(SHARE_CACHE))) return;
         const cache = await caches.open(SHARE_CACHE);
         const metaRes = await cache.match(SHARE_META_PATH);
-        if (!metaRes) { cleanUrl(); return; } // nothing stashed (e.g. reload of the URL)
+        if (!metaRes) return; // empty stash shell (e.g. reload of the URL)
         const meta = (await metaRes.json()) as SharedPayloadMeta;
+
+        // Stale orphaned stash: discard without importing (the share is long past;
+        // silently resurrecting day-old content would be surprising).
+        if (typeof meta?.ts !== 'number' || Date.now() - meta.ts > SHARE_STASH_TTL_MS) return;
 
         // 1) Files -> Shared Folder (reconstruct File objects from the cached blobs).
         let filesSaved = 0;
@@ -79,12 +97,15 @@ export function useShareTarget(): void {
         } else if (!inboxSaved) {
           toast('Nothing to save from the share', 'info');
         }
+        if (meta.skippedFiles) {
+          toast(`${meta.skippedFiles} shared file${meta.skippedFiles === 1 ? ' was' : 's were'} too large to receive`, 'error');
+        }
       } catch (err) {
         recordError('shareTarget.consume', err);
         toast('Could not save the shared content', 'error');
       } finally {
         await clearStash();
-        cleanUrl();
+        if (flag) cleanUrl();
       }
     })();
   }, []);

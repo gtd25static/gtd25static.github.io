@@ -7,7 +7,7 @@ Scope: repository-wide static review of the GTD app, with focus on the end-to-en
 
 Method: Codex Security-style multi-pass review using independent threat-model passes, candidate finding discovery, validation, and attack-path analysis.
 
-> **Status (2026-06-09):** All 16 findings have been remediated or explicitly accepted-and-documented, and each fix was independently re-verified against source and tests. Fixing commits: `9da4610` (ACR-001), `62250bf` (ACR-002/003/004), `f5ccbed` (ACR-005…016), `7a2c2dd` (share target moved to POST), plus a follow-up closing the last ACR-001 recommendation (request digest signed into the approval response). Per-finding verification notes are in "Remediation Verification"; two new low-priority findings from the follow-up review (ACR-017, ACR-018) are at the end.
+> **Status (2026-06-09):** All 16 findings have been remediated or explicitly accepted-and-documented, and each fix was independently re-verified against source and tests. Fixing commits: `9da4610` (ACR-001), `62250bf` (ACR-002/003/004), `f5ccbed` (ACR-005…016), `7a2c2dd` (share target moved to POST), plus a follow-up closing the last ACR-001 recommendation (request digest signed into the approval response). Per-finding verification notes are in "Remediation Verification"; two new low-priority findings from the follow-up review (ACR-017, ACR-018) are at the end — both fixed the same day (stash startup sweep + TTL, SW-side stash caps).
 
 ## Executive Summary
 
@@ -39,8 +39,8 @@ There are also several medium-priority confidentiality and threat-model gaps: We
 | ACR-014 | P3 | Low | Medium | Secret UX | Fixed (verified) — `f5ccbed` |
 | ACR-015 | P3 | Low | Medium | Diagnostics | Fixed (verified) — `f5ccbed` |
 | ACR-016 | P3 | Low | High | Threat model / platform | Fixed (verified) — `f5ccbed` |
-| ACR-017 | P3 | Low/Medium | High | Share target / SW | New (2026-06-09 follow-up) — open |
-| ACR-018 | P3 | Low | High | Share target / SW | New (2026-06-09 follow-up) — open |
+| ACR-017 | P3 | Low/Medium | High | Share target / SW | New (2026-06-09 follow-up) — Fixed (verified) |
+| ACR-018 | P3 | Low | High | Share target / SW | New (2026-06-09 follow-up) — Fixed (verified) |
 
 ## Remediation Verification (2026-06-09)
 
@@ -67,7 +67,7 @@ Each finding was re-verified against the current `main` by independent source in
 
 A second pass targeted code that landed after the original audit snapshot or that the audit covered only lightly: the POST share-target pipeline (`src/sw.ts`, `src/lib/share-target.ts`, `src/hooks/use-share-target.ts`), the Shared Folder blob lifecycle (`src/sync/shared-blobs.ts`), default-branch history squashing (`src/sync/history-compaction.ts`), and a repo-wide sweep for sensitive-material logging and new plaintext sync fields.
 
-Clean areas: Shared Folder blobs use two correctly separated crypto layers (sync-key AES-GCM on the wire; DEK at rest when Paranoid, applied in `shared-blobs.ts` because the field-oriented middleware can't handle binary); blob ids are random with no filename/type leak and all `sharedItem` metadata fields are sync-encrypted; blob-branch compaction and default-branch squashing rebuild orphan commits and re-check the ref before force-updating, and only ciphertext ever becomes GC-pending unreachable history; capture/share links pass through `sanitizeUrl()` (non-http(s) → `#`) at render; no console logging of key material was found. Two new findings, both in the share-target stash lifecycle, are documented as ACR-017 and ACR-018 below (not yet fixed).
+Clean areas: Shared Folder blobs use two correctly separated crypto layers (sync-key AES-GCM on the wire; DEK at rest when Paranoid, applied in `shared-blobs.ts` because the field-oriented middleware can't handle binary); blob ids are random with no filename/type leak and all `sharedItem` metadata fields are sync-encrypted; blob-branch compaction and default-branch squashing rebuild orphan commits and re-check the ref before force-updating, and only ciphertext ever becomes GC-pending unreachable history; capture/share links pass through `sanitizeUrl()` (non-http(s) → `#`) at render; no console logging of key material was found. Two new findings, both in the share-target stash lifecycle, are documented as ACR-017 and ACR-018 below; both were fixed the same day.
 
 ## ACR-001: Remote Unlock Approval Request Can Be Swapped After Code Display
 
@@ -468,7 +468,9 @@ Recommended tests:
 
 ## ACR-017: Share-Target Stash Can Be Orphaned in Plaintext Cache Storage
 
-Found in the 2026-06-09 follow-up review (post-audit code, commit `7a2c2dd`). Status: open.
+Found in the 2026-06-09 follow-up review (post-audit code, commit `7a2c2dd`). Status: **fixed** (same day).
+
+Fix implemented: `useShareTarget` now sweeps the stash on every unlocked app start (probing `caches.has` first so a normal launch never creates the cache), not only on the `?shareTarget` redirect — a fresh orphaned stash is consumed, one older than `SHARE_STASH_TTL_MS` (24h) is purged unconsumed; the `?shareTarget=error` path clears the (possibly partial) stash on both ends (client `clearStash()` and the SW's own catch). Tests: `share-target.test.tsx` ("consumes an orphaned fresh stash", "purges a stale orphaned stash", "clears a (possibly partial) stash on the SW error redirect", "does not touch the URL or the (empty) cache on a normal launch").
 
 Affected code:
 
@@ -498,7 +500,9 @@ Recommended tests:
 
 ## ACR-018: Service Worker Stashes Shared Payloads Without Size or Count Limits
 
-Found in the 2026-06-09 follow-up review (post-audit code, commit `7a2c2dd`). Status: open.
+Found in the 2026-06-09 follow-up review (post-audit code, commit `7a2c2dd`). Status: **fixed** (same day).
+
+Fix implemented: `handleShareTarget()` filters files through `selectFilesToStash()` (`src/lib/share-target.ts`) before stashing — per-file and aggregate caps of 30 MB (mirroring `MAX_SHARED_FOLDER_BYTES`) and at most 20 files; the skipped count travels in the stash meta and the app toasts "N shared file(s) were too large to receive" after consume. The consume-time quota in `createFileItem` remains the authoritative check. Tests: `share-target.test.tsx` (`selectFilesToStash` cap suite + skipped-files toast).
 
 Affected code:
 
@@ -545,7 +549,7 @@ All items below are done (see "Remediation Verification"); the list is kept as t
 7. ~~Harden import limits, diagnostics redaction, security-key UX, remote-wipe status trust, and CSP.~~ Done (`f5ccbed`).
 8. ~~Update `THREAT_MODEL.md` to reflect the final decisions and residual risks.~~ Done (each fixing commit).
 
-Remaining open items: ACR-017 and ACR-018 (share-target stash lifecycle; P3).
+Remaining open items: none — ACR-017 and ACR-018 (share-target stash lifecycle; P3) were fixed the same day.
 
 ## Verification Plan
 

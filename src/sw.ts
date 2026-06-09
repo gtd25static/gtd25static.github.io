@@ -2,7 +2,7 @@
 import { precacheAndRoute, cleanupOutdatedCaches, createHandlerBoundToURL } from 'workbox-precaching';
 import { NavigationRoute, registerRoute } from 'workbox-routing';
 import { clientsClaim } from 'workbox-core';
-import { SHARE_CACHE, SHARE_TARGET_ACTION, SHARE_META_PATH, shareFilePath, SHARE_TARGET_FLAG } from './lib/share-target';
+import { SHARE_CACHE, SHARE_TARGET_ACTION, SHARE_META_PATH, shareFilePath, SHARE_TARGET_FLAG, selectFilesToStash } from './lib/share-target';
 
 declare let self: ServiceWorkerGlobalScope;
 
@@ -15,7 +15,11 @@ async function handleShareTarget(request: Request): Promise<Response> {
   try {
     const form = await request.formData();
     const str = (k: string): string => { const v = form.get(k); return typeof v === 'string' ? v : ''; };
-    const files = form.getAll('files').filter((v): v is File => v instanceof File);
+    const shared = form.getAll('files').filter((v): v is File => v instanceof File);
+    // Cap what we stash (ACR-018): the Shared Folder quota would reject oversized
+    // files at consume time anyway; refusing them here keeps a mis-share from
+    // filling the origin's storage quota first.
+    const { keep: files, skipped } = selectFilesToStash(shared);
 
     const cache = await caches.open(SHARE_CACHE);
     const meta = {
@@ -24,6 +28,7 @@ async function handleShareTarget(request: Request): Promise<Response> {
       url: str('url'),
       ts: Date.now(),
       files: files.map((f, i) => ({ name: f.name || `shared-${i}`, type: f.type || 'application/octet-stream', size: f.size })),
+      skippedFiles: skipped,
     };
     await cache.put(new Request(SHARE_META_PATH), new Response(JSON.stringify(meta), { headers: { 'Content-Type': 'application/json' } }));
     await Promise.all(files.map((f, i) =>
@@ -31,6 +36,9 @@ async function handleShareTarget(request: Request): Promise<Response> {
     ));
     return Response.redirect(`/?${SHARE_TARGET_FLAG}=1`, 303);
   } catch {
+    // A failed stash can be PARTIAL (meta written, a file put failed) — drop it so
+    // no plaintext fragment lingers in Cache Storage (ACR-017).
+    try { await caches.delete(SHARE_CACHE); } catch { /* best effort */ }
     return Response.redirect(`/?${SHARE_TARGET_FLAG}=error`, 303);
   }
 }
