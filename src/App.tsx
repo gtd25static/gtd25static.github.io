@@ -13,6 +13,7 @@ import { SpecialListProvider } from './hooks/use-special-list';
 import { SyncProvider } from './sync/use-sync';
 import { usePomodoroClock } from './hooks/use-pomodoro-clock';
 import { useUrlCapture } from './hooks/use-url-capture';
+import { useShareTarget } from './hooks/use-share-target';
 import { useNudges, useLockedNudge } from './hooks/use-nudges';
 import { useRemoteWipeCommands } from './hooks/use-remote-unlock';
 import { RemoteApprovalPrompt } from './components/security/RemoteApprovalPrompt';
@@ -98,6 +99,7 @@ function UnlockedApp() {
 
   useKeyboard();
   useUrlCapture();
+  useShareTarget();
   useNudges();
   useAppBadge();
 

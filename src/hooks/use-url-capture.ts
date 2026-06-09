@@ -11,7 +11,7 @@ function stripHtml(s: string): string {
 }
 
 /** Sanitize a capture param: strip HTML, trim, truncate. */
-function sanitize(raw: string | null): string {
+export function sanitize(raw: string | null): string {
   if (!raw) return '';
   return stripHtml(raw).trim().slice(0, MAX_TITLE_LENGTH);
 }
@@ -87,7 +87,12 @@ export function useUrlCapture() {
   }, []);
 }
 
-async function captureToInbox({ title, link, linkTitle }: CaptureResult) {
+/**
+ * Create an Inbox task from a capture result. `link`/`linkTitle` are passed straight
+ * through to createTask so the task renders the URL as a clickable link (sanitized +
+ * rel="noopener noreferrer" by the task UI). Reused by the share-target flow.
+ */
+export async function captureToInbox({ title, link, linkTitle }: CaptureResult) {
   const inboxId = await getOrCreateInbox();
   const task = await createTask(inboxId, { title, link, linkTitle });
   if (task) {

@@ -2,8 +2,38 @@
 import { precacheAndRoute, cleanupOutdatedCaches, createHandlerBoundToURL } from 'workbox-precaching';
 import { NavigationRoute, registerRoute } from 'workbox-routing';
 import { clientsClaim } from 'workbox-core';
+import { SHARE_CACHE, SHARE_TARGET_ACTION, SHARE_META_PATH, shareFilePath, SHARE_TARGET_FLAG } from './lib/share-target';
 
 declare let self: ServiceWorkerGlobalScope;
+
+// --- Web Share Target (POST/multipart) ---
+// The OS share sheet POSTs the shared title/text/url + files here. We can't reach the
+// app's encrypted store from the SW, so we stash the payload in Cache Storage and
+// redirect into the app, which consumes it (use-share-target). Files go to the Shared
+// Folder; text/links to the Inbox.
+async function handleShareTarget(request: Request): Promise<Response> {
+  try {
+    const form = await request.formData();
+    const str = (k: string): string => { const v = form.get(k); return typeof v === 'string' ? v : ''; };
+    const files = form.getAll('files').filter((v): v is File => v instanceof File);
+
+    const cache = await caches.open(SHARE_CACHE);
+    const meta = {
+      title: str('title'),
+      text: str('text'),
+      url: str('url'),
+      ts: Date.now(),
+      files: files.map((f, i) => ({ name: f.name || `shared-${i}`, type: f.type || 'application/octet-stream', size: f.size })),
+    };
+    await cache.put(new Request(SHARE_META_PATH), new Response(JSON.stringify(meta), { headers: { 'Content-Type': 'application/json' } }));
+    await Promise.all(files.map((f, i) =>
+      cache.put(new Request(shareFilePath(i)), new Response(f, { headers: { 'Content-Type': f.type || 'application/octet-stream' } })),
+    ));
+    return Response.redirect(`/?${SHARE_TARGET_FLAG}=1`, 303);
+  } catch {
+    return Response.redirect(`/?${SHARE_TARGET_FLAG}=error`, 303);
+  }
+}
 
 // --- Lifecycle diagnostics ---
 console.debug('[SW] script evaluated at', new Date().toISOString());
@@ -29,6 +59,14 @@ function redactUrlForLog(rawUrl: string): string {
 
 let fetchCount = 0;
 self.addEventListener('fetch', (event) => {
+  // Intercept the share-target POST before anything else and take it over.
+  if (event.request.method === 'POST') {
+    const url = new URL(event.request.url);
+    if (url.pathname === SHARE_TARGET_ACTION) {
+      event.respondWith(handleShareTarget(event.request));
+      return;
+    }
+  }
   fetchCount++;
   if (fetchCount <= 5 || fetchCount % 50 === 0) {
     console.debug(`[SW] fetch #${fetchCount}: ${redactUrlForLog(event.request.url)}`);

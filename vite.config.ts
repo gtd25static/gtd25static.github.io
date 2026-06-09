@@ -102,13 +102,21 @@ export default defineConfig({
           { src: 'pwa-512.png', sizes: '512x512', type: 'image/png' },
           { src: 'pwa-512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
         ],
+        // POST/multipart so the OS share sheet can hand us FILES (a GET target can
+        // only carry text/url). The service worker intercepts this POST, stashes the
+        // payload, and redirects into the app; files land in the Shared Folder and
+        // text/links in the Inbox. See src/sw.ts + src/hooks/use-share-target.ts.
         share_target: {
-          action: '/capture',
-          method: 'GET',
+          action: '/share-target',
+          method: 'POST',
+          enctype: 'multipart/form-data',
           params: {
             title: 'title',
             text: 'text',
             url: 'url',
+            files: [
+              { name: 'files', accept: ['*/*', 'image/*', 'video/*', 'audio/*', 'text/*', 'application/*'] },
+            ],
           },
         },
       },
