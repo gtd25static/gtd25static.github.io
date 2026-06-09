@@ -6,6 +6,33 @@ import { extractHostname, sanitizeUrl } from '../../lib/link-utils';
 import { toast } from '../ui/Toast';
 import { confirmDialog } from '../ui/ConfirmDialog';
 
+// Common MIME → extension fallbacks, used only when the stored name lacks one
+// (e.g. snippets named "notes", or a file dropped without an extension).
+const MIME_EXT: Record<string, string> = {
+  'text/plain': 'txt',
+  'text/csv': 'csv',
+  'text/html': 'html',
+  'text/markdown': 'md',
+  'application/json': 'json',
+  'application/pdf': 'pdf',
+  'application/zip': 'zip',
+  'image/png': 'png',
+  'image/jpeg': 'jpg',
+  'image/gif': 'gif',
+  'image/webp': 'webp',
+  'image/svg+xml': 'svg',
+};
+
+// The filename a download should use: the original name, with an extension
+// inferred from the MIME type appended if the name doesn't already have one.
+export function downloadName(item: SharedItem): string {
+  const name = item.name?.trim() || 'download';
+  const hasExt = /\.[^./\\]+$/.test(name); // a dot followed by a non-empty, non-dot tail
+  if (hasExt) return name;
+  const ext = item.mimeType ? MIME_EXT[item.mimeType] : undefined;
+  return ext ? `${name}.${ext}` : name;
+}
+
 function TypeIcon({ type }: { type: SharedItem['type'] }) {
   const cls = 'shrink-0 text-zinc-400';
   if (type === 'link') {
@@ -34,7 +61,7 @@ function TypeIcon({ type }: { type: SharedItem['type'] }) {
 export function SharedItemCard({ item }: { item: SharedItem }) {
   const [busy, setBusy] = useState(false);
 
-  async function openBlob(mode: 'open' | 'download') {
+  async function download() {
     if (!item.blobId) return;
     setBusy(true);
     try {
@@ -43,17 +70,15 @@ export function SharedItemCard({ item }: { item: SharedItem }) {
       const buf = bytes.slice().buffer;
       const blob = new Blob([buf], { type: item.mimeType || 'application/octet-stream' });
       const url = URL.createObjectURL(blob);
-      if (mode === 'download') {
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = item.name;
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-      } else {
-        window.open(url, '_blank', 'noopener');
-      }
-      // Revoke after a tick so the open/download has grabbed it.
+      // The download attribute is what gives the saved file its real name+extension
+      // (a blob: URL alone would save as a random UUID with no extension).
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = downloadName(item);
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      // Revoke after a tick so the download has grabbed it.
       setTimeout(() => URL.revokeObjectURL(url), 60_000);
     } catch (err) {
       const msg = err instanceof Error && err.message === 'NO_SYNC_KEY'
@@ -86,10 +111,10 @@ export function SharedItemCard({ item }: { item: SharedItem }) {
           </a>
         ) : (
           <button
-            onClick={() => openBlob('open')}
+            onClick={download}
             disabled={busy}
             className="block max-w-full truncate text-left text-sm font-medium text-zinc-800 hover:underline disabled:opacity-50 dark:text-zinc-100"
-            title={item.name}
+            title={`Download ${downloadName(item)}`}
           >
             {item.name}
           </button>
@@ -104,7 +129,7 @@ export function SharedItemCard({ item }: { item: SharedItem }) {
       <div className="flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
         {item.type !== 'link' && (
           <button
-            onClick={() => openBlob('download')}
+            onClick={download}
             disabled={busy}
             className="rounded-full p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 disabled:opacity-50 dark:hover:bg-zinc-700"
             aria-label="Download"
