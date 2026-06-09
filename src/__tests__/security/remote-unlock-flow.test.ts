@@ -5,7 +5,7 @@ import { db } from '../../db';
 import { resetDb } from '../helpers/db-helpers';
 import * as vault from '../../db/vault';
 import * as ru from '../../sync/remote-unlock';
-import { generateIdentityKeys, publicIdentityOf, signPayload } from '../../sync/remote-unlock-crypto';
+import { generateIdentityKeys, publicIdentityOf, signPayload, eciesEncryptTo } from '../../sync/remote-unlock-crypto';
 import type { LocalSettings } from '../../db/models';
 
 // In-memory GitHub mailbox. The fail* sets simulate unexpected backend errors (e.g. a GitHub
@@ -183,8 +183,9 @@ describe('remote unlock: enrollment', () => {
     vault.lock();
     await ru.requestRemoteUnlock(PAT, REPO, LAP);
     await actAsPhone();
-    expect(await ru.readPendingApproval(PAT, REPO, LAP)).not.toBeNull();
-    await ru.approveRemoteUnlock(PAT, REPO, LAP);
+    const reReq = await ru.readPendingApproval(PAT, REPO, LAP);
+    expect(reReq).not.toBeNull();
+    await ru.approveRemoteUnlock(PAT, REPO, LAP, reReq!.requestDigest);
     await actAsLaptop();
     expect((await ru.pollRemoteUnlock(PAT, REPO, LAP)).status).toBe('unlocked');
   });
@@ -216,7 +217,7 @@ describe('remote unlock: full exchange', () => {
     const pending = await ru.readPendingApproval(PAT, REPO, LAP);
     expect(pending?.fromName).toBe('Work Laptop');
     expect(pending?.code).toBe(code);
-    await ru.approveRemoteUnlock(PAT, REPO, LAP);
+    await ru.approveRemoteUnlock(PAT, REPO, LAP, pending!.requestDigest);
 
     // Laptop polls the response and unlocks.
     await actAsLaptop();
@@ -252,7 +253,58 @@ describe('remote unlock: full exchange', () => {
     await actAsPhone();
     localStorage.setItem(PARANOID_FLAG, '1');
     expect(await ru.readPendingApproval(PAT, REPO, LAP)).toBeNull();
-    await expect(ru.approveRemoteUnlock(PAT, REPO, LAP)).rejects.toThrow(/Paranoid device cannot approve/);
+    await expect(ru.approveRemoteUnlock(PAT, REPO, LAP, 'unused-digest')).rejects.toThrow(/Paranoid device cannot approve/);
+  });
+
+  it('refuses to approve a request that was swapped after the code was shown (ACR-001)', async () => {
+    await enrollPair();
+    await actAsLaptop();
+    vault.lock();
+    await ru.requestRemoteUnlock(PAT, REPO, LAP);
+
+    // Phone reads + verifies the genuine request and would display its code/digest.
+    await actAsPhone();
+    const shown = await ru.readPendingApproval(PAT, REPO, LAP);
+    expect(shown).not.toBeNull();
+
+    // Attacker (backend/PAT writer) swaps the request file for one carrying attacker-
+    // controlled ECIES key material before the user clicks approve.
+    const reqPath = ru.unlockReqPath(LAP);
+    const genuine = JSON.parse(files[reqPath].data);
+    const attackerKey = await generateIdentityKeys();
+    const attackerBlob = await eciesEncryptTo(attackerKey.ecdhPub, crypto.getRandomValues(new Uint8Array(32)));
+    files[reqPath] = {
+      data: JSON.stringify({ ...genuine, kForApprover: { ...genuine.kForApprover, [LAP]: attackerBlob } }),
+      sha: 'swapped',
+    };
+
+    // Approving against the digest the user actually saw must be rejected, and NO response
+    // (which would carry RUK sealed to the attacker key) may be written.
+    await expect(ru.approveRemoteUnlock(PAT, REPO, LAP, shown!.requestDigest)).rejects.toThrow();
+    expect(files[ru.unlockRespPath(LAP)]).toBeUndefined();
+  });
+
+  it('refuses a different but validly-signed request (binding is to the shown request)', async () => {
+    await enrollPair();
+    await actAsLaptop();
+    vault.lock();
+    await ru.requestRemoteUnlock(PAT, REPO, LAP);
+
+    await actAsPhone();
+    const shown = await ru.readPendingApproval(PAT, REPO, LAP);
+    expect(shown).not.toBeNull();
+
+    // Laptop legitimately re-requests (fresh nonce + key material), re-signed by the real
+    // requester identity. It verifies, but it is NOT the request whose code the user matched.
+    await actAsLaptop();
+    vault.lock();
+    await ru.requestRemoteUnlock(PAT, REPO, LAP);
+    await actAsPhone();
+    const fresh = await ru.readPendingApproval(PAT, REPO, LAP);
+    expect(fresh!.requestDigest).not.toBe(shown!.requestDigest);
+
+    await expect(ru.approveRemoteUnlock(PAT, REPO, LAP, shown!.requestDigest)).rejects.toThrow(/changed since it was shown/);
+    expect(files[ru.unlockRespPath(LAP)]).toBeUndefined();
   });
 });
 

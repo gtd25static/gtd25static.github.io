@@ -157,7 +157,7 @@ export function useRemoteWipeCommands() {
   }, [tick]);
 }
 
-export interface ApprovalRequest { deviceId: string; fromName: string; nonce: string; code: string; expiresAt: number }
+export interface ApprovalRequest { deviceId: string; fromName: string; nonce: string; code: string; expiresAt: number; requestDigest: string }
 
 /**
  * Approver-side hook (NON-Paranoid devices): accept RUK invites and surface a
@@ -203,7 +203,7 @@ export function useRemoteApprovals(): { pending: ApprovalRequest | null; approve
       const cur = current.current;
       if (cur) {
         const still = await readPendingApproval(pat, repo, cur.deviceId);
-        if (!still || still.nonce !== cur.nonce) {
+        if (!still || still.nonce !== cur.nonce || still.requestDigest !== cur.requestDigest) {
           dismiss(Date.now() >= cur.expiresAt
             ? `Unlock request from “${cur.fromName}” expired`
             : `Unlock request from “${cur.fromName}” was handled by another device`);
@@ -217,7 +217,7 @@ export function useRemoteApprovals(): { pending: ApprovalRequest | null; approve
       for (const m of managed) {
         const p = await readPendingApproval(pat, repo, m.deviceId);
         if (p && !seen.current.has(p.nonce)) {
-          const req: ApprovalRequest = { deviceId: m.deviceId, fromName: p.fromName, nonce: p.nonce, code: p.code, expiresAt: p.expiresAt };
+          const req: ApprovalRequest = { deviceId: m.deviceId, fromName: p.fromName, nonce: p.nonce, code: p.code, expiresAt: p.expiresAt, requestDigest: p.requestDigest };
           current.current = req;
           setPending(req);
           break;
@@ -264,7 +264,7 @@ export function useRemoteApprovals(): { pending: ApprovalRequest | null; approve
     if (!p) return;
     try {
       const local = await db.localSettings.get('local');
-      if (local?.githubPat && local.githubRepo) await approveRemoteUnlock(local.githubPat, local.githubRepo, p.deviceId);
+      if (local?.githubPat && local.githubRepo) await approveRemoteUnlock(local.githubPat, local.githubRepo, p.deviceId, p.requestDigest);
     } catch { /* requester can retry */ } finally {
       dismiss(null);
     }

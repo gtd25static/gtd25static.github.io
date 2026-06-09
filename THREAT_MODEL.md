@@ -1,6 +1,6 @@
 # GTD25 — Security Review & Threat Model
 
-**Last updated:** 2026-06-09 (the sync repo's **default branch is now also periodically history-squashed** (~monthly, content-preserving orphan commit + force-update) to bound git-history growth from per-sync JSON commits; CAS-guarded, transparent to the app's content-SHA concurrency and other devices, recovery via the preserved remote backup files. Earlier 2026-06-09: Shared Folder blobs live on a dedicated orphan branch `gtd25-blobs` that is periodically **history-squashed** (single orphan commit + force-update) to purge deleted files so the sync repo stops growing; and GitHub GCs the freed bytes on its own schedule; wipe empties the branch. Earlier 2026-06-09: added the **Shared Folder**: an E2E-encrypted link/file/snippet store synced across the user's devices; item metadata — type/name/size/url/blobId/mimeType — is encrypted with only opaque id/order/timestamps plaintext; file/snippet bytes are sync-key encrypted on the wire and DEK-encrypted at rest under Paranoid; residual leak is per-blob count + ciphertext size to a backend reader. Prior: remote-wipe device lifecycle derived from shared repo files; registry-entry deletion as decommission signal; serialized `remoteApproverFor` writes + backend-error resilience; diagnostics log hardened against payload leaks)
+**Last updated:** 2026-06-09 (**remote-unlock approval is now bound to the exact verified+displayed request** — the approver re-verifies the requester signature and requires a canonical request digest match before sealing RUK, closing the ACR-001 request-swap window where a backend/PAT writer could redirect RUK to attacker-controlled key material after the verification code was shown. Earlier 2026-06-09: the sync repo's **default branch is now also periodically history-squashed** (~monthly, content-preserving orphan commit + force-update) to bound git-history growth from per-sync JSON commits; CAS-guarded, transparent to the app's content-SHA concurrency and other devices, recovery via the preserved remote backup files. Earlier 2026-06-09: Shared Folder blobs live on a dedicated orphan branch `gtd25-blobs` that is periodically **history-squashed** (single orphan commit + force-update) to purge deleted files so the sync repo stops growing; and GitHub GCs the freed bytes on its own schedule; wipe empties the branch. Earlier 2026-06-09: added the **Shared Folder**: an E2E-encrypted link/file/snippet store synced across the user's devices; item metadata — type/name/size/url/blobId/mimeType — is encrypted with only opaque id/order/timestamps plaintext; file/snippet bytes are sync-key encrypted on the wire and DEK-encrypted at rest under Paranoid; residual leak is per-blob count + ciphertext size to a backend reader. Prior: remote-wipe device lifecycle derived from shared repo files; registry-entry deletion as decommission signal; serialized `remoteApproverFor` writes + backend-error resilience; diagnostics log hardened against payload leaks)
 **Maintenance:** This document MUST be kept current. See "Keeping this document
 updated" at the end and the corresponding rule in `CLAUDE.md`.
 
@@ -398,8 +398,15 @@ locked device unwraps the DEK. Device identity keys are distributed via a regist
   request — but completion requires **you approving on the trusted device**. Requests
   are single-use, short-TTL and **user-initiated**, and both screens show a
   **verification code** (derived from K) that must match; an **unexpected prompt is
-  an attack signal → deny**. Residual: this leans on user vigilance (don't approve
-  prompts you didn't initiate; check the code).
+  an attack signal → deny**. **Approval is cryptographically bound to the exact
+  request that was verified and displayed:** when you approve, the approver re-verifies
+  the requester signature **and** requires the request to hash to the same canonical
+  digest (over `fromDeviceId|nonce|ts|kForApprover`) it showed you — so a
+  backend/PAT/same-account writer that **swaps the request after the code is shown**
+  (substituting attacker-controlled ECIES key material) is **rejected by the approver**,
+  not merely caught by you noticing a code mismatch. Residual: still user-gated (don't
+  approve prompts you didn't initiate; check the code) — but the code-vs-swap window is
+  now closed by the digest binding rather than relying on vigilance alone.
 - **Identity-key trust.** The registry MAC (syncPassword-derived) stops a PAT-only
   attacker from injecting or substituting approver identity keys; enrolment is
   **owner-gated** (only an unlocked owner can grant an approver — delivering RUK needs

@@ -174,6 +174,17 @@ function responseBytes(r: { forNonce: string; fromApproverDeviceId: string; ts: 
   return te.encode(`resp|${r.forNonce}|${r.fromApproverDeviceId}|${r.ts}|${r.respBlob}`);
 }
 
+/**
+ * Canonical SHA-256 digest of an unlock request over the SAME signed bytes used for
+ * `requestBytes` — i.e. it pins fromDeviceId, nonce, ts, and the full kForApprover map
+ * (so the exact ECIES key material the user's verification code was derived from). Used
+ * to bind approval to the request that was verified + displayed (see ACR-001).
+ */
+async function requestDigest(r: { fromDeviceId: string; nonce: string; ts: number; kForApprover: Record<string, EciesBlob> }): Promise<string> {
+  const hash = await crypto.subtle.digest('SHA-256', requestBytes(r));
+  return b64encode(new Uint8Array(hash));
+}
+
 // --- Wire shapes ---
 interface ApproverInvite { fromDeviceId: string; fromName: string; fromEcdsaPub: JsonWebKey; rukEcies: EciesBlob; ts: number }
 interface WipeCommand { target: string; nonce: string; ts: number; from: string; sig: string }
@@ -769,7 +780,7 @@ export async function pollRemoteUnlock(pat: string, repo: string, deviceId: stri
 
 // --- Unlock exchange (approver side) ---
 
-export interface PendingApproval { fromDeviceId: string; fromName: string; nonce: string; code: string; expiresAt: number }
+export interface PendingApproval { fromDeviceId: string; fromName: string; nonce: string; code: string; expiresAt: number; requestDigest: string }
 
 /**
  * Approver: read a pending unlock request from a managed device, verify its
@@ -797,14 +808,21 @@ export async function readPendingApproval(pat: string, repo: string, fromDeviceI
   try { k = await eciesDecrypt(identity.ecdhPriv, myBlob); } catch { return null; }
   const code = await verificationCode(concat(k, te.encode(req.nonce)));
   k.fill(0);
-  return { fromDeviceId, fromName: entry.name, nonce: req.nonce, code, expiresAt: req.ts + REQUEST_TTL_MS };
+  const digest = await requestDigest({ fromDeviceId: req.fromDeviceId, nonce: req.nonce, ts: req.ts, kForApprover: req.kForApprover });
+  return { fromDeviceId, fromName: entry.name, nonce: req.nonce, code, expiresAt: req.ts + REQUEST_TTL_MS, requestDigest: digest };
 }
 
 /**
  * Approver: APPROVE a pending request — re-derive the session key, wrap RUK under
  * it, sign, and post the response. The user must have matched the code first.
+ *
+ * `expectedDigest` is the `requestDigest` returned by `readPendingApproval` for the
+ * request whose verification code the user just matched. We re-verify the requester
+ * signature AND require the re-read request to hash to `expectedDigest`, so a backend
+ * /PAT writer that swaps the request after the code is shown cannot redirect RUK to
+ * attacker-controlled key material (ACR-001).
  */
-export async function approveRemoteUnlock(pat: string, repo: string, fromDeviceId: string): Promise<void> {
+export async function approveRemoteUnlock(pat: string, repo: string, fromDeviceId: string, expectedDigest: string): Promise<void> {
   if (isParanoidFlagSet()) throw new Error('A Paranoid device cannot approve remote unlock');
   const local = await db.localSettings.get('local');
   const entry = local?.remoteApproverFor?.[fromDeviceId];
@@ -812,8 +830,17 @@ export async function approveRemoteUnlock(pat: string, repo: string, fromDeviceI
   const myId = local?.deviceId ?? '';
   const file = await getFile(pat, repo, unlockReqPath(fromDeviceId));
   if (!file) throw new Error('No unlock request found');
-  const req = JSON.parse(file.data) as UnlockRequest;
+  const req = (() => { try { return JSON.parse(file.data) as UnlockRequest; } catch { return null; } })();
+  if (!req || req.fromDeviceId !== fromDeviceId || !req.kForApprover?.[myId]) throw new Error('No unlock request found');
   if (Date.now() - req.ts > REQUEST_TTL_MS) throw new Error('Request expired');
+  // Re-verify the requester signature (the request must be genuine)...
+  if (!(await verifyPayload(entry.ecdsaPub, req.sig, requestBytes({ fromDeviceId: req.fromDeviceId, nonce: req.nonce, ts: req.ts, kForApprover: req.kForApprover })))) {
+    throw new Error('Unlock request signature is invalid — approval aborted');
+  }
+  // ...and that it is byte-for-byte the request the user saw and matched the code for.
+  if ((await requestDigest({ fromDeviceId: req.fromDeviceId, nonce: req.nonce, ts: req.ts, kForApprover: req.kForApprover })) !== expectedDigest) {
+    throw new Error('Unlock request changed since it was shown — approval aborted');
+  }
   const identity = await ensureDeviceIdentity();
   const k = await eciesDecrypt(identity.ecdhPriv, req.kForApprover[myId]);
   try {
