@@ -1,12 +1,13 @@
-import type { SyncData, Task, TaskList, Subtask } from '../db/models';
+import type { SyncData, Task, TaskList, Subtask, SharedItem } from '../db/models';
 import { encryptRow, getActiveAtRestKey, type Row } from '../db/vault-middleware';
 
-type AtRestTableName = 'taskLists' | 'tasks' | 'subtasks';
-type AtRestRow = TaskList | Task | Subtask;
+type AtRestTableName = 'taskLists' | 'tasks' | 'subtasks' | 'sharedItems';
+type AtRestRow = TaskList | Task | Subtask | SharedItem;
 
 export function prepareEntityRowsForAtRest(tableName: 'taskLists', rows: TaskList[]): Promise<TaskList[]>;
 export function prepareEntityRowsForAtRest(tableName: 'tasks', rows: Task[]): Promise<Task[]>;
 export function prepareEntityRowsForAtRest(tableName: 'subtasks', rows: Subtask[]): Promise<Subtask[]>;
+export function prepareEntityRowsForAtRest(tableName: 'sharedItems', rows: SharedItem[]): Promise<SharedItem[]>;
 export async function prepareEntityRowsForAtRest(
   tableName: AtRestTableName,
   rows: AtRestRow[],

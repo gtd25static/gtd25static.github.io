@@ -108,6 +108,40 @@ export interface Subtask {
   fieldTimestamps?: Record<string, number>;
 }
 
+export type SharedItemType = 'link' | 'file' | 'snippet';
+
+// An item in the single app-level Shared Folder, synced across the user's own
+// devices. Metadata (type/name/size/url/blobId/mimeType) is SENSITIVE and
+// encrypted as a unit on the wire and at rest (see SENSITIVE_FIELDS.sharedItem);
+// only opaque id/order/timestamps stay plaintext — same exposure level as tasks.
+// File/snippet bytes live in a separate opaque backend blob (gtd25-shared/{blobId});
+// link URLs live inline in `url`. blobId is encrypted so a backend observer can't
+// correlate a metadata entry to its blob object.
+export interface SharedItem {
+  id: string;
+  type: SharedItemType;
+  name: string;        // filename / link title / snippet title
+  size: number;        // bytes, counted against the folder quota
+  url?: string;        // link only
+  blobId?: string;     // file/snippet: opaque ref to backend blob
+  mimeType?: string;   // file/snippet
+  order: number;
+  createdAt: number;
+  updatedAt: number;
+  deletedAt?: number;
+  fieldTimestamps?: Record<string, number>;
+}
+
+// Device-local cache of a Shared Folder blob's bytes (NEVER synced). `data` holds
+// plaintext bytes when Paranoid Mode is off, and DEK-encrypted bytes when it's on
+// (applied explicitly by shared-blobs.ts since the field-oriented vault middleware
+// can't handle binary). Decrypted to memory only when an item is opened.
+export interface SharedBlob {
+  id: string; // = SharedItem.blobId
+  data: Uint8Array;
+  cachedAt: number;
+}
+
 export interface Settings {
   theme: 'light' | 'dark' | 'system';
 }
@@ -224,7 +258,7 @@ export interface ChangeEntry {
   id: string;
   deviceId: string;
   timestamp: number;
-  entityType: 'taskList' | 'task' | 'subtask';
+  entityType: 'taskList' | 'task' | 'subtask' | 'sharedItem';
   entityId: string;
   operation: 'upsert' | 'delete';
   data?: Record<string, unknown>;
@@ -239,6 +273,7 @@ export interface SyncData {
   taskLists: TaskList[];
   tasks: Task[];
   subtasks: Subtask[];
+  sharedItems?: SharedItem[];
   settings: Settings;
   pomodoroSettings?: PomodoroSettings;
   soundPresets?: SoundPreset[];

@@ -5,9 +5,9 @@ import { SYNC_VERSION } from './version';
 import { migrateEntryData } from './migrations';
 import { mergeEntity, stampUpdatedFields } from './field-timestamps';
 import { prepareEntityRowsForAtRest } from './at-rest-writes';
-import type { Subtask, Task, TaskList } from '../db/models';
+import type { Subtask, Task, TaskList, SharedItem } from '../db/models';
 
-type EntityRow = TaskList | Task | Subtask;
+type EntityRow = TaskList | Task | Subtask | SharedItem;
 
 async function getDeviceId(): Promise<string> {
   const local = await db.localSettings.get('local');
@@ -127,18 +127,21 @@ const tableForEntity = {
   taskList: () => db.taskLists,
   task: () => db.tasks,
   subtask: () => db.subtasks,
+  sharedItem: () => db.sharedItems,
 } as const;
 
 const tableNameForEntity = {
   taskList: 'taskLists',
   task: 'tasks',
   subtask: 'subtasks',
+  sharedItem: 'sharedItems',
 } as const;
 
 const requiredFields: Record<ChangeEntry['entityType'], string[]> = {
   taskList: ['id', 'name', 'order', 'createdAt', 'updatedAt'],
   task: ['id', 'listId', 'title', 'status', 'order', 'createdAt', 'updatedAt'],
   subtask: ['id', 'taskId', 'title', 'status', 'order', 'createdAt', 'updatedAt'],
+  sharedItem: ['id', 'type', 'name', 'size', 'order', 'createdAt', 'updatedAt'],
 };
 
 function validateEntityShape(data: Record<string, unknown> | undefined, entityType: ChangeEntry['entityType']): boolean {
@@ -157,11 +160,13 @@ export async function applyRemoteEntries(entries: ChangeEntry[]) {
     taskList: new Map<string, EntityRow | null>(),
     task: new Map<string, EntityRow | null>(),
     subtask: new Map<string, EntityRow | null>(),
+    sharedItem: new Map<string, EntityRow | null>(),
   };
   const writes: Record<ChangeEntry['entityType'], Map<string, EntityRow>> = {
     taskList: new Map<string, EntityRow>(),
     task: new Map<string, EntityRow>(),
     subtask: new Map<string, EntityRow>(),
+    sharedItem: new Map<string, EntityRow>(),
   };
 
   async function getCurrent(entityType: ChangeEntry['entityType'], entityId: string): Promise<EntityRow | null> {
@@ -224,15 +229,16 @@ export async function applyRemoteEntries(entries: ChangeEntry[]) {
     }
   }
 
-  const [taskLists, tasks, subtasks] = await Promise.all([
+  const [taskLists, tasks, subtasks, sharedItems] = await Promise.all([
     prepareEntityRowsForAtRest(tableNameForEntity.taskList, Array.from(writes.taskList.values()) as TaskList[]),
     prepareEntityRowsForAtRest(tableNameForEntity.task, Array.from(writes.task.values()) as Task[]),
     prepareEntityRowsForAtRest(tableNameForEntity.subtask, Array.from(writes.subtask.values()) as Subtask[]),
+    prepareEntityRowsForAtRest(tableNameForEntity.sharedItem, Array.from(writes.sharedItem.values()) as SharedItem[]),
   ]);
 
-  if (taskLists.length === 0 && tasks.length === 0 && subtasks.length === 0) return;
+  if (taskLists.length === 0 && tasks.length === 0 && subtasks.length === 0 && sharedItems.length === 0) return;
 
-  await db.transaction('rw', [db.taskLists, db.tasks, db.subtasks], async () => {
+  await db.transaction('rw', [db.taskLists, db.tasks, db.subtasks, db.sharedItems], async () => {
     if (taskLists.length > 0) {
       await db.taskLists.bulkPut(taskLists);
     }
@@ -241,6 +247,9 @@ export async function applyRemoteEntries(entries: ChangeEntry[]) {
     }
     if (subtasks.length > 0) {
       await db.subtasks.bulkPut(subtasks);
+    }
+    if (sharedItems.length > 0) {
+      await db.sharedItems.bulkPut(sharedItems);
     }
   });
 }

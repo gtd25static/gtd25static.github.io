@@ -32,6 +32,7 @@ const ENTITY_TYPE_BY_TABLE: Record<string, string> = {
   tasks: 'task',
   subtasks: 'subtask',
   taskLists: 'taskList',
+  sharedItems: 'sharedItem',
 };
 
 function isHandledTable(name: string): boolean {
@@ -127,7 +128,7 @@ function quarantineRow(table: string, row: Row): Row {
   const out: Row = {};
   for (const [k, v] of Object.entries(row)) if (k !== '_enc') out[k] = v;
   if (table === 'tasks' || table === 'subtasks') out.title = UNREADABLE;
-  else if (table === 'taskLists') out.name = UNREADABLE;
+  else if (table === 'taskLists' || table === 'sharedItems') out.name = UNREADABLE;
   out._decryptError = true;
   return out;
 }

@@ -4,7 +4,7 @@ import { __resetForTesting as resetSyncEngine } from '../../sync/sync-engine';
 import { __resetForTesting as resetRemoteBackups } from '../../sync/remote-backups';
 import { clearEncryptionKey } from '../../sync/crypto';
 import { clearDeviceIdCache } from '../../sync/change-log';
-import type { ChangeEntry } from '../../db/models';
+import type { ChangeEntry, SharedItem } from '../../db/models';
 import { newId } from '../../lib/id';
 
 const SYNC_LOCALSTORAGE_KEYS = [
@@ -66,6 +66,21 @@ export function makeChangeEntry(overrides?: Partial<ChangeEntry>): ChangeEntry {
       createdAt: Date.now(),
       updatedAt: Date.now(),
     },
+    ...overrides,
+  };
+}
+
+export function makeSharedItem(overrides?: Partial<SharedItem>): SharedItem {
+  const now = Date.now();
+  return {
+    id: newId(),
+    type: 'link',
+    name: 'Example',
+    size: 32,
+    url: 'https://example.com',
+    order: 0,
+    createdAt: now,
+    updatedAt: now,
     ...overrides,
   };
 }

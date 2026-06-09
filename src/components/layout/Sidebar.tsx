@@ -26,6 +26,7 @@ import { PomodoroBar } from '../pomodoro/PomodoroBar';
 import { GIT_COMMIT, MAX_LIST_NAME_LENGTH, isInboxList } from '../../lib/constants';
 import { moveTaskToList } from '../../hooks/use-tasks';
 import { useSpecialListContext } from '../../hooks/use-special-list';
+import { useSharedStorage, formatBytes } from '../../hooks/use-shared-items';
 import { useReviewData } from '../../hooks/use-review-data';
 import { useVault } from '../../hooks/use-vault';
 import { lock as lockVault } from '../../db/vault';
@@ -275,6 +276,7 @@ export function Sidebar() {
   const specialTotal = warningCount + blockedCount + recurringCount;
   const reviewData = useReviewData();
   const { enabled: paranoidEnabled } = useVault();
+  const sharedStorage = useSharedStorage();
 
   const filteredLists = searchQuery
     ? lists.filter((l) => l.name.toLowerCase().includes(searchQuery.toLowerCase()))
@@ -537,6 +539,29 @@ export function Sidebar() {
           </button>
         </div>
       )}
+
+      {/* Shared folder */}
+      <div className="px-2 pb-1">
+        <button
+          onClick={() => {
+            selectList('__shared__');
+            setSidebarOpen(false);
+          }}
+          className={`flex w-full items-center gap-3 rounded-full px-3 py-3.5 md:py-2 text-sm transition-colors ${
+            selectedListId === '__shared__'
+              ? 'bg-accent-50 text-accent-700 font-medium dark:bg-accent-900/20 dark:text-accent-300'
+              : 'text-zinc-700 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800'
+          }`}
+        >
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className={selectedListId === '__shared__' ? 'text-accent-600' : 'text-zinc-400'}>
+            <path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z" strokeLinejoin="round" />
+          </svg>
+          <span className="flex-1 text-left">Shared</span>
+          {sharedStorage.usedBytes > 0 && (
+            <span className="text-xs text-zinc-400">{formatBytes(sharedStorage.usedBytes)}</span>
+          )}
+        </button>
+      </div>
 
       <nav className="flex-1 overflow-y-auto px-2 pt-1 scrollbar-thin">
         {/* Task lists section */}

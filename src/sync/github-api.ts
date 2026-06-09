@@ -60,6 +60,17 @@ function base64ToUtf8(base64: string): string {
   return new TextDecoder().decode(bytes);
 }
 
+// Chunked base64 of raw bytes — avoids the call-stack/string-length limits that
+// String.fromCharCode(...bytes) or a per-byte loop hit on multi-MB blobs.
+function bytesToBase64(bytes: Uint8Array): string {
+  const CHUNK = 0x8000;
+  let binary = '';
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
+  }
+  return btoa(binary);
+}
+
 export async function testConnection(pat: string, repo: string): Promise<boolean> {
   try {
     const resp = await fetch(`https://api.github.com/repos/${repo}`, {
@@ -179,6 +190,73 @@ export async function deleteFile(
   if (!resp.ok && resp.status !== 404) {
     throw new Error(`GitHub API error deleting ${path}: ${resp.status}`);
   }
+}
+
+// --- Binary blobs (Shared Folder) ---
+// The text helpers above assume UTF-8 and the Contents API JSON `content` field,
+// which is empty for files >1 MB. These handle raw bytes and large files:
+// upload via base64 in the Contents PUT (auto-commits), download via the raw
+// media type (returns full content regardless of the 1 MB JSON limit).
+
+export async function putBinaryFile(
+  pat: string,
+  repo: string,
+  path: string,
+  bytes: Uint8Array,
+  sha?: string,
+  signal?: AbortSignal,
+): Promise<string> {
+  const body: Record<string, string> = {
+    message: `gtd25 sync: ${path}`,
+    content: bytesToBase64(bytes),
+  };
+  if (sha) body.sha = sha;
+
+  const resp = await githubFetch(pat, repo, path, {
+    method: 'PUT',
+    body: JSON.stringify(body),
+  }, signal);
+
+  if (resp.status === 409) throw new Error('CONFLICT');
+  if (!resp.ok) throw new Error(`GitHub API error: ${resp.status}`);
+
+  const json = await resp.json();
+  return json.content.sha;
+}
+
+export async function getBinaryFile(
+  pat: string,
+  repo: string,
+  path: string,
+  signal?: AbortSignal,
+): Promise<Uint8Array | null> {
+  const resp = await githubFetch(
+    pat,
+    repo,
+    path,
+    { headers: { Accept: 'application/vnd.github.raw' } },
+    signal,
+  );
+  if (resp.status === 404) return null;
+  if (!resp.ok) throw new Error(`GitHub API error: ${resp.status}`);
+  return new Uint8Array(await resp.arrayBuffer());
+}
+
+// Fetch just the blob SHA (needed to delete a >1 MB file when we don't hold it).
+export async function getFileSha(
+  pat: string,
+  repo: string,
+  path: string,
+  signal?: AbortSignal,
+): Promise<string | null> {
+  const resp = await githubFetch(pat, repo, path, undefined, signal);
+  if (resp.status === 404) return null;
+  if (!resp.ok) throw new Error(`GitHub API error: ${resp.status}`);
+  const json = await resp.json();
+  if (!json || typeof json.sha !== 'string') {
+    throw new Error(`Malformed GitHub response for ${path}: missing sha`);
+  }
+  return json.sha;
 }
 
 // Legacy compat exports

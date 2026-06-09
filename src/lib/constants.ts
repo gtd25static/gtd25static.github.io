@@ -13,6 +13,9 @@ export const MAX_TITLE_LENGTH = 500;
 export const MAX_DESCRIPTION_LENGTH = 5000;
 export const MAX_LIST_NAME_LENGTH = 100;
 
+// Shared Folder overall storage cap (30 MB). Per-item cap = remaining free space.
+export const MAX_SHARED_FOLDER_BYTES = 30 * 1024 * 1024;
+
 export const INBOX_LIST_NAME = 'Inbox';
 
 export function isInboxList(list: { name: string; type: string }): boolean {

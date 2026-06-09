@@ -1,5 +1,5 @@
 import Dexie, { type Table } from 'dexie';
-import type { TaskList, Task, Subtask, SyncMeta, LocalSettings, ChangeEntry, PomodoroSound, SoundPreset, PomodoroSettings, Vault } from './models';
+import type { TaskList, Task, Subtask, SyncMeta, LocalSettings, ChangeEntry, PomodoroSound, SoundPreset, PomodoroSettings, Vault, SharedItem, SharedBlob } from './models';
 import { newId } from '../lib/id';
 import { createLocalBackup } from './backup';
 import { purgeOldTrashItems } from './purge';
@@ -20,6 +20,8 @@ export class Gtd25DB extends Dexie {
   soundPresets!: Table<SoundPreset, string>;
   pomodoroSettings!: Table<PomodoroSettings, string>;
   vault!: Table<Vault, string>;
+  sharedItems!: Table<SharedItem, string>;
+  sharedBlobs!: Table<SharedBlob, string>;
 
   constructor() {
     super('gtd25');
@@ -48,6 +50,13 @@ export class Gtd25DB extends Dexie {
     // Paranoid Mode: device-local vault holding the wrapped at-rest DEK.
     this.version(6).stores({
       vault: 'id',
+    });
+    // Shared Folder: E2E-encrypted items synced across the user's devices.
+    // `sharedItems` holds metadata (synced); `sharedBlobs` caches file/snippet
+    // bytes locally (device-local, never synced).
+    this.version(7).stores({
+      sharedItems: 'id, order, deletedAt',
+      sharedBlobs: 'id',
     });
   }
 }

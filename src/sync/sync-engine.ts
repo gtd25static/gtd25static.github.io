@@ -68,21 +68,24 @@ async function reconcileFromSnapshot(snapshot: SyncData) {
     return toPut;
   }
 
-  const [taskListsToPut, tasksToPut, subtasksToPut] = await Promise.all([
+  const [taskListsToPut, tasksToPut, subtasksToPut, sharedItemsToPut] = await Promise.all([
     reconcileCollection(db.taskLists, snapshot.taskLists),
     reconcileCollection(db.tasks, snapshot.tasks),
     reconcileCollection(db.subtasks, snapshot.subtasks),
+    reconcileCollection(db.sharedItems, snapshot.sharedItems ?? []),
   ]);
-  const [taskLists, tasks, subtasks] = await Promise.all([
+  const [taskLists, tasks, subtasks, sharedItems] = await Promise.all([
     prepareEntityRowsForAtRest('taskLists', taskListsToPut),
     prepareEntityRowsForAtRest('tasks', tasksToPut),
     prepareEntityRowsForAtRest('subtasks', subtasksToPut),
+    prepareEntityRowsForAtRest('sharedItems', sharedItemsToPut),
   ]);
 
-  await db.transaction('rw', [db.taskLists, db.tasks, db.subtasks], async () => {
+  await db.transaction('rw', [db.taskLists, db.tasks, db.subtasks, db.sharedItems], async () => {
     if (taskLists.length > 0) await db.taskLists.bulkPut(taskLists);
     if (tasks.length > 0) await db.tasks.bulkPut(tasks);
     if (subtasks.length > 0) await db.subtasks.bulkPut(subtasks);
+    if (sharedItems.length > 0) await db.sharedItems.bulkPut(sharedItems);
   });
 
   // Reconcile pomodoro settings (outside entity transaction)
@@ -107,15 +110,27 @@ async function reconcileFromSnapshot(snapshot: SyncData) {
   }
 }
 
-async function replaceLocalEntitiesFromSnapshot(snapshot: Pick<SyncData, 'taskLists' | 'tasks' | 'subtasks'>): Promise<void> {
+async function replaceLocalEntitiesFromSnapshot(snapshot: Pick<SyncData, 'taskLists' | 'tasks' | 'subtasks' | 'sharedItems'>): Promise<void> {
   const prepared = await prepareSyncDataForAtRest(snapshot);
-  await db.transaction('rw', [db.taskLists, db.tasks, db.subtasks], async () => {
+  // Only replace shared items when the source actually carries them. Authoritative
+  // remote snapshots always include the field (at least []), so an empty folder
+  // still clears local; ZIP imports / pre-v4 backups omit it, so we preserve local
+  // shared items instead of silently wiping them.
+  const replaceShared = snapshot.sharedItems !== undefined;
+  const sharedItems = replaceShared
+    ? await prepareEntityRowsForAtRest('sharedItems', snapshot.sharedItems ?? [])
+    : [];
+  await db.transaction('rw', [db.taskLists, db.tasks, db.subtasks, db.sharedItems], async () => {
     await db.taskLists.clear();
     await db.tasks.clear();
     await db.subtasks.clear();
     await db.taskLists.bulkPut(prepared.taskLists);
     await db.tasks.bulkPut(prepared.tasks);
     await db.subtasks.bulkPut(prepared.subtasks);
+    if (replaceShared) {
+      await db.sharedItems.clear();
+      if (sharedItems.length > 0) await db.sharedItems.bulkPut(sharedItems);
+    }
   });
 }
 
@@ -427,13 +442,14 @@ async function getCredentials() {
 }
 
 export async function getLocalSnapshot(): Promise<SyncData> {
-  const { taskLists, tasks, subtasks } = await db.transaction(
+  const { taskLists, tasks, subtasks, sharedItems } = await db.transaction(
     'r',
-    [db.taskLists, db.tasks, db.subtasks],
+    [db.taskLists, db.tasks, db.subtasks, db.sharedItems],
     async () => ({
       taskLists: await db.taskLists.toArray(),
       tasks: await db.tasks.toArray(),
       subtasks: await db.subtasks.toArray(),
+      sharedItems: await db.sharedItems.toArray(),
     }),
   );
   const settings: Settings = {
@@ -442,7 +458,7 @@ export async function getLocalSnapshot(): Promise<SyncData> {
   const pomodoroSettings = await db.pomodoroSettings.get('pomodoro') ?? undefined;
   const soundPresets = await db.soundPresets.toArray();
   return {
-    syncVersion: SYNC_VERSION, taskLists, tasks, subtasks, settings,
+    syncVersion: SYNC_VERSION, taskLists, tasks, subtasks, sharedItems, settings,
     pomodoroSettings, soundPresets,
   };
 }
@@ -1183,6 +1199,7 @@ async function compactSnapshot(pat: string, repo: string, encKey: CryptoKey) {
       taskList: new Map(snapshot.taskLists.map((e) => [e.id, e])),
       task: new Map(snapshot.tasks.map((e) => [e.id, e])),
       subtask: new Map(snapshot.subtasks.map((e) => [e.id, e])),
+      sharedItem: new Map((snapshot.sharedItems ?? []).map((e) => [e.id, e])),
     };
 
     const sorted = [...entries].sort((a, b) => a.timestamp - b.timestamp);
@@ -1217,6 +1234,7 @@ async function compactSnapshot(pat: string, repo: string, encKey: CryptoKey) {
     snapshot.taskLists = Array.from(entityMaps.taskList.values());
     snapshot.tasks = Array.from(entityMaps.task.values());
     snapshot.subtasks = Array.from(entityMaps.subtask.values());
+    snapshot.sharedItems = Array.from(entityMaps.sharedItem.values());
 
     // Cleanup soft-deletes older than 30 days
     snapshot = cleanupSoftDeletes(snapshot);
@@ -1501,6 +1519,8 @@ export async function wipeAllData() {
       db.taskLists.clear(),
       db.tasks.clear(),
       db.subtasks.clear(),
+      db.sharedItems.clear(),
+      db.sharedBlobs.clear(),
       clearPendingEntries(),
     ]);
 
@@ -1518,6 +1538,7 @@ export async function wipeAllData() {
         taskLists: [],
         tasks: [],
         subtasks: [],
+        sharedItems: [],
         settings: { theme: (localStorage.getItem('gtd25-theme') as Settings['theme']) ?? 'system' },
         pomodoroSettings: currentPomSettings,
         soundPresets: currentSoundPresets,

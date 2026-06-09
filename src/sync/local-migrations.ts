@@ -28,6 +28,14 @@ const localMigrations: LocalMigration[] = [
       // No-op: new fields (hasWarning, warningAt, blockedAt, links, recurrence) are optional
     },
   },
+  {
+    fromVersion: 3,
+    toVersion: 4,
+    migrate: async () => {
+      // No-op: the Shared Folder tables (sharedItems/sharedBlobs) are created by the
+      // Dexie v7 schema; nothing to backfill.
+    },
+  },
 ];
 
 export async function runLocalMigrations(database: Gtd25DB, from: number, to: number): Promise<void> {

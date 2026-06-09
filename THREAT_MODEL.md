@@ -1,6 +1,6 @@
 # GTD25 — Security Review & Threat Model
 
-**Last updated:** 2026-06-08 (remote-wipe device lifecycle is now derived from shared repo files so all trusted devices converge; registry-entry deletion is the shared "decommission" signal for purge/forget; serialized `remoteApproverFor` writes + backend-error resilience; diagnostics log hardened against payload leaks)
+**Last updated:** 2026-06-09 (added the **Shared Folder**: an E2E-encrypted link/file/snippet store synced across the user's devices; item metadata — type/name/size/url/blobId/mimeType — is encrypted with only opaque id/order/timestamps plaintext; file/snippet bytes are sync-key encrypted on the wire and DEK-encrypted at rest under Paranoid; residual leak is per-blob count + ciphertext size to a backend reader. Prior: remote-wipe device lifecycle derived from shared repo files; registry-entry deletion as decommission signal; serialized `remoteApproverFor` writes + backend-error resilience; diagnostics log hardened against payload leaks)
 **Maintenance:** This document MUST be kept current. See "Keeping this document
 updated" at the end and the corresponding rule in `CLAUDE.md`.
 
@@ -36,7 +36,8 @@ updated" at the end and the corresponding rule in `CLAUDE.md`.
 
 Encryption is **field-level**. Encrypted fields (`SENSITIVE_FIELDS`):
 - `taskList.name`; `task.title/description/link/linkTitle/links/discussionLog`;
-  `subtask.title/link/linkTitle/links`; and the `changeLog.data` snapshots.
+  `subtask.title/link/linkTitle/links`; the `changeLog.data` snapshots; and
+  `sharedItem.type/name/size/url/blobId/mimeType` (Shared Folder — see below).
 - `task.discussionLog` is the follow-up discussion history (`{id, at, note}[]`).
   The free-text `note` is content, so the **whole array** is encrypted as a unit
   (the per-entry `at` timestamps are encrypted too — they are not exposed as
@@ -60,6 +61,38 @@ Encryption is **field-level**. Encrypted fields (`SENSITIVE_FIELDS`):
 ➡️ **Metadata leakage is inherent to every scenario below.** An adversary always
 learns the structure, size, timing, due dates, completion state, device count,
 and activity patterns of your data — only the free-text content is protected.
+
+#### Shared Folder (E2E file/link/snippet store synced across the user's devices)
+
+The Shared Folder is a single app-level container holding three item types — links,
+files, and text snippets — synced across the user's own devices (no multi-user
+sharing; same single sync key as everything else).
+
+- **Item metadata** (`sharedItem`): everything sensitive — the item **type**,
+  **name/filename**, **size**, **url**, **mimeType**, and the opaque **blobId** — is
+  encrypted as a unit into `_enc`. Only the opaque `id`, `order`, and timestamps are
+  plaintext (parity with tasks). **No filename, type, URL, or size leaks** in the
+  metadata file. `blobId` is encrypted so a backend observer cannot link a metadata
+  entry to its blob object.
+- **File/snippet bytes** live in separate opaque backend objects at
+  `gtd25-shared/{random-id}` (no extension → no type leak). On the wire they are
+  AES-GCM encrypted with the sync key (`encryptBytes`).
+- **At rest** (the device-local `sharedBlobs` cache): bytes are **DEK/Argon2id-encrypted
+  when Paranoid Mode is on**, plaintext when off (same posture as tasks). The cache is
+  dropped and re-downloaded whenever Paranoid is toggled, so the at-rest regime never
+  mismatches. While the vault is **locked**, neither the sync key nor the DEK is in
+  memory, so item metadata reads as `_enc`/`⚠︎ unreadable` and blobs cannot be fetched
+  or decrypted — the folder UI shows a locked state.
+- **Size limits** (30 MB folder cap, per-item = remaining) are a client-side UX guard,
+  not a security control.
+- **Residual leak (accepted):** an adversary who can read the backend (Scenario 7)
+  sees the **number** of blob objects and each one's **approximate ciphertext size**,
+  plus the count/timestamps of `sharedItem` metadata rows. This is the per-file-blob
+  trade-off (chosen for efficient incremental sync); it never reveals filenames,
+  types, URLs, or content. "Wipe All Data" clears local items/blobs and pushes an
+  empty snapshot, but previously-uploaded encrypted blob objects may linger as
+  orphans in the repo (still E2E-encrypted) until removed — consistent with the
+  existing recoverable-wipe design.
 
 ### Crypto inventory
 | Purpose | Algo | Key derivation | Verifier (oracle) |

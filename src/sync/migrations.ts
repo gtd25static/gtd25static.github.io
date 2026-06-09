@@ -22,6 +22,13 @@ const migrations: RemoteMigration[] = [
     toVersion: 3,
     migrate: (data) => ({ ...data, syncVersion: 3 }),
   },
+  {
+    // v4 adds the Shared Folder (`sharedItems`). Additive: older snapshots simply
+    // lack the field and are treated as an empty folder.
+    fromVersion: 3,
+    toVersion: 4,
+    migrate: (data) => ({ ...data, syncVersion: 4 }),
+  },
 ];
 
 export function runRemoteMigrations(data: SyncData, from: number, to: number): SyncData {

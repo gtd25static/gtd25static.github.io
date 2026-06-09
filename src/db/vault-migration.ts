@@ -28,7 +28,19 @@ function encryptedTables(): Array<Table<unknown, string>> {
     db.tasks as unknown as Table<unknown, string>,
     db.subtasks as unknown as Table<unknown, string>,
     db.changeLog as unknown as Table<unknown, string>,
+    db.sharedItems as unknown as Table<unknown, string>,
   ];
+}
+
+// The Shared Folder blob cache (binary, not middleware-handled) just mirrors the
+// backend. On any at-rest regime flip we drop it rather than re-encrypt binary in
+// place; the next open re-downloads and re-caches under the new regime.
+async function clearSharedBlobCache(): Promise<void> {
+  try {
+    await db.sharedBlobs.clear();
+  } catch (err) {
+    recordError('vault-migration:sharedBlobs', err);
+  }
 }
 
 async function totalRows(tables: Array<Table<unknown, string>>): Promise<number> {
@@ -86,6 +98,7 @@ export async function encryptAllAtRest(onProgress?: ProgressFn): Promise<void> {
     done += plain.length;
     onProgress?.(done, total);
   }
+  await clearSharedBlobCache();
 }
 
 /** Rewrite every row back to plaintext on disk. DEK must already be active. */
@@ -102,4 +115,5 @@ export async function decryptAllAtRest(onProgress?: ProgressFn): Promise<void> {
     done += raw.length;
     onProgress?.(done, total);
   }
+  await clearSharedBlobCache();
 }

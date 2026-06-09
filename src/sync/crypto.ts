@@ -8,6 +8,9 @@ const SENSITIVE_FIELDS: Record<string, string[]> = {
   taskList: ['name'],
   task: ['title', 'description', 'link', 'linkTitle', 'links', 'discussionLog'],
   subtask: ['title', 'link', 'linkTitle', 'links'],
+  // Shared Folder: everything except opaque id/order/timestamps is encrypted —
+  // no filename, type, size, URL or blob-ref leaks. Same exposure level as tasks.
+  sharedItem: ['type', 'name', 'size', 'url', 'blobId', 'mimeType'],
 };
 
 // --- Key cache ---
@@ -132,6 +135,35 @@ export async function decryptBlob(key: CryptoKey, base64Str: string): Promise<st
   return new TextDecoder().decode(plaintext);
 }
 
+// --- Binary (raw bytes) encryption ---
+// Key-agnostic: used with the sync key (wire) AND the Paranoid DEK (at rest).
+// Returns/consumes IV(12) || ciphertext as raw bytes (no base64 — the GitHub
+// layer base64-encodes for transport, the at-rest cache stores bytes directly).
+
+export async function encryptBytes(key: CryptoKey, bytes: Uint8Array): Promise<Uint8Array> {
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ciphertext = await crypto.subtle.encrypt(
+    { name: 'AES-GCM', iv },
+    key,
+    bytes as BufferSource,
+  );
+  const result = new Uint8Array(iv.length + ciphertext.byteLength);
+  result.set(iv);
+  result.set(new Uint8Array(ciphertext), iv.length);
+  return result;
+}
+
+export async function decryptBytes(key: CryptoKey, data: Uint8Array): Promise<Uint8Array> {
+  const iv = data.slice(0, 12);
+  const ciphertext = data.slice(12);
+  const plaintext = await crypto.subtle.decrypt(
+    { name: 'AES-GCM', iv },
+    key,
+    ciphertext as BufferSource,
+  );
+  return new Uint8Array(plaintext);
+}
+
 // --- Per-entity encryption ---
 
 export async function encryptEntity(
@@ -188,10 +220,11 @@ export async function decryptEntity(
 // --- SyncData-level encryption ---
 
 export async function encryptSyncData(key: CryptoKey, data: SyncData): Promise<SyncData> {
-  const [taskLists, tasks, subtasks] = await Promise.all([
+  const [taskLists, tasks, subtasks, sharedItems] = await Promise.all([
     Promise.all(data.taskLists.map((e) => encryptEntity(key, e as unknown as Record<string, unknown>, 'taskList'))),
     Promise.all(data.tasks.map((e) => encryptEntity(key, e as unknown as Record<string, unknown>, 'task'))),
     Promise.all(data.subtasks.map((e) => encryptEntity(key, e as unknown as Record<string, unknown>, 'subtask'))),
+    Promise.all((data.sharedItems ?? []).map((e) => encryptEntity(key, e as unknown as Record<string, unknown>, 'sharedItem'))),
   ]);
 
   return {
@@ -199,14 +232,16 @@ export async function encryptSyncData(key: CryptoKey, data: SyncData): Promise<S
     taskLists: taskLists as unknown as SyncData['taskLists'],
     tasks: tasks as unknown as SyncData['tasks'],
     subtasks: subtasks as unknown as SyncData['subtasks'],
+    ...(data.sharedItems ? { sharedItems: sharedItems as unknown as SyncData['sharedItems'] } : {}),
   };
 }
 
 export async function decryptSyncData(key: CryptoKey, data: SyncData): Promise<SyncData> {
-  const [taskLists, tasks, subtasks] = await Promise.all([
+  const [taskLists, tasks, subtasks, sharedItems] = await Promise.all([
     Promise.all(data.taskLists.map((e) => decryptEntity(key, e as unknown as Record<string, unknown>, 'taskList'))),
     Promise.all(data.tasks.map((e) => decryptEntity(key, e as unknown as Record<string, unknown>, 'task'))),
     Promise.all(data.subtasks.map((e) => decryptEntity(key, e as unknown as Record<string, unknown>, 'subtask'))),
+    Promise.all((data.sharedItems ?? []).map((e) => decryptEntity(key, e as unknown as Record<string, unknown>, 'sharedItem'))),
   ]);
 
   return {
@@ -214,6 +249,7 @@ export async function decryptSyncData(key: CryptoKey, data: SyncData): Promise<S
     taskLists: taskLists as unknown as SyncData['taskLists'],
     tasks: tasks as unknown as SyncData['tasks'],
     subtasks: subtasks as unknown as SyncData['subtasks'],
+    ...(data.sharedItems ? { sharedItems: sharedItems as unknown as SyncData['sharedItems'] } : {}),
   };
 }
 

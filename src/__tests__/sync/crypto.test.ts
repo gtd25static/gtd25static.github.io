@@ -3,6 +3,8 @@ import {
   deriveKey,
   encryptBlob,
   decryptBlob,
+  encryptBytes,
+  decryptBytes,
   encryptEntity,
   decryptEntity,
   encryptSyncData,
@@ -361,5 +363,97 @@ describe('createVerifier / checkVerifier', () => {
     const wrongKey = await deriveKey('wrong', generateSalt());
     const ok = await checkVerifier(wrongKey, verifier);
     expect(ok).toBe(false);
+  });
+});
+
+describe('encryptBytes / decryptBytes (binary)', () => {
+  it('roundtrips a small buffer', async () => {
+    const bytes = new Uint8Array([0, 1, 2, 250, 251, 255]);
+    const enc = await encryptBytes(testKey, bytes);
+    const dec = await decryptBytes(testKey, enc);
+    expect(Array.from(dec)).toEqual(Array.from(bytes));
+  });
+
+  it('prepends a 12-byte IV (ciphertext differs from plaintext)', async () => {
+    const bytes = new Uint8Array(64).fill(7);
+    const enc = await encryptBytes(testKey, bytes);
+    // IV(12) + ciphertext(>= plaintext + 16 GCM tag)
+    expect(enc.length).toBeGreaterThan(bytes.length + 12);
+    expect(Array.from(enc.slice(12, 12 + bytes.length))).not.toEqual(Array.from(bytes));
+  });
+
+  it('roundtrips a multi-megabyte buffer', async () => {
+    const bytes = new Uint8Array(3 * 1024 * 1024);
+    for (let i = 0; i < bytes.length; i += 4096) bytes[i] = i & 0xff;
+    const enc = await encryptBytes(testKey, bytes);
+    const dec = await decryptBytes(testKey, enc);
+    expect(dec.length).toBe(bytes.length);
+    expect(dec[0]).toBe(bytes[0]);
+    expect(dec[4096]).toBe(bytes[4096]);
+    expect(dec[bytes.length - 1]).toBe(bytes[bytes.length - 1]);
+  });
+
+  it('fails to decrypt with the wrong key', async () => {
+    const wrongKey = await deriveKey('nope', generateSalt());
+    const enc = await encryptBytes(testKey, new Uint8Array([1, 2, 3]));
+    await expect(decryptBytes(wrongKey, enc)).rejects.toThrow();
+  });
+});
+
+describe('encryptEntity / decryptEntity — sharedItem', () => {
+  it('encrypts all metadata except opaque id/order/timestamps', async () => {
+    const item = {
+      id: 'item1',
+      type: 'file',
+      name: 'secret-plans.pdf',
+      size: 12345,
+      blobId: 'blob-abc',
+      mimeType: 'application/pdf',
+      order: 2,
+      createdAt: 1000,
+      updatedAt: 1001,
+    };
+
+    const encrypted = await encryptEntity(testKey, item, 'sharedItem');
+
+    expect(encrypted._enc).toBeDefined();
+    // Sensitive fields removed from plaintext
+    expect(encrypted.type).toBeUndefined();
+    expect(encrypted.name).toBeUndefined();
+    expect(encrypted.size).toBeUndefined();
+    expect(encrypted.blobId).toBeUndefined();
+    expect(encrypted.mimeType).toBeUndefined();
+    // No filename / blob ref leak anywhere in the serialized row
+    expect(JSON.stringify(encrypted)).not.toContain('secret-plans.pdf');
+    expect(JSON.stringify(encrypted)).not.toContain('blob-abc');
+    // Opaque metadata preserved
+    expect(encrypted.id).toBe('item1');
+    expect(encrypted.order).toBe(2);
+    expect(encrypted.createdAt).toBe(1000);
+    expect(encrypted.updatedAt).toBe(1001);
+
+    const decrypted = await decryptEntity(testKey, encrypted, 'sharedItem');
+    expect(decrypted).toEqual(item);
+  });
+
+  it('round-trips a link item through encryptSyncData/decryptSyncData', async () => {
+    const data: SyncData = {
+      syncVersion: 4,
+      taskLists: [],
+      tasks: [],
+      subtasks: [],
+      sharedItems: [
+        { id: 'l1', type: 'link', name: 'GH', size: 20, url: 'https://github.com', order: 0, createdAt: 1, updatedAt: 2 },
+      ],
+      settings: { theme: 'system' },
+    };
+    const enc = await encryptSyncData(testKey, data);
+    const encItem = enc.sharedItems![0] as unknown as Record<string, unknown>;
+    expect(encItem._enc).toBeDefined();
+    expect(encItem.url).toBeUndefined();
+    expect(JSON.stringify(enc.sharedItems)).not.toContain('github.com');
+
+    const dec = await decryptSyncData(testKey, enc);
+    expect(dec.sharedItems).toEqual(data.sharedItems);
   });
 });
