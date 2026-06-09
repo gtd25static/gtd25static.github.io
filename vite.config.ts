@@ -16,6 +16,38 @@ const gitLog = git('git log -25 --pretty=%h%x09%s')
   .filter(Boolean)
   .map((line) => { const [h, ...rest] = line.split('\t'); return { h, s: rest.join('\t') } })
 
+// Inject a Content-Security-Policy meta into the PRODUCTION index.html only (ACR-016).
+// Applied at build time so it does not break Vite's dev server (HMR uses inline scripts
+// + eval). GitHub Pages can't set HTTP headers, so a meta CSP is the deployable route;
+// header-only directives (frame-ancestors) are intentionally omitted as they're ignored
+// in meta. The app's only network egress is the GitHub REST API; styles are injected
+// at runtime by Tailwind, hence 'unsafe-inline' for style-src.
+function cspPlugin(): Plugin {
+  const csp = [
+    "default-src 'self'",
+    "script-src 'self'",
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data: blob: https:",
+    "font-src 'self' data:",
+    "connect-src 'self' https://api.github.com",
+    "worker-src 'self' blob:",
+    "manifest-src 'self'",
+    "object-src 'none'",
+    "base-uri 'self'",
+    "form-action 'self'",
+  ].join('; ')
+  return {
+    name: 'gtd25-csp',
+    apply: 'build',
+    transformIndexHtml(html) {
+      return html.replace(
+        '</title>',
+        `</title>\n    <meta http-equiv="Content-Security-Policy" content="${csp}" />`,
+      )
+    },
+  }
+}
+
 // Emit a NON-precached version.json describing this build, so a running (older)
 // client can fetch the live one and show what the pending update contains.
 function versionJsonPlugin(): Plugin {
@@ -44,6 +76,7 @@ export default defineConfig({
   plugins: [
     react(),
     tailwindcss(),
+    cspPlugin(),
     versionJsonPlugin(),
     VitePWA({
       strategies: 'injectManifest',

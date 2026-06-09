@@ -105,11 +105,11 @@ export async function deriveKey(password: string, saltBase64: string): Promise<C
   );
 }
 
-export async function encryptBlob(key: CryptoKey, plaintext: string): Promise<string> {
+export async function encryptBlob(key: CryptoKey, plaintext: string, aad?: Uint8Array): Promise<string> {
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const encoder = new TextEncoder();
   const ciphertext = await crypto.subtle.encrypt(
-    { name: 'AES-GCM', iv },
+    { name: 'AES-GCM', iv, ...(aad ? { additionalData: aad as BufferSource } : {}) },
     key,
     encoder.encode(plaintext),
   );
@@ -121,13 +121,13 @@ export async function encryptBlob(key: CryptoKey, plaintext: string): Promise<st
   return uint8ToBase64(result);
 }
 
-export async function decryptBlob(key: CryptoKey, base64Str: string): Promise<string> {
+export async function decryptBlob(key: CryptoKey, base64Str: string, aad?: Uint8Array): Promise<string> {
   const data = base64ToUint8(base64Str);
   const iv = data.slice(0, 12);
   const ciphertext = data.slice(12);
 
   const plaintext = await crypto.subtle.decrypt(
-    { name: 'AES-GCM', iv },
+    { name: 'AES-GCM', iv, ...(aad ? { additionalData: aad as BufferSource } : {}) },
     key,
     ciphertext,
   );
@@ -166,6 +166,20 @@ export async function decryptBytes(key: CryptoKey, data: Uint8Array): Promise<Ui
 
 // --- Per-entity encryption ---
 
+// AES-GCM additional-authenticated-data binding the sensitive-field blob to the record
+// it belongs to: the entity type + its id. The blob then can't be silently relocated
+// onto a different record (e.g. moving task A's encrypted title/description onto task B)
+// — a swap fails authentication and surfaces as unreadable rather than impersonating
+// B's content (ACR-005). Newly-written blobs carry this AAD; legacy blobs (written
+// before this change) have none and are still readable via the fallback below, gaining
+// the binding the next time the record is re-encrypted.
+const teAad = new TextEncoder();
+function entityAad(entityType: string, entity: Record<string, unknown>): Uint8Array | undefined {
+  const id = entity.id;
+  if (typeof id !== 'string' || id.length === 0) return undefined; // no stable id -> no binding
+  return teAad.encode(`${entityType}:${id}`);
+}
+
 export async function encryptEntity(
   key: CryptoKey,
   entity: Record<string, unknown>,
@@ -182,8 +196,8 @@ export async function encryptEntity(
     }
   }
 
-  // Encrypt
-  const blob = await encryptBlob(key, JSON.stringify(sensitiveData));
+  // Encrypt — bound to this record's type+id when an id is present.
+  const blob = await encryptBlob(key, JSON.stringify(sensitiveData), entityAad(entityType, entity));
 
   // Build result without sensitive fields
   const result: Record<string, unknown> = {};
@@ -199,11 +213,21 @@ export async function encryptEntity(
 export async function decryptEntity(
   key: CryptoKey,
   entity: Record<string, unknown>,
-  _entityType: string,
+  entityType: string,
 ): Promise<Record<string, unknown>> {
   if (!entity._enc || typeof entity._enc !== 'string') return entity;
 
-  const plaintext = await decryptBlob(key, entity._enc);
+  const aad = entityAad(entityType, entity);
+  let plaintext: string;
+  try {
+    // New blobs are bound to type+id; verify that binding.
+    plaintext = await decryptBlob(key, entity._enc, aad);
+  } catch (err) {
+    // Fallback for blobs written before AAD binding (no additionalData). If there is no
+    // AAD to try, this was already the unbound attempt, so the error is genuine.
+    if (!aad) throw err;
+    plaintext = await decryptBlob(key, entity._enc);
+  }
   const sensitiveData = JSON.parse(plaintext) as Record<string, unknown>;
 
   // Spread decrypted fields back, remove _enc

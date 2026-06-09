@@ -434,3 +434,10 @@ describe('encrypted export/import', () => {
     expect(result.tasks[0].id).toBe(taskId);
   });
 });
+
+describe('parseImportZip resource limits (ACR-011)', () => {
+  it('rejects an oversized archive before reading it', async () => {
+    const huge = { size: 60 * 1024 * 1024 } as unknown as File; // > 50MB cap
+    await expect(parseImportZip(huge)).rejects.toThrow(/too large/i);
+  });
+});

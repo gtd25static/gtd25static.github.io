@@ -39,6 +39,32 @@ describe('failed-attempt wipe', () => {
     expect((await db.vault.get('vault'))?.failedUnlockAttempts).toBe(0);
   });
 
+  it('counts every concurrent wrong attempt without racing the counter (ACR-009)', async () => {
+    await enableParanoid(PASS);
+    await configureMaxUnlockAttempts(0); // isolate the counter from the wipe tripwire
+    lock();
+
+    // Fire several wrong unlocks at once. Serialized read-modify-write means the
+    // stored counter advances once per attempt (before the fix they could collapse).
+    const results = await Promise.all([
+      unlockWithPassphrase('w1'),
+      unlockWithPassphrase('w2'),
+      unlockWithPassphrase('w3'),
+      unlockWithPassphrase('w4'),
+    ]);
+    expect(results).toEqual([false, false, false, false]);
+    expect((await db.vault.get('vault'))?.failedUnlockAttempts).toBe(4);
+  });
+
+  it('does not leave the DEK resident when vault secrets are corrupt (ACR-008)', async () => {
+    await enableParanoid(PASS);
+    lock();
+    // Corrupt the encrypted secrets blob so post-verifier validation fails.
+    await db.vault.update('vault', { secrets: 'not-valid-ciphertext' });
+    expect(await unlockWithPassphrase(PASS)).toBe(false);
+    expect(isUnlocked()).toBe(false);
+  });
+
   it('wipes local data after the configured number of failed attempts', async () => {
     await enableParanoid(PASS);
     await configureMaxUnlockAttempts(3);

@@ -19,6 +19,7 @@ import { encryptAllAtRest, decryptAllAtRest } from './vault-migration';
 import { registerPrfCredential, getPrfOutput } from '../sync/webauthn-prf';
 import { b64encode, b64decode } from '../sync/remote-unlock-crypto';
 import { PARANOID_FLAG, isParanoidFlagSet } from './paranoid-flag';
+import { recordError } from '../lib/diagnostics';
 import type { LocalSettings, Vault, PrfCredential } from './models';
 
 // Synchronous mirror of "a security-key credential is enrolled", so the lock
@@ -139,6 +140,20 @@ async function writeSecurityKeys(keys: PrfCredential[]): Promise<void> {
   setKeyFlag(keys.length > 0);
 }
 
+/**
+ * Reconcile the synchronous `hasSecurityKey` flag (a localStorage cache the lock
+ * screen reads on first paint) against the authoritative vault metadata, and emit if
+ * it changed. The flag is only a cache — clearing/tampering with localStorage must not
+ * hide an enrolled key — so the lock screen calls this on mount to self-heal it from
+ * the persisted vault row (ACR-012). Returns the metadata-derived truth.
+ */
+export async function refreshSecurityKeyFlag(): Promise<boolean> {
+  const vault = await db.vault.get('vault');
+  const has = vault ? vaultSecurityKeys(vault).length > 0 : false;
+  if (has !== readKeyFlag()) { setKeyFlag(has); emit(); }
+  return has;
+}
+
 /** Enrolled security keys (metadata only) for the settings UI. */
 export async function listSecurityKeys(): Promise<Array<{ credentialId: string; label?: string; addedAt: number }>> {
   const vault = await db.vault.get('vault');
@@ -253,8 +268,22 @@ async function completeDisable(): Promise<void> {
   emit();
 }
 
+// Serialize unlock attempts so concurrent wrong guesses cannot interleave their
+// read-modify-write of failedUnlockAttempts and collapse to a single increment,
+// which would let an attacker exceed the wipe threshold undetected (ACR-009).
+let unlockChain: Promise<unknown> = Promise.resolve();
+function serializeUnlock<T>(fn: () => Promise<T>): Promise<T> {
+  const run = unlockChain.then(fn, fn);
+  unlockChain = run.then(() => undefined, () => undefined);
+  return run;
+}
+
 /** Returns false on a wrong passphrase; true once unlocked. */
-export async function unlockWithPassphrase(passphrase: string): Promise<boolean> {
+export function unlockWithPassphrase(passphrase: string): Promise<boolean> {
+  return serializeUnlock(() => doUnlockWithPassphrase(passphrase));
+}
+
+async function doUnlockWithPassphrase(passphrase: string): Promise<boolean> {
   const vault = await db.vault.get('vault');
   if (!vault) return false;
 
@@ -266,7 +295,7 @@ export async function unlockWithPassphrase(passphrase: string): Promise<boolean>
 
   const ok = dek ? await finishUnlock(vault, dek) : false;
   if (!ok) {
-    await registerFailedAttempt(vault);
+    await registerFailedAttempt();
     return false;
   }
   // Transparently upgrade a legacy PBKDF2 vault to Argon2id now that we hold the
@@ -278,8 +307,12 @@ export async function unlockWithPassphrase(passphrase: string): Promise<boolean>
 }
 
 // Count a failed passphrase unlock; trip the panic wipe at the configured limit.
-// The counter lives in the vault row so a reload cannot reset it.
-async function registerFailedAttempt(vault: Vault): Promise<void> {
+// The counter lives in the vault row so a reload cannot reset it. Re-reads the
+// LATEST persisted vault (not a possibly-stale snapshot) so the increment is
+// monotonic under serialized attempts (ACR-009).
+async function registerFailedAttempt(): Promise<void> {
+  const vault = await db.vault.get('vault');
+  if (!vault) return;
   const max = vault.maxUnlockAttempts ?? 0; // 0 => tripwire disabled
   const count = (vault.failedUnlockAttempts ?? 0) + 1;
   await db.vault.update('vault', { failedUnlockAttempts: count });
@@ -326,23 +359,44 @@ export async function unlockWithSecurityKey(): Promise<boolean> {
 async function finishUnlock(vault: Vault, dek: CryptoKey): Promise<boolean> {
   if (!(await checkVerifier(dek, vault.verifier))) return false;
 
-  currentDek = dek;
-  // A successful unlock (passphrase OR security key) clears the failure tripwire.
-  if ((vault.failedUnlockAttempts ?? 0) !== 0) {
-    await db.vault.update('vault', { failedUnlockAttempts: 0 });
+  // Validate ALL required vault secrets into locals BEFORE making the DEK live, so a
+  // corrupt secrets blob aborts the unlock without leaving the DEK resident while the
+  // UI still believes the vault is locked (ACR-008).
+  let secrets: VaultSecrets | null;
+  try {
+    secrets = vault.secrets
+      ? (JSON.parse(await decryptBlob(dek, vault.secrets)) as VaultSecrets)
+      : null;
+  } catch (err) {
+    recordError('vault.finishUnlock.secrets', err);
+    return false;
   }
-  idleTimeoutMs = (vault.idleTimeoutMinutes ?? DEFAULT_IDLE_MINUTES) * 60_000;
-  currentSecrets = vault.secrets
-    ? (JSON.parse(await decryptBlob(dek, vault.secrets)) as VaultSecrets)
-    : null;
 
-  // Resume an interrupted migration.
-  if (vault.migrationState === 'encrypting') {
-    await encryptAllAtRest();
-    await db.vault.update('vault', { migrationState: 'done' });
-  } else if (vault.migrationState === 'decrypting') {
-    await completeDisable();
-    return true;
+  currentDek = dek;
+  currentSecrets = secrets;
+  idleTimeoutMs = (vault.idleTimeoutMinutes ?? DEFAULT_IDLE_MINUTES) * 60_000;
+
+  try {
+    // A successful unlock (passphrase OR security key) clears the failure tripwire.
+    if ((vault.failedUnlockAttempts ?? 0) !== 0) {
+      await db.vault.update('vault', { failedUnlockAttempts: 0 });
+    }
+    // Resume an interrupted migration.
+    if (vault.migrationState === 'encrypting') {
+      await encryptAllAtRest();
+      await db.vault.update('vault', { migrationState: 'done' });
+    } else if (vault.migrationState === 'decrypting') {
+      await completeDisable();
+      return true;
+    }
+  } catch (err) {
+    // Roll back the in-memory unlock so a failed post-validation step can never leave
+    // the DEK/secrets live behind a locked-looking UI (ACR-008).
+    currentDek = null;
+    currentSecrets = null;
+    if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
+    recordError('vault.finishUnlock.resume', err);
+    return false;
   }
 
   resetIdleTimer();

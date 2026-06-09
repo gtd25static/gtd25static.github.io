@@ -1,8 +1,8 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Input } from '../ui/Input';
 import { Button } from '../ui/Button';
 import { RandomizedKeyboard } from './RandomizedKeyboard';
-import { unlockWithPassphrase, unlockWithSecurityKey } from '../../db/vault';
+import { unlockWithPassphrase, unlockWithSecurityKey, refreshSecurityKeyFlag } from '../../db/vault';
 import { useVault } from '../../hooks/use-vault';
 import { useLockScreenRemote } from '../../hooks/use-remote-unlock';
 import { useServiceWorker } from '../../hooks/use-service-worker';
@@ -29,6 +29,11 @@ export function LockScreen() {
   const [showPass, setShowPass] = useState(false); // passphrase is a hidden last resort
   const { forceCheck } = useServiceWorker();
   const [checkingUpdate, setCheckingUpdate] = useState(false);
+
+  // Self-heal the security-key affordance from authoritative vault metadata, so a
+  // cleared/tampered localStorage cache can't hide the hardware-key unlock path and
+  // push the user toward typing the passphrase on an untrusted device (ACR-012).
+  useEffect(() => { void refreshSecurityKeyFlag(); }, []);
 
   function handleCheckUpdate() {
     if (checkingUpdate) return;

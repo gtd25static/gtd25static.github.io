@@ -114,4 +114,16 @@ describe('importSoundsFromZip', () => {
 
     expect(result.imported).toEqual(['aa']);
   });
+
+  it('rejects an oversized archive before reading it (ACR-011)', async () => {
+    const huge = { size: 200 * 1024 * 1024 } as unknown as File; // > 100MB cap
+    await expect(importSoundsFromZip(huge)).rejects.toThrow(/too large/i);
+  });
+
+  it('rejects an archive with too many sound files (ACR-011)', async () => {
+    const many: Record<string, Uint8Array> = {};
+    for (let i = 0; i < 201; i++) many[`s${i}.m4a`] = new Uint8Array([0x00]);
+    const zipFile = await makeTestZip(many);
+    await expect(importSoundsFromZip(zipFile)).rejects.toThrow(/too many/i);
+  });
 });

@@ -16,6 +16,12 @@ const CURRENT_EXPORT_VERSION = 2;
 const EXPORT_FORMAT = 'gtd25-export';
 const PBKDF2_ITERATIONS = 600_000;
 
+// Resource limits for import — reject malicious/accidental oversized archives before
+// they can exhaust memory/CPU (ACR-011). Generous enough for any real backup.
+const MAX_IMPORT_ZIP_BYTES = 50 * 1024 * 1024;   // the .zip on disk
+const MAX_DECODED_BYTES = 80 * 1024 * 1024;      // data.json / decrypted payload string
+const MAX_RECORDS_PER_ARRAY = 200_000;           // tasks / subtasks / lists / presets
+
 export type ExportKeySource = 'passphrase' | 'sync';
 
 // Plaintext manifest for an encrypted export. Holds only non-sensitive metadata
@@ -111,12 +117,16 @@ export async function exportToZip(opts?: ExportOptions): Promise<Blob> {
 }
 
 export async function parseImportZip(file: File, opts?: ImportOptions): Promise<ImportData> {
+  if (file.size > MAX_IMPORT_ZIP_BYTES) {
+    throw new Error('Invalid backup: file is too large');
+  }
   const JSZip = (await import('jszip')).default;
   const zip = await JSZip.loadAsync(file);
 
   const dataFile = zip.file('data.json');
   if (dataFile) {
     const raw = await dataFile.async('string');
+    if (raw.length > MAX_DECODED_BYTES) throw new Error('Invalid backup: data.json is too large');
     let parsed: ExportPayload;
     try {
       parsed = JSON.parse(raw);
@@ -154,6 +164,7 @@ async function decryptPayload(
   const encFile = zip.file('data.enc');
   if (!encFile) throw new Error('Invalid backup: missing data.enc');
   const cipher = await encFile.async('string');
+  if (cipher.length > MAX_DECODED_BYTES) throw new Error('Invalid backup: encrypted data is too large');
 
   // Resolve a key: try the sync password first when the backup was encrypted
   // with it, otherwise prompt. A wrong password is caught by the verifier.
@@ -175,9 +186,16 @@ async function decryptPayload(
     key = candidate;
   }
 
+  let decoded: string;
+  try {
+    decoded = await decryptBlob(key, cipher);
+  } catch {
+    throw new Error('Invalid backup: could not decrypt data');
+  }
+  if (decoded.length > MAX_DECODED_BYTES) throw new Error('Invalid backup: decrypted data is too large');
   let parsed: ExportPayload;
   try {
-    parsed = JSON.parse(await decryptBlob(key, cipher));
+    parsed = JSON.parse(decoded);
   } catch {
     throw new Error('Invalid backup: could not decrypt data');
   }
@@ -195,6 +213,15 @@ function validatePayload(parsed: ExportPayload): ImportData {
 
   if (!Array.isArray(parsed.taskLists) || !Array.isArray(parsed.tasks) || !Array.isArray(parsed.subtasks)) {
     throw new Error('Invalid backup: missing taskLists, tasks, or subtasks arrays');
+  }
+
+  // Bound record counts so a crafted backup can't pin the CPU validating millions of
+  // entries or blow up IndexedDB (ACR-011).
+  if (parsed.taskLists.length > MAX_RECORDS_PER_ARRAY
+    || parsed.tasks.length > MAX_RECORDS_PER_ARRAY
+    || parsed.subtasks.length > MAX_RECORDS_PER_ARRAY
+    || (Array.isArray(parsed.soundPresets) && parsed.soundPresets.length > MAX_RECORDS_PER_ARRAY)) {
+    throw new Error('Invalid backup: too many records');
   }
 
   const VALID_TASK_STATUSES = new Set(['todo', 'done', 'blocked', 'working']);

@@ -23,6 +23,7 @@ import { identityFingerprint } from '../../sync/remote-unlock-crypto';
 import { panicWipe } from '../../lib/panic-wipe';
 import { exportToZip } from '../../db/export-import';
 import { recordError } from '../../lib/diagnostics';
+import { checkSecretStrength } from '../../lib/password-strength';
 
 function clampMinutes(value: string): number {
   const n = parseInt(value, 10);
@@ -39,6 +40,8 @@ function EnableForm() {
   async function handleEnable() {
     if (pass !== confirm) { toast('Passphrases do not match', 'error'); return; }
     if (!pass.trim()) { toast('Choose a passphrase', 'error'); return; }
+    const strength = checkSecretStrength(pass.trim());
+    if (!strength.ok) { toast(strength.reason!, 'error'); return; }
     setBusy(true);
     try {
       await enableParanoid(pass.trim(), clampMinutes(idle));
@@ -273,6 +276,8 @@ function ManageForm({ idleMinutes, maxAttempts, systemIdleOn, systemLockGraceOn,
   async function handleChangePass() {
     if (newPass !== newPassConfirm) { toast('Passphrases do not match', 'error'); return; }
     if (!newPass.trim()) { toast('Enter a new passphrase', 'error'); return; }
+    const strength = checkSecretStrength(newPass.trim());
+    if (!strength.ok) { toast(strength.reason!, 'error'); return; }
     setBusy(true);
     try {
       await changePassphrase(newPass.trim());
@@ -667,8 +672,12 @@ function ApproverDevicesSection() {
   }
 
   function wipeStatus(m: ManagedDevice): string {
+    // "confirmed" comes from a device-signed wipe-status (authenticated). The pending
+    // ("sent") line is derived from the shared, UNSIGNED command file and is advisory
+    // only — the protected device verifies the approver signature before wiping, and
+    // the confirmation below is the authenticated outcome (ACR-013).
     if (m.lastWipeAck) return `Wipe confirmed ${formatRemoteWipeTime(m.lastWipeAck.wipedAt)}`;
-    if (m.lastWipeCommand) return `Wipe command sent ${formatRemoteWipeTime(m.lastWipeCommand.sentAt)} · awaiting confirmation`;
+    if (m.lastWipeCommand) return `Wipe command sent ${formatRemoteWipeTime(m.lastWipeCommand.sentAt)} · unconfirmed (advisory)`;
     return 'No wipe command sent';
   }
 

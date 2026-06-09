@@ -173,6 +173,13 @@ function requestBytes(r: { fromDeviceId: string; nonce: string; ts: number; kFor
 function responseBytes(r: { forNonce: string; fromApproverDeviceId: string; ts: number; respBlob: string }): Uint8Array {
   return te.encode(`resp|${r.forNonce}|${r.fromApproverDeviceId}|${r.ts}|${r.respBlob}`);
 }
+// Canonical bytes an approver-invite is signed over. Binds the invite to THIS recipient
+// (so it can't be re-targeted), the sender, the timestamp, and the exact ECIES blob
+// carrying RUK — signed by the sender's device key and verified against the
+// MAC-authenticated registry on accept (ACR-007).
+function inviteBytes(recipientDeviceId: string, i: { fromDeviceId: string; ts: number; rukEcies: EciesBlob }): Uint8Array {
+  return te.encode(`invite|${recipientDeviceId}|${i.fromDeviceId}|${i.ts}|${i.rukEcies.epk.x}:${i.rukEcies.ct}`);
+}
 
 /**
  * Canonical SHA-256 digest of an unlock request over the SAME signed bytes used for
@@ -181,12 +188,12 @@ function responseBytes(r: { forNonce: string; fromApproverDeviceId: string; ts: 
  * to bind approval to the request that was verified + displayed (see ACR-001).
  */
 async function requestDigest(r: { fromDeviceId: string; nonce: string; ts: number; kForApprover: Record<string, EciesBlob> }): Promise<string> {
-  const hash = await crypto.subtle.digest('SHA-256', requestBytes(r));
+  const hash = await crypto.subtle.digest('SHA-256', requestBytes(r) as BufferSource);
   return b64encode(new Uint8Array(hash));
 }
 
 // --- Wire shapes ---
-interface ApproverInvite { fromDeviceId: string; fromName: string; fromEcdsaPub: JsonWebKey; rukEcies: EciesBlob; ts: number }
+interface ApproverInvite { fromDeviceId: string; fromName: string; fromEcdsaPub: JsonWebKey; rukEcies: EciesBlob; ts: number; sig?: string }
 interface WipeCommand { target: string; nonce: string; ts: number; from: string; sig: string }
 interface WipeStatus { target: string; commandNonce: string; commandTs: number; wipedAt: number; fromApproverDeviceId: string; protectedDeviceId: string; sig: string }
 interface UnlockRequest { fromDeviceId: string; nonce: string; ts: number; kForApprover: Record<string, EciesBlob>; sig: string }
@@ -235,8 +242,10 @@ export async function enableRemoteUnlock(ctx: EnrollContext, approverDeviceIds: 
     await wrapDekWithRuk(ruk);
     for (const a of approvers) {
       const rukEcies = await eciesEncryptTo(a.ecdhPub, ruk);
+      const ts = Date.now();
+      const sig = await signPayload(identity.ecdsaPriv, inviteBytes(a.deviceId, { fromDeviceId: deviceId, ts, rukEcies }));
       await postApproverInvite(pat, repo, a.deviceId, {
-        fromDeviceId: deviceId, fromName: deviceName, fromEcdsaPub: identity.ecdsaPub, rukEcies, ts: Date.now(),
+        fromDeviceId: deviceId, fromName: deviceName, fromEcdsaPub: identity.ecdsaPub, rukEcies, ts, sig,
       });
     }
   } finally {
@@ -269,7 +278,9 @@ export async function addApprovers(ctx: EnrollContext, approverDeviceIds: string
   try {
     for (const a of toAdd) {
       const rukEcies = await eciesEncryptTo(a.ecdhPub, ruk);
-      await postApproverInvite(pat, repo, a.deviceId, { fromDeviceId: deviceId, fromName: deviceName, fromEcdsaPub: identity.ecdsaPub, rukEcies, ts: Date.now() });
+      const ts = Date.now();
+      const sig = await signPayload(identity.ecdsaPriv, inviteBytes(a.deviceId, { fromDeviceId: deviceId, ts, rukEcies }));
+      await postApproverInvite(pat, repo, a.deviceId, { fromDeviceId: deviceId, fromName: deviceName, fromEcdsaPub: identity.ecdsaPub, rukEcies, ts, sig });
     }
   } finally {
     ruk.fill(0);
@@ -320,15 +331,28 @@ async function removeApproverInvite(pat: string, repo: string, approverDeviceId:
  * Pick up RUK invites addressed to this device and store them. Refuses entirely
  * if THIS device is in Paranoid Mode (a Paranoid device must never be an approver).
  * Returns the number of newly-accepted enrollments.
+ *
+ * Each invite must be SIGNED by a sender device whose identity key is published in the
+ * MAC-authenticated registry — a decryptable-but-unsigned/foreign invite is rejected,
+ * so a PAT-only writer cannot register an attacker-controlled approver relationship
+ * (ACR-007). `macKey` derives from the syncPassword; if omitted it is derived here, and
+ * when no key is available (sync not yet established) the poll is a no-op until it is.
  */
-export async function pollApproverInbox(pat: string, repo: string, deviceId: string): Promise<number> {
+export async function pollApproverInbox(pat: string, repo: string, deviceId: string, macKey?: CryptoKey): Promise<number> {
   if (isParanoidFlagSet()) return 0;
+  const key = macKey ?? (await getRegistryMacKey());
+  if (!key) return 0; // can't authenticate senders yet — skip; invites stay for next poll
   const file = await getFile(pat, repo, approverInboxPath(deviceId));
   if (!file) return 0;
   const inbox = safeParseObj<ApproverInvite>(file.data);
   const identity = await ensureDeviceIdentity();
   const local = await db.localSettings.get('local');
   const existing = local?.remoteApproverFor ?? {};
+
+  // The set of sender devices we can trust — registry entries whose MAC verifies.
+  const authentic = await readAuthenticRegistry(pat, repo, key);
+  const trustedByDeviceId = new Map(authentic.map((e) => [e.deviceId, e]));
+
   const consumedInviteIds = new Set<string>();
   // ECIES decryption is async, so accepted entries are built here (outside the lock) and
   // merged into the live map below; the merge re-checks presence against the fresh map.
@@ -340,9 +364,17 @@ export async function pollApproverInbox(pat: string, repo: string, deviceId: str
       consumedInviteIds.add(invite.fromDeviceId);
       continue;
     }
+    // The sender must be a registry-authenticated device, and the invite must carry a
+    // valid signature from that device's identity key over THIS recipient's id. We use
+    // the registry's key/name (not the invite's self-asserted ones) for the stored entry.
+    const trusted = trustedByDeviceId.get(invite.fromDeviceId);
+    if (!trusted || !invite.sig) continue;
+    const sigOk = await verifyPayload(trusted.ecdsaPub, invite.sig,
+      inviteBytes(deviceId, { fromDeviceId: invite.fromDeviceId, ts: invite.ts, rukEcies: invite.rukEcies }));
+    if (!sigOk) continue;
     try {
       const ruk = await eciesDecrypt(identity.ecdhPriv, invite.rukEcies);
-      toAdd[invite.fromDeviceId] = { ruk: b64encode(ruk), ecdsaPub: invite.fromEcdsaPub, name: invite.fromName };
+      toAdd[invite.fromDeviceId] = { ruk: b64encode(ruk), ecdsaPub: trusted.ecdsaPub, name: trusted.name };
       ruk.fill(0);
       consumedInviteIds.add(invite.fromDeviceId);
       accepted++;
@@ -707,7 +739,7 @@ export async function forgetManagedDeviceAfterWipeCommand(pat: string, repo: str
 
 // --- Unlock exchange (laptop side, while locked) ---
 
-let pendingUnlock: { nonce: string; k: Uint8Array; code: string } | null = null;
+let pendingUnlock: { nonce: string; k: Uint8Array; code: string; expiresAt: number } | null = null;
 
 /** Build + post an unlock request to all enrolled approvers; returns the code to display. */
 export async function requestRemoteUnlock(pat: string, repo: string, deviceId: string): Promise<{ code: string }> {
@@ -731,8 +763,19 @@ export async function requestRemoteUnlock(pat: string, repo: string, deviceId: s
   await putFile(pat, repo, path, JSON.stringify(req), existing?.sha);
 
   const code = await verificationCode(concat(k, te.encode(nonce)));
-  pendingUnlock = { nonce, k, code };
+  pendingUnlock = { nonce, k, code, expiresAt: ts + REQUEST_TTL_MS };
   return { code };
+}
+
+/** True once the in-RAM pending request has passed its TTL (or there is none). */
+function pendingUnlockExpired(): boolean {
+  return !pendingUnlock || Date.now() > pendingUnlock.expiresAt;
+}
+
+/** Drop the pending ephemeral key and best-effort delete the stale remote request. */
+async function expirePendingUnlock(pat: string, repo: string, deviceId: string): Promise<void> {
+  cancelRemoteUnlock(); // zeroes k and clears pendingUnlock
+  await deleteRemoteFileIfExists(pat, repo, unlockReqPath(deviceId));
 }
 
 export function cancelRemoteUnlock(): void {
@@ -744,8 +787,15 @@ export function cancelRemoteUnlock(): void {
  * signed response, decrypt RUK with the in-RAM session key and unlock. Returns
  * 'unlocked' | 'waiting'. Uses conditional requests for cheap polling.
  */
-export async function pollRemoteUnlock(pat: string, repo: string, deviceId: string, etag?: string | null): Promise<{ etag: string | null; status: 'unlocked' | 'waiting' }> {
+export async function pollRemoteUnlock(pat: string, repo: string, deviceId: string, etag?: string | null): Promise<{ etag: string | null; status: 'unlocked' | 'waiting' | 'expired' }> {
   if (!pendingUnlock) return { etag: etag ?? null, status: 'waiting' };
+  // Enforce the TTL on the requester side too: once expired, wipe the in-RAM session
+  // key and delete the stale request so a late/replayed response can't be accepted
+  // against still-resident key material (ACR-006).
+  if (pendingUnlockExpired()) {
+    await expirePendingUnlock(pat, repo, deviceId);
+    return { etag: null, status: 'expired' };
+  }
   const res = await getFileConditional(pat, repo, unlockRespPath(deviceId), etag);
   if (res.status !== 'ok') return { etag: res.status === 'unchanged' ? res.etag : null, status: 'waiting' };
 

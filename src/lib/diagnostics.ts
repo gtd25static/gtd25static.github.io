@@ -29,6 +29,26 @@ function cap(s: string | undefined, max: number): string | undefined {
   return s.length > max ? `${s.slice(0, max)}… [+${s.length - max} chars]` : s;
 }
 
+// The error log is user-readable/copyable, so scrub common secret shapes before
+// storing a message/stack: GitHub tokens, Authorization/Bearer values, the Web Share
+// Target's query content (title/text/url), and long high-entropy base64 blobs
+// (ciphertext / wrapped keys / PRF output) (ACR-015). Conservative by design — it
+// targets recognizable secret patterns rather than redacting everything.
+const REDACTIONS: Array<[RegExp, string]> = [
+  [/gh[pousr]_[A-Za-z0-9]{20,}/g, '[redacted-token]'],
+  [/github_pat_[A-Za-z0-9_]{20,}/g, '[redacted-token]'],
+  [/\b(authorization|bearer|token|pat)\b\s*[:=]\s*[^\s,&"']+/gi, '$1 [redacted]'],
+  [/([?&](?:title|text|url)=)[^&\s"']+/gi, '$1[redacted]'],
+  // Long continuous base64 run (no path separators break it) — keys/ciphertext.
+  [/[A-Za-z0-9+/]{40,}={0,2}/g, '[redacted-blob]'],
+];
+
+export function redactSecrets(s: string): string {
+  let out = s;
+  for (const [re, rep] of REDACTIONS) out = out.replace(re, rep);
+  return out;
+}
+
 /**
  * Summarize an unknown thrown value into a non-sensitive message. We deliberately
  * do NOT JSON.stringify arbitrary objects: an unexpected throw/rejection could carry
@@ -51,8 +71,8 @@ export function recordError(context: string, err: unknown): void {
     errorLog.push({
       at: Date.now(),
       context,
-      message: cap(message, MAX_MESSAGE_LEN) || 'unknown error',
-      stack: cap(stack, MAX_STACK_LEN),
+      message: cap(redactSecrets(message), MAX_MESSAGE_LEN) || 'unknown error',
+      stack: cap(stack !== undefined ? redactSecrets(stack) : undefined, MAX_STACK_LEN),
     });
     if (errorLog.length > MAX_ERRORS) errorLog.shift();
     for (const l of listeners) l();

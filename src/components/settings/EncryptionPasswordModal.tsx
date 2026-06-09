@@ -5,6 +5,7 @@ import { db } from '../../db';
 import { deriveKey, generateSalt, checkVerifier, cacheEncryptionKey } from '../../sync/crypto';
 import { getFile } from '../../sync/github-api';
 import { onEncryptionPasswordNeeded, offEncryptionPasswordNeeded, syncNow } from '../../sync/sync-engine';
+import { checkSecretStrength } from '../../lib/password-strength';
 
 export function EncryptionPasswordModal() {
   // null = closed, '' = new password needed, 'salt...' = existing encryption
@@ -57,6 +58,14 @@ export function EncryptionPasswordModal() {
         // Confirm password match
         if (password !== confirmPassword) {
           setError('Passwords do not match');
+          setLoading(false);
+          return;
+        }
+        // Block clearly-weak sync passwords: this is the single secret protecting ALL
+        // synced data at the backend, so offline-guessing resistance matters (ACR-014).
+        const strength = checkSecretStrength(password, 12);
+        if (!strength.ok) {
+          setError(strength.reason!);
           setLoading(false);
           return;
         }

@@ -5,7 +5,7 @@ import { resetDb } from '../helpers/db-helpers';
 import {
   enableParanoid, lock, unlockWithPassphrase, unlockWithSecurityKey,
   addSecurityKey, removeSecurityKey, listSecurityKeys, isUnlocked, getVaultSnapshot,
-  __resetVaultStateForTests,
+  refreshSecurityKeyFlag, __resetVaultStateForTests,
 } from '../../db/vault';
 import { installWebAuthnMock, uninstallWebAuthnMock, setWebAuthnMode, setNextCredentialId } from '../helpers/webauthn-mock';
 import type { Task } from '../../db/models';
@@ -198,5 +198,19 @@ describe('multiple security keys', () => {
     expect(migrated?.securityKeys?.length).toBe(2);
     expect(migrated?.webauthnCredentialId).toBeUndefined();
     expect(migrated?.dekWrappedByPrf).toBeUndefined();
+  });
+
+  it('re-derives the security-key flag from vault metadata when localStorage is cleared (ACR-012)', async () => {
+    await enableParanoid(PASSPHRASE);
+    await addSecurityKey('key');
+    expect(getVaultSnapshot().hasSecurityKey).toBe(true);
+
+    // Simulate a wiped/tampered localStorage cache hiding the hardware-key path.
+    localStorage.removeItem('gtd25-paranoid-key');
+
+    const has = await refreshSecurityKeyFlag();
+    expect(has).toBe(true);
+    expect(localStorage.getItem('gtd25-paranoid-key')).toBe('1'); // cache self-healed
+    expect(getVaultSnapshot().hasSecurityKey).toBe(true);
   });
 });

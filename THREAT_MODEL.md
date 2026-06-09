@@ -1,6 +1,6 @@
 # GTD25 — Security Review & Threat Model
 
-**Last updated:** 2026-06-09 (**hardening from the Codex AppSec review**: the Paranoid idle re-lock is now re-armed **only by real user interaction** — background DEK access (recurring checks, liveQuery, sync) no longer keeps the vault unlocked (ACR-002); WebAuthn enrollment **no longer logs PRF output bytes or the salt** to the console (ACR-003); and the GET Web Share Target's query string is **redacted from service-worker logs and scrubbed from the URL before any async work** so shared content does not linger (ACR-004). Earlier 2026-06-09: **remote-unlock approval is now bound to the exact verified+displayed request** — the approver re-verifies the requester signature and requires a canonical request digest match before sealing RUK, closing the ACR-001 request-swap window where a backend/PAT writer could redirect RUK to attacker-controlled key material after the verification code was shown. Earlier 2026-06-09: the sync repo's **default branch is now also periodically history-squashed** (~monthly, content-preserving orphan commit + force-update) to bound git-history growth from per-sync JSON commits; CAS-guarded, transparent to the app's content-SHA concurrency and other devices, recovery via the preserved remote backup files. Earlier 2026-06-09: Shared Folder blobs live on a dedicated orphan branch `gtd25-blobs` that is periodically **history-squashed** (single orphan commit + force-update) to purge deleted files so the sync repo stops growing; and GitHub GCs the freed bytes on its own schedule; wipe empties the branch. Earlier 2026-06-09: added the **Shared Folder**: an E2E-encrypted link/file/snippet store synced across the user's devices; item metadata — type/name/size/url/blobId/mimeType — is encrypted with only opaque id/order/timestamps plaintext; file/snippet bytes are sync-key encrypted on the wire and DEK-encrypted at rest under Paranoid; residual leak is per-blob count + ciphertext size to a backend reader. Prior: remote-wipe device lifecycle derived from shared repo files; registry-entry deletion as decommission signal; serialized `remoteApproverFor` writes + backend-error resilience; diagnostics log hardened against payload leaks)
+**Last updated:** 2026-06-09 (**second batch of Codex AppSec hardening (ACR-005–016)**: entity ciphertext is now AES-GCM **bound to its record (type:id) via AAD** so it can't be relocated across records — residual anti-replay/rollback documented (ACR-005); remote-unlock **requester-side TTL** wipes the in-RAM key + stale request on expiry (ACR-006); **approver invites are signed and verified against the MAC-authenticated registry** so a PAT-only writer can't register an approver bond (ACR-007); failed unlock no longer leaves the DEK resident (ACR-008) and the **attempt counter is serialized** against the latest persisted vault (ACR-009); **Pomodoro/sound-preset names documented as plaintext metadata** (ACR-010); **import resource limits** on ZIP/sound archives (ACR-011); the **security-key affordance self-heals from vault metadata** if the localStorage cache is cleared (ACR-012); the unsigned **pending wipe status is labelled advisory** while confirmed stays signed (ACR-013); a **weak-secret gate** blocks clearly-weak passphrases/sync passwords (ACR-014); **diagnostics scrub tokens/share-target/secret blobs** (ACR-015); and a **Trusted Computing Base section + production CSP** were added (ACR-016). Earlier 2026-06-09: **hardening from the Codex AppSec review**: the Paranoid idle re-lock is now re-armed **only by real user interaction** — background DEK access (recurring checks, liveQuery, sync) no longer keeps the vault unlocked (ACR-002); WebAuthn enrollment **no longer logs PRF output bytes or the salt** to the console (ACR-003); and the GET Web Share Target's query string is **redacted from service-worker logs and scrubbed from the URL before any async work** so shared content does not linger (ACR-004). Earlier 2026-06-09: **remote-unlock approval is now bound to the exact verified+displayed request** — the approver re-verifies the requester signature and requires a canonical request digest match before sealing RUK, closing the ACR-001 request-swap window where a backend/PAT writer could redirect RUK to attacker-controlled key material after the verification code was shown. Earlier 2026-06-09: the sync repo's **default branch is now also periodically history-squashed** (~monthly, content-preserving orphan commit + force-update) to bound git-history growth from per-sync JSON commits; CAS-guarded, transparent to the app's content-SHA concurrency and other devices, recovery via the preserved remote backup files. Earlier 2026-06-09: Shared Folder blobs live on a dedicated orphan branch `gtd25-blobs` that is periodically **history-squashed** (single orphan commit + force-update) to purge deleted files so the sync repo stops growing; and GitHub GCs the freed bytes on its own schedule; wipe empties the branch. Earlier 2026-06-09: added the **Shared Folder**: an E2E-encrypted link/file/snippet store synced across the user's devices; item metadata — type/name/size/url/blobId/mimeType — is encrypted with only opaque id/order/timestamps plaintext; file/snippet bytes are sync-key encrypted on the wire and DEK-encrypted at rest under Paranoid; residual leak is per-blob count + ciphertext size to a backend reader. Prior: remote-wipe device lifecycle derived from shared repo files; registry-entry deletion as decommission signal; serialized `remoteApproverFor` writes + backend-error resilience; diagnostics log hardened against payload leaks)
 **Maintenance:** This document MUST be kept current. See "Keeping this document
 updated" at the end and the corresponding rule in `CLAUDE.md`.
 
@@ -57,10 +57,30 @@ Encryption is **field-level**. Encrypted fields (`SENSITIVE_FIELDS`):
   is deliberate: it lets the "ready to discuss" count and the nudge engine work
   without unlocking the vault (the topic *titles* still require an unlocked vault
   to read). It also leaks how often you revisit topics.
+- **Pomodoro settings and sound-preset names** (`pomodoroSettings`, `soundPresets`):
+  **plaintext by design**, both in the sync snapshot and at rest under Paranoid Mode
+  (the at-rest middleware covers only tasks/subtasks/lists/sharedItems/changelog). They
+  are timer config + user-chosen preset labels, classified as **metadata, not content**.
+  Residual: a backend reader can see preset names and productivity/notification settings.
+  If a user puts sensitive text in a preset name, it is **not** protected — keep names
+  generic. (Imported sound *audio* blobs are device-local and never synced.)
 
 ➡️ **Metadata leakage is inherent to every scenario below.** An adversary always
 learns the structure, size, timing, due dates, completion state, device count,
 and activity patterns of your data — only the free-text content is protected.
+
+**Ciphertext is bound to its record.** Each entity's encrypted field-bundle (`_enc`)
+is sealed with AES-GCM **additional authenticated data = `entityType:id`**, so a
+backend/PAT writer can't silently relocate one record's encrypted content onto another
+record (e.g. move task A's title/description onto task B) — a swap fails authentication
+and surfaces as **unreadable** rather than impersonating the target. All sensitive
+fields of a record share one bundle, so cross-*field* swaps within a record are already
+impossible. **Residual (anti-replay):** the AAD binds *identity*, not *freshness* — a
+backend writer can still **roll a record back** to an older ciphertext it previously
+saw, or replay a whole prior snapshot; metadata (due date, status, list membership)
+remains plaintext-tamperable. Detecting rollback/replay would need per-record version
+counters or a signed snapshot MAC (not yet implemented). Legacy pre-binding blobs stay
+readable (an unbound fallback) and gain the binding when next re-encrypted.
 
 #### Shared Folder (E2E file/link/snippet store synced across the user's devices)
 
@@ -442,6 +462,14 @@ locked device unwraps the DEK. Device identity keys are distributed via a regist
   Any one trusted device can decommission for all of them; this is within the existing
   mutual-trust boundary (every approver can already unlock/wipe the protected device).
   Forget is **not** evidence that the wipe ran.
+  - **Signed vs. advisory status (ACR-013).** Only the **confirmed** state is
+    authenticated: it derives from a **device-signed** wipe-status, and the actual wipe
+    only runs after the protected device verifies the **approver's signature** on the
+    command. The intermediate **"sent · unconfirmed"** line is derived from the
+    *unsigned* shared command file (an approver holds the protected device's verify key,
+    not the other approvers') and is therefore **advisory only** — a backend/PAT writer
+    could fabricate or clear a *pending* indicator, but cannot forge a confirmation or
+    cause an unsigned wipe to execute. The UI labels the pending line "advisory".
 - **Consistency under concurrency / backend faults.** All `remoteApproverFor` writes
   are serialized through an async mutex that re-reads the latest map inside the
   critical section, so the background status-refresh timer can no longer clobber a
@@ -455,6 +483,38 @@ locked device unwraps the DEK. Device identity keys are distributed via a regist
 ---
 
 ## 4. Cross-cutting residual risks (true in multiple scenarios)
+
+### Trusted Computing Base (TCB) — what you implicitly trust (ACR-016)
+All of this app's protections assume the code running in your browser is the code we
+shipped. The following are **inside the TCB**: compromising any one is equivalent to a
+full client compromise, and **no in-app control (Paranoid Mode, lock screen, wipes)
+defends against it**:
+- **The hosting origin (GitHub Pages).** Whoever can serve content at the app's origin
+  can serve **malicious same-origin JavaScript**, which can read the DEK and all
+  decrypted data while unlocked. Same-origin XSS has identical impact — hence the
+  strict no-`dangerouslySetInnerHTML` posture and URL sanitization.
+- **The build & deploy pipeline and dependency tree.** A poisoned dependency, a
+  compromised CI step, or a tampered release artifact is full client compromise.
+- **The service worker.** It is same-origin, persistent, and intercepts navigations; a
+  malicious SW update is full compromise. (Updates are user-prompted and same-origin.)
+- **The browser, OS, and any installed extensions.** Extensions with host access and
+  local malware can read the heap while unlocked; these are **out of scope** unless
+  separately mitigated (use a trusted device; that is the point of Paranoid Mode's
+  "untrusted device" guidance being about *typing the passphrase*, not about defeating
+  a compromised browser).
+
+**Defense-in-depth (not a substitute for the above):** the production `index.html`
+ships a **Content-Security-Policy** meta (`default-src 'self'`; `script-src 'self'`;
+`connect-src 'self' https://api.github.com`; `object-src 'none'`; `base-uri 'self'`;
+styles allow `'unsafe-inline'` for runtime-injected Tailwind). This raises the bar for
+injected-script and exfiltration attacks but cannot stop an attacker who can replace the
+served bundle itself. It is build-only (the dev server needs inline/eval for HMR).
+
+**Backup retention caveat:** enabling Paranoid Mode stops *new* backups but does **not**
+retroactively delete remote backups created earlier (while OFF). Those older plaintext
+snapshots may persist in the sync repo's history until pruned/rotated. Rotate the
+syncPassword and prune old backups if the earlier plaintext exposure matters.
+
 - **Metadata is never protected.** Structure, timing, due dates, status, sizes,
   and device/activity patterns leak everywhere.
 - **Git history + a logging TLS proxy are append-only from the defender's view.**
@@ -465,7 +525,10 @@ locked device unwraps the DEK. Device identity keys are distributed via a regist
   becoming a content sink, `recordError` only ever stores the text of `Error`/string
   inputs (plus a capped stack); any other thrown/rejected value is reduced to its
   type (`[Object]`), so an unexpected throw carrying an entity payload cannot leak
-  its fields into the log. Messages/stacks are length-capped.
+  its fields into the log. Messages/stacks are length-capped, and are additionally
+  **scrubbed** before storage (ACR-015): GitHub tokens, `Authorization`/`Bearer`
+  values, Web-Share-Target query content (`title`/`text`/`url`), and long high-entropy
+  base64 blobs (keys/ciphertext) are replaced with `[redacted…]`.
 - **Client-side timed/failure wipes only run when our code runs** — useless
   against an offline disk image or memory dump. The same applies to **remote wipe**
   (Scenario 8): it is delivered only while the protected app is open and online

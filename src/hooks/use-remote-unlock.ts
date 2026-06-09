@@ -53,7 +53,13 @@ export function useLockScreenRemote() {
       try {
         const r = await pollRemoteUnlock(c.pat, c.repo, c.deviceId, reqEtag.current);
         reqEtag.current = r.etag;
-        // On 'unlocked' the vault emits -> the gate unmounts this screen.
+        // On 'unlocked' the vault emits -> the gate unmounts this screen. On 'expired'
+        // the requester-side TTL fired (ephemeral key wiped) — clear the prompt (ACR-006).
+        if (r.status === 'expired') {
+          pending.current = false;
+          setCode(null);
+          setError('Unlock request expired — request again');
+        }
       } catch { /* transient */ }
     }
   }, []);

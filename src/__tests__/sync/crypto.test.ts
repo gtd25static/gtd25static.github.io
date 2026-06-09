@@ -457,3 +457,33 @@ describe('encryptEntity / decryptEntity — sharedItem', () => {
     expect(dec.sharedItems).toEqual(data.sharedItems);
   });
 });
+
+describe('encryptEntity AAD record binding (ACR-005)', () => {
+  it('round-trips when the record id is unchanged', async () => {
+    const enc = await encryptEntity(testKey, { id: 'task-A', listId: 'l1', title: 'hello' }, 'task');
+    const dec = await decryptEntity(testKey, enc, 'task');
+    expect(dec.title).toBe('hello');
+  });
+
+  it('rejects a sensitive blob relocated onto a different record id', async () => {
+    const a = await encryptEntity(testKey, { id: 'task-A', listId: 'l1', title: 'secret A' }, 'task');
+    // Move A's encrypted payload onto a row carrying a DIFFERENT id (B). The AAD
+    // (type:id) no longer matches, so decryption fails instead of impersonating B.
+    const swapped = { id: 'task-B', listId: 'l1', _enc: a._enc as string };
+    await expect(decryptEntity(testKey, swapped, 'task')).rejects.toThrow();
+  });
+
+  it('rejects a blob moved across entity types', async () => {
+    const list = await encryptEntity(testKey, { id: 'shared-x', name: 'List' }, 'taskList');
+    const asSharedItem = { id: 'shared-x', _enc: list._enc as string };
+    await expect(decryptEntity(testKey, asSharedItem, 'sharedItem')).rejects.toThrow();
+  });
+
+  it('still decrypts a legacy blob written without AAD (backward compatible)', async () => {
+    // Simulate a pre-AAD blob: the sensitive payload encrypted with no additionalData.
+    const legacyBlob = await encryptBlob(testKey, JSON.stringify({ title: 'legacy' }));
+    const row = { id: 'task-L', listId: 'l1', _enc: legacyBlob };
+    const out = await decryptEntity(testKey, row, 'task');
+    expect(out.title).toBe('legacy');
+  });
+});

@@ -89,7 +89,7 @@ async function enrollPair(): Promise<void> {
   // Phone accepts the RUK invite.
   phoneLocal = { id: 'local', syncEnabled: true, syncIntervalMs: 300_000, deviceId: PHONE, githubRepo: REPO, deviceIdentity: phoneIdentity, deviceName: 'My Phone', paranoidEnabled: false };
   await actAsPhone();
-  const accepted = await ru.pollApproverInbox(PAT, REPO, PHONE);
+  const accepted = await ru.pollApproverInbox(PAT, REPO, PHONE, macKey);
   expect(accepted).toBe(1);
   phoneLocal = await snapshotLocal();
 }
@@ -120,12 +120,12 @@ async function enrollTwoApprovers(): Promise<void> {
 
   phoneLocal = { id: 'local', syncEnabled: true, syncIntervalMs: 300_000, deviceId: PHONE, githubRepo: REPO, githubPat: PAT, deviceIdentity: phoneIdentity, deviceName: 'My Phone', paranoidEnabled: false };
   await actAsPhone();
-  expect(await ru.pollApproverInbox(PAT, REPO, PHONE)).toBe(1);
+  expect(await ru.pollApproverInbox(PAT, REPO, PHONE, macKey)).toBe(1);
   phoneLocal = await snapshotLocal();
 
   phone2Local = { id: 'local', syncEnabled: true, syncIntervalMs: 300_000, deviceId: PHONE2, githubRepo: REPO, githubPat: PAT, deviceIdentity: phone2Identity, deviceName: 'Tablet', paranoidEnabled: false };
   await actAsPhone2();
-  expect(await ru.pollApproverInbox(PAT, REPO, PHONE2)).toBe(1);
+  expect(await ru.pollApproverInbox(PAT, REPO, PHONE2, macKey)).toBe(1);
   phone2Local = await snapshotLocal();
 }
 
@@ -176,7 +176,7 @@ describe('remote unlock: enrollment', () => {
     // Phone2 picks up its RUK invite.
     await db.localSettings.put({ id: 'local', syncEnabled: true, syncIntervalMs: 300_000, deviceId: PHONE2, githubRepo: REPO, deviceIdentity: phone2, deviceName: 'Tablet', paranoidEnabled: false });
     localStorage.removeItem(PARANOID_FLAG);
-    expect(await ru.pollApproverInbox(PAT, REPO, PHONE2)).toBe(1);
+    expect(await ru.pollApproverInbox(PAT, REPO, PHONE2, macKey)).toBe(1);
 
     // The ORIGINAL phone (unchanged RUK) still unlocks the laptop.
     await actAsLaptop();
@@ -433,7 +433,7 @@ describe('remote wipe', () => {
     expect(files[ru.approverInboxPath(PHONE)]).toBeUndefined();
     expect(files[ru.cmdPath(LAP)]).toBeTruthy();
     expect(JSON.parse(files[ru.cmdPath(LAP)].data).nonce).toBe(command.nonce);
-    expect(await ru.pollApproverInbox(PAT, REPO, PHONE)).toBe(0);
+    expect(await ru.pollApproverInbox(PAT, REPO, PHONE, macKey)).toBe(0);
     expect((await db.localSettings.get('local'))?.remoteApproverFor?.[LAP]).toBeUndefined();
   });
 
@@ -443,7 +443,7 @@ describe('remote wipe', () => {
     const command = await ru.sendRemoteWipe(PAT, REPO, LAP);
     await db.localSettings.update('local', { remoteApproverFor: undefined });
 
-    expect(await ru.pollApproverInbox(PAT, REPO, PHONE)).toBe(1);
+    expect(await ru.pollApproverInbox(PAT, REPO, PHONE, macKey)).toBe(1);
     expect((await db.localSettings.get('local'))?.remoteApproverFor?.[LAP]?.lastWipeCommand).toBeUndefined();
 
     const refreshed = await ru.refreshManagedDeviceWipeStatuses(PAT, REPO);
@@ -748,7 +748,7 @@ describe('remote unlock: approver inbox enforcement', () => {
     expect(files[ru.approverInboxPath(PHONE)]).toBeUndefined();
 
     await repostLaptopInviteToPhone();
-    expect(await ru.pollApproverInbox(PAT, REPO, PHONE)).toBe(0);
+    expect(await ru.pollApproverInbox(PAT, REPO, PHONE, macKey)).toBe(0);
 
     expect(files[ru.approverInboxPath(PHONE)]).toBeUndefined();
   });
@@ -758,7 +758,67 @@ describe('remote unlock: approver inbox enforcement', () => {
     await repostLaptopInviteToPhone();
     await db.localSettings.update('local', { remoteApproverFor: undefined }); // forget prior acceptance
     localStorage.setItem(PARANOID_FLAG, '1');
-    expect(await ru.pollApproverInbox(PAT, REPO, PHONE)).toBe(0);
+    expect(await ru.pollApproverInbox(PAT, REPO, PHONE, macKey)).toBe(0);
     expect(files[ru.approverInboxPath(PHONE)]).toBeTruthy();
+  });
+
+  it('rejects an invite whose sender is not in the authenticated registry (ACR-007)', async () => {
+    await enrollPair();
+    await repostLaptopInviteToPhone(); // a fresh, validly-signed invite sits in PHONE's inbox
+    await db.localSettings.update('local', { remoteApproverFor: undefined });
+    // Drop the laptop's MAC-authenticated registry entry: the sender can no longer be
+    // authenticated, so a PAT-only writer's invite cannot register an approver bond.
+    const reg = JSON.parse(files[ru.REGISTRY_PATH].data);
+    delete reg[LAP];
+    files[ru.REGISTRY_PATH] = { data: JSON.stringify(reg), sha: 'reg-no-lap' };
+    expect(await ru.pollApproverInbox(PAT, REPO, PHONE, macKey)).toBe(0);
+    expect((await db.localSettings.get('local'))?.remoteApproverFor?.[LAP]).toBeUndefined();
+  });
+
+  it('rejects an invite with a tampered/invalid signature (ACR-007)', async () => {
+    await enrollPair();
+    await repostLaptopInviteToPhone();
+    await db.localSettings.update('local', { remoteApproverFor: undefined });
+    const inbox = JSON.parse(files[ru.approverInboxPath(PHONE)].data);
+    inbox[LAP].sig = 'bm90LXNpZw=='; // garbage signature
+    files[ru.approverInboxPath(PHONE)] = { data: JSON.stringify(inbox), sha: 'tampered' };
+    expect(await ru.pollApproverInbox(PAT, REPO, PHONE, macKey)).toBe(0);
+    expect((await db.localSettings.get('local'))?.remoteApproverFor?.[LAP]).toBeUndefined();
+  });
+
+  it('rejects an unsigned invite even from a registry-known sender (ACR-007)', async () => {
+    await enrollPair();
+    await repostLaptopInviteToPhone();
+    await db.localSettings.update('local', { remoteApproverFor: undefined });
+    const inbox = JSON.parse(files[ru.approverInboxPath(PHONE)].data);
+    delete inbox[LAP].sig;
+    files[ru.approverInboxPath(PHONE)] = { data: JSON.stringify(inbox), sha: 'unsigned' };
+    expect(await ru.pollApproverInbox(PAT, REPO, PHONE, macKey)).toBe(0);
+  });
+});
+
+describe('remote unlock: requester-side expiry (ACR-006)', () => {
+  it('expires the pending request, wipes the key, and deletes the stale remote request', async () => {
+    await enrollPair();
+    await actAsLaptop();
+    vault.lock();
+    await ru.requestRemoteUnlock(PAT, REPO, LAP);
+    expect(files[ru.unlockReqPath(LAP)]).toBeTruthy();
+
+    // Jump past the 2-minute TTL.
+    const future = Date.now() + 3 * 60_000;
+    const spy = vi.spyOn(Date, 'now').mockReturnValue(future);
+    try {
+      const r = await ru.pollRemoteUnlock(PAT, REPO, LAP);
+      expect(r.status).toBe('expired');
+      // Stale remote request deleted so other devices' prompts clear too.
+      expect(files[ru.unlockReqPath(LAP)]).toBeUndefined();
+      // Pending key wiped: a subsequent poll has nothing to act on.
+      const again = await ru.pollRemoteUnlock(PAT, REPO, LAP);
+      expect(again.status).toBe('waiting');
+      expect(vault.isUnlocked()).toBe(false);
+    } finally {
+      spy.mockRestore();
+    }
   });
 });
