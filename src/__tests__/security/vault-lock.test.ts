@@ -50,6 +50,23 @@ describe('vault lock/unlock', () => {
     expect(isUnlocked()).toBe(false);
   });
 
+  it('background DB reads do NOT defer the idle re-lock (ACR-002)', async () => {
+    await enableParanoid(PASSPHRASE);
+    __setIdleTimeoutMsForTests(150);
+
+    // Two background reads (no user activity) through the vault middleware, which hits
+    // the key provider. The key provider must not re-arm the idle timer, so the vault
+    // still locks on schedule. (Before the fix each read reset the 150ms timer.)
+    await delay(60);
+    await db.tasks.toArray();
+    await delay(60);
+    await db.tasks.toArray();
+    expect(isUnlocked()).toBe(true); // ~120ms < 150ms, still unlocked
+
+    await delay(80); // ~200ms total with no user activity -> idle lock fires
+    expect(isUnlocked()).toBe(false);
+  });
+
   it('activity defers the idle re-lock', async () => {
     await enableParanoid(PASSPHRASE);
     __setIdleTimeoutMsForTests(120);

@@ -70,21 +70,20 @@ export function useUrlCapture() {
     const url = sanitize(params.get('url'));
     const text = sanitize(params.get('text'));
 
+    // Clear the share-target query string from the address bar/history IMMEDIATELY,
+    // before any async work, so the shared content (which the GET share target puts in
+    // the URL) lingers for the shortest possible window (ACR-004). The sanitized values
+    // are already captured in locals above.
+    cleanUrl();
+
     // Skip if all params are empty
-    if (!title && !url && !text) {
-      cleanUrl();
-      return;
-    }
+    if (!title && !url && !text) return;
 
     const result = formatCaptureResult(title, url, text);
     result.title = result.title.slice(0, MAX_TITLE_LENGTH);
-    if (!result.title) {
-      cleanUrl();
-      return;
-    }
+    if (!result.title) return;
 
     captureToInbox(result);
-    cleanUrl();
   }, []);
 }
 

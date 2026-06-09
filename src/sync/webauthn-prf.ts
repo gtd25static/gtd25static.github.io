@@ -71,7 +71,7 @@ export class PrfUnsupportedError extends Error {
  * Throws (rather than returning null) so the caller can show the user *why* it
  * failed: a cancelled prompt (DOMException 'NotAllowedError'), an authenticator
  * without PRF support (PrfUnsupportedError — e.g. some synced passkeys), or an
- * empty PRF result. The DOMException / extension results are also logged.
+ * empty PRF result. Failures log the DOMException; PRF output bytes are never logged.
  */
 export async function registerPrfCredential(
   prfSalt: string,
@@ -117,7 +117,9 @@ export async function registerPrfCredential(
   if (!cred) throw new Error('No credential was created');
 
   const ext = cred.getClientExtensionResults();
-  console.info('[paranoid] passkey created; prf extension result:', ext.prf);
+  // Log ONLY presence booleans — never `ext.prf` itself: results.first is the raw
+  // PRF output used as the vault KEK, and must not reach devtools/console capture (ACR-003).
+  console.info('[paranoid] passkey created; prf enabled:', !!ext.prf?.enabled, 'result present:', !!ext.prf?.results?.first);
 
   const credentialId = bytesToBase64(new Uint8Array(cred.rawId));
   // Transports help the browser route the unlock prompt (e.g. 'hybrid' => offer

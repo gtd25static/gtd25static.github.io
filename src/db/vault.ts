@@ -93,12 +93,12 @@ async function patchLocalSettings(updates: Partial<LocalSettings>): Promise<void
   });
 }
 
-// Feed the at-rest key to the DBCore middleware. Reading the key counts as
-// activity so active DB use defers the idle re-lock.
-setVaultKeyProvider(() => {
-  if (currentDek) resetIdleTimer();
-  return currentDek;
-});
+// Feed the at-rest key to the DBCore middleware. DEK access is NOT user activity:
+// background reads (recurring-task checks, liveQuery refreshes, sync) must not defer
+// the idle re-lock, or the vault could stay unlocked indefinitely on an idle device
+// while the tab is open (ACR-002). Only real interaction — via touchVaultActivity()
+// from App.tsx pointer/key handlers — re-arms the idle timer.
+setVaultKeyProvider(() => currentDek);
 
 // --- Idle re-lock ---
 function resetIdleTimer(): void {
@@ -108,7 +108,9 @@ function resetIdleTimer(): void {
 /** Call on user interaction to defer the idle re-lock. */
 export function touchVaultActivity(): void { resetIdleTimer(); }
 
-export function getDEK(): CryptoKey | null { resetIdleTimer(); return currentDek; }
+// DEK access only — does NOT count as user activity (see the key-provider note
+// above); the idle timer is re-armed solely by touchVaultActivity() / unlock / config.
+export function getDEK(): CryptoKey | null { return currentDek; }
 export function getVaultSecrets(): VaultSecrets | null { return currentSecrets; }
 
 // Normalize the enrolled security keys to the array form, synthesizing a single

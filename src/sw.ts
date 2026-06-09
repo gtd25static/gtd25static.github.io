@@ -15,11 +15,23 @@ self.addEventListener('activate', () => {
   console.debug('[SW] activate event fired at', new Date().toISOString());
 });
 
+// Log origin+path ONLY — never the query string. The Web Share Target arrives as
+// GET /capture?title=…&text=…&url=…, so the raw URL carries shared task content;
+// keeping it out of the SW log avoids leaking it to devtools/console capture (ACR-004).
+function redactUrlForLog(rawUrl: string): string {
+  try {
+    const u = new URL(rawUrl);
+    return `${u.origin}${u.pathname}`.slice(0, 100);
+  } catch {
+    return '[unparseable url]';
+  }
+}
+
 let fetchCount = 0;
 self.addEventListener('fetch', (event) => {
   fetchCount++;
   if (fetchCount <= 5 || fetchCount % 50 === 0) {
-    console.debug(`[SW] fetch #${fetchCount}: ${event.request.url.slice(0, 100)}`);
+    console.debug(`[SW] fetch #${fetchCount}: ${redactUrlForLog(event.request.url)}`);
   }
 });
 
