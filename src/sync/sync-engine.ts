@@ -15,6 +15,7 @@ import { getVaultSecrets } from '../db/vault';
 import { recordError } from '../lib/diagnostics';
 import { prepareEntityRowsForAtRest, prepareSyncDataForAtRest } from './at-rest-writes';
 import { maybeCompactBlobBranch, compactBlobBranch } from './shared-blobs';
+import { maybeSquashDefaultBranch } from './history-compaction';
 import {
   deriveKey,
   generateSalt,
@@ -1114,6 +1115,12 @@ export async function syncNow(manual = false, pushLimit?: number): Promise<numbe
     // from git history (gated: only when there are pending deletes or periodically).
     maybeCompactBlobBranch(creds.pat, creds.repo).catch((err) => {
       recordError('sync.blobCompaction', err);
+    });
+
+    // Fire-and-forget: periodically squash the default branch's history (~monthly)
+    // to bound the sync repo's growth from per-sync JSON commits.
+    maybeSquashDefaultBranch(creds.pat, creds.repo).catch((err) => {
+      recordError('sync.historyCompaction', err);
     });
 
     return remaining;

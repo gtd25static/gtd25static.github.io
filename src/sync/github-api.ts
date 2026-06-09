@@ -313,12 +313,22 @@ export async function updateRef(pat: string, repo: string, branch: string, sha: 
   if (!resp.ok) throw new Error(`GitHub API error (updateRef ${branch}): ${resp.status}`);
 }
 
-export async function getCommit(pat: string, repo: string, sha: string, signal?: AbortSignal): Promise<{ treeSha: string }> {
+export async function getCommit(pat: string, repo: string, sha: string, signal?: AbortSignal): Promise<{ treeSha: string; parents: string[] }> {
   const resp = await apiFetch(pat, gitUrl(repo, `git/commits/${sha}`), undefined, signal);
   if (!resp.ok) throw new Error(`GitHub API error (getCommit): ${resp.status}`);
   const json = await resp.json();
   if (!json?.tree?.sha) throw new Error('Malformed commit response: missing tree');
-  return { treeSha: json.tree.sha };
+  const parents = Array.isArray(json.parents) ? json.parents.map((p: { sha: string }) => p.sha) : [];
+  return { treeSha: json.tree.sha, parents };
+}
+
+/** The repo's default branch name (e.g. 'main' / 'master'). */
+export async function getDefaultBranch(pat: string, repo: string, signal?: AbortSignal): Promise<string> {
+  const resp = await apiFetch(pat, `https://api.github.com/repos/${repo}`, undefined, signal);
+  if (!resp.ok) throw new Error(`GitHub API error (getDefaultBranch): ${resp.status}`);
+  const json = await resp.json();
+  if (typeof json?.default_branch !== 'string') throw new Error('Malformed repo response: missing default_branch');
+  return json.default_branch;
 }
 
 export async function getTree(pat: string, repo: string, treeSha: string, recursive: boolean, signal?: AbortSignal): Promise<{ entries: GitTreeEntry[]; truncated: boolean }> {

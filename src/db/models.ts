@@ -159,6 +159,8 @@ export interface SyncMeta {
   // last compacted. Gate `maybeCompactBlobBranch`. See src/sync/shared-blobs.ts.
   pendingBlobDeletes?: number;
   lastBlobCompactionAt?: number;
+  // Periodic squash of the sync repo's default branch to bound git history growth.
+  lastMainSquashAt?: number;
 }
 
 export interface LocalSettings {

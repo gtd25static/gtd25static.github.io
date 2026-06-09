@@ -1,6 +1,6 @@
 # GTD25 — Security Review & Threat Model
 
-**Last updated:** 2026-06-09 (Shared Folder blobs now live on a dedicated orphan branch `gtd25-blobs` that is periodically **history-squashed** (single orphan commit + force-update) to purge deleted files so the sync repo stops growing; only that branch is ever force-rewritten, and GitHub GCs the freed bytes on its own schedule; wipe empties the branch. Earlier 2026-06-09: added the **Shared Folder**: an E2E-encrypted link/file/snippet store synced across the user's devices; item metadata — type/name/size/url/blobId/mimeType — is encrypted with only opaque id/order/timestamps plaintext; file/snippet bytes are sync-key encrypted on the wire and DEK-encrypted at rest under Paranoid; residual leak is per-blob count + ciphertext size to a backend reader. Prior: remote-wipe device lifecycle derived from shared repo files; registry-entry deletion as decommission signal; serialized `remoteApproverFor` writes + backend-error resilience; diagnostics log hardened against payload leaks)
+**Last updated:** 2026-06-09 (the sync repo's **default branch is now also periodically history-squashed** (~monthly, content-preserving orphan commit + force-update) to bound git-history growth from per-sync JSON commits; CAS-guarded, transparent to the app's content-SHA concurrency and other devices, recovery via the preserved remote backup files. Earlier 2026-06-09: Shared Folder blobs live on a dedicated orphan branch `gtd25-blobs` that is periodically **history-squashed** (single orphan commit + force-update) to purge deleted files so the sync repo stops growing; and GitHub GCs the freed bytes on its own schedule; wipe empties the branch. Earlier 2026-06-09: added the **Shared Folder**: an E2E-encrypted link/file/snippet store synced across the user's devices; item metadata — type/name/size/url/blobId/mimeType — is encrypted with only opaque id/order/timestamps plaintext; file/snippet bytes are sync-key encrypted on the wire and DEK-encrypted at rest under Paranoid; residual leak is per-blob count + ciphertext size to a backend reader. Prior: remote-wipe device lifecycle derived from shared repo files; registry-entry deletion as decommission signal; serialized `remoteApproverFor` writes + backend-error resilience; diagnostics log hardened against payload leaks)
 **Maintenance:** This document MUST be kept current. See "Keeping this document
 updated" at the end and the corresponding rule in `CLAUDE.md`.
 
@@ -84,8 +84,15 @@ sharing; same single sync key as everything else).
   single orphan commit referencing only live blobs (reusing their git blob SHAs) and
   force-updates the ref, so deleted/old blobs become unreachable. We make history
   *unreferenced*; GitHub reclaims the bytes on its own GC schedule (we can't force
-  it), so the repo stops growing and shrinks eventually, not instantly. Only the
-  blob branch is ever force-rewritten — the default data branch is untouched.
+  it), so the repo stops growing and shrinks eventually, not instantly.
+- **Default-branch history is also bounded:** to stop the per-sync JSON commits
+  (snapshot/changelog rewrites) from growing forever, the sync repo's **default
+  branch is periodically (~monthly) history-squashed** to a single orphan commit
+  that keeps the *current* tree. It is content-preserving — git blob SHAs are
+  unchanged, so the app's content-SHA-based concurrency and every other device are
+  unaffected — and CAS-guarded against a concurrent push. Recovery relies on the
+  remote `gtd25-backup-{hourly,daily,weekly}.json` files (preserved by the squash),
+  not git history. Same eventual-GC caveat as above.
 - **At rest** (the device-local `sharedBlobs` cache): bytes are **DEK/Argon2id-encrypted
   when Paranoid Mode is on**, plaintext when off (same posture as tasks). The cache is
   dropped and re-downloaded whenever Paranoid is toggled, so the at-rest regime never

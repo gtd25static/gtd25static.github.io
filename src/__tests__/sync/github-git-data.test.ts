@@ -1,7 +1,7 @@
 import { vi, type Mock } from 'vitest';
 import {
   getRef, createRef, updateRef, getCommit, getTree, createTree, createCommit, createBlobBase64,
-  getBinaryFile, putBinaryFile,
+  getBinaryFile, putBinaryFile, getDefaultBranch,
 } from '../../sync/github-api';
 
 function resp(status: number, body?: unknown, arrayBuffer?: ArrayBuffer) {
@@ -72,8 +72,8 @@ describe('Git Data API helpers', () => {
     expect(await createBlobBase64('pat', 'u/r', btoa('x'))).toBe('blob1');
     expect(lastCall().body.encoding).toBe('base64');
 
-    fetchMock.mockResolvedValueOnce(resp(200, { tree: { sha: 'treeX' } }));
-    expect(await getCommit('pat', 'u/r', 'c1')).toEqual({ treeSha: 'treeX' });
+    fetchMock.mockResolvedValueOnce(resp(200, { tree: { sha: 'treeX' }, parents: [{ sha: 'p1' }] }));
+    expect(await getCommit('pat', 'u/r', 'c1')).toEqual({ treeSha: 'treeX', parents: ['p1'] });
 
     fetchMock.mockResolvedValueOnce(resp(200, { tree: [{ path: 'p', sha: 's', type: 'blob', mode: '100644' }], truncated: false }));
     const { entries, truncated } = await getTree('pat', 'u/r', 'treeX', true);
@@ -95,5 +95,11 @@ describe('branch-scoped binary Contents helpers', () => {
     fetchMock.mockResolvedValueOnce(resp(201, { content: { sha: 'newsha' } }));
     await putBinaryFile('pat', 'u/r', 'gtd25-shared/abc', new Uint8Array([9]), undefined, undefined, 'gtd25-blobs');
     expect(lastCall().body.branch).toBe('gtd25-blobs');
+  });
+
+  it('getDefaultBranch returns the repo default branch', async () => {
+    fetchMock.mockResolvedValueOnce(resp(200, { default_branch: 'main' }));
+    expect(await getDefaultBranch('pat', 'u/r')).toBe('main');
+    expect(lastCall().url).toBe('https://api.github.com/repos/u/r');
   });
 });
