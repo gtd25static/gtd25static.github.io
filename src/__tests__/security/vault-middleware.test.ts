@@ -147,11 +147,11 @@ describe('vault-middleware: at-rest encryption', () => {
   });
 
   it('cursor reads via .filter().first() return a decrypted value', async () => {
-    await db.tasks.add(makeTask({ id: 'w1', title: 'working one', status: 'working' }));
+    await db.tasks.add(makeTask({ id: 'w1', title: 'blocked one', status: 'blocked' }));
     await db.tasks.add(makeTask({ id: 'w2', title: 'todo one', status: 'todo' }));
 
-    const working = await db.tasks.filter((t) => t.status === 'working').first();
-    expect(working?.title).toBe('working one');
+    const blocked = await db.tasks.filter((t) => t.status === 'blocked').first();
+    expect(blocked?.title).toBe('blocked one');
   });
 
   it('cursor reads via .filter().count() work on plaintext metadata', async () => {

@@ -3,7 +3,6 @@ import type { Subtask } from '../../db/models';
 import { setSubtaskStatus, deleteSubtask, restoreSubtask, updateSubtask, convertSubtaskToTask } from '../../hooks/use-subtasks';
 import { toast } from '../ui/Toast';
 import { confirmDialog } from '../ui/ConfirmDialog';
-import { startWorkingOn } from '../../hooks/use-working-on';
 import { toggleWarning } from '../../hooks/use-warning';
 import { useTaskLists } from '../../hooks/use-task-lists';
 import { useAppState } from '../../stores/app-state';
@@ -69,8 +68,6 @@ export function SubtaskItem({ subtask }: Props) {
         focused
           ? 'ring-2 ring-accent-500/40 dark:ring-accent-400/30'
           : ''
-      } ${
-        subtask.status === 'working' ? 'bg-accent-50 dark:bg-accent-950/30' : ''
       } ${subtask.status === 'done' ? 'opacity-50' : ''}`}
     >
       <div className="flex-1 min-w-0">
@@ -117,15 +114,6 @@ export function SubtaskItem({ subtask }: Props) {
         </div>
       </div>
 
-      {subtask.status === 'todo' && (
-        <button
-          onClick={() => startWorkingOn(subtask.id)}
-          className="rounded-full px-2.5 py-1.5 md:py-1 text-sm md:text-xs font-medium bg-accent-50 text-accent-600 hover:bg-accent-100 dark:bg-accent-900/30 dark:text-accent-300 dark:hover:bg-accent-800/40"
-          title="Start working"
-        >
-          Work
-        </button>
-      )}
       {/* Mobile dropdown */}
       <div className="md:hidden shrink-0" onClick={(e) => e.stopPropagation()}>
         <DropdownMenu

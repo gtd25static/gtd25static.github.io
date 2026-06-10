@@ -12,7 +12,6 @@ export interface MotivationStats {
   overdueCount: number;
   blockedCount: number;
   totalActive: number;
-  isCurrentlyWorking: boolean;
   isWeekend: boolean;
   timeOfDay: TimeOfDay;
 }
@@ -127,14 +126,12 @@ export function useMotivationStats(): MotivationStats | undefined {
     const nowMs = now.getTime();
 
     // Use indexed queries where possible to avoid full table scans
-    const [doneTasks, doneSubtasks, blockedTasks, blockedSubs, workingTasks, workingSubs] =
+    const [doneTasks, doneSubtasks, blockedTasks, blockedSubs] =
       await Promise.all([
         db.tasks.where('status').equals('done').filter((t) => !t.deletedAt && !t.archived).toArray(),
         db.subtasks.where('status').equals('done').filter((s) => !s.deletedAt).toArray(),
         db.tasks.where('status').equals('blocked').filter((t) => !t.deletedAt && !t.archived).count(),
         db.subtasks.where('status').equals('blocked').filter((s) => !s.deletedAt).count(),
-        db.tasks.where('status').equals('working').filter((t) => !t.deletedAt && !t.archived).count(),
-        db.subtasks.where('status').equals('working').filter((s) => !s.deletedAt).count(),
       ]);
 
     // Overdue: use dueDate index to narrow the scan
@@ -171,7 +168,6 @@ export function useMotivationStats(): MotivationStats | undefined {
     const overdueCount = overdueTasks + overdueSubs;
     const blockedCount = blockedTasks + blockedSubs;
     const totalActive = totalTaskCount;
-    const isCurrentlyWorking = workingTasks > 0 || workingSubs > 0;
 
     return {
       completedToday,
@@ -181,7 +177,6 @@ export function useMotivationStats(): MotivationStats | undefined {
       overdueCount,
       blockedCount,
       totalActive,
-      isCurrentlyWorking,
       isWeekend: isWeekend(now),
       timeOfDay,
     };

@@ -10,7 +10,6 @@ function makeStats(overrides: Partial<MotivationStats> = {}): MotivationStats {
     overdueCount: 0,
     blockedCount: 0,
     totalActive: 5,
-    isCurrentlyWorking: false,
     isWeekend: false,
     timeOfDay: 'afternoon',
     ...overrides,

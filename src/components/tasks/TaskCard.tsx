@@ -10,7 +10,6 @@ import { useShallow } from 'zustand/react/shallow';
 import { useAppState } from '../../stores/app-state';
 import { useSubtasks } from '../../hooks/use-subtasks';
 import { useTaskLists } from '../../hooks/use-task-lists';
-import { startWorkingOn, startWorkingOnTask } from '../../hooks/use-working-on';
 import { toggleWarning } from '../../hooks/use-warning';
 import { SubtaskJourney } from '../subtasks/SubtaskJourney';
 import { TaskForm } from './TaskForm';
@@ -48,7 +47,6 @@ export function TaskCard({ task, index, dragHandleProps }: Props) {
   const expanded = expandedTaskIds.has(task.id);
   const focused = focusedItemId === task.id && focusZone === 'main';
   const hasBlockedSubtask = subtasks.some((s) => s.status === 'blocked');
-  const hasWorkingSubtask = subtasks.some((s) => s.status === 'working');
   const lists = useTaskLists();
   const [editing, setEditing] = useState(false);
   const [editingTitle, setEditingTitle] = useState(false);
@@ -152,21 +150,11 @@ export function TaskCard({ task, index, dragHandleProps }: Props) {
                 <path d="M2.5 6l2.5 3L9.5 3" stroke="white" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
               </svg>
             </div>
-          ) : task.status === 'working' ? (
-            <div className="flex h-7 w-7 md:h-6 md:w-6 items-center justify-center rounded border-[1.5px] border-accent-500 bg-accent-50 dark:bg-accent-950/30">
-              <div className="h-2.5 w-2.5 rounded-sm bg-accent-500" />
-            </div>
           ) : task.status === 'blocked' ? (
             <div className="flex h-7 w-7 md:h-6 md:w-6 items-center justify-center rounded border-[1.5px] border-red-400">
               <svg width="12" height="12" viewBox="0 0 10 10">
                 <path d="M2.5 5h5" stroke="#ef4444" strokeWidth="1.5" strokeLinecap="round" />
               </svg>
-            </div>
-          ) : hasWorkingSubtask ? (
-            <div className="flex h-7 w-7 md:h-6 md:w-6 items-center justify-center rounded border-[1.5px] border-accent-500 bg-accent-50 dark:bg-accent-950/30">
-              <span className="text-[10px] font-semibold leading-none text-accent-600 dark:text-accent-400">
-                {subtasks.filter((s) => s.status === 'done').length}/{subtasks.length}
-              </span>
             </div>
           ) : hasBlockedSubtask ? (
             <div className="flex h-7 w-7 md:h-6 md:w-6 items-center justify-center rounded border-[1.5px] border-red-400">
@@ -266,16 +254,6 @@ export function TaskCard({ task, index, dragHandleProps }: Props) {
             }
             items={[
               { label: task.starred ? 'Unstar' : 'Star', onClick: () => updateTask(task.id, { starred: !task.starred }) },
-              ...(task.status !== 'working' && !hasWorkingSubtask && task.status !== 'done' ? [{
-                label: 'Work', onClick: () => {
-                  if (subtasks.length > 0) {
-                    const firstTodo = subtasks.find((s) => s.status === 'todo');
-                    if (firstTodo) startWorkingOn(firstTodo.id);
-                  } else {
-                    startWorkingOnTask(task.id);
-                  }
-                },
-              }] : []),
               { label: task.status === 'blocked' ? 'Unblock' : 'Block', onClick: () => setTaskStatus(task.id, task.status === 'blocked' ? 'todo' : 'blocked') },
               { label: task.hasWarning ? 'Clear warning' : 'Warn', onClick: () => toggleWarning('task', task.id) },
               { label: 'Edit', onClick: () => setEditing(true) },
@@ -305,22 +283,6 @@ export function TaskCard({ task, index, dragHandleProps }: Props) {
         </button>}
         {/* Desktop inline actions (hidden in bulk mode) */}
         {!bulkMode && <div className="hidden md:flex items-center gap-1 md:opacity-0 md:group-hover:opacity-100 shrink-0" onClick={(e) => e.stopPropagation()}>
-          {task.status !== 'working' && !hasWorkingSubtask && task.status !== 'done' && (
-            <button
-              onClick={() => {
-                if (subtasks.length > 0) {
-                  const firstTodo = subtasks.find((s) => s.status === 'todo');
-                  if (firstTodo) startWorkingOn(firstTodo.id);
-                } else {
-                  startWorkingOnTask(task.id);
-                }
-              }}
-              className="rounded-full px-2.5 py-0.5 text-xs font-medium bg-accent-50 text-accent-600 hover:bg-accent-100 dark:bg-accent-900/30 dark:text-accent-300 dark:hover:bg-accent-800/40"
-              title="Start working"
-            >
-              Work
-            </button>
-          )}
           <button
             onClick={() => setTaskStatus(task.id, task.status === 'blocked' ? 'todo' : 'blocked')}
             className={`rounded px-1.5 py-0.5 text-xs ${task.status === 'blocked' ? 'text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20' : 'text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800'}`}
@@ -422,18 +384,6 @@ export function TaskCard({ task, index, dragHandleProps }: Props) {
     const items: MenuItem[] = [
       { label: task.starred ? 'Unstar' : 'Star', onClick: () => updateTask(task.id, { starred: !task.starred }) },
     ];
-    if (task.status !== 'working' && !hasWorkingSubtask && task.status !== 'done') {
-      items.push({
-        label: 'Work', onClick: () => {
-          if (subtasks.length > 0) {
-            const firstTodo = subtasks.find((s) => s.status === 'todo');
-            if (firstTodo) startWorkingOn(firstTodo.id);
-          } else {
-            startWorkingOnTask(task.id);
-          }
-        },
-      });
-    }
     items.push(
       { label: task.status === 'blocked' ? 'Unblock' : 'Block', onClick: () => setTaskStatus(task.id, task.status === 'blocked' ? 'todo' : 'blocked') },
       { label: task.hasWarning ? 'Clear warning' : 'Warn', onClick: () => toggleWarning('task', task.id) },

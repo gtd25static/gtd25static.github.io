@@ -14,7 +14,6 @@ export function resetAppState() {
     focusedItemId: null,
     focusZone: 'main',
     editingItemId: null,
-    bannerFocusIndex: 0,
     addingSubtaskToTaskId: null,
     creatingTask: false,
     sidebarOpen: true,

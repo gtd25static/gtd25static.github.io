@@ -69,11 +69,9 @@ function SortableItem({ subtask, isLast }: { subtask: Subtask; isLast: boolean }
           ) : (
             <div
               className={`h-3.5 w-3.5 rounded-sm border-[1.5px] ${
-                subtask.status === 'working'
-                  ? 'border-accent-500 bg-accent-500'
-                  : subtask.status === 'blocked'
-                    ? 'border-red-500 bg-red-500'
-                    : 'border-zinc-400 bg-white hover:border-zinc-500 dark:border-zinc-500 dark:bg-zinc-900 dark:hover:border-zinc-400'
+                subtask.status === 'blocked'
+                  ? 'border-red-500 bg-red-500'
+                  : 'border-zinc-400 bg-white hover:border-zinc-500 dark:border-zinc-500 dark:bg-zinc-900 dark:hover:border-zinc-400'
               }`}
             />
           )}

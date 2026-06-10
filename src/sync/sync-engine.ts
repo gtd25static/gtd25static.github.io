@@ -7,7 +7,7 @@ import { applyRemoteEntries, getPendingEntries, clearPendingEntries, clearEntrie
 import { mergeEntity, stampUpdatedFields } from './field-timestamps';
 import { toast } from '../components/ui/Toast';
 import { SYNC_VERSION, isCompatibleVersion, needsMigration } from './version';
-import { runRemoteMigrations } from './migrations';
+import { runRemoteMigrations, normalizeLegacyWorkingStatus } from './migrations';
 import { maybeCreateBackups, BACKUP_FILES } from './remote-backups';
 import type { BackupTier } from './remote-backups';
 import { isParanoidFlagSet } from '../db/paranoid-flag';
@@ -70,10 +70,12 @@ async function reconcileFromSnapshot(snapshot: SyncData) {
     return toPut;
   }
 
+  // Pre-v5 snapshot bytes can still carry the removed 'working' status (this path
+  // re-parses the pre-migration snapshot within the same sync) — normalize first.
   const [taskListsToPut, tasksToPut, subtasksToPut, sharedItemsToPut] = await Promise.all([
     reconcileCollection(db.taskLists, snapshot.taskLists),
-    reconcileCollection(db.tasks, snapshot.tasks),
-    reconcileCollection(db.subtasks, snapshot.subtasks),
+    reconcileCollection(db.tasks, normalizeLegacyWorkingStatus(snapshot.tasks)),
+    reconcileCollection(db.subtasks, normalizeLegacyWorkingStatus(snapshot.subtasks)),
     reconcileCollection(db.sharedItems, snapshot.sharedItems ?? []),
   ]);
   const [taskLists, tasks, subtasks, sharedItems] = await Promise.all([
@@ -113,7 +115,13 @@ async function reconcileFromSnapshot(snapshot: SyncData) {
 }
 
 async function replaceLocalEntitiesFromSnapshot(snapshot: Pick<SyncData, 'taskLists' | 'tasks' | 'subtasks' | 'sharedItems'>): Promise<void> {
-  const prepared = await prepareSyncDataForAtRest(snapshot);
+  // Bootstrap / force-pull / ZIP import / backup-restore can all carry pre-v5
+  // data with the removed 'working' status — normalize before writing locally.
+  const prepared = await prepareSyncDataForAtRest({
+    ...snapshot,
+    tasks: normalizeLegacyWorkingStatus(snapshot.tasks),
+    subtasks: normalizeLegacyWorkingStatus(snapshot.subtasks),
+  });
   // Only replace shared items when the source actually carries them. Authoritative
   // remote snapshots always include the field (at least []), so an empty folder
   // still clears local; ZIP imports / pre-v4 backups omit it, so we preserve local

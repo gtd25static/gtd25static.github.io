@@ -134,7 +134,8 @@ export function AppShell() {
           </div>
         </div>
 
-        <TopBanner />
+        {/* Banner is hidden on the Focus view (distraction-free); search wins over the pseudo-list, like the content branch below */}
+        {(searchQuery || selectedListId !== '__focus__') && <TopBanner />}
         {searchQuery ? <SearchResults /> : selectedListId === '__focus__' ? <FocusView /> : selectedListId === '__shared__' ? <SharedFolderView /> : selectedListId === '__special__' ? <SpecialListView /> : <TaskListView />}
       </div>
 

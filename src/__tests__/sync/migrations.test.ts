@@ -43,6 +43,26 @@ describe('runRemoteMigrations', () => {
     const result = runRemoteMigrations(data, 0, SYNC_VERSION);
     expect(result.syncVersion).toBe(SYNC_VERSION);
   });
+
+  it('4 -> 5 normalizes legacy working statuses without touching fieldTimestamps', () => {
+    const ft = { status: 12345 };
+    const data = makeSyncData({
+      syncVersion: 4,
+      tasks: [
+        { id: 't1', listId: 'l1', title: 'Legacy', status: 'working', order: 0, createdAt: 1, updatedAt: 1, fieldTimestamps: ft } as unknown as SyncData['tasks'][number],
+        { id: 't2', listId: 'l1', title: 'Done', status: 'done', order: 1, createdAt: 1, updatedAt: 1 },
+      ],
+      subtasks: [
+        { id: 's1', taskId: 't1', title: 'Legacy sub', status: 'working', order: 0, createdAt: 1, updatedAt: 1 } as unknown as SyncData['subtasks'][number],
+      ],
+    });
+    const result = runRemoteMigrations(data, 4, 5);
+    expect(result.syncVersion).toBe(5);
+    expect(result.tasks[0].status).toBe('todo');
+    expect(result.tasks[0].fieldTimestamps).toEqual(ft); // value normalization, not a user edit
+    expect(result.tasks[1].status).toBe('done');
+    expect(result.subtasks[0].status).toBe('todo');
+  });
 });
 
 describe('migrateEntryData', () => {
@@ -72,5 +92,20 @@ describe('migrateEntryData', () => {
     expect(migrateEntryData(taskData, 'task', 1)).toEqual(taskData);
     expect(migrateEntryData(listData, 'taskList', 1)).toEqual(listData);
     expect(migrateEntryData(subData, 'subtask', 1)).toEqual(subData);
+  });
+
+  it('normalizes the legacy working status on pre-v5 task/subtask entries', () => {
+    const taskData = { id: 't1', listId: 'l1', title: 'T', status: 'working', order: 0, createdAt: 1, updatedAt: 1 };
+    const subData = { id: 's1', taskId: 't1', title: 'S', status: 'working', order: 0, createdAt: 1, updatedAt: 1 };
+    expect(migrateEntryData(taskData, 'task', 4).status).toBe('todo');
+    expect(migrateEntryData(subData, 'subtask', 4).status).toBe('todo');
+    expect(migrateEntryData(taskData, 'task', undefined).status).toBe('todo'); // versionless = oldest
+  });
+
+  it('leaves v5+ entries and non-working statuses alone', () => {
+    const v5Data = { id: 't1', listId: 'l1', title: 'T', status: 'working', order: 0, createdAt: 1, updatedAt: 1 };
+    expect(migrateEntryData(v5Data, 'task', 5)).toEqual(v5Data);
+    const todoData = { id: 't1', listId: 'l1', title: 'T', status: 'todo', order: 0, createdAt: 1, updatedAt: 1 };
+    expect(migrateEntryData(todoData, 'task', 4)).toEqual(todoData);
   });
 });

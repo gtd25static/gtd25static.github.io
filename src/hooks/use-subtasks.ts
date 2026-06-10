@@ -80,50 +80,6 @@ export async function updateSubtask(id: string, updates: Partial<Subtask>) {
 
 export async function setSubtaskStatus(id: string, status: SubtaskStatus) {
   try {
-    if (status === 'working') {
-      const allWorkingSubs = await db.subtasks.where('status').equals('working').toArray();
-      const allWorkingTasks = await db.tasks.where('status').equals('working').toArray();
-      const now = Date.now();
-
-      await ensureDeviceId();
-      await db.transaction('rw', [db.subtasks, db.tasks, db.changeLog], async () => {
-        for (const s of allWorkingSubs) {
-          if (s.id !== id) {
-            const ft = stampUpdatedFields(s.fieldTimestamps, ['status'], now);
-            await db.subtasks.update(s.id, { status: 'todo', updatedAt: now, fieldTimestamps: ft });
-          }
-        }
-        for (const t of allWorkingTasks) {
-          const ft = stampUpdatedFields(t.fieldTimestamps, ['status'], now);
-          await db.tasks.update(t.id, { status: 'todo', updatedAt: now, fieldTimestamps: ft });
-        }
-        {
-          const self = await db.subtasks.get(id);
-          const ft = stampUpdatedFields(self?.fieldTimestamps, ['status'], now);
-          await db.subtasks.update(id, { status, updatedAt: now, fieldTimestamps: ft });
-        }
-
-        // Record changes for all modified entities
-        const batch: Array<{ entityType: 'task' | 'subtask'; entityId: string; operation: 'upsert'; data: Record<string, unknown> }> = [];
-        for (const s of allWorkingSubs) {
-          if (s.id !== id) {
-            const updated = await db.subtasks.get(s.id);
-            if (updated) batch.push({ entityType: 'subtask', entityId: s.id, operation: 'upsert', data: updated as unknown as Record<string, unknown> });
-          }
-        }
-        for (const t of allWorkingTasks) {
-          const updated = await db.tasks.get(t.id);
-          if (updated) batch.push({ entityType: 'task', entityId: t.id, operation: 'upsert', data: updated as unknown as Record<string, unknown> });
-        }
-        const updatedSelf = await db.subtasks.get(id);
-        if (updatedSelf) batch.push({ entityType: 'subtask', entityId: id, operation: 'upsert', data: updatedSelf as unknown as Record<string, unknown> });
-        await recordChangeBatchInTx(batch);
-      });
-
-      scheduleSyncDebounced();
-      return;
-    }
-
     // Track blockedAt
     const subtask = await db.subtasks.get(id);
     const updates: Partial<Subtask> = { status };
@@ -259,7 +215,7 @@ export async function convertSubtaskToTask(subtaskId: string, targetListId: stri
         link: subtask.link,
         linkTitle: subtask.linkTitle,
         dueDate: subtask.dueDate,
-        status: subtask.status === 'working' ? 'todo' : subtask.status,
+        status: subtask.status,
         order: count,
         createdAt: now,
         updatedAt: now,
@@ -305,7 +261,7 @@ export async function convertTaskToSubtask(taskId: string, parentTaskId: string)
         linkTitle: task.linkTitle,
         dueDate: task.dueDate,
         links: task.links ? [...task.links] : undefined,
-        status: task.status === 'working' ? 'todo' : (task.status as import('../db/models').SubtaskStatus),
+        status: task.status as import('../db/models').SubtaskStatus,
         order: parentSubCount,
         createdAt: now,
         updatedAt: now,

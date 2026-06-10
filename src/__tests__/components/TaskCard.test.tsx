@@ -37,11 +37,6 @@ vi.mock('../../hooks/use-tasks', () => ({
   duplicateTask: (...args: unknown[]) => mockDuplicateTask(...args),
 }));
 
-vi.mock('../../hooks/use-working-on', () => ({
-  startWorkingOn: vi.fn(),
-  startWorkingOnTask: vi.fn(),
-}));
-
 vi.mock('../../hooks/use-warning', () => ({
   toggleWarning: vi.fn(),
 }));

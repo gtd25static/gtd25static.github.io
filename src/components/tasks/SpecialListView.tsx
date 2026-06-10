@@ -4,7 +4,6 @@ import { useAppState } from '../../stores/app-state';
 import { setTaskStatus } from '../../hooks/use-tasks';
 import { setSubtaskStatus } from '../../hooks/use-subtasks';
 import { toggleWarning } from '../../hooks/use-warning';
-import { startWorkingOn, startWorkingOnTask } from '../../hooks/use-working-on';
 
 function timeSince(timestamp: number): string {
   const ms = Date.now() - timestamp;
@@ -46,15 +45,6 @@ function SpecialItemRow({ item }: { item: SpecialItem }) {
   function handleRemoveWarning(e: React.MouseEvent) {
     e.stopPropagation();
     toggleWarning(item.entityType, item.id);
-  }
-
-  function handleWork(e: React.MouseEvent) {
-    e.stopPropagation();
-    if (item.entityType === 'task') {
-      startWorkingOnTask(item.id);
-    } else {
-      startWorkingOn(item.id);
-    }
   }
 
   return (
@@ -102,20 +92,12 @@ function SpecialItemRow({ item }: { item: SpecialItem }) {
           </>
         )}
         {item.type === 'recurring' && (
-          <>
-            <button
-              onClick={handleDone}
-              className="rounded px-3 py-1.5 md:px-2 md:py-0.5 text-sm md:text-xs text-accent-600 hover:bg-accent-50 dark:text-accent-400 dark:hover:bg-accent-900/20"
-            >
-              Done
-            </button>
-            <button
-              onClick={handleWork}
-              className="rounded px-3 py-1.5 md:px-2 md:py-0.5 text-sm md:text-xs text-accent-600 hover:bg-accent-50 dark:text-accent-400 dark:hover:bg-accent-900/20"
-            >
-              Work
-            </button>
-          </>
+          <button
+            onClick={handleDone}
+            className="rounded px-3 py-1.5 md:px-2 md:py-0.5 text-sm md:text-xs text-accent-600 hover:bg-accent-50 dark:text-accent-400 dark:hover:bg-accent-900/20"
+          >
+            Done
+          </button>
         )}
       </div>
     </div>

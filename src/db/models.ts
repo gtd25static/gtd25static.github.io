@@ -2,8 +2,10 @@ import type { KdfParams } from './vault-kdf';
 import type { DeviceIdentity } from '../sync/remote-unlock-crypto';
 
 export type ListType = 'tasks' | 'follow-ups';
-export type TaskStatus = 'todo' | 'done' | 'blocked' | 'working';
-export type SubtaskStatus = 'todo' | 'done' | 'blocked' | 'working';
+// 'working' was removed 2026-06 (superseded by Focus Mode); legacy rows are
+// normalized to 'todo' by the SYNC_VERSION 4->5 migrations.
+export type TaskStatus = 'todo' | 'done' | 'blocked';
+export type SubtaskStatus = 'todo' | 'done' | 'blocked';
 // Current UI presets: '20h' | '6d' | '30d' | '12w'. Legacy values
 // ('12h' | '1week' | '1month' | '3months') are kept so already-snoozed tasks
 // still type-check and resolve a cooldown. 'custom' = absolute pingCooldownUntil.

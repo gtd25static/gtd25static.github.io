@@ -142,6 +142,21 @@ describe('parseImportZip — validation', () => {
     expect(result.tasks).toHaveLength(0);
   });
 
+  it('imports legacy working-status rows as todo instead of skipping them', async () => {
+    const now = Date.now();
+    const file = await makeTestZip(JSON.stringify({
+      exportVersion: 1,
+      taskLists: [{ id: 'l1', name: 'List', type: 'tasks', order: 0, createdAt: now, updatedAt: now }],
+      tasks: [{ id: 't1', listId: 'l1', title: 'Legacy', status: 'working', order: 0, createdAt: now, updatedAt: now }],
+      subtasks: [{ id: 's1', taskId: 't1', title: 'Legacy sub', status: 'working', order: 0, createdAt: now, updatedAt: now }],
+    }));
+    const result = await parseImportZip(file);
+    expect(result.tasks).toHaveLength(1);
+    expect(result.tasks[0].status).toBe('todo');
+    expect(result.subtasks).toHaveLength(1);
+    expect(result.subtasks[0].status).toBe('todo');
+  });
+
   it('skips items with invalid timestamps', async () => {
     const file = await makeTestZip(JSON.stringify({
       exportVersion: 1,

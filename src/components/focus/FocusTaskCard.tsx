@@ -18,7 +18,6 @@ export function FocusTaskCard({ task }: { task: Task }) {
   const now = Date.now();
   const focusDay = task.focusedAt != null ? dayDiff(task.focusedAt, now) + 1 : 1;
   const overdue = task.dueDate != null && daysUntil(task.dueDate) < 0;
-  const working = task.status === 'working';
 
   async function handleComplete() {
     await setTaskStatus(task.id, 'done');
@@ -46,11 +45,6 @@ export function FocusTaskCard({ task }: { task: Task }) {
             }`}
           >
             {overdue ? 'Overdue' : 'Due'} {formatDate(task.dueDate)}
-          </span>
-        )}
-        {working && (
-          <span className="rounded-full bg-accent-50 px-2 py-0.5 font-medium text-accent-600 dark:bg-accent-900/20 dark:text-accent-400">
-            Working
           </span>
         )}
         {subtasks.length > 0 && (

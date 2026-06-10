@@ -3,8 +3,7 @@ import { db } from '../../db';
 import { resetDb, assertDefined } from '../helpers/db-helpers';
 import { resetAppState } from '../helpers/component-helpers';
 import { createTaskList } from '../../hooks/use-task-lists';
-import { createTask } from '../../hooks/use-tasks';
-import { createSubtask, setSubtaskStatus } from '../../hooks/use-subtasks';
+import { createTask, updateTask, setTaskStatus } from '../../hooks/use-tasks';
 import { focusTask } from '../../hooks/use-focus';
 import { useAppState } from '../../stores/app-state';
 
@@ -18,54 +17,54 @@ beforeEach(async () => {
 });
 
 describe('focusTask', () => {
-  it('starts and reveals a task with no undone subtasks', async () => {
+  it('stamps workedAt (with a change-log entry) and reveals the task — no status change', async () => {
     const task = assertDefined(await createTask(listId, { title: 'Task' }));
+    const changesBefore = await db.changeLog.count();
 
     await focusTask(task.id, { startTimer: false });
 
-    const updated = await db.tasks.get(task.id);
-    expect(updated?.status).toBe('working');
+    const updated = assertDefined(await db.tasks.get(task.id));
+    expect(updated.status).toBe('todo');
+    expect(updated.workedAt).toBeDefined();
+    expect(updated.fieldTimestamps?.workedAt).toBe(updated.updatedAt);
+    expect(await db.changeLog.count()).toBe(changesBefore + 1);
     expect(useAppState.getState().selectedListId).toBe(listId);
     expect(useAppState.getState().expandedTaskIds.has(task.id)).toBe(true);
     expect(useAppState.getState().navigateToTaskId).toBe(task.id);
   });
 
-  it('starts the first undone subtask and reveals the parent task', async () => {
+  it('leaves an existing workedAt untouched', async () => {
     const task = assertDefined(await createTask(listId, { title: 'Task' }));
-    const done = assertDefined(await createSubtask(task.id, { title: 'Done first' }));
-    const next = assertDefined(await createSubtask(task.id, { title: 'Next up' }));
-    await setSubtaskStatus(done.id, 'done');
+    const earlier = Date.now() - 1000;
+    await updateTask(task.id, { workedAt: earlier });
 
-    await focusTask(task.id, { startTimer: false });
+    await focusTask(task.id);
 
-    expect((await db.subtasks.get(done.id))?.status).toBe('done');
-    expect((await db.subtasks.get(next.id))?.status).toBe('working');
-    expect(useAppState.getState().selectedListId).toBe(listId);
-    expect(useAppState.getState().expandedTaskIds.has(task.id)).toBe(true);
-    expect(useAppState.getState().navigateToTaskId).toBe(task.id);
+    expect((await db.tasks.get(task.id))?.workedAt).toBe(earlier);
   });
 
-  it('reveals but does not start a task whose remaining subtasks are blocked', async () => {
+  it('does not navigate with navigate: false', async () => {
     const task = assertDefined(await createTask(listId, { title: 'Task' }));
-    const blocked = assertDefined(await createSubtask(task.id, { title: 'Blocked' }));
-    await setSubtaskStatus(blocked.id, 'blocked');
 
-    await focusTask(task.id, { startTimer: false });
+    await focusTask(task.id, { navigate: false });
 
-    expect((await db.tasks.get(task.id))?.status).toBe('todo');
-    expect((await db.subtasks.get(blocked.id))?.status).toBe('blocked');
-    expect(useAppState.getState().selectedListId).toBe(listId);
-    expect(useAppState.getState().navigateToTaskId).toBe(task.id);
+    expect(useAppState.getState().selectedListId).not.toBe(listId);
+    expect(useAppState.getState().navigateToTaskId).toBeNull();
+    expect((await db.tasks.get(task.id))?.workedAt).toBeDefined();
   });
 
-  it('starts a specific todo subtask when requested', async () => {
-    const task = assertDefined(await createTask(listId, { title: 'Task' }));
-    const first = assertDefined(await createSubtask(task.id, { title: 'First' }));
-    const second = assertDefined(await createSubtask(task.id, { title: 'Second' }));
+  it('no-ops on done, deleted, and archived tasks', async () => {
+    const done = assertDefined(await createTask(listId, { title: 'Done' }));
+    await setTaskStatus(done.id, 'done');
+    const archived = assertDefined(await createTask(listId, { title: 'Archived' }));
+    await updateTask(archived.id, { archived: true });
 
-    await focusTask(task.id, { startTimer: false, subtaskId: second.id });
+    await focusTask(done.id);
+    await focusTask(archived.id);
+    await focusTask('no-such-id');
 
-    expect((await db.subtasks.get(first.id))?.status).toBe('todo');
-    expect((await db.subtasks.get(second.id))?.status).toBe('working');
+    expect((await db.tasks.get(done.id))?.workedAt).toBeUndefined();
+    expect((await db.tasks.get(archived.id))?.workedAt).toBeUndefined();
+    expect(useAppState.getState().navigateToTaskId).toBeNull();
   });
 });

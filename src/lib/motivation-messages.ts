@@ -8,20 +8,6 @@ interface MessageCategory {
 
 const categories: MessageCategory[] = [
   {
-    id: 'currently_working',
-    match: (s) => s.isCurrentlyWorking,
-    templates: [
-      'Locked in. You got this.',
-      'Focus mode: active.',
-      'One thing at a time. You\'re doing it right.',
-      'Heads down, making progress.',
-      'Deep in it. Keep going.',
-      'You\'re in the zone.',
-      'Focused work is the best kind of work.',
-      'Ship it.',
-    ],
-  },
-  {
     id: 'weekend',
     match: (s) => s.isWeekend && s.completedToday === 0,
     templates: [

@@ -4,7 +4,6 @@ import { db } from '../db';
 import { useAppState } from '../stores/app-state';
 import { setTaskStatus } from './use-tasks';
 import { setSubtaskStatus } from './use-subtasks';
-import { startWorkingOn, startWorkingOnTask, markWorkingDone, markWorkingBlocked, stopWorking } from './use-working-on';
 import { updateTask, restoreTask } from './use-tasks';
 import { isInCooldown } from './use-follow-ups';
 import { sortTasksForDisplay, sortFollowUpsForDisplay } from '../lib/task-sort';
@@ -15,12 +14,12 @@ import type { ListType } from '../db/models';
 
 interface NavItem {
   id: string;
-  type: 'task' | 'subtask' | 'banner' | 'banner-blocked' | 'create' | 'add-subtask';
+  type: 'task' | 'subtask' | 'banner-blocked' | 'create' | 'add-subtask';
   taskId?: string;
 }
 
 function isActionItem(item: NavItem): boolean {
-  return item.type === 'banner' || item.type === 'banner-blocked' || item.type === 'create' || item.type === 'add-subtask';
+  return item.type === 'banner-blocked' || item.type === 'create' || item.type === 'add-subtask';
 }
 
 export function useKeyboard() {
@@ -52,17 +51,6 @@ export function useKeyboard() {
       if (!selectedListId) return [];
 
       const items: NavItem[] = [];
-
-      // Working-on banner — use indexed status queries
-      const [workingTasks, workingSubs] = await Promise.all([
-        db.tasks.where('status').equals('working').toArray(),
-        db.subtasks.where('status').equals('working').toArray(),
-      ]);
-      const workingTask = workingTasks.find((t) => !t.deletedAt);
-      const workingSub = workingSubs.find((s) => !s.deletedAt);
-      if (workingTask || workingSub) {
-        items.push({ id: 'banner-working', type: 'banner' });
-      }
 
       // Blocked banner items (up to 5) — use indexed queries
       const [blockedTasks, blockedSubs] = await Promise.all([
@@ -248,7 +236,6 @@ export function useKeyboard() {
           else break;
           const newItem = items[newIdx];
           s.setFocusedItem(newItem.id);
-          if (newItem.id !== 'banner-working') s.setBannerFocusIndex(0);
           // Shift+J in bulk mode: extend selection
           if (e.shiftKey && s.bulkMode && s.focusZone === 'main' && newItem.type === 'task') {
             s.toggleTaskSelected(newItem.id);
@@ -270,7 +257,6 @@ export function useKeyboard() {
           else break;
           const newItem = items[newIdx];
           s.setFocusedItem(newItem.id);
-          if (newItem.id !== 'banner-working') s.setBannerFocusIndex(0);
           // Shift+K in bulk mode: extend selection
           if (e.shiftKey && s.bulkMode && s.focusZone === 'main' && newItem.type === 'task') {
             s.toggleTaskSelected(newItem.id);
@@ -280,15 +266,9 @@ export function useKeyboard() {
         case 'h': {
           e.preventDefault();
           if (s.focusZone === 'main') {
-            // Banner sub-navigation: move left through buttons
-            if (s.focusedItemId === 'banner-working' && s.bannerFocusIndex > 0) {
-              s.setBannerFocusIndex(s.bannerFocusIndex - 1);
-            } else {
-              s.setBannerFocusIndex(0);
-              s.setFocusZone('sidebar');
-              if (s.selectedListId) s.setFocusedItem(s.selectedListId);
-              else if (listsRef.current.length > 0) s.setFocusedItem(listsRef.current[0].id);
-            }
+            s.setFocusZone('sidebar');
+            if (s.selectedListId) s.setFocusedItem(s.selectedListId);
+            else if (listsRef.current.length > 0) s.setFocusedItem(listsRef.current[0].id);
           }
           break;
         }
@@ -296,18 +276,12 @@ export function useKeyboard() {
           e.preventDefault();
           if (s.focusZone === 'sidebar') {
             s.setFocusZone('main');
-            s.setBannerFocusIndex(0);
             // Skip banner items — land on first content item (create or task)
-            const contentItem = mainRef.current.find((i) => i.type !== 'banner' && i.type !== 'banner-blocked');
+            const contentItem = mainRef.current.find((i) => i.type !== 'banner-blocked');
             if (contentItem) {
               s.setFocusedItem(contentItem.id);
             } else if (mainRef.current.length > 0) {
               s.setFocusedItem(mainRef.current[0].id);
-            }
-          } else if (s.focusZone === 'main' && s.focusedItemId === 'banner-working') {
-            // Move right through banner buttons (0=task, 1=Done, 2=Blocked, 3=Stop)
-            if (s.bannerFocusIndex < 3) {
-              s.setBannerFocusIndex(s.bannerFocusIndex + 1);
             }
           }
           break;
@@ -316,84 +290,47 @@ export function useKeyboard() {
         // --- Actions ---
         case 'Enter': {
           e.preventDefault();
-          if (e.ctrlKey || e.metaKey) {
-            // Ctrl+Enter: start working
-            if (s.focusZone === 'main' && s.focusedItemId) {
-              const item = mainRef.current.find((i) => i.id === s.focusedItemId);
-              if (!item || isActionItem(item)) break;
-              if (item.type === 'subtask') {
-                const subtask = await db.subtasks.get(item.id);
-                if (subtask?.status === 'todo' && !subtask.deletedAt) await startWorkingOn(item.id);
-              } else {
-                const subs = await db.subtasks.where('taskId').equals(item.id).toArray();
-                const todo = subs.filter((sub) => !sub.deletedAt).find((sub) => sub.status === 'todo');
-                if (todo) await startWorkingOn(todo.id);
-                else if (!subs.some((sub) => !sub.deletedAt && sub.status !== 'done')) await startWorkingOnTask(item.id);
+          // Enter: sidebar = select list, main = context-dependent
+          if (s.focusZone === 'sidebar' && s.focusedItemId) {
+            s.selectList(s.focusedItemId);
+            s.setFocusZone('main');
+            setTimeout(() => {
+              const m = mainRef.current;
+              if (m.length > 0) useAppState.getState().setFocusedItem(m[0].id);
+            }, 100);
+          } else if (s.focusZone === 'main' && s.focusedItemId) {
+            const item = mainRef.current.find((i) => i.id === s.focusedItemId);
+            if (!item) break;
+            if (item.type === 'banner-blocked') {
+              // Navigate to blocked task
+              const task = await db.tasks.get(item.taskId!);
+              if (task) {
+                s.selectList(task.listId);
+                s.ensureTaskExpanded(task.id);
+                s.setFocusedItem(task.id);
               }
-            }
-          } else {
-            // Enter: sidebar = select list, main = context-dependent
-            if (s.focusZone === 'sidebar' && s.focusedItemId) {
-              s.selectList(s.focusedItemId);
-              s.setFocusZone('main');
-              setTimeout(() => {
-                const m = mainRef.current;
-                if (m.length > 0) useAppState.getState().setFocusedItem(m[0].id);
-              }, 100);
-            } else if (s.focusZone === 'main' && s.focusedItemId) {
-              const item = mainRef.current.find((i) => i.id === s.focusedItemId);
-              if (!item) break;
-              if (item.type === 'banner') {
-                const bi = s.bannerFocusIndex;
-                if (bi === 0) {
-                  // Navigate to working task
-                  const wTask = await db.tasks.filter((t) => t.status === 'working' && !t.deletedAt).first();
-                  const wSub = await db.subtasks.filter((sub) => sub.status === 'working' && !sub.deletedAt).first();
-                  const targetTask = wTask ?? (wSub ? await db.tasks.get(wSub.taskId) : null);
-                  if (targetTask) {
-                    s.selectList(targetTask.listId);
-                    s.ensureTaskExpanded(targetTask.id);
-                    s.setFocusedItem(targetTask.id);
-                    s.setBannerFocusIndex(0);
-                  }
-                } else if (bi === 1) {
-                  await markWorkingDone();
-                } else if (bi === 2) {
-                  await markWorkingBlocked();
-                } else if (bi === 3) {
-                  await stopWorking();
+            } else if (item.type === 'create') {
+              s.setCreatingTask(true);
+            } else if (item.type === 'add-subtask') {
+              s.ensureTaskExpanded(item.taskId!);
+              s.setAddingSubtaskToTaskId(item.taskId!);
+            } else if (listTypeRef.current === 'follow-ups') {
+              // Ping toggle for follow-ups
+              const task = await db.tasks.get(item.id);
+              if (task) {
+                if (isInCooldown(task)) {
+                  await updateTask(task.id, {
+                    pingedAt: undefined,
+                    pingCooldown: undefined,
+                    pingCooldownCustomMs: undefined,
+                    pingCooldownUntil: undefined,
+                  });
+                } else {
+                  await updateTask(task.id, { pingedAt: Date.now(), pingCooldown: task.pingCooldown ?? '12h' });
                 }
-              } else if (item.type === 'banner-blocked') {
-                // Navigate to blocked task
-                const task = await db.tasks.get(item.taskId!);
-                if (task) {
-                  s.selectList(task.listId);
-                  s.ensureTaskExpanded(task.id);
-                  s.setFocusedItem(task.id);
-                }
-              } else if (item.type === 'create') {
-                s.setCreatingTask(true);
-              } else if (item.type === 'add-subtask') {
-                s.ensureTaskExpanded(item.taskId!);
-                s.setAddingSubtaskToTaskId(item.taskId!);
-              } else if (listTypeRef.current === 'follow-ups') {
-                // Ping toggle for follow-ups
-                const task = await db.tasks.get(item.id);
-                if (task) {
-                  if (isInCooldown(task)) {
-                    await updateTask(task.id, {
-                      pingedAt: undefined,
-                      pingCooldown: undefined,
-                      pingCooldownCustomMs: undefined,
-                      pingCooldownUntil: undefined,
-                    });
-                  } else {
-                    await updateTask(task.id, { pingedAt: Date.now(), pingCooldown: task.pingCooldown ?? '12h' });
-                  }
-                }
-              } else if (item.type === 'task') {
-                s.toggleTaskExpanded(item.id);
               }
+            } else if (item.type === 'task') {
+              s.toggleTaskExpanded(item.id);
             }
           }
           break;
@@ -490,24 +427,6 @@ export function useKeyboard() {
           } else {
             const sub = await db.subtasks.get(item.id);
             if (sub) await setSubtaskStatus(sub.id, sub.status === 'blocked' ? 'todo' : 'blocked');
-          }
-          break;
-        }
-
-        case 'w': {
-          // Start working
-          e.preventDefault();
-          if (s.focusZone !== 'main' || !s.focusedItemId) break;
-          const item = mainRef.current.find((i) => i.id === s.focusedItemId);
-          if (!item || isActionItem(item)) break;
-          if (item.type === 'subtask') {
-            const subtask = await db.subtasks.get(item.id);
-            if (subtask?.status === 'todo' && !subtask.deletedAt) await startWorkingOn(item.id);
-          } else {
-            const subs = await db.subtasks.where('taskId').equals(item.id).toArray();
-            const todo = subs.filter((sub) => !sub.deletedAt).find((sub) => sub.status === 'todo');
-            if (todo) await startWorkingOn(todo.id);
-            else if (!subs.some((sub) => !sub.deletedAt && sub.status !== 'done')) await startWorkingOnTask(item.id);
           }
           break;
         }

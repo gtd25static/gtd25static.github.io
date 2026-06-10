@@ -1,4 +1,4 @@
-export const SYNC_VERSION = 4;
+export const SYNC_VERSION = 5;
 
 export function isCompatibleVersion(remote: number | undefined): boolean {
   return (remote ?? 0) <= SYNC_VERSION;

@@ -11,7 +11,6 @@ function resetStore() {
     focusedItemId: null,
     focusZone: 'main',
     editingItemId: null,
-    bannerFocusIndex: 0,
     addingSubtaskToTaskId: null,
     creatingTask: false,
     sidebarOpen: true,
@@ -107,11 +106,6 @@ describe('app-state store', () => {
     it('setEditingItemId', () => {
       getState().setEditingItemId('t1');
       expect(getState().editingItemId).toBe('t1');
-    });
-
-    it('setBannerFocusIndex', () => {
-      getState().setBannerFocusIndex(3);
-      expect(getState().bannerFocusIndex).toBe(3);
     });
 
     it('setAddingSubtaskToTaskId', () => {

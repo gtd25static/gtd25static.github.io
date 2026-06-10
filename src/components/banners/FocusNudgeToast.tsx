@@ -31,7 +31,7 @@ export function FocusNudgeToast() {
 
   async function handleFocus() {
     if (!nudge) return;
-    await focusTask(nudge.taskId, { subtaskId: nudge.subtaskId });
+    await focusTask(nudge.taskId);
     dismiss();
   }
 

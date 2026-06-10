@@ -6,6 +6,18 @@ interface RemoteMigration {
   migrate: (data: SyncData) => SyncData;
 }
 
+/**
+ * v5 removed the 'working' status (superseded by Focus Mode). Map legacy rows to
+ * 'todo' WITHOUT bumping fieldTimestamps: this is a value normalization, not a
+ * user edit, so a genuinely fresher 'done'/'blocked' from another device still
+ * wins the per-field merge. Used by the 4->5 migration and by every snapshot
+ * ingestion path (bootstrap, force-pull, ZIP import, backup restore), which can
+ * legitimately carry pre-v5 data forever.
+ */
+export function normalizeLegacyWorkingStatus<T extends { status: string }>(rows: T[]): T[] {
+  return rows.map((r) => ((r.status as string) === 'working' ? { ...r, status: 'todo' } : r));
+}
+
 const migrations: RemoteMigration[] = [
   {
     fromVersion: 0,
@@ -28,6 +40,17 @@ const migrations: RemoteMigration[] = [
     fromVersion: 3,
     toVersion: 4,
     migrate: (data) => ({ ...data, syncVersion: 4 }),
+  },
+  {
+    // v5 removes the 'working' task/subtask status; legacy rows become 'todo'.
+    fromVersion: 4,
+    toVersion: 5,
+    migrate: (data) => ({
+      ...data,
+      tasks: normalizeLegacyWorkingStatus(data.tasks),
+      subtasks: normalizeLegacyWorkingStatus(data.subtasks),
+      syncVersion: 5,
+    }),
   },
 ];
 
@@ -53,10 +76,16 @@ export function runRemoteMigrations(data: SyncData, from: number, to: number): S
  */
 export function migrateEntryData(
   data: Record<string, unknown>,
-  _entityType: ChangeEntry['entityType'],
-  _entryVersion?: number,
+  entityType: ChangeEntry['entityType'],
+  entryVersion?: number,
 ): Record<string, unknown> {
-  // Identity for now. When format changes happen, add transforms here.
-  // Example: if ((entryVersion ?? 0) < 3 && 'dueDate' in data) { ... }
+  // v5: entries pushed by pre-v5 devices may still carry the removed 'working' status.
+  if (
+    (entryVersion ?? 0) < 5 &&
+    (entityType === 'task' || entityType === 'subtask') &&
+    data.status === 'working'
+  ) {
+    return { ...data, status: 'todo' };
+  }
   return data;
 }

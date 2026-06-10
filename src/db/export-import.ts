@@ -224,9 +224,14 @@ function validatePayload(parsed: ExportPayload): ImportData {
     throw new Error('Invalid backup: too many records');
   }
 
-  const VALID_TASK_STATUSES = new Set(['todo', 'done', 'blocked', 'working']);
+  const VALID_TASK_STATUSES = new Set(['todo', 'done', 'blocked']);
   const VALID_LIST_TYPES = new Set(['tasks', 'follow-ups']);
   const warnings: string[] = [];
+
+  // Old backups may carry the removed legacy 'working' status — import them as
+  // 'todo' rather than skipping the rows (genuinely garbage statuses still skip).
+  parsed.tasks = parsed.tasks.map((t) => ((t.status as string) === 'working' ? { ...t, status: 'todo' as const } : t));
+  parsed.subtasks = parsed.subtasks.map((s) => ((s.status as string) === 'working' ? { ...s, status: 'todo' as const } : s));
 
   function isValidNumber(v: unknown): v is number {
     return typeof v === 'number' && !isNaN(v);

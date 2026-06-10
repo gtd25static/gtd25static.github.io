@@ -31,7 +31,6 @@ function statusBadgeClass(result: SearchResult): string {
   if (result.archived) return 'bg-zinc-100 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400';
   switch (result.status) {
     case 'done': return 'bg-green-50 text-green-600 dark:bg-green-900/30 dark:text-green-400';
-    case 'working': return 'bg-accent-50 text-accent-600 dark:bg-accent-900/30 dark:text-accent-400';
     case 'blocked': return 'bg-red-50 text-red-600 dark:bg-red-900/30 dark:text-red-400';
     default: return 'bg-zinc-100 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400';
   }
@@ -42,7 +41,6 @@ function statusDot(result: SearchResult): string {
   if (result.archived) return 'bg-zinc-300 dark:bg-zinc-600';
   switch (result.status) {
     case 'done': return 'bg-green-500';
-    case 'working': return 'bg-accent-500';
     case 'blocked': return 'bg-red-500';
     default: return 'bg-zinc-300 dark:bg-zinc-600';
   }

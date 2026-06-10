@@ -86,7 +86,7 @@ describe('FocusNudgeToast', () => {
 
     await user.click(screen.getByRole('button', { name: 'Focus' }));
 
-    await waitFor(() => expect(focusTask).toHaveBeenCalledWith('task-1', { subtaskId: undefined }));
+    await waitFor(() => expect(focusTask).toHaveBeenCalledWith('task-1'));
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 });

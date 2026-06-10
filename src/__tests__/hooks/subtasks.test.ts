@@ -43,33 +43,6 @@ describe('createSubtask', () => {
 });
 
 describe('setSubtaskStatus', () => {
-  it('sets working, clears other working subtasks globally', async () => {
-    const list2 = await createTaskList('Other');
-    const task2 = assertDefined(await createTask(list2.id, { title: 'Other Task' }));
-    const sub1 = assertDefined(await createSubtask(taskId, { title: 'Sub 1' }));
-    const sub2 = assertDefined(await createSubtask(task2.id, { title: 'Sub 2' }));
-
-    await setSubtaskStatus(sub1.id, 'working');
-    await setSubtaskStatus(sub2.id, 'working');
-
-    const s1 = await db.subtasks.get(sub1.id);
-    const s2 = await db.subtasks.get(sub2.id);
-    expect(s1?.status).toBe('todo'); // cleared
-    expect(s2?.status).toBe('working');
-  });
-
-  it('sets working, clears working tasks globally', async () => {
-    await db.tasks.update(taskId, { status: 'working' });
-    const sub = assertDefined(await createSubtask(taskId, { title: 'Sub' }));
-
-    await setSubtaskStatus(sub.id, 'working');
-
-    const updatedTask = await db.tasks.get(taskId);
-    expect(updatedTask?.status).toBe('todo');
-    const updatedSub = await db.subtasks.get(sub.id);
-    expect(updatedSub?.status).toBe('working');
-  });
-
   it('auto-completes parent when all subtasks done', async () => {
     const s1 = assertDefined(await createSubtask(taskId, { title: 'Sub 1' }));
     const s2 = assertDefined(await createSubtask(taskId, { title: 'Sub 2' }));
@@ -132,17 +105,6 @@ describe('convertSubtaskToTask', () => {
     expect(newTasks).toHaveLength(1);
     expect(newTasks[0].title).toBe('Convert Me');
     expect(newTasks[0].link).toBe('https://x.com');
-  });
-
-  it('maps working status to todo', async () => {
-    const list2 = await createTaskList('Target');
-    const sub = assertDefined(await createSubtask(taskId, { title: 'Working Sub' }));
-    await setSubtaskStatus(sub.id, 'working');
-
-    await convertSubtaskToTask(sub.id, list2.id);
-
-    const newTasks = await db.tasks.where('listId').equals(list2.id).toArray();
-    expect(newTasks[0].status).toBe('todo');
   });
 
   it('preserves other statuses', async () => {
