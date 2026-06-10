@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
 import { vi } from 'vitest';
-vi.setConfig({ testTimeout: 20_000 });
+// Each test runs 1-2 real Argon2id derivations (seconds each in isolation,
+// 3-4x slower when the full suite saturates the CPU) — keep generous headroom.
+vi.setConfig({ testTimeout: 45_000 });
 import { render, screen, act, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import '../../__tests__/setup-component';
@@ -84,7 +86,12 @@ describe('Paranoid Mode UI flow', () => {
 
   it('can unlock via the opt-in on-screen randomized keyboard', async () => {
     const user = userEvent.setup();
-    await enableParanoid(PASS);
+    // Short passphrase on purpose: every character is one user.click on the
+    // on-screen keyboard (slow in jsdom under load), and enableParanoid() —
+    // unlike the Security settings UI — applies no strength gate. Letters +
+    // Space still cover the keyboard mechanics.
+    const KB_PASS = 'kb pass';
+    await enableParanoid(KB_PASS);
     lock();
 
     render(<Gate />);
@@ -92,7 +99,7 @@ describe('Paranoid Mode UI flow', () => {
 
     // Switch to the keylogger-safe on-screen keyboard, then tap the passphrase.
     await user.click(screen.getByRole('button', { name: /on-screen keyboard/i }));
-    for (const ch of PASS) {
+    for (const ch of KB_PASS) {
       await user.click(screen.getByRole('button', { name: ch === ' ' ? 'Space' : ch }));
     }
     await user.click(screen.getByRole('button', { name: /^unlock$/i }));

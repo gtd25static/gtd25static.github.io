@@ -1,3 +1,8 @@
+import { vi } from 'vitest';
+// The encrypted export/import tests run several real KDF derivations (~1s each
+// in isolation, 3-4x slower when the suite saturates the CPU) — the 5s default
+// flakes under full-suite load.
+vi.setConfig({ testTimeout: 30_000 });
 import { db } from '../../db';
 import { resetDb } from '../helpers/db-helpers';
 import { exportToZip, parseImportZip } from '../../db/export-import';

@@ -1,4 +1,10 @@
 import '@testing-library/jest-dom/vitest';
+import { configure } from '@testing-library/react';
+
+// findBy*/waitFor default to 1s, which flakes when the full suite saturates the
+// CPU and renders take seconds. Passing tests resolve as soon as the assertion
+// holds, so this only slows down the reporting of genuine failures.
+configure({ asyncUtilTimeout: 5_000 });
 
 // Mock <dialog> methods since jsdom does not support them
 if (typeof HTMLDialogElement !== 'undefined') {
