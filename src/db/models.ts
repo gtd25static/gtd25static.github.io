@@ -75,6 +75,12 @@ export interface Task {
   completedAt?: number;
   // Work tracking
   workedAt?: number;
+  // Focus Mode membership: when this task entered the focus set. Plaintext
+  // metadata (timestamp only, like workedAt) — synced, NOT in SENSITIVE_FIELDS.
+  // Cleared by the daily focus cleanup, by recurring reset, or on trim.
+  // NOTE: kept on done tasks until the next daily cleanup so the Focus view's
+  // "cleared N today" count works — don't clear it on completion.
+  focusedAt?: number;
   // Additional links
   links?: TaskLink[];
   // Recurrence
@@ -181,6 +187,7 @@ export interface LocalSettings {
   nudgeSoundEnabled?: boolean;
   lastNudgeAt?: number;
   lastReviewedAt?: number;   // last weekly-review completion (shown in the sidebar)
+  lastFocusRefillDay?: string; // local 'YYYY-MM-DD' of the last Focus Mode refill (device-local)
   // Paranoid Mode (device-local; not synced). Persistent record of the mode;
   // the synchronous gate flag lives in localStorage ('gtd25-paranoid').
   paranoidEnabled?: boolean;

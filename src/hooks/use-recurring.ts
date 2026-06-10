@@ -57,10 +57,16 @@ export async function checkRecurringTasks() {
         task.recurrenceUnit!,
       );
 
-      const taskFT = stampUpdatedFields(task.fieldTimestamps, ['status', 'nextOccurrence'], now);
+      // A reset task leaves the Focus Mode set: without clearing focusedAt, a
+      // recurring task completed from the Focus view would re-enter it the same
+      // day when it flips back to 'todo'. (Dexie removes keys set to undefined.)
+      const resetFields = ['status', 'nextOccurrence'];
+      if (task.focusedAt != null) resetFields.push('focusedAt');
+      const taskFT = stampUpdatedFields(task.fieldTimestamps, resetFields, now);
       await db.tasks.update(task.id, {
         status: 'todo',
         nextOccurrence: newNext,
+        focusedAt: undefined,
         updatedAt: now,
         fieldTimestamps: taskFT,
       });

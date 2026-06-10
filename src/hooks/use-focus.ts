@@ -16,8 +16,9 @@ function maybeStartTimer(startTimer: boolean): void {
   }
 }
 
-export async function focusTask(taskId: string, opts?: { startTimer?: boolean; subtaskId?: string }): Promise<void> {
+export async function focusTask(taskId: string, opts?: { startTimer?: boolean; subtaskId?: string; navigate?: boolean }): Promise<void> {
   const startTimer = opts?.startTimer ?? false;
+  const navigate = opts?.navigate ?? true; // false: start working in place (Focus Mode view)
   const task = await db.tasks.get(taskId);
   if (!task || task.deletedAt || task.status === 'done' || task.archived) return;
 
@@ -29,11 +30,11 @@ export async function focusTask(taskId: string, opts?: { startTimer?: boolean; s
   if (firstTodo) {
     await startWorkingOn(firstTodo.id);
   } else if (subtasks.some((s) => !s.deletedAt && s.status !== 'done')) {
-    revealTask(task.id, task.listId);
+    if (navigate) revealTask(task.id, task.listId);
     return;
   } else {
     await startWorkingOnTask(task.id);
   }
-  revealTask(task.id, task.listId);
+  if (navigate) revealTask(task.id, task.listId);
   maybeStartTimer(startTimer);
 }

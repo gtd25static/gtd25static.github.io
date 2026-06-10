@@ -1,5 +1,6 @@
 import type { Subtask, Task, TaskList } from '../db/models';
 import { collectDueItems, taskListIds } from './attention';
+import { FOCUS_SET_SIZE, focusMembers } from './focus-mode';
 import { eligibleForFocus, pickWeighted } from './focus-pick';
 
 export interface NudgeContent {
@@ -96,6 +97,14 @@ export function computeNudge(
     return item.dueDate >= dayStart.getTime();
   });
 
+  // Keep all the app's pressure pointing at the same tasks: Focus Mode set
+  // members win within each ladder rung (stable partition preserves dueDate order).
+  const focusIds = new Set(focusMembers(tasks, allowedListIds).slice(0, FOCUS_SET_SIZE).map((t) => t.id));
+  const preferFocus = <T extends { taskId: string }>(items: T[]): T[] =>
+    focusIds.size === 0
+      ? items
+      : [...items.filter((i) => focusIds.has(i.taskId)), ...items.filter((i) => !focusIds.has(i.taskId))];
+
   function contentFor(item: (typeof dueItems)[number], kind: 'overdue' | 'due-today'): NudgeContent {
     const title = item.title;
     return {
@@ -117,16 +126,17 @@ export function computeNudge(
 
   // 1. Overdue
   if (overdue.length > 0) {
-    return contentFor(overdue[0], 'overdue');
+    return contentFor(preferFocus(overdue)[0], 'overdue');
   }
 
   // 2. Due today
   if (dueToday.length > 0) {
-    return contentFor(dueToday[0], 'due-today');
+    return contentFor(preferFocus(dueToday)[0], 'due-today');
   }
 
-  // 3. Pending task fallback.
-  const pick = pickWeighted(active, now, rng);
+  // 3. Pending task fallback — drawn from the focus set when one exists.
+  const focusActive = active.filter((t) => focusIds.has(t.id));
+  const pick = pickWeighted(focusActive.length > 0 ? focusActive : active, now, rng);
   if (!pick) return null;
   return {
     kind: 'pending',

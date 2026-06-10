@@ -26,6 +26,7 @@ import { PomodoroBar } from '../pomodoro/PomodoroBar';
 import { GIT_COMMIT, MAX_LIST_NAME_LENGTH, isInboxList } from '../../lib/constants';
 import { moveTaskToList } from '../../hooks/use-tasks';
 import { useSpecialListContext } from '../../hooks/use-special-list';
+import { useFocusSet } from '../../hooks/use-focus-mode';
 import { useSharedStorage, formatBytes } from '../../hooks/use-shared-items';
 import { useReviewData } from '../../hooks/use-review-data';
 import { useVault } from '../../hooks/use-vault';
@@ -277,6 +278,7 @@ export function Sidebar() {
   const reviewData = useReviewData();
   const { enabled: paranoidEnabled } = useVault();
   const sharedStorage = useSharedStorage();
+  const focusCount = useFocusSet().members.length;
 
   const filteredLists = searchQuery
     ? lists.filter((l) => l.name.toLowerCase().includes(searchQuery.toLowerCase()))
@@ -464,6 +466,34 @@ export function Sidebar() {
             Create new list
           </button>
         )}
+      </div>
+
+      {/* Focus Mode: today's 2-3 task commitment set */}
+      <div className="px-2 pb-1">
+        <button
+          onClick={() => {
+            selectList('__focus__');
+            setSidebarOpen(false);
+          }}
+          className={`flex w-full items-center gap-3 rounded-full px-3 py-3.5 md:py-2 text-sm transition-colors ${
+            selectedListId === '__focus__'
+              ? 'bg-accent-50 text-accent-700 font-medium dark:bg-accent-900/20 dark:text-accent-300'
+              : 'text-zinc-700 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800'
+          }`}
+        >
+          {/* Target icon */}
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className={selectedListId === '__focus__' ? 'text-accent-600' : 'text-zinc-400'}>
+            <circle cx="12" cy="12" r="9" />
+            <circle cx="12" cy="12" r="5" />
+            <circle cx="12" cy="12" r="1.2" fill="currentColor" stroke="none" />
+          </svg>
+          <span className="flex-1 text-left">Focus</span>
+          {focusCount > 0 && (
+            <span className="flex h-5 min-w-[20px] items-center justify-center rounded-full bg-accent-500 px-1.5 text-xs font-medium text-white">
+              {focusCount}
+            </span>
+          )}
+        </button>
       </div>
 
       {/* Inbox row (visible when items pending) */}

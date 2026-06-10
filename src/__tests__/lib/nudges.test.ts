@@ -126,6 +126,63 @@ describe('computeNudge — priority ladder', () => {
   });
 });
 
+describe('computeNudge — Focus Mode preference', () => {
+  it('an overdue focus-set member beats an earlier-due non-member', () => {
+    const tasks = [
+      makeTask({ id: 'earlier', dueDate: NOW - 5 * DAY }),
+      makeTask({ id: 'focus', dueDate: NOW - DAY, focusedAt: NOW - DAY }),
+    ];
+    expect(computeNudge(NOW, tasks, lists)!.taskId).toBe('focus');
+  });
+
+  it('a due-today focus-set member wins its rung', () => {
+    const tasks = [
+      makeTask({ id: 'other', dueDate: NOW - HOUR }),
+      makeTask({ id: 'focus', dueDate: NOW, focusedAt: NOW - DAY }),
+    ];
+    const nudge = computeNudge(NOW, tasks, lists)!;
+    expect(nudge.kind).toBe('due-today');
+    expect(nudge.taskId).toBe('focus');
+  });
+
+  it('a due subtask of a focus-set task counts as focus', () => {
+    const focusParent = makeTask({ id: 'fp', focusedAt: NOW - DAY });
+    const other = makeTask({ id: 'other', dueDate: NOW - 3 * DAY });
+    const sub = makeSubtask({ id: 'sub', taskId: 'fp', dueDate: NOW - DAY });
+    const nudge = computeNudge(NOW, [focusParent, other], lists, () => 0, [sub])!;
+    expect(nudge.taskId).toBe('fp');
+    expect(nudge.subtaskId).toBe('sub');
+  });
+
+  it('the pending fallback only draws from focus members when any exist', () => {
+    const tasks = [
+      makeTask({ id: 'old-heavy', createdAt: NOW - 100 * DAY }),
+      makeTask({ id: 'focus', focusedAt: NOW - DAY }),
+      makeTask({ id: 'plain' }),
+    ];
+    // Whatever the rng says, the pick must come from the focus set.
+    for (const r of [0, 0.5, 0.999]) {
+      expect(computeNudge(NOW, tasks, lists, () => r)!.taskId).toBe('focus');
+    }
+  });
+
+  it('behaviour is unchanged when nothing carries focusedAt', () => {
+    const tasks = [
+      makeTask({ id: 'overdue', dueDate: NOW - 2 * DAY }),
+      makeTask({ id: 'plain' }),
+    ];
+    expect(computeNudge(NOW, tasks, lists)!.taskId).toBe('overdue');
+  });
+
+  it('focusedAt on an ineligible task (done) is ignored', () => {
+    const tasks = [
+      makeTask({ id: 'done-focus', focusedAt: NOW - DAY, status: 'done' }),
+      makeTask({ id: 'overdue', dueDate: NOW - DAY }),
+    ];
+    expect(computeNudge(NOW, tasks, lists)!.taskId).toBe('overdue');
+  });
+});
+
 describe('computeNudge — fallback gating', () => {
   it('does NOT use the random fallback while anything is overdue or due today', () => {
     const withOverdue = [

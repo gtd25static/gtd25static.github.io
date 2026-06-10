@@ -9,6 +9,7 @@ import { TaskListView } from '../tasks/TaskListView';
 import { SpecialListView } from '../tasks/SpecialListView';
 import { SearchResults } from '../tasks/SearchResults';
 import { SharedFolderView } from '../shared-folder/SharedFolderView';
+import { FocusView } from '../focus/FocusView';
 import { SettingsModal } from '../settings/SettingsModal';
 import { EncryptionPasswordModal } from '../settings/EncryptionPasswordModal';
 import { TrashModal } from '../trash/TrashModal';
@@ -134,7 +135,7 @@ export function AppShell() {
         </div>
 
         <TopBanner />
-        {searchQuery ? <SearchResults /> : selectedListId === '__shared__' ? <SharedFolderView /> : selectedListId === '__special__' ? <SpecialListView /> : <TaskListView />}
+        {searchQuery ? <SearchResults /> : selectedListId === '__focus__' ? <FocusView /> : selectedListId === '__shared__' ? <SharedFolderView /> : selectedListId === '__special__' ? <SpecialListView /> : <TaskListView />}
       </div>
 
       <SettingsModal />

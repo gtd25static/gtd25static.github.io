@@ -48,7 +48,9 @@ interface AppState {
 }
 
 export const useAppState = create<AppState>((set) => ({
-  selectedListId: null,
+  // Focus Mode is the default view on open — the 2-3 task commitment set greets
+  // you before the full lists do. AppShell's auto-select only fires on null.
+  selectedListId: '__focus__',
   expandedTaskIds: new Set(),
   focusedItemId: null,
   focusZone: 'main',
