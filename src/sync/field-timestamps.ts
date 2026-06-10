@@ -7,8 +7,44 @@
 
 const EXCLUDED_FIELDS = new Set(['id', 'createdAt', 'updatedAt', 'fieldTimestamps']);
 
+// Fields merged as id-keyed unions instead of whole-value LWW. discussionLog
+// entries are appended independently on different devices; whole-field LWW
+// silently dropped one side's appends (see THREAT_MODEL.md). Residual: a
+// deletion on one device can be resurrected by a device still carrying the
+// entry — accepted, append is the dominant operation.
+const UNION_ARRAY_FIELDS = new Set(['discussionLog']);
+
 type Entity = Record<string, unknown>;
 type FieldTimestamps = Record<string, number>;
+type IdEntry = { id: string; at?: number } & Record<string, unknown>;
+
+function isIdEntryArray(value: unknown): value is IdEntry[] {
+  return (
+    Array.isArray(value) &&
+    value.every((e) => !!e && typeof e === 'object' && typeof (e as Record<string, unknown>).id === 'string')
+  );
+}
+
+/**
+ * Union two entry arrays by id. On id collision with differing content the
+ * entry from the side with the newer field timestamp wins (ties keep local,
+ * matching the per-field LWW convention). Result is ordered oldest-first by
+ * `at` (the discussionLog convention), tie-broken by id for determinism.
+ */
+function unionEntriesById(
+  localArr: IdEntry[],
+  remoteArr: IdEntry[],
+  localTs: number,
+  remoteTs: number,
+): IdEntry[] {
+  const remoteWins = remoteTs > localTs;
+  const loser = remoteWins ? localArr : remoteArr;
+  const winner = remoteWins ? remoteArr : localArr;
+  const byId = new Map<string, IdEntry>();
+  for (const e of loser) byId.set(e.id, e);
+  for (const e of winner) byId.set(e.id, e); // collisions: winner's version
+  return [...byId.values()].sort((a, b) => (a.at ?? 0) - (b.at ?? 0) || a.id.localeCompare(b.id));
+}
 
 /**
  * Create initial fieldTimestamps for a new entity.
@@ -83,6 +119,20 @@ export function mergeEntity(
   for (const key of allKeys) {
     const localTs = localFT[key] ?? 0;
     const remoteTs = remoteFT[key] ?? 0;
+
+    // Union-merged array fields converge regardless of timestamp direction:
+    // plain LWW would drop the older side's appends entirely (and an older
+    // remote would never contribute its new entries at all). Falls through to
+    // LWW when either side is missing/malformed, preserving old semantics.
+    if (UNION_ARRAY_FIELDS.has(key) && isIdEntryArray(local[key]) && isIdEntryArray(remote[key])) {
+      const union = unionEntriesById(local[key] as IdEntry[], remote[key] as IdEntry[], localTs, remoteTs);
+      if (JSON.stringify(union) !== JSON.stringify(local[key])) {
+        merged[key] = union;
+        mergedFT[key] = Math.max(localTs, remoteTs);
+        changed = true;
+      }
+      continue;
+    }
 
     if (remoteTs > localTs) {
       // Remote wins for this field

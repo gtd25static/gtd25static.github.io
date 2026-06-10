@@ -211,6 +211,68 @@ describe('applyRemoteEntries — upsert', () => {
   });
 });
 
+describe('applyRemoteEntries — discussionLog union', () => {
+  it('concurrent appends from two devices both survive in the stored row', async () => {
+    const taskId = newId();
+    const now = Date.now();
+    const e1 = { id: 'e1', at: now, note: 'kickoff' };
+    const eA = { id: 'eA', at: now + 110, note: 'noted on this device' };
+    const eB = { id: 'eB', at: now + 120, note: 'noted on the other device' };
+
+    // This device appended eA at now+110.
+    await db.tasks.add({
+      id: taskId, listId: 'list-1', title: 'Follow-up', status: 'todo', order: 0,
+      createdAt: now, updatedAt: now + 110,
+      discussionLog: [e1, eA],
+      fieldTimestamps: { title: now, status: now, order: now, discussionLog: now + 110 },
+    });
+
+    // The other device appended eB at now+120 and its change entry arrives.
+    await applyRemoteEntries([{
+      id: 'e-remote', deviceId: 'remote', timestamp: now + 120,
+      entityType: 'task', entityId: taskId, operation: 'upsert',
+      data: {
+        id: taskId, listId: 'list-1', title: 'Follow-up', status: 'todo', order: 0,
+        createdAt: now, updatedAt: now + 120,
+        discussionLog: [e1, eB],
+        fieldTimestamps: { title: now, status: now, order: now, discussionLog: now + 120 },
+      },
+    }]);
+
+    const task = await db.tasks.get(taskId);
+    expect(task!.discussionLog).toEqual([e1, eA, eB]);
+  });
+
+  it('an OLDER remote entry still contributes its appended note', async () => {
+    const taskId = newId();
+    const now = Date.now();
+    const e1 = { id: 'e1', at: now, note: 'kickoff' };
+    const eA = { id: 'eA', at: now + 110, note: 'older remote append' };
+    const eB = { id: 'eB', at: now + 120, note: 'newer local append' };
+
+    await db.tasks.add({
+      id: taskId, listId: 'list-1', title: 'Follow-up', status: 'todo', order: 0,
+      createdAt: now, updatedAt: now + 120,
+      discussionLog: [e1, eB],
+      fieldTimestamps: { title: now, status: now, order: now, discussionLog: now + 120 },
+    });
+
+    await applyRemoteEntries([{
+      id: 'e-remote', deviceId: 'remote', timestamp: now + 110,
+      entityType: 'task', entityId: taskId, operation: 'upsert',
+      data: {
+        id: taskId, listId: 'list-1', title: 'Follow-up', status: 'todo', order: 0,
+        createdAt: now, updatedAt: now + 110,
+        discussionLog: [e1, eA],
+        fieldTimestamps: { title: now, status: now, order: now, discussionLog: now + 110 },
+      },
+    }]);
+
+    const task = await db.tasks.get(taskId);
+    expect(task!.discussionLog).toEqual([e1, eA, eB]);
+  });
+});
+
 describe('applyRemoteEntries — delete', () => {
   it('sets deletedAt when remote >= local', async () => {
     const taskId = newId();

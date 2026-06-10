@@ -250,6 +250,115 @@ describe('mergeEntity', () => {
     });
   });
 
+  describe('discussionLog union merge', () => {
+    const e1 = { id: 'e1', at: 100, note: 'kickoff' };
+    const eA = { id: 'eA', at: 110, note: 'from device A' };
+    const eB = { id: 'eB', at: 120, note: 'from device B' };
+
+    function withLog(log: unknown, ts: number, extraFT: Record<string, number> = {}) {
+      return base({
+        discussionLog: log,
+        updatedAt: ts,
+        fieldTimestamps: { title: 100, status: 100, order: 100, discussionLog: ts, ...extraFT },
+      });
+    }
+
+    it('concurrent appends converge when the remote side is newer', () => {
+      const local = withLog([e1, eA], 110);
+      const remote = withLog([e1, eB], 120);
+
+      const merged = mergeEntity(local, remote, 120);
+      expect(merged).not.toBeNull();
+      expect(merged!.discussionLog).toEqual([e1, eA, eB]);
+      expect((merged!.fieldTimestamps as Record<string, number>).discussionLog).toBe(120);
+    });
+
+    it('concurrent appends converge when the remote side is OLDER (the previously lossy direction)', () => {
+      const local = withLog([e1, eB], 120);
+      const remote = withLog([e1, eA], 110);
+
+      const merged = mergeEntity(local, remote, 110);
+      expect(merged).not.toBeNull();
+      expect(merged!.discussionLog).toEqual([e1, eA, eB]);
+      // Field timestamp stays at the max of both sides.
+      expect((merged!.fieldTimestamps as Record<string, number>).discussionLog).toBe(120);
+    });
+
+    it('both devices end with identical arrays after merging each other (convergence)', () => {
+      const deviceA = withLog([e1, eA], 110);
+      const deviceB = withLog([e1, eB], 120);
+
+      const aAfter = mergeEntity(deviceA, deviceB, 120)!;
+      const bAfter = mergeEntity(deviceB, deviceA, 110)!;
+      expect(aAfter.discussionLog).toEqual(bAfter.discussionLog);
+      expect(aAfter.discussionLog).toEqual([e1, eA, eB]);
+    });
+
+    it('id collision: the side with the newer field timestamp wins the entry', () => {
+      const localEdit = { id: 'e1', at: 100, note: 'edited locally' };
+      const remoteEdit = { id: 'e1', at: 100, note: 'edited remotely' };
+
+      const remoteNewer = mergeEntity(withLog([localEdit], 110), withLog([remoteEdit], 120), 120);
+      expect(remoteNewer!.discussionLog).toEqual([remoteEdit]);
+
+      const localNewer = mergeEntity(withLog([localEdit], 120), withLog([remoteEdit], 110), 110);
+      expect(localNewer).toBeNull(); // union equals local → no change
+    });
+
+    it('identical arrays produce no spurious change', () => {
+      const merged = mergeEntity(withLog([e1, eA], 110), withLog([e1, eA], 120), 120);
+      expect(merged).toBeNull();
+    });
+
+    it('a remote deletion is resurrected by a local copy (documented residual)', () => {
+      const local = withLog([e1, eA], 100);
+      const remote = withLog([e1], 200); // remote removed eA, newer stamp
+
+      const merged = mergeEntity(local, remote, 200);
+      // Union keeps the local superset; nothing else changed → null.
+      expect(merged).toBeNull();
+    });
+
+    it('falls back to plain LWW when the remote side cleared the whole field', () => {
+      const local = withLog([e1, eA], 100);
+      const remote = base({
+        updatedAt: 200,
+        fieldTimestamps: { title: 100, status: 100, order: 100, discussionLog: 200 },
+      }); // field absent, stamped newer
+
+      const merged = mergeEntity(local, remote, 200);
+      expect(merged).not.toBeNull();
+      expect('discussionLog' in merged!).toBe(false);
+    });
+
+    it('falls back to plain LWW when entries lack ids', () => {
+      const local = withLog([{ at: 100, note: 'no id' }], 100);
+      const remote = withLog([e1], 200);
+
+      const merged = mergeEntity(local, remote, 200);
+      expect(merged!.discussionLog).toEqual([e1]); // remote (newer) replaces wholesale
+    });
+
+    it('other fields in the same merge still follow plain per-field LWW', () => {
+      const local = withLog([e1, eA], 110, { title: 300 });
+      const remote = { ...withLog([e1, eB], 120, { title: 100 }), title: 'Remote Title' };
+
+      const merged = mergeEntity(local, remote, 120);
+      expect(merged!.discussionLog).toEqual([e1, eA, eB]);
+      expect(merged!.title).toBe('Local Title'); // local title ts 300 beats remote 100
+    });
+
+    it('orders the union oldest-first by at', () => {
+      const late = { id: 'late', at: 500, note: 'late' };
+      const early = { id: 'early', at: 50, note: 'early' };
+      const local = withLog([e1, late], 110);
+      const remote = withLog([e1, early], 120);
+
+      const merged = mergeEntity(local, remote, 120);
+      expect((merged!.discussionLog as Array<{ id: string }>).map((e) => e.id)).toEqual(['early', 'e1', 'late']);
+    });
+  });
+
   describe('entity-level LWW fallback', () => {
     it('one side missing fieldTimestamps — remote wins when newer', () => {
       const local = base({ updatedAt: 200 }); // no fieldTimestamps
