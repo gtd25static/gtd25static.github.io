@@ -1,4 +1,5 @@
 import { useFocusSet, useFocusModeDaily } from '../../hooks/use-focus-mode';
+import { MotivationBanner } from '../banners/MotivationBanner';
 import { FocusTaskCard } from './FocusTaskCard';
 
 /**
@@ -18,6 +19,8 @@ export function FocusView() {
             Just these — finish or delete. New tasks arrive tomorrow.
           </p>
         </div>
+
+        <MotivationBanner prominent />
 
         {state === 'tasks' && (
           <div className="flex flex-col gap-3">
