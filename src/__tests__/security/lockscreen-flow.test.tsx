@@ -13,7 +13,8 @@ import { LockScreen } from '../../components/security/LockScreen';
 import type { Task } from '../../db/models';
 import { usePomodoroStore } from '../../stores/pomodoro-store';
 
-const PASS = 'integration passphrase';
+// 5 words — clears the entropy gate (>1y offline crack time, see password-strength.ts)
+const PASS = 'integration flow lock screen passphrase';
 
 // Mirrors App.tsx: show the lock screen when locked, otherwise the app.
 function Gate() {

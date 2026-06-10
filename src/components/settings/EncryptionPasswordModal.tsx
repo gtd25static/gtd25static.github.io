@@ -6,6 +6,7 @@ import { deriveKey, generateSalt, checkVerifier, cacheEncryptionKey } from '../.
 import { getFile } from '../../sync/github-api';
 import { onEncryptionPasswordNeeded, offEncryptionPasswordNeeded, syncNow } from '../../sync/sync-engine';
 import { checkSecretStrength } from '../../lib/password-strength';
+import { PasswordStrengthBar } from '../ui/PasswordStrengthBar';
 
 export function EncryptionPasswordModal() {
   // null = closed, '' = new password needed, 'salt...' = existing encryption
@@ -61,9 +62,9 @@ export function EncryptionPasswordModal() {
           setLoading(false);
           return;
         }
-        // Block clearly-weak sync passwords: this is the single secret protecting ALL
-        // synced data at the backend, so offline-guessing resistance matters (ACR-014).
-        const strength = checkSecretStrength(password, 12);
+        // Block weak sync passwords: this is the single secret protecting ALL synced
+        // data at the backend, where PBKDF2 makes offline guessing cheapest (ACR-014).
+        const strength = checkSecretStrength(password, 'sync');
         if (!strength.ok) {
           setError(strength.reason!);
           setLoading(false);
@@ -163,6 +164,8 @@ export function EncryptionPasswordModal() {
           autoFocus
           disabled={loading}
         />
+
+        {isNewPassword && <PasswordStrengthBar secret={password} kind="sync" />}
 
         {isNewPassword && (
           <div className="mt-2">

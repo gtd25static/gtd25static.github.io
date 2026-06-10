@@ -24,6 +24,7 @@ import { panicWipe } from '../../lib/panic-wipe';
 import { exportToZip } from '../../db/export-import';
 import { recordError } from '../../lib/diagnostics';
 import { checkSecretStrength } from '../../lib/password-strength';
+import { PasswordStrengthBar } from '../ui/PasswordStrengthBar';
 
 function clampMinutes(value: string): number {
   const n = parseInt(value, 10);
@@ -40,7 +41,7 @@ function EnableForm() {
   async function handleEnable() {
     if (pass !== confirm) { toast('Passphrases do not match', 'error'); return; }
     if (!pass.trim()) { toast('Choose a passphrase', 'error'); return; }
-    const strength = checkSecretStrength(pass.trim());
+    const strength = checkSecretStrength(pass.trim(), 'vault');
     if (!strength.ok) { toast(strength.reason!, 'error'); return; }
     setBusy(true);
     try {
@@ -64,6 +65,7 @@ function EnableForm() {
         passphrase — local data becomes unreadable (data synced to other devices is unaffected).
       </p>
       <Input label="Passphrase" type="password" value={pass} onChange={(e) => setPass(e.target.value)} placeholder="Choose a strong passphrase" disabled={busy} />
+      <PasswordStrengthBar secret={pass.trim()} kind="vault" />
       <Input label="Confirm passphrase" type="password" value={confirm} onChange={(e) => setConfirm(e.target.value)} placeholder="Repeat passphrase" disabled={busy} />
       <Input label="Auto-lock after (minutes idle)" type="number" min={1} max={240} value={idle} onChange={(e) => setIdle(e.target.value)} disabled={busy} />
       <Button size="sm" variant="danger" onClick={handleEnable} disabled={busy}>
@@ -276,7 +278,7 @@ function ManageForm({ idleMinutes, maxAttempts, systemIdleOn, systemLockGraceOn,
   async function handleChangePass() {
     if (newPass !== newPassConfirm) { toast('Passphrases do not match', 'error'); return; }
     if (!newPass.trim()) { toast('Enter a new passphrase', 'error'); return; }
-    const strength = checkSecretStrength(newPass.trim());
+    const strength = checkSecretStrength(newPass.trim(), 'vault');
     if (!strength.ok) { toast(strength.reason!, 'error'); return; }
     setBusy(true);
     try {
@@ -384,6 +386,7 @@ function ManageForm({ idleMinutes, maxAttempts, systemIdleOn, systemLockGraceOn,
 
       <div className="space-y-2 border-t border-zinc-200 pt-3 dark:border-zinc-700">
         <Input label="New passphrase" type="password" value={newPass} onChange={(e) => setNewPass(e.target.value)} placeholder="Change passphrase" disabled={busy} />
+        <PasswordStrengthBar secret={newPass.trim()} kind="vault" />
         <Input label="Confirm new passphrase" type="password" value={newPassConfirm} onChange={(e) => setNewPassConfirm(e.target.value)} placeholder="Repeat new passphrase" disabled={busy} />
         <Button size="sm" variant="secondary" onClick={handleChangePass} disabled={busy}>Change passphrase</Button>
       </div>
