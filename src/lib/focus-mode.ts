@@ -11,6 +11,9 @@ import { eligibleForFocus, pickWeighted } from './focus-pick';
 export const FOCUS_LIST_ID = '__focus__';
 export const FOCUS_SET_SIZE = 3;
 export const FOCUS_URGENT_CAP = 2;
+// Due within this many days claims an urgent slot. Deliberately tighter than the
+// badge threshold (DUE_SOON_DAYS = 14): only genuinely approaching deadlines.
+export const FOCUS_DUE_SOON_DAYS = 7;
 
 /** Local-calendar day key ('YYYY-MM-DD') used to gate the once-daily refill. */
 export function localDayKey(now: number): string {
@@ -38,28 +41,32 @@ export function focusOverflow(members: Task[]): Task[] {
 }
 
 /**
- * Urgency ladder for slot-claiming, mirroring the nudge priority order:
- * 0 = overdue, 1 = due today, 2 = starred, null = backlog. A starred overdue
- * task ranks 0 (best rank wins).
+ * Urgency ladder for slot-claiming: 0 = overdue, 1 = due today, 2 = due within
+ * FOCUS_DUE_SOON_DAYS, 3 = starred, null = backlog. A starred dated task ranks
+ * by its date (best rank wins).
  */
-export function urgencyRank(task: Task, now: number): 0 | 1 | 2 | null {
+export function urgencyRank(task: Task, now: number): 0 | 1 | 2 | 3 | null {
   if (task.dueDate != null) {
     const dayStart = new Date(now);
     dayStart.setHours(0, 0, 0, 0);
     if (task.dueDate < dayStart.getTime()) return 0;
     if (task.dueDate <= endOfDayMs(now)) return 1;
+    if (task.dueDate <= endOfDayMs(now) + FOCUS_DUE_SOON_DAYS * 24 * 60 * 60 * 1000) return 2;
   }
-  if (task.starred) return 2;
+  if (task.starred) return 3;
   return null;
 }
 
 /**
- * Pick tasks for the empty slots (FOCUS_SET_SIZE - members). Urgent tasks
- * (overdue -> due today -> starred) claim at most FOCUS_URGENT_CAP slots AND
- * at least one slot per refill is reserved for an age-weighted random backlog
- * pick, so lingering tasks keep surfacing. Caps only bind while both pools
- * have supply: if the backlog runs dry, urgent tasks fill the rest (and vice
- * versa). Members are excluded from the pool. `rng` injectable for tests.
+ * Pick tasks for the empty slots (FOCUS_SET_SIZE - members). Slots are
+ * role-based as a SET-COMPOSITION target: FOCUS_URGENT_CAP urgent slots +
+ * the rest backlog. Current members are classified by their *current*
+ * urgencyRank and count against their role's quota — so when an urgent member
+ * finishes while a backlog member stays, the freed slot refills urgent, not
+ * backlog. Urgent picks follow the ladder; backlog picks are age-weighted
+ * random. Quotas only bind while both pools have supply: if one pool runs
+ * dry the other fills the remainder. Members are excluded from the pool.
+ * `rng` injectable for tests.
  */
 export function selectFocusRefill(
   eligible: Task[],
@@ -72,6 +79,11 @@ export function selectFocusRefill(
   const pool = eligible.filter((t) => !memberIds.has(t.id));
   if (slots <= 0 || pool.length === 0) return [];
 
+  const urgentMembers = members.filter((t) => urgencyRank(t, now) !== null).length;
+  const backlogMembers = members.length - urgentMembers;
+  const urgentWant = Math.max(0, FOCUS_URGENT_CAP - urgentMembers);
+  const backlogWant = Math.max(0, FOCUS_SET_SIZE - FOCUS_URGENT_CAP - backlogMembers);
+
   const urgent = pool
     .filter((t) => urgencyRank(t, now) !== null)
     .sort(
@@ -81,20 +93,27 @@ export function selectFocusRefill(
         a.createdAt - b.createdAt ||
         a.id.localeCompare(b.id),
     );
-  const backlog = pool.filter((t) => urgencyRank(t, now) === null);
+  let backlog = pool.filter((t) => urgencyRank(t, now) === null);
 
-  const urgentCount = Math.min(urgent.length, FOCUS_URGENT_CAP, Math.max(0, slots - 1));
-  const picks = urgent.slice(0, urgentCount);
+  const urgentTake = Math.min(urgent.length, urgentWant, slots);
+  const picks = urgent.slice(0, urgentTake);
 
-  let remainingBacklog = backlog;
-  while (picks.length < slots && remainingBacklog.length > 0) {
-    const pick = pickWeighted(remainingBacklog, now, rng)!;
+  const backlogTake = Math.min(backlog.length, backlogWant, slots - picks.length);
+  for (let i = 0; i < backlogTake; i++) {
+    const pick = pickWeighted(backlog, now, rng)!;
     picks.push(pick);
-    remainingBacklog = remainingBacklog.filter((t) => t.id !== pick.id);
+    backlog = backlog.filter((t) => t.id !== pick.id);
   }
-  // Backlog exhausted: let urgent tasks fill beyond the cap rather than leave slots empty.
-  for (let i = urgentCount; picks.length < slots && i < urgent.length; i++) {
+
+  // One pool short of its quota: fill remaining slots from whatever's left
+  // (further urgent first, then weighted backlog) rather than leave slots empty.
+  for (let i = urgentTake; picks.length < slots && i < urgent.length; i++) {
     picks.push(urgent[i]);
+  }
+  while (picks.length < slots && backlog.length > 0) {
+    const pick = pickWeighted(backlog, now, rng)!;
+    picks.push(pick);
+    backlog = backlog.filter((t) => t.id !== pick.id);
   }
   return picks;
 }

@@ -67,10 +67,11 @@ describe('focusMembers / focusOverflow', () => {
 });
 
 describe('urgencyRank', () => {
-  it('ranks overdue 0, due today 1, starred 2, plain null', () => {
+  it('ranks overdue 0, due today 1, due soon 2, starred 3, plain null', () => {
     expect(urgencyRank(makeTask({ id: 'o', dueDate: NOW - DAY }), NOW)).toBe(0);
     expect(urgencyRank(makeTask({ id: 't', dueDate: NOW }), NOW)).toBe(1);
-    expect(urgencyRank(makeTask({ id: 's', starred: true }), NOW)).toBe(2);
+    expect(urgencyRank(makeTask({ id: 'soon', dueDate: NOW + 3 * DAY }), NOW)).toBe(2);
+    expect(urgencyRank(makeTask({ id: 's', starred: true }), NOW)).toBe(3);
     expect(urgencyRank(makeTask({ id: 'p' }), NOW)).toBeNull();
   });
 
@@ -78,9 +79,10 @@ describe('urgencyRank', () => {
     expect(urgencyRank(makeTask({ id: 'so', starred: true, dueDate: NOW - DAY }), NOW)).toBe(0);
   });
 
-  it('a future due date is not urgent (but starred still is)', () => {
-    expect(urgencyRank(makeTask({ id: 'f', dueDate: NOW + 3 * DAY }), NOW)).toBeNull();
-    expect(urgencyRank(makeTask({ id: 'fs', dueDate: NOW + 3 * DAY, starred: true }), NOW)).toBe(2);
+  it('due-soon window is 7 days; beyond it only starred counts', () => {
+    expect(urgencyRank(makeTask({ id: 'edge', dueDate: NOW + 7 * DAY }), NOW)).toBe(2);
+    expect(urgencyRank(makeTask({ id: 'far', dueDate: NOW + 10 * DAY }), NOW)).toBeNull();
+    expect(urgencyRank(makeTask({ id: 'fs', dueDate: NOW + 10 * DAY, starred: true }), NOW)).toBe(3);
   });
 });
 
@@ -131,10 +133,37 @@ describe('selectFocusRefill', () => {
     expect(new Set(picks.map((t) => t.id)).size).toBe(3); // distinct
   });
 
-  it('a single empty slot always goes to the backlog (the backlog reserve)', () => {
+  it('a backlog member holds its slot: freed urgent slots refill urgent, not backlog', () => {
+    // The user's scenario: backlog task pending in the set, urgent member finished.
+    const members = [makeTask({ id: 'backlog-member', focusedAt: NOW - DAY })];
+    const eligible = [
+      ...members,
+      makeTask({ id: 'overdue-1', dueDate: NOW - DAY }),
+      makeTask({ id: 'overdue-2', dueDate: NOW - 2 * DAY }),
+      makeTask({ id: 'fresh-backlog' }),
+    ];
+    const picks = selectFocusRefill(eligible, members, NOW, () => 0);
+    expect(picks.map((t) => t.id)).toEqual(['overdue-2', 'overdue-1']);
+  });
+
+  it('two urgent members hold their slots: the free slot goes to backlog', () => {
     const members = [
-      makeTask({ id: 'm1', focusedAt: NOW - DAY }),
-      makeTask({ id: 'm2', focusedAt: NOW - DAY }),
+      makeTask({ id: 'm1', focusedAt: NOW - DAY, dueDate: NOW - DAY }),
+      makeTask({ id: 'm2', focusedAt: NOW - DAY, dueDate: NOW }),
+    ];
+    const eligible = [
+      ...members,
+      makeTask({ id: 'overdue', dueDate: NOW - 3 * DAY }),
+      makeTask({ id: 'backlog' }),
+    ];
+    const picks = selectFocusRefill(eligible, members, NOW, () => 0);
+    expect(picks.map((t) => t.id)).toEqual(['backlog']);
+  });
+
+  it('one urgent + one backlog member: the free slot refills urgent', () => {
+    const members = [
+      makeTask({ id: 'urgent-member', focusedAt: NOW - DAY, dueDate: NOW }),
+      makeTask({ id: 'backlog-member', focusedAt: NOW - DAY }),
     ];
     const eligible = [
       ...members,
@@ -142,19 +171,20 @@ describe('selectFocusRefill', () => {
       makeTask({ id: 'backlog' }),
     ];
     const picks = selectFocusRefill(eligible, members, NOW, () => 0);
-    expect(picks.map((t) => t.id)).toEqual(['backlog']);
+    expect(picks.map((t) => t.id)).toEqual(['overdue']);
   });
 
-  it('two empty slots → 1 urgent + 1 backlog', () => {
-    const members = [makeTask({ id: 'm1', focusedAt: NOW - DAY })];
+  it('a member that BECAME urgent counts toward the urgent quota', () => {
+    // Picked as backlog, but its due date has since arrived.
+    const members = [makeTask({ id: 'urgentified', focusedAt: NOW - 3 * DAY, dueDate: NOW - DAY })];
     const eligible = [
       ...members,
-      makeTask({ id: 'overdue-1', dueDate: NOW - DAY }),
-      makeTask({ id: 'overdue-2', dueDate: NOW - 2 * DAY }),
+      makeTask({ id: 'overdue', dueDate: NOW - 2 * DAY }),
       makeTask({ id: 'backlog' }),
     ];
+    // 1 urgent member present → only 1 more urgent + the backlog slot.
     const picks = selectFocusRefill(eligible, members, NOW, () => 0);
-    expect(picks.map((t) => t.id)).toEqual(['overdue-2', 'backlog']);
+    expect(picks.map((t) => t.id)).toEqual(['overdue', 'backlog']);
   });
 
   it('backlog dry → urgent tasks fill beyond the cap', () => {
