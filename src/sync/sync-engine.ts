@@ -1,7 +1,8 @@
 import { db } from '../db';
 import type { SyncData, Settings, ChangeEntry } from '../db/models';
 import type { ImportData } from '../db/export-import';
-import { getFile, putFile, deleteFile, RateLimitError } from './github-api';
+import { getFile, getFileConditional, putFile, deleteFile, RateLimitError } from './github-api';
+import { jitterInterval } from './poll-jitter';
 import { cleanupSoftDeletes, archiveOldCompleted } from './conflict-resolution';
 import { applyRemoteEntries, getPendingEntries, clearPendingEntries, clearEntriesByIds, pendingEntryCount } from './change-log';
 import { mergeEntity, stampUpdatedFields } from './field-timestamps';
@@ -307,9 +308,49 @@ function clearSchedulerTimer() {
 }
 
 function getBackoffInterval(): number {
-  if (consecutiveErrors === 0) return POLL_INTERVAL_MS;
+  // jitterInterval applies ±30% only in Paranoid Mode (else identity) so the idle
+  // poll doesn't fire on a fixed grid that a network monitor can fingerprint.
+  if (consecutiveErrors === 0) return jitterInterval(POLL_INTERVAL_MS);
   // Exponential backoff: 30s → 60s → 120s → 240s → 300s (cap at 5 min)
-  return Math.min(POLL_INTERVAL_MS * Math.pow(2, consecutiveErrors), 300_000);
+  return jitterInterval(Math.min(POLL_INTERVAL_MS * Math.pow(2, consecutiveErrors), 300_000));
+}
+
+// --- Conditional-GET idle probe (Paranoid-only steady-state poll) ---
+// Cached ETags for the two synced files so the idle poll can ask "has anything
+// changed?" with a cheap conditional GET (mostly 304s) instead of pulling full
+// bodies every 30s. Reduces the wire footprint and doesn't burn rate limit.
+let probeChangelogEtag: string | null = null;
+let probeSnapshotEtag: string | null = null;
+
+/**
+ * Returns true when a full syncNow() is warranted — remote changed, a file is
+ * absent, we have pending local pushes, or anything is uncertain. Returns false
+ * only when BOTH changelog and snapshot are definitively unchanged (304) and
+ * nothing is pending, letting the idle tick skip the heavier full sync. The
+ * default on any doubt is true, so this can only save work, never lose changes.
+ */
+export async function cheapIdleProbe(): Promise<boolean> {
+  try {
+    const creds = await getCredentials();
+    if (!creds) return false; // sync disabled / vault locked — a full sync would no-op too
+    if ((await pendingEntryCount()) > 0) return true; // something to push
+    const [cl, snap] = await Promise.all([
+      getFileConditional(creds.pat, creds.repo, CHANGELOG_FILE, probeChangelogEtag),
+      getFileConditional(creds.pat, creds.repo, SNAPSHOT_FILE, probeSnapshotEtag),
+    ]);
+    probeChangelogEtag = cl.status === 'absent' ? null : cl.etag;
+    probeSnapshotEtag = snap.status === 'absent' ? null : snap.etag;
+    return !(cl.status === 'unchanged' && snap.status === 'unchanged');
+  } catch {
+    return true; // any error → fall through to the real sync
+  }
+}
+
+async function idlePollOnce(): Promise<void> {
+  // In Paranoid Mode, gate the full sync behind a cheap conditional-GET probe so
+  // the steady state is two bodyless 304s rather than two full-body pulls.
+  if (isParanoidFlagSet() && !(await cheapIdleProbe())) return;
+  await syncNow();
 }
 
 function startIdlePoll() {
@@ -320,7 +361,7 @@ function startIdlePoll() {
   const interval = getBackoffInterval();
   schedulerTimer = setTimeout(async function poll() {
     if (schedulerState !== 'idle') return;
-    await syncNow();
+    await idlePollOnce();
     if (schedulerState === 'idle') {
       schedulerTimer = setTimeout(poll, getBackoffInterval());
     }
@@ -332,7 +373,7 @@ async function onBatchTimerFired(batchSize: number) {
   if (remaining > 0) {
     // More entries to push — continue batching
     schedulerState = 'batching';
-    schedulerTimer = setTimeout(() => onBatchTimerFired(BATCH_SIZE), BATCH_INTERVAL_MS);
+    schedulerTimer = setTimeout(() => onBatchTimerFired(BATCH_SIZE), jitterInterval(BATCH_INTERVAL_MS));
   } else {
     // All pushed — final pull then back to idle
     await syncNow();
@@ -1708,6 +1749,8 @@ export function __resetForTesting() {
   cachedRemoteEntries = [];
   cachedCreds = null;
   cachedChangelogTimestamp = 0;
+  probeChangelogEtag = null;
+  probeSnapshotEtag = null;
   consecutiveErrors = 0;
   if (rateLimitTimer) { clearTimeout(rateLimitTimer); rateLimitTimer = null; }
   lastErrorToastAt = 0;

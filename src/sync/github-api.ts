@@ -1,3 +1,5 @@
+import { isParanoidFlagSet } from '../db/paranoid-flag';
+
 export class RateLimitError extends Error {
   resetAtMs: number;
   constructor(resetAtMs: number) {
@@ -5,6 +7,16 @@ export class RateLimitError extends Error {
     this.name = 'RateLimitError';
     this.resetAtMs = resetAtMs;
   }
+}
+
+// In Paranoid Mode, strip the app-identifying commit message ("gtd25 sync: …")
+// so a TLS-intercepting proxy doesn't see the app branded in the request body.
+// Commit messages are write-only (never read back by the app), so neutralizing
+// them is purely a wire-fingerprint reduction with no functional effect. The
+// URL path still carries the filename — renaming those is a separate migration.
+const GENERIC_COMMIT_MESSAGE = 'update';
+function commitMessage(branded: string): string {
+  return isParanoidFlagSet() ? GENERIC_COMMIT_MESSAGE : branded;
 }
 
 // Low-level fetch against a full api.github.com URL, with auth, timeout and
@@ -168,7 +180,7 @@ export async function putFile(
   options?: { keepalive?: boolean },
 ): Promise<string> {
   const body: Record<string, string> = {
-    message: `gtd25 sync: ${path}`,
+    message: commitMessage(`gtd25 sync: ${path}`),
     content: utf8ToBase64(content),
   };
   if (sha) body.sha = sha;
@@ -193,7 +205,7 @@ export async function deleteFile(
   signal?: AbortSignal,
   branch?: string,
 ): Promise<void> {
-  const body: Record<string, string> = { message: `gtd25: remove ${path}`, sha };
+  const body: Record<string, string> = { message: commitMessage(`gtd25: remove ${path}`), sha };
   if (branch) body.branch = branch;
   const resp = await githubFetch(pat, repo, path, {
     method: 'DELETE',
@@ -220,7 +232,7 @@ export async function putBinaryFile(
   branch?: string,
 ): Promise<string> {
   const body: Record<string, string> = {
-    message: `gtd25 sync: ${path}`,
+    message: commitMessage(`gtd25 sync: ${path}`),
     content: bytesToBase64(bytes),
   };
   if (sha) body.sha = sha;
@@ -357,7 +369,7 @@ export async function createCommit(
 ): Promise<string> {
   const resp = await apiFetch(pat, gitUrl(repo, 'git/commits'), {
     method: 'POST',
-    body: JSON.stringify(params),
+    body: JSON.stringify({ ...params, message: commitMessage(params.message) }),
   }, signal);
   if (!resp.ok) throw new Error(`GitHub API error (createCommit): ${resp.status}`);
   const json = await resp.json();

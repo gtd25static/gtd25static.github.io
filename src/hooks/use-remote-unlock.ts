@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { db } from '../db';
 import { isRemoteUnlockEnrolled } from '../db/vault';
 import { isParanoidFlagSet } from '../db/paranoid-flag';
+import { jitterInterval } from '../sync/poll-jitter';
 import { toast } from '../components/ui/Toast';
 import {
   getMailboxPat, getRepo, requestRemoteUnlock, pollRemoteUnlock, pollRemoteCommands, cancelRemoteUnlock,
@@ -14,6 +15,21 @@ const REFOCUS_POLL_AFTER_MS = 60_000; // only force a poll on refocus after this
 
 function isHidden(): boolean {
   return typeof document !== 'undefined' && document.visibilityState === 'hidden';
+}
+
+// setInterval replacement that re-randomizes its delay each tick. In Paranoid Mode
+// jitterInterval spreads the cadence ±30% so the mailbox poll isn't a fixed-period
+// beacon; non-paranoid keeps the flat base interval. Does not fire immediately —
+// callers run() once up front, mirroring the previous setInterval behavior.
+function startJitteredInterval(run: () => void, baseMs: number): () => void {
+  let stopped = false;
+  let timer: ReturnType<typeof setTimeout>;
+  const loop = () => {
+    if (stopped) return;
+    timer = setTimeout(() => { run(); loop(); }, jitterInterval(baseMs));
+  };
+  loop();
+  return () => { stopped = true; clearTimeout(timer); };
 }
 
 /**
@@ -68,12 +84,12 @@ export function useLockScreenRemote() {
     if (!enrolled) return;
     const run = () => { void tick(); };
     run();
-    const timer = setInterval(run, code ? FAST_POLL_MS : SLOW_POLL_MS); // fast while a request is pending
+    const stop = startJitteredInterval(run, code ? FAST_POLL_MS : SLOW_POLL_MS); // fast while a request is pending
     const onVis = () => { if (document.visibilityState === 'visible') run(); };
     document.addEventListener('visibilitychange', onVis);
     window.addEventListener('online', run);
     return () => {
-      clearInterval(timer);
+      stop();
       document.removeEventListener('visibilitychange', onVis);
       window.removeEventListener('online', run);
     };
@@ -150,13 +166,13 @@ export function useRemoteWipeCommands() {
     let stopped = false;
     const run = () => { if (!stopped) void tick(); };
     run();
-    const timer = setInterval(run, SLOW_POLL_MS);
+    const stop = startJitteredInterval(run, SLOW_POLL_MS);
     const onVis = () => { if (document.visibilityState === 'visible') run(); };
     document.addEventListener('visibilitychange', onVis);
     window.addEventListener('online', run);
     return () => {
       stopped = true;
-      clearInterval(timer);
+      stop();
       document.removeEventListener('visibilitychange', onVis);
       window.removeEventListener('online', run);
     };
@@ -239,7 +255,7 @@ export function useRemoteApprovals(): { pending: ApprovalRequest | null; approve
     let lastHidden = 0;
     const run = () => { if (!stop) void tick(); };
     run();
-    const timer = setInterval(run, SLOW_POLL_MS);
+    const stopTimer = startJitteredInterval(run, SLOW_POLL_MS);
     const onVis = () => {
       if (document.visibilityState === 'hidden') { lastHidden = Date.now(); return; }
       if (deferredToast.current) { toast(deferredToast.current, 'info'); deferredToast.current = null; }
@@ -250,7 +266,7 @@ export function useRemoteApprovals(): { pending: ApprovalRequest | null; approve
     window.addEventListener('online', run);
     return () => {
       stop = true;
-      clearInterval(timer);
+      stopTimer();
       document.removeEventListener('visibilitychange', onVis);
       window.removeEventListener('online', run);
     };
