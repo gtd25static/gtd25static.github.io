@@ -14,6 +14,7 @@ import type { BackupTier } from './remote-backups';
 import { isParanoidFlagSet } from '../db/paranoid-flag';
 import { getVaultSecrets } from '../db/vault';
 import { recordError } from '../lib/diagnostics';
+import { classifySyncError, type SyncErrorInfo } from './sync-errors';
 import { prepareEntityRowsForAtRest, prepareSyncDataForAtRest } from './at-rest-writes';
 import { maybeCompactBlobBranch, compactBlobBranch } from './shared-blobs';
 import { maybeSquashDefaultBranch } from './history-compaction';
@@ -255,6 +256,8 @@ export interface SyncProgress {
   progress: number; // 0 to 1
   pulled?: number;
   pushed?: number;
+  /** Structured failure info (phase 'error' only) — the UI labels from this, not from string-matching. */
+  errorInfo?: SyncErrorInfo;
 }
 
 let onSyncProgress: ((progress: SyncProgress) => void) | null = null;
@@ -265,6 +268,10 @@ export function setSyncProgressCallback(cb: ((progress: SyncProgress) => void) |
 
 function reportProgress(phase: SyncPhase, label: string, progress: number, pulled?: number, pushed?: number) {
   onSyncProgress?.({ phase, label, progress, pulled, pushed });
+}
+
+function reportError(label: string, errorInfo: SyncErrorInfo, progress = 0) {
+  onSyncProgress?.({ phase: 'error', label, progress, errorInfo });
 }
 
 // --- Sync lock ---
@@ -751,7 +758,7 @@ export async function syncNow(manual = false, pushLimit?: number): Promise<numbe
       // Snapshot exists but no changelog — apply snapshot then create empty changelog
       const snapshotParsed = safeParseJson<SyncData>(remoteSnapshotFile.data, 'remote snapshot (bootstrap)');
       if (!snapshotParsed.ok) {
-        reportProgress('error', 'Remote data corrupted', 0);
+        reportError('Remote data corrupted', { category: 'corrupt-remote', message: 'Remote data corrupted' });
         toast('Remote data corrupted — cannot sync', 'error');
         return -1;
       }
@@ -810,7 +817,7 @@ export async function syncNow(manual = false, pushLimit?: number): Promise<numbe
     if (remoteSnapshotFile) {
       const versionParsed = safeParseJson<SyncData>(remoteSnapshotFile.data, 'remote snapshot (version check)');
       if (!versionParsed.ok) {
-        reportProgress('error', 'Remote data corrupted', 0);
+        reportError('Remote data corrupted', { category: 'corrupt-remote', message: 'Remote data corrupted' });
         toast('Remote data corrupted — cannot sync', 'error');
         return -1;
       }
@@ -823,7 +830,7 @@ export async function syncNow(manual = false, pushLimit?: number): Promise<numbe
         // Remote is ahead — block sync, notify UI
         recordSyncMessage('versionIncompatible', `Remote sync version ${remoteVersion ?? 'unknown'} requires a newer app version`);
         notifyVersionIncompatible();
-        reportProgress('error', 'Update required', 0);
+        reportError('Update required', { category: 'update-required', message: 'Remote data requires a newer app version' });
         if (manual) toast('Remote data requires a newer app version', 'error');
         return -1;
       }
@@ -855,7 +862,7 @@ export async function syncNow(manual = false, pushLimit?: number): Promise<numbe
 
         const wipeParsed = safeParseJson<SyncData>(remoteSnapshotFile.data, 'remote snapshot (wipedAt bootstrap)');
         if (!wipeParsed.ok) {
-          reportProgress('error', 'Remote data corrupted', 0);
+          reportError('Remote data corrupted', { category: 'corrupt-remote', message: 'Remote data corrupted' });
           return -1;
         }
         let snapshot = wipeParsed.value;
@@ -921,7 +928,7 @@ export async function syncNow(manual = false, pushLimit?: number): Promise<numbe
       // Decrypt → migrate → re-encrypt → write
       const migParsed = safeParseJson<SyncData>(remoteSnapshotFile.data, 'remote snapshot (migration)');
       if (!migParsed.ok) {
-        reportProgress('error', 'Remote data corrupted', 0);
+        reportError('Remote data corrupted', { category: 'corrupt-remote', message: 'Remote data corrupted' });
         return -1;
       }
       let snapshotData = migParsed.value;
@@ -1014,7 +1021,7 @@ export async function syncNow(manual = false, pushLimit?: number): Promise<numbe
             if (retries >= MAX_RETRIES) {
               recordSyncMessage('conflict', `Exceeded ${MAX_RETRIES} retries while pushing changelog`);
               toast('Sync conflict — will retry later', 'error');
-              reportProgress('error', 'Sync conflict', 0.8);
+              reportError('Sync conflict', { category: 'conflict', message: `Exceeded ${MAX_RETRIES} retries while pushing changelog` }, 0.8);
               return -1;
             }
             // Re-fetch changelog and merge
@@ -1181,7 +1188,7 @@ export async function syncNow(manual = false, pushLimit?: number): Promise<numbe
       recordError('sync.rateLimit', err);
       const waitMs = Math.max(0, err.resetAtMs - Date.now());
       const waitMin = Math.ceil(waitMs / 60_000);
-      reportProgress('error', `Rate limited — retrying in ${waitMin}m`, 0);
+      reportError(`Rate limited — retrying in ${waitMin}m`, { category: 'rate-limited', message: err.message, retryAtMs: err.resetAtMs });
       toast(`Rate limited — retrying in ${waitMin}m`, 'error');
       clearSchedulerTimer();
       schedulerState = 'idle'; // pause polling
@@ -1201,7 +1208,8 @@ export async function syncNow(manual = false, pushLimit?: number): Promise<numbe
 
     // Server error backoff (5xx) — double interval, cap at 5min, throttle toasts
     const msg = err instanceof Error ? err.message : 'Sync failed';
-    const isServerError = msg.includes('5');
+    const errorInfo = classifySyncError(err);
+    const isServerError = errorInfo.category === 'server';
     if (isServerError && consecutiveErrors > 1) {
       // Throttle error toasts: only show once per outage window
       if (Date.now() - lastErrorToastAt > 120_000) {
@@ -1212,7 +1220,7 @@ export async function syncNow(manual = false, pushLimit?: number): Promise<numbe
       toast('Sync failed', 'error');
     }
 
-    reportProgress('error', msg, 0);
+    reportError(msg, errorInfo);
     return -1;
   } finally {
     releaseSyncLock();
@@ -1463,7 +1471,7 @@ export async function forcePush() {
     if (err instanceof DOMException && err.name === 'AbortError') return;
     console.error('Force push failed:', err);
     recordError('sync.forcePush', err);
-    reportProgress('error', 'Force push failed', 0);
+    reportError('Force push failed', classifySyncError(err));
     toast('Force push failed', 'error');
   } finally {
     releaseSyncLock();
@@ -1493,7 +1501,7 @@ export async function forcePull() {
     const pullParsed = safeParseJson<SyncData>(snapshotFile.data, 'remote snapshot (force pull)');
     if (!pullParsed.ok) {
       toast('Remote data corrupted', 'error');
-      reportProgress('error', 'Remote data corrupted', 0);
+      reportError('Remote data corrupted', { category: 'corrupt-remote', message: 'Remote data corrupted' });
       return;
     }
     let snapshot = pullParsed.value;
@@ -1501,7 +1509,7 @@ export async function forcePull() {
     if (!isCompatibleVersion(snapshot.syncVersion)) {
       recordSyncMessage('forcePull.versionIncompatible', `Remote sync version ${snapshot.syncVersion ?? 'unknown'} requires a newer app version`);
       notifyVersionIncompatible();
-      reportProgress('error', 'Update required', 0);
+      reportError('Update required', { category: 'update-required', message: 'Remote data requires a newer app version' });
       toast('Remote data requires a newer app version', 'error');
       return;
     }
@@ -1565,7 +1573,7 @@ export async function forcePull() {
     if (err instanceof DOMException && err.name === 'AbortError') return;
     console.error('Force pull failed:', err);
     recordError('sync.forcePull', err);
-    reportProgress('error', 'Force pull failed', 0);
+    reportError('Force pull failed', classifySyncError(err));
     toast('Force pull failed', 'error');
   } finally {
     releaseSyncLock();

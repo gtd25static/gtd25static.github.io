@@ -1,4 +1,4 @@
-import { daysUntil, isDueSoon, dueDateColor, formatDate, toInputDate, fromInputDate, formatTimeRemaining } from '../../lib/date-utils';
+import { daysUntil, isDueSoon, dueDateColor, formatDate, toInputDate, fromInputDate, formatTimeRemaining, formatTimeAgo } from '../../lib/date-utils';
 
 const PINNED = new Date('2026-03-08T12:00:00').getTime();
 
@@ -131,5 +131,23 @@ describe('formatTimeRemaining', () => {
   it('returns months for longer periods', () => {
     const threeMonths = PINNED + 90 * 24 * 60 * 60 * 1000;
     expect(formatTimeRemaining(threeMonths)).toBe('3mo');
+  });
+});
+
+describe('formatTimeAgo', () => {
+  it('returns "just now" under a minute', () => {
+    expect(formatTimeAgo(PINNED - 30_000)).toBe('just now');
+  });
+
+  it('returns minutes for <1h', () => {
+    expect(formatTimeAgo(PINNED - 5 * 60_000)).toBe('5m ago');
+  });
+
+  it('returns hours for <24h', () => {
+    expect(formatTimeAgo(PINNED - 2 * 60 * 60_000)).toBe('2h ago');
+  });
+
+  it('returns days beyond 24h', () => {
+    expect(formatTimeAgo(PINNED - 3 * 24 * 60 * 60_000)).toBe('3d ago');
   });
 });

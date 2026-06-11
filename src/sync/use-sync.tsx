@@ -1,8 +1,9 @@
-import { useState, useEffect, useCallback, useRef, createContext, useContext, type ReactNode } from 'react';
+import { useState, useEffect, useCallback, createContext, useContext, type ReactNode } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../db';
 import { setSyncProgressCallback, startScheduler, stopScheduler, syncNow } from './sync-engine';
 import type { SyncProgress } from './sync-engine';
+import type { SyncErrorInfo } from './sync-errors';
 
 export interface SyncData {
   syncEnabled: boolean;
@@ -11,7 +12,9 @@ export interface SyncData {
   lastPulledAt?: number;
   syncProgress: SyncProgress | null;
   lastSyncStats: { pulled: number; pushed: number } | null;
-  lastError: string | null;
+  /** Last failure, kept until the next successful sync clears it. */
+  lastErrorInfo: SyncErrorInfo | null;
+  online: boolean;
   triggerSync: () => void;
 }
 
@@ -20,7 +23,8 @@ const defaultSync: SyncData = {
   pendingChanges: false,
   syncProgress: null,
   lastSyncStats: null,
-  lastError: null,
+  lastErrorInfo: null,
+  online: true,
   triggerSync: () => {},
 };
 
@@ -40,8 +44,8 @@ function useSync() {
   const syncMeta = useLiveQuery(() => db.syncMeta.get('sync-meta'));
   const [syncProgress, setSyncProgress] = useState<SyncProgress | null>(null);
   const [lastSyncStats, setLastSyncStats] = useState<{ pulled: number; pushed: number } | null>(null);
-  const [lastError, setLastError] = useState<string | null>(null);
-  const errorTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const [lastErrorInfo, setLastErrorInfo] = useState<SyncErrorInfo | null>(null);
+  const [online, setOnline] = useState(() => navigator.onLine !== false);
 
   // Subscribe to sync progress
   useEffect(() => {
@@ -49,18 +53,27 @@ function useSync() {
       setSyncProgress(progress);
       if (progress.phase === 'done') {
         setLastSyncStats({ pulled: progress.pulled ?? 0, pushed: progress.pushed ?? 0 });
-        setLastError(null);
+        setLastErrorInfo(null);
       }
       if (progress.phase === 'error') {
-        setLastError(progress.label);
-        // Clear error display after 4s
-        clearTimeout(errorTimerRef.current);
-        errorTimerRef.current = setTimeout(() => setLastError(null), 4000);
+        // Kept until the next successful sync — the user can always see WHY it failed
+        setLastErrorInfo(progress.errorInfo ?? { category: 'unknown', message: progress.label });
       }
     });
     return () => {
       setSyncProgressCallback(null);
-      clearTimeout(errorTimerRef.current);
+    };
+  }, []);
+
+  // Track connectivity for the indicator (the engine skips syncs while offline)
+  useEffect(() => {
+    const goOnline = () => setOnline(true);
+    const goOffline = () => setOnline(false);
+    window.addEventListener('online', goOnline);
+    window.addEventListener('offline', goOffline);
+    return () => {
+      window.removeEventListener('online', goOnline);
+      window.removeEventListener('offline', goOffline);
     };
   }, []);
 
@@ -90,7 +103,8 @@ function useSync() {
     lastPulledAt: syncMeta?.lastPulledAt,
     syncProgress,
     lastSyncStats,
-    lastError,
+    lastErrorInfo,
+    online,
     triggerSync,
   };
 }

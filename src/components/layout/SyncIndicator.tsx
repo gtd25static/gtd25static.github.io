@@ -1,17 +1,7 @@
+import { useEffect, useState } from 'react';
 import { useSyncContext } from '../../sync/use-sync';
-
-function friendlyError(msg: string): string {
-  const lower = msg.toLowerCase();
-  if (lower.includes('fetch') || lower.includes('network') || lower.includes('offline'))
-    return 'No connection';
-  if (lower.includes('conflict')) return 'Conflict';
-  if (lower.includes('401') || lower.includes('auth') || lower.includes('token'))
-    return 'Auth error';
-  if (lower.includes('timeout')) return 'Timeout';
-  if (lower.includes('password') || lower.includes('decrypt'))
-    return 'Wrong password';
-  return 'Sync error';
-}
+import { syncErrorLabel } from '../../sync/sync-errors';
+import { formatTimeAgo } from '../../lib/date-utils';
 
 function SyncCounts({ pulled, pushed }: { pulled: number; pushed: number }) {
   if (pulled === 0 && pushed === 0) return null;
@@ -25,13 +15,22 @@ function SyncCounts({ pulled, pushed }: { pulled: number; pushed: number }) {
 }
 
 export function SyncIndicator() {
-  const { syncEnabled, pendingChanges, syncProgress, lastSyncStats, lastError, triggerSync } = useSyncContext();
+  const { syncEnabled, pendingChanges, syncProgress, lastSyncStats, lastErrorInfo, lastPulledAt, online, triggerSync } = useSyncContext();
+
+  // Refresh the relative "last synced" text even when no progress events arrive
+  // (e.g. Paranoid conditional-GET steady state never re-renders this otherwise).
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const timer = setInterval(() => setTick((n) => n + 1), 60_000);
+    return () => clearInterval(timer);
+  }, []);
 
   if (!syncEnabled) return null;
 
   const isActive = syncProgress && syncProgress.phase !== 'done' && syncProgress.phase !== 'error';
   const isDone = syncProgress?.phase === 'done';
   const isError = syncProgress?.phase === 'error';
+  const lastSyncedTitle = lastPulledAt ? `Last synced ${formatTimeAgo(lastPulledAt)} — click to sync` : 'Click to sync';
 
   // Active sync — spinning icon + phase label
   if (isActive) {
@@ -49,17 +48,31 @@ export function SyncIndicator() {
     );
   }
 
-  // Error — red dot + friendly message
-  if (isError || lastError) {
-    const errorMsg = lastError || syncProgress?.label || 'Sync error';
+  // Offline — takes precedence over a stale error; syncs resume on reconnect
+  if (!online) {
+    return (
+      <button
+        onClick={triggerSync}
+        className="flex items-center gap-1.5 rounded-full px-2 py-1 text-xs text-zinc-400 cursor-pointer hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
+        title={lastSyncedTitle}
+      >
+        <div className="h-1.5 w-1.5 shrink-0 rounded-full bg-zinc-400" />
+        <span className="truncate">{lastPulledAt ? `Offline — last synced ${formatTimeAgo(lastPulledAt)}` : 'Offline'}</span>
+      </button>
+    );
+  }
+
+  // Error — red dot + actionable label, kept until the next successful sync
+  if (isError || lastErrorInfo) {
+    const info = lastErrorInfo ?? { category: 'unknown' as const, message: syncProgress?.label ?? 'Sync error' };
     return (
       <button
         onClick={triggerSync}
         className="flex items-center gap-1.5 rounded-full px-2 py-1 text-xs text-red-500 cursor-pointer hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
-        title={`Click to retry: ${errorMsg}`}
+        title={`Click to retry: ${info.message}`}
       >
         <div className="h-1.5 w-1.5 shrink-0 rounded-full bg-red-500" />
-        <span className="truncate">{friendlyError(errorMsg)}</span>
+        <span className="truncate">{syncErrorLabel(info)}</span>
       </button>
     );
   }
@@ -72,7 +85,7 @@ export function SyncIndicator() {
       <button
         onClick={triggerSync}
         className="flex items-center gap-1.5 rounded-full px-2 py-1 text-xs text-green-500 cursor-pointer hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
-        title="Click to sync"
+        title={lastSyncedTitle}
       >
         <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
           <path d="M3 8l3.5 3.5L13 5" />
@@ -92,7 +105,7 @@ export function SyncIndicator() {
       <button
         onClick={triggerSync}
         className="flex items-center gap-1.5 rounded-full px-2 py-1 text-xs text-green-500 cursor-pointer hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
-        title="Click to sync"
+        title={lastSyncedTitle}
       >
         <div className="h-1.5 w-1.5 shrink-0 rounded-full bg-green-500" />
         <SyncCounts pulled={lastSyncStats.pulled} pushed={lastSyncStats.pushed} />
@@ -107,7 +120,7 @@ export function SyncIndicator() {
       className={`flex items-center gap-1.5 rounded-full px-2 py-1 text-xs cursor-pointer hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors ${
         pendingChanges ? 'text-yellow-600 dark:text-yellow-500' : 'text-zinc-400'
       }`}
-      title="Click to sync"
+      title={lastSyncedTitle}
     >
       <div
         className={`h-1.5 w-1.5 shrink-0 rounded-full ${

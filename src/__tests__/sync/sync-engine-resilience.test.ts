@@ -35,9 +35,11 @@ import { RateLimitError } from '../../sync/github-api';
 import { toast } from '../../components/ui/Toast';
 import {
   syncNow,
+  setSyncProgressCallback,
   __resetForTesting,
   SNAPSHOT_FILE,
   CHANGELOG_FILE,
+  type SyncProgress,
 } from '../../sync/sync-engine';
 import {
   deriveKey,
@@ -341,5 +343,84 @@ describe('wipeAllData — ordering', () => {
       const changelogDeleteOrder = deleteCalls[0];
       expect(snapshotPutOrder).toBeLessThan(changelogDeleteOrder);
     }
+  });
+});
+
+describe('syncNow — structured errorInfo on progress (sync observability)', () => {
+  let events: SyncProgress[];
+
+  beforeEach(() => {
+    events = [];
+    setSyncProgressCallback((p) => events.push(p));
+  });
+
+  afterEach(() => {
+    setSyncProgressCallback(null);
+  });
+
+  function lastError(): SyncProgress | undefined {
+    return events.filter((e) => e.phase === 'error').at(-1);
+  }
+
+  it('tags rate limits with category and reset time', async () => {
+    await setupWithEncryption();
+    const resetAt = Date.now() + 60_000;
+    mockGetFile.mockRejectedValueOnce(new RateLimitError(resetAt));
+
+    await syncNow();
+
+    expect(lastError()?.errorInfo).toMatchObject({ category: 'rate-limited', retryAtMs: resetAt });
+  });
+
+  it('tags a missing repo (404 on bootstrap PUT) as repo-missing', async () => {
+    await setupWithEncryption();
+    mockGetFile.mockResolvedValue(null);
+    mockPutFile.mockRejectedValue(new Error('GitHub API error: 404'));
+
+    await syncNow();
+
+    expect(lastError()?.errorInfo?.category).toBe('repo-missing');
+  });
+
+  it('tags a newer remote sync version as update-required', async () => {
+    await setupWithEncryption();
+    const snapshotContent = await makeEncryptedSnapshot({ syncVersion: 99 });
+    mockGetFile.mockImplementation((_p: string, _r: string, path: string) => {
+      if (path === SNAPSHOT_FILE) return Promise.resolve({ data: snapshotContent, sha: 's1' });
+      if (path === CHANGELOG_FILE) return Promise.resolve({ data: '[]', sha: 'c1' });
+      return Promise.resolve(null);
+    });
+
+    await syncNow();
+
+    expect(lastError()?.errorInfo?.category).toBe('update-required');
+  });
+
+  it('classifies 5xx as server error and keeps the toast throttle (one outage toast per window)', async () => {
+    await setupWithEncryption();
+    mockGetFile.mockRejectedValue(new Error('GitHub API error: 502'));
+
+    await syncNow(); // consecutiveErrors=1 → plain failure toast
+    expect(lastError()?.errorInfo?.category).toBe('server');
+    expect(mockToast).toHaveBeenCalledWith('Sync failed', 'error');
+
+    mockToast.mockClear();
+    await syncNow(); // consecutiveErrors=2 → throttled outage toast
+    expect(mockToast).toHaveBeenCalledWith('GitHub unavailable — will keep retrying', 'error');
+
+    mockToast.mockClear();
+    await syncNow(); // still inside the 2-minute window → no extra toast
+    expect(mockToast).not.toHaveBeenCalledWith('GitHub unavailable — will keep retrying', 'error');
+  });
+
+  it('does not misclassify filenames containing "5" as server errors', async () => {
+    await setupWithEncryption();
+    mockGetFile.mockRejectedValue(new Error('Malformed GitHub response for gtd25-snapshot.json: missing content or sha'));
+
+    await syncNow();
+
+    expect(lastError()?.errorInfo?.category).toBe('corrupt-remote');
+    // Not the throttled "GitHub unavailable" path
+    expect(mockToast).toHaveBeenCalledWith('Sync failed', 'error');
   });
 });

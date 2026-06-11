@@ -47,6 +47,17 @@ export function fromInputDate(dateStr: string): number | undefined {
   return new Date(`${year}-${month}-${day}T00:00:00`).getTime();
 }
 
+export function formatTimeAgo(timestamp: number): string {
+  const diff = Date.now() - timestamp;
+  if (diff < 60_000) return 'just now';
+  const minutes = Math.floor(diff / 60_000);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
+}
+
 export function formatTimeRemaining(nextOccurrence: number): string {
   const diff = nextOccurrence - Date.now();
   if (diff <= 0) return 'now';
