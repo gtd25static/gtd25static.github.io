@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Button } from '../ui/Button';
 import { useRemoteApprovals } from '../../hooks/use-remote-unlock';
 
-const COOLDOWN_SECONDS = 3;
+const COOLDOWN_SECONDS = 2;
 
 // Attention-grabbing overlay (like the update prompt) shown on a trusted device
 // when one of its managed Paranoid devices requests a remote unlock. The Approve
