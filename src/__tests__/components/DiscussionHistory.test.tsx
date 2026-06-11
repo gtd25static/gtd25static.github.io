@@ -48,6 +48,29 @@ describe('DiscussionHistory (editable)', () => {
     });
   });
 
+  it('saves an edit with Enter', async () => {
+    const { user, task } = renderHistory();
+    await user.click(screen.getByTitle('Edit this entry'));
+    const textarea = screen.getByDisplayValue('old note');
+    await user.clear(textarea);
+    await user.type(textarea, 'edited via enter{Enter}');
+
+    expect(mockUpdateTask).toHaveBeenCalledWith(task.id, {
+      discussionLog: [expect.objectContaining({ id: 'd1', note: 'edited via enter' })],
+    });
+  });
+
+  it('Shift+Enter inserts a newline in the edit instead of saving', async () => {
+    const { user } = renderHistory();
+    await user.click(screen.getByTitle('Edit this entry'));
+    const textarea = screen.getByDisplayValue('old note');
+    await user.clear(textarea);
+    await user.type(textarea, 'line1{Shift>}{Enter}{/Shift}line2');
+
+    expect(mockUpdateTask).not.toHaveBeenCalled();
+    expect(textarea).toHaveValue('line1\nline2');
+  });
+
   it('cancel discards the edit without saving', async () => {
     const { user } = renderHistory();
     await user.click(screen.getByTitle('Edit this entry'));
@@ -77,6 +100,16 @@ describe('DiscussionHistory (editable)', () => {
     // Stored oldest-first; the original entry is preserved.
     expect(payload.discussionLog[0]).toMatchObject({ id: 'd1' });
     expect(payload.discussionLog[1]).toMatchObject({ note: 'a brand new entry' });
+  });
+
+  it('appends a new entry with Enter', async () => {
+    const { user, task } = renderHistory();
+    await user.type(screen.getByPlaceholderText('What was discussed?'), 'entry via enter{Enter}');
+
+    expect(mockUpdateTask).toHaveBeenCalledTimes(1);
+    const [id, payload] = mockUpdateTask.mock.calls[0];
+    expect(id).toBe(task.id);
+    expect(payload.discussionLog[1]).toMatchObject({ note: 'entry via enter' });
   });
 
   it('shows an empty-state message and still allows adding', async () => {

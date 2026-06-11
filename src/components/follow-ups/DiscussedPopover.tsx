@@ -86,6 +86,7 @@ export function DiscussedPopover({ task, align, onDone }: Props) {
       <textarea
         value={note}
         onChange={(e) => setNote(e.target.value)}
+        onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSubmit(); } }}
         placeholder="What came of it?"
         rows={2}
         autoFocus

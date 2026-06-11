@@ -48,6 +48,16 @@ describe('DiscussedPopover', () => {
     expect(payload.pingCooldownUntil).toBeLessThan(Date.now() + 31 * DAY);
   });
 
+  it('logs and re-snoozes on Enter from the note field', async () => {
+    const { user, task } = renderPopover();
+    await user.type(screen.getByPlaceholderText('What came of it?'), 'noted via enter{Enter}');
+
+    expect(mockUpdateTask).toHaveBeenCalledTimes(1);
+    const [id, payload] = mockUpdateTask.mock.calls[0];
+    expect(id).toBe(task.id);
+    expect(payload.discussionLog[0].note).toBe('noted via enter');
+  });
+
   it('re-snoozes without creating a history entry when no note is written', async () => {
     const { user } = renderPopover();
     await user.click(screen.getByText('6 days'));

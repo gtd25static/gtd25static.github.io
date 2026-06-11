@@ -138,6 +138,7 @@ export function DiscussionHistory({ task, open, onClose }: Props) {
                     <textarea
                       value={editText}
                       onChange={(e) => setEditText(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); saveEdit(entry.id); } }}
                       rows={2}
                       autoFocus
                       className={sharedTextarea}
@@ -174,6 +175,7 @@ export function DiscussionHistory({ task, open, onClose }: Props) {
           <textarea
             value={newNote}
             onChange={(e) => setNewNote(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); if (newNote.trim() || newDate) addEntry(); } }}
             placeholder="What was discussed?"
             rows={2}
             className={`mb-2 ${sharedTextarea}`}
