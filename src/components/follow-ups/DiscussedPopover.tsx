@@ -1,7 +1,8 @@
 import { useState } from 'react';
-import type { Task, PingCooldown } from '../../db/models';
+import type { Task, PingCooldown, DiscussionEntry } from '../../db/models';
 import { updateTask } from '../../hooks/use-tasks';
 import { applyDiscussed } from '../../hooks/use-follow-ups';
+import { newId } from '../../lib/id';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -51,6 +52,16 @@ export function DiscussedPopover({ task, align, onDone }: Props) {
   const isCustom = cadence === 'custom';
   const customValid = !isCustom || Boolean(customDate);
 
+  // Enter in the note field: append the note to the discussion log without
+  // touching the snooze — re-snoozing stays behind the explicit button.
+  async function logNoteOnly() {
+    const trimmed = note.trim();
+    if (!trimmed) return;
+    const entry: DiscussionEntry = { id: newId(), at: Date.now(), note: trimmed };
+    await updateTask(task.id, { discussionLog: [...(task.discussionLog ?? []), entry] });
+    onDone();
+  }
+
   async function handleSubmit() {
     if (!customValid) return;
 
@@ -86,7 +97,7 @@ export function DiscussedPopover({ task, align, onDone }: Props) {
       <textarea
         value={note}
         onChange={(e) => setNote(e.target.value)}
-        onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSubmit(); } }}
+        onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); logNoteOnly(); } }}
         placeholder="What came of it?"
         rows={2}
         autoFocus
