@@ -35,8 +35,10 @@ interface Props {
 }
 
 /**
- * Log a discussion of this follow-up and re-snooze it. The named presets are
- * remembered as the topic's cadence (one-tap re-snooze next time); "custom"
+ * Popover behind the "Discussed" chip: two decoupled actions. "Log" (or Enter in
+ * the note field) appends the note to the discussion history without snoozing;
+ * "Snooze" re-snoozes for the chosen cadence without logging. The named presets
+ * are remembered as the topic's cadence (one-tap re-snooze next time); "custom"
  * snoozes until a specific calendar date instead.
  */
 export function DiscussedPopover({ task, align, onDone }: Props) {
@@ -52,8 +54,8 @@ export function DiscussedPopover({ task, align, onDone }: Props) {
   const isCustom = cadence === 'custom';
   const customValid = !isCustom || Boolean(customDate);
 
-  // Enter in the note field: append the note to the discussion log without
-  // touching the snooze — re-snoozing stays behind the explicit button.
+  // "Log" button and Enter in the note field: append the note to the discussion
+  // log without touching the snooze.
   async function logNoteOnly() {
     const trimmed = note.trim();
     if (!trimmed) return;
@@ -62,7 +64,8 @@ export function DiscussedPopover({ task, align, onDone }: Props) {
     onDone();
   }
 
-  async function handleSubmit() {
+  // "Snooze" button: re-snooze for the chosen cadence/date without logging.
+  async function handleSnooze() {
     if (!customValid) return;
 
     if (isCustom) {
@@ -74,7 +77,7 @@ export function DiscussedPopover({ task, align, onDone }: Props) {
       const cadenceUpdate: Partial<Task> = { snoozeCadence: 'custom', snoozeCadenceDays: days };
       await updateTask(task.id, {
         ...cadenceUpdate,
-        ...applyDiscussed({ ...task, ...cadenceUpdate }, note, { untilMs: target.getTime() }),
+        ...applyDiscussed({ ...task, ...cadenceUpdate }, undefined, { untilMs: target.getTime() }),
       });
       onDone();
       return;
@@ -82,7 +85,7 @@ export function DiscussedPopover({ task, align, onDone }: Props) {
 
     const cadenceUpdate: Partial<Task> = { snoozeCadence: cadence, snoozeCadenceDays: undefined };
     // applyDiscussed reads the cadence off the task, so fold the chosen cadence in first.
-    const payload = { ...cadenceUpdate, ...applyDiscussed({ ...task, ...cadenceUpdate }, note) };
+    const payload = { ...cadenceUpdate, ...applyDiscussed({ ...task, ...cadenceUpdate }) };
     await updateTask(task.id, payload);
     onDone();
   }
@@ -141,13 +144,24 @@ export function DiscussedPopover({ task, align, onDone }: Props) {
           />
         </div>
       )}
-      <button
-        onClick={handleSubmit}
-        disabled={!customValid}
-        className="w-full rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-indigo-700 disabled:opacity-40"
-      >
-        Log &amp; snooze
-      </button>
+      <div className="flex gap-2">
+        <button
+          onClick={handleSnooze}
+          disabled={!customValid}
+          title="Snooze for the chosen cadence (does not log the note)"
+          className="flex-1 rounded-lg bg-zinc-100 px-3 py-1.5 text-xs font-medium text-zinc-600 hover:bg-zinc-200 disabled:opacity-40 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
+        >
+          Snooze
+        </button>
+        <button
+          onClick={logNoteOnly}
+          disabled={!note.trim()}
+          title="Add the note to the discussion history (does not snooze)"
+          className="flex-1 rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-indigo-700 disabled:opacity-40"
+        >
+          Log
+        </button>
+      </div>
     </div>
   );
 }

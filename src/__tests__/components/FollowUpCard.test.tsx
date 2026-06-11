@@ -78,14 +78,13 @@ describe('FollowUpCard', () => {
     expect(screen.queryByTitle('Restore')).not.toBeInTheDocument();
   });
 
-  it('logs a discussion and re-snoozes when "Discussed" is confirmed', async () => {
+  it('re-snoozes via Snooze in the "Discussed" popover', async () => {
     const { user, task } = renderCard();
     await user.click(screen.getByText('Discussed'));
-    await user.click(screen.getByText('Log & snooze'));
+    await user.click(screen.getByText('Snooze'));
     expect(mockUpdateTask).toHaveBeenCalledWith(
       task.id,
       expect.objectContaining({
-        discussionLog: expect.any(Array),
         pingCooldown: 'custom',
         pingCooldownUntil: expect.any(Number),
       }),

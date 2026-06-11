@@ -229,13 +229,13 @@ export function FollowUpCard({ task, index, dragHandleProps }: Props) {
         </button>
       )}
 
-      {/* Discussed button — log a discussion and re-snooze for the chosen cadence */}
+      {/* Discussed button — log a discussion note and/or re-snooze for a chosen cadence */}
       {!task.archived && (
         <div className="relative shrink-0" ref={discussedRef}>
           <button
             onClick={() => setShowDiscussed((v) => !v)}
             className={`${chipBase} bg-emerald-50 text-emerald-700 hover:bg-emerald-100 dark:bg-emerald-900/30 dark:text-emerald-400 dark:hover:bg-emerald-800/40`}
-            title="Log that you discussed this, then snooze for the chosen cadence"
+            title="Log a discussion note or snooze for a chosen cadence"
           >
             Discussed
           </button>
