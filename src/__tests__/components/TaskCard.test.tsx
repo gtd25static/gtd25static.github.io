@@ -237,5 +237,28 @@ describe('TaskCard', () => {
       );
       expect(screen.getByDisplayValue('Keyboard edit')).toBeInTheDocument();
     });
+
+    it('closes on Enter and does not reopen on re-render', async () => {
+      const task = makeTask(list.id, { title: 'Keyboard edit' });
+      useAppState.setState({ editingItemId: task.id });
+      const user = userEvent.setup();
+      const { rerender } = render(
+        <TestDndWrapper>
+          <TaskCard task={task} index={0} />
+        </TestDndWrapper>,
+      );
+      const input = screen.getByDisplayValue('Keyboard edit');
+      await user.clear(input);
+      await user.type(input, 'Edited{Enter}');
+      expect(mockUpdateTask).toHaveBeenCalledWith(task.id, { title: 'Edited' });
+      expect(useAppState.getState().editingItemId).toBeNull();
+      // Guard against the editing effect re-entering after editingTitle flips
+      rerender(
+        <TestDndWrapper>
+          <TaskCard task={task} index={0} />
+        </TestDndWrapper>,
+      );
+      expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
+    });
   });
 });

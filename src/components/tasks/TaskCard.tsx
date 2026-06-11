@@ -67,7 +67,7 @@ export function TaskCard({ task, index, dragHandleProps }: Props) {
       setEditedTitle(task.title);
       setEditingTitle(true);
     }
-  }, [editingItemId, task.id, task.title]);
+  }, [editingItemId, editingTitle, task.id, task.title]);
 
   const handleContextMenu = useCallback((e: React.MouseEvent) => {
     e.preventDefault();

@@ -60,13 +60,11 @@ export function TaskListView() {
   const tasks = useTasks(selectedListId);
   const [creating, setCreating] = useState(false);
 
-  // React to keyboard-triggered task creation (n key) and cancellation (Esc)
+  // React to keyboard-triggered task creation (n key) and cancellation (Esc).
+  // Deliberately keyed to creatingTask only: the "+ Add task" button opens the
+  // form via setCreating without touching creatingTask, and must stay open.
   useEffect(() => {
-    if (creatingTask && !creating) {
-      setCreating(true);
-    } else if (!creatingTask && creating) {
-      setCreating(false);
-    }
+    setCreating(creatingTask);
   }, [creatingTask]);
   const [showCompleted, setShowCompleted] = useState(false);
   const [sortMode, setSortMode] = useState<SortMode>('default');
@@ -83,13 +81,13 @@ export function TaskListView() {
       setShowCompleted(true);
     }
     setNavigateToTaskId(null);
-  }, [navigateToTaskId, tasks]);
+  }, [navigateToTaskId, setNavigateToTaskId, tasks]);
 
   // Keep recently-done tasks visible in the active list for 60s
   useEffect(() => {
     const now = Date.now();
     for (const task of tasks) {
-      if (task.status === 'done' && !recentlyDone.has(task.id) && !timersRef.current.has(task.id)) {
+      if (task.status === 'done' && !timersRef.current.has(task.id)) {
         const elapsed = now - task.updatedAt;
         if (elapsed < 60_000) {
           setRecentlyDone((prev) => new Set(prev).add(task.id));
