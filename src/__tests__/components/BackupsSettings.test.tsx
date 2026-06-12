@@ -12,7 +12,9 @@ import { ConfirmDialogContainer } from '../../components/ui/ConfirmDialog';
 
 const h = vi.hoisted(() => ({
   wipeAllData: vi.fn(),
+  importData: vi.fn(),
   local: {} as Record<string, unknown>,
+  localBackups: [] as Array<{ key: string; timestamp: number }>,
 }));
 
 vi.mock('../../hooks/use-settings', () => ({
@@ -27,7 +29,11 @@ vi.mock('../../db/vault', () => ({
 vi.mock('../../sync/sync-engine', () => ({
   wipeAllData: h.wipeAllData,
   restoreFromBackup: vi.fn(),
-  importData: vi.fn(),
+  importData: h.importData,
+}));
+vi.mock('../../db/backup', () => ({
+  getLocalBackups: () => h.localBackups,
+  readLocalBackup: vi.fn(() => ({ taskLists: [], tasks: [], subtasks: [] })),
 }));
 vi.mock('../../sync/remote-backups', () => ({
   listRemoteBackups: vi.fn(async () => []),
@@ -43,6 +49,7 @@ vi.mock('../../components/ui/Toast', () => ({ toast: vi.fn() }));
 describe('BackupsSettings — Wipe All Data prompt wall', () => {
   beforeEach(() => {
     h.wipeAllData.mockClear();
+    h.localBackups = [];
     h.local = { syncEnabled: false };
     render(
       <>
@@ -82,5 +89,48 @@ describe('BackupsSettings — Wipe All Data prompt wall', () => {
 
     await user.click(screen.getByRole('button', { name: 'Cancel' }));
     expect(h.wipeAllData).not.toHaveBeenCalled();
+  });
+});
+
+describe('BackupsSettings — local safety backups', () => {
+  beforeEach(() => {
+    h.importData.mockClear();
+    h.local = { syncEnabled: false };
+  });
+
+  function renderWithDialogs() {
+    render(
+      <>
+        <BackupsSettings />
+        <ConfirmDialogContainer />
+      </>,
+    );
+  }
+
+  it('hides the section when no safety backups exist', () => {
+    h.localBackups = [];
+    renderWithDialogs();
+    expect(screen.queryByText('Safety Backups')).not.toBeInTheDocument();
+  });
+
+  it('restores through importData after confirmation', async () => {
+    const user = userEvent.setup();
+    h.localBackups = [{ key: 'gtd25-local-backup-1', timestamp: Date.now() }];
+    renderWithDialogs();
+
+    await user.click(screen.getByRole('button', { name: 'Restore' }));
+    // Dialog open: its confirm button shares the label with the row button.
+    await user.click(screen.getAllByRole('button', { name: 'Restore' })[1]);
+    expect(h.importData).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not restore on Cancel', async () => {
+    const user = userEvent.setup();
+    h.localBackups = [{ key: 'gtd25-local-backup-1', timestamp: Date.now() }];
+    renderWithDialogs();
+
+    await user.click(screen.getByRole('button', { name: 'Restore' }));
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(h.importData).not.toHaveBeenCalled();
   });
 });

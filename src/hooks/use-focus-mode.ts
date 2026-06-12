@@ -14,6 +14,7 @@ import {
 } from '../lib/focus-mode';
 import { updateTask } from './use-tasks';
 import { updateLocalSettings } from './use-settings';
+import { recordError } from '../lib/diagnostics';
 
 const CHECK_INTERVAL_MS = 60_000;
 
@@ -111,10 +112,11 @@ export function useFocusModeDaily(): void {
       await maybeRefillFocus(now);
       await maintainFocusSet(now);
     };
-    void tick();
-    const interval = setInterval(() => void tick(), CHECK_INTERVAL_MS);
+    const run = () => void tick().catch((e) => recordError('focus.tick', e));
+    run();
+    const interval = setInterval(run, CHECK_INTERVAL_MS);
     const onVisible = () => {
-      if (document.visibilityState === 'visible') void tick();
+      if (document.visibilityState === 'visible') run();
     };
     document.addEventListener('visibilitychange', onVisible);
     return () => {

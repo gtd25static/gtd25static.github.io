@@ -2,7 +2,7 @@ import { vi } from 'vitest';
 vi.setConfig({ testTimeout: 20_000 });
 import { db } from '../../db';
 import { resetDb } from '../helpers/db-helpers';
-import { panicWipe } from '../../lib/panic-wipe';
+import { panicWipe, retryPendingWipe, WIPE_PENDING_KEY } from '../../lib/panic-wipe';
 import { __resetVaultStateForTests } from '../../db/vault';
 import type { Task } from '../../db/models';
 
@@ -76,5 +76,60 @@ describe('panicWipe', () => {
     await db.open();
     expect(await db.tasks.count()).toBe(0);
     expect(localStorage.getItem('gtd25-foo')).toBeNull();
+  });
+
+  it('clears the wipe-pending marker once IndexedDB deletion is confirmed', async () => {
+    await seedTask();
+
+    await panicWipe({ reload: false });
+
+    expect(localStorage.getItem(WIPE_PENDING_KEY)).toBeNull();
+  });
+});
+
+describe('blocked wipe + boot retry', () => {
+  /** Make the next deleteDatabase call report BLOCKED (a second tab holds the DB). */
+  function stubBlockedDeleteOnce() {
+    return vi.spyOn(indexedDB, 'deleteDatabase').mockImplementationOnce(() => {
+      const req = { onsuccess: null, onerror: null, onblocked: null } as unknown as IDBOpenDBRequest;
+      setTimeout(() => req.onblocked?.(new Event('blocked') as IDBVersionChangeEvent), 0);
+      return req;
+    });
+  }
+
+  it('keeps the wipe-pending marker (surviving the storage clear) when deletion is blocked', async () => {
+    await seedTask();
+    localStorage.setItem('gtd25-foo', 'x');
+    stubBlockedDeleteOnce();
+
+    await panicWipe({ reload: false });
+
+    expect(localStorage.getItem(WIPE_PENDING_KEY)).not.toBeNull();
+    expect(localStorage.getItem('gtd25-foo')).toBeNull(); // other gtd25 keys still cleared
+  });
+
+  it('retryPendingWipe finishes a previously blocked wipe and clears the marker', async () => {
+    await seedTask();
+    stubBlockedDeleteOnce();
+    await panicWipe({ reload: false });
+    expect(localStorage.getItem(WIPE_PENDING_KEY)).not.toBeNull();
+    await db.open();
+    expect(await db.tasks.count()).toBe(1); // blocked: data survived the first attempt
+
+    await retryPendingWipe(); // unstubbed → deletion succeeds this time
+
+    expect(localStorage.getItem(WIPE_PENDING_KEY)).toBeNull();
+    await db.open();
+    expect(await db.tasks.count()).toBe(0);
+  });
+
+  it('retryPendingWipe is a no-op without the marker', async () => {
+    await seedTask();
+    const deleteSpy = vi.spyOn(indexedDB, 'deleteDatabase');
+
+    await retryPendingWipe();
+
+    expect(deleteSpy).not.toHaveBeenCalled();
+    expect(await db.tasks.count()).toBe(1);
   });
 });

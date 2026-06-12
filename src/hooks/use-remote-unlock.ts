@@ -3,6 +3,7 @@ import { db } from '../db';
 import { isRemoteUnlockEnrolled } from '../db/vault';
 import { isParanoidFlagSet } from '../db/paranoid-flag';
 import { jitterInterval } from '../sync/poll-jitter';
+import { recordError } from '../lib/diagnostics';
 import { toast } from '../components/ui/Toast';
 import {
   getMailboxPat, getRepo, requestRemoteUnlock, pollRemoteUnlock, pollRemoteCommands, cancelRemoteUnlock,
@@ -245,7 +246,11 @@ export function useRemoteApprovals(): { pending: ApprovalRequest | null; approve
           break;
         }
       }
-    } catch { /* transient */ } finally {
+    } catch (err) {
+      // Mostly transient network/db errors, but a PERSISTENT failure means this
+      // device silently stops approving unlocks — keep it visible in diagnostics.
+      recordError('remoteUnlock.approverTick', err);
+    } finally {
       busy.current = false;
     }
   }, [dismiss]);

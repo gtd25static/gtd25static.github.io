@@ -3,6 +3,7 @@ import { Button } from '../ui/Button';
 import { useLocalSettings } from '../../hooks/use-settings';
 import { listRemoteBackups, type BackupInfo } from '../../sync/remote-backups';
 import { restoreFromBackup, wipeAllData, importData } from '../../sync/sync-engine';
+import { getLocalBackups, readLocalBackup } from '../../db/backup';
 import { parseImportZip } from '../../db/export-import';
 import { ExportDialog } from './ExportDialog';
 import { toast } from '../ui/Toast';
@@ -19,6 +20,7 @@ export function BackupsSettings() {
   const [backups, setBackups] = useState<BackupInfo[]>([]);
   const [loading, setLoading] = useState(false);
   const [restoringTier, setRestoringTier] = useState<string | null>(null);
+  const [restoringLocalKey, setRestoringLocalKey] = useState<string | null>(null);
   const [showExport, setShowExport] = useState(false);
 
   // Paranoid devices keep the PAT in the vault; the remote-backup READ/restore
@@ -59,6 +61,26 @@ export function BackupsSettings() {
       await fetchBackups();
     } finally {
       setRestoringTier(null);
+    }
+  }
+
+  // Boot-time safety backups (localStorage; not created under Paranoid).
+  const localBackups = paranoid ? [] : getLocalBackups();
+
+  async function handleRestoreLocal(backup: { key: string; timestamp: number }) {
+    if (!await confirmDialog(
+      `This will replace all current data with the safety backup from ${new Date(backup.timestamp).toLocaleString()} and sync the change to all devices. Continue?`,
+      { confirmLabel: 'Restore', danger: false },
+    )) return;
+
+    setRestoringLocalKey(backup.key);
+    try {
+      await importData(readLocalBackup(backup.key));
+    } catch (err) {
+      recordError('backups.restoreLocal', err);
+      toast(err instanceof Error ? err.message : 'Restore failed', 'error');
+    } finally {
+      setRestoringLocalKey(null);
     }
   }
 
@@ -113,6 +135,32 @@ export function BackupsSettings() {
         syncPassword={syncPassword}
         defaultEncrypted={paranoid}
       />
+      {localBackups.length > 0 && (
+        <div className="space-y-2">
+          <h3 className="text-sm font-medium text-zinc-700 dark:text-zinc-300">Safety Backups</h3>
+          {localBackups.map((b) => (
+            <div
+              key={b.key}
+              className="flex items-center justify-between rounded-lg border border-zinc-200 px-3 py-2 dark:border-zinc-700"
+            >
+              <div className="text-xs text-zinc-400 dark:text-zinc-500">
+                {new Date(b.timestamp).toLocaleString()}
+              </div>
+              <Button
+                size="sm"
+                variant="secondary"
+                disabled={restoringLocalKey !== null}
+                onClick={() => handleRestoreLocal(b)}
+              >
+                {restoringLocalKey === b.key ? 'Restoring...' : 'Restore'}
+              </Button>
+            </div>
+          ))}
+          <p className="text-xs text-zinc-400 dark:text-zinc-500">
+            Created automatically on this device at app start. Restore replaces all data and syncs to other devices.
+          </p>
+        </div>
+      )}
       <div>
         <Button
           size="sm"

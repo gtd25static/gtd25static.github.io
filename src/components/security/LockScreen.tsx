@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { Input } from '../ui/Input';
 import { Button } from '../ui/Button';
 import { RandomizedKeyboard } from './RandomizedKeyboard';
-import { unlockWithPassphrase, unlockWithSecurityKey, refreshSecurityKeyFlag } from '../../db/vault';
+import { unlockWithPassphrase, unlockWithSecurityKey, refreshSecurityKeyFlag, getLastUnlockFailure } from '../../db/vault';
 import { useVault } from '../../hooks/use-vault';
 import { useLockScreenRemote } from '../../hooks/use-remote-unlock';
 import { useServiceWorker } from '../../hooks/use-service-worker';
@@ -49,7 +49,17 @@ export function LockScreen() {
     try {
       const ok = await unlockWithPassphrase(passphrase);
       if (!ok) {
-        setError('Incorrect passphrase');
+        // Distinguish "vault unreadable" from "wrong passphrase": after the verifier
+        // passed, the failure is local corruption / interrupted maintenance, and it
+        // does NOT count toward the failed-attempt wipe.
+        const reason = getLastUnlockFailure();
+        setError(
+          reason === 'corrupt-vault'
+            ? 'Vault data is unreadable on this device — this is not a wrong passphrase. Wipe this device and sync again (or import a backup) to recover.'
+            : reason === 'resume-failed'
+              ? 'Your passphrase is correct, but unlock could not finish (possibly low storage). Free up space and try again.'
+              : 'Incorrect passphrase',
+        );
         setPassphrase('');
         setAttempt((n) => n + 1);
       }

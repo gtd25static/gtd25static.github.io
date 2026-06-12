@@ -775,10 +775,15 @@ function pendingUnlockExpired(): boolean {
   return !pendingUnlock || Date.now() > pendingUnlock.expiresAt;
 }
 
-/** Drop the pending ephemeral key and best-effort delete the stale remote request. */
+/**
+ * Drop the pending ephemeral key and best-effort delete the stale remote request
+ * AND any late approval response — its session key is gone, so the response is
+ * undecryptable; deleting it just keeps the repo clean of dead ceremony files.
+ */
 async function expirePendingUnlock(pat: string, repo: string, deviceId: string): Promise<void> {
   cancelRemoteUnlock(); // zeroes k and clears pendingUnlock
   await deleteRemoteFileIfExists(pat, repo, unlockReqPath(deviceId));
+  await deleteRemoteFileIfExists(pat, repo, unlockRespPath(deviceId));
 }
 
 export function cancelRemoteUnlock(): void {

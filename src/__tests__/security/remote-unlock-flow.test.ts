@@ -880,4 +880,23 @@ describe('remote unlock: requester-side expiry (ACR-006)', () => {
       spy.mockRestore();
     }
   });
+
+  it('also deletes a late approval response on expiry (no dead ceremony files)', async () => {
+    await enrollPair();
+    await actAsLaptop();
+    vault.lock();
+    await ru.requestRemoteUnlock(PAT, REPO, LAP);
+    // A late response landed, but the request expires before it is consumed.
+    files[ru.unlockRespPath(LAP)] = { data: '{"stale":true}', sha: 'stale-resp' };
+
+    const future = Date.now() + 3 * 60_000;
+    const spy = vi.spyOn(Date, 'now').mockReturnValue(future);
+    try {
+      expect((await ru.pollRemoteUnlock(PAT, REPO, LAP)).status).toBe('expired');
+      expect(files[ru.unlockReqPath(LAP)]).toBeUndefined();
+      expect(files[ru.unlockRespPath(LAP)]).toBeUndefined();
+    } finally {
+      spy.mockRestore();
+    }
+  });
 });

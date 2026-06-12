@@ -268,6 +268,18 @@ async function completeDisable(): Promise<void> {
   emit();
 }
 
+// Why the most recent unlock attempt failed. 'wrong-credential' is the only
+// reason that burns a failed attempt: 'corrupt-vault' and 'resume-failed' occur
+// AFTER the verifier proved the credential right, so counting them could march
+// a correct passphrase into the failed-attempt wipe.
+export type UnlockFailureReason = 'wrong-credential' | 'corrupt-vault' | 'resume-failed';
+let lastUnlockFailure: UnlockFailureReason | null = null;
+
+/** Reason the most recent unlock attempt failed (null after a success). */
+export function getLastUnlockFailure(): UnlockFailureReason | null {
+  return lastUnlockFailure;
+}
+
 // Serialize unlock attempts so concurrent wrong guesses cannot interleave their
 // read-modify-write of failedUnlockAttempts and collapse to a single increment,
 // which would let an attacker exceed the wipe threshold undetected (ACR-009).
@@ -286,16 +298,19 @@ export function unlockWithPassphrase(passphrase: string): Promise<boolean> {
 async function doUnlockWithPassphrase(passphrase: string): Promise<boolean> {
   const vault = await db.vault.get('vault');
   if (!vault) return false;
+  lastUnlockFailure = null;
 
   const kek = await deriveVaultKek(passphrase, vault.passSalt, vault.kdf ?? LEGACY_KDF);
   let dek: CryptoKey | null = null;
   try {
     dek = await unwrapDek(kek, vault.dekWrappedByPass);
   } catch { /* wrong passphrase -> AES-GCM auth failure */ }
+  if (!dek) lastUnlockFailure = 'wrong-credential';
 
   const ok = dek ? await finishUnlock(vault, dek) : false;
   if (!ok) {
-    await registerFailedAttempt();
+    // Only a wrong credential counts toward the wipe tripwire (see UnlockFailureReason).
+    if (lastUnlockFailure === 'wrong-credential') await registerFailedAttempt();
     return false;
   }
   // Transparently upgrade a legacy PBKDF2 vault to Argon2id now that we hold the
@@ -328,6 +343,7 @@ async function registerFailedAttempt(): Promise<void> {
  * back to the passphrase.
  */
 export async function unlockWithSecurityKey(): Promise<boolean> {
+  lastUnlockFailure = null;
   const vault = await db.vault.get('vault');
   if (!vault?.prfSalt) return false;
   const keys = vaultSecurityKeys(vault);
@@ -351,13 +367,18 @@ export async function unlockWithSecurityKey(): Promise<boolean> {
       return await finishUnlock(vault, dek);
     } catch { /* not this credential — try the next */ }
   }
+  lastUnlockFailure = 'wrong-credential';
   return false; // PRF output didn't reconstruct any enrolled KEK
 }
 
 // Shared tail of every unlock path: verify the DEK, hydrate in-memory state,
 // resume any interrupted migration, and notify subscribers.
 async function finishUnlock(vault: Vault, dek: CryptoKey): Promise<boolean> {
-  if (!(await checkVerifier(dek, vault.verifier))) return false;
+  lastUnlockFailure = null;
+  if (!(await checkVerifier(dek, vault.verifier))) {
+    lastUnlockFailure = 'wrong-credential';
+    return false;
+  }
 
   // Validate ALL required vault secrets into locals BEFORE making the DEK live, so a
   // corrupt secrets blob aborts the unlock without leaving the DEK resident while the
@@ -369,6 +390,7 @@ async function finishUnlock(vault: Vault, dek: CryptoKey): Promise<boolean> {
       : null;
   } catch (err) {
     recordError('vault.finishUnlock.secrets', err);
+    lastUnlockFailure = 'corrupt-vault';
     return false;
   }
 
@@ -396,6 +418,7 @@ async function finishUnlock(vault: Vault, dek: CryptoKey): Promise<boolean> {
     currentSecrets = null;
     if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
     recordError('vault.finishUnlock.resume', err);
+    lastUnlockFailure = 'resume-failed';
     return false;
   }
 
@@ -563,6 +586,7 @@ function purgeLocalBackups(): void {
 export function __resetVaultStateForTests(): void {
   currentDek = null;
   currentSecrets = null;
+  lastUnlockFailure = null;
   if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
   idleTimeoutMs = DEFAULT_IDLE_MINUTES * 60_000;
   emit();

@@ -1,5 +1,6 @@
 import { db } from './index';
 import { isParanoidFlagSet } from './paranoid-flag';
+import type { ImportData } from './export-import';
 
 const BACKUP_KEY_PREFIX = 'gtd25-local-backup-';
 const MAX_BACKUPS = 2;
@@ -55,17 +56,25 @@ export function getLocalBackups(): Array<{ key: string; timestamp: number }> {
     });
 }
 
-export async function restoreLocalBackup(key: string): Promise<void> {
+/**
+ * Read + validate a boot-time safety backup. Returns ImportData for the sync
+ * engine's importData() — restoring must go through it (NOT direct table
+ * writes) so FK validation, change entries, and sync propagation apply.
+ * Throws a descriptive error on a corrupt or malformed backup.
+ */
+export function readLocalBackup(key: string): ImportData {
   const raw = localStorage.getItem(key);
   if (!raw) throw new Error('Backup not found');
 
-  const backup = JSON.parse(raw);
-  await db.transaction('rw', [db.taskLists, db.tasks, db.subtasks], async () => {
-    await db.taskLists.clear();
-    await db.tasks.clear();
-    await db.subtasks.clear();
-    await db.taskLists.bulkPut(backup.taskLists);
-    await db.tasks.bulkPut(backup.tasks);
-    await db.subtasks.bulkPut(backup.subtasks);
-  });
+  let backup: unknown;
+  try {
+    backup = JSON.parse(raw);
+  } catch {
+    throw new Error('Backup is corrupted (not valid JSON)');
+  }
+  const b = backup as Partial<ImportData>;
+  if (!Array.isArray(b.taskLists) || !Array.isArray(b.tasks) || !Array.isArray(b.subtasks)) {
+    throw new Error('Backup structure is invalid');
+  }
+  return { taskLists: b.taskLists, tasks: b.tasks, subtasks: b.subtasks };
 }

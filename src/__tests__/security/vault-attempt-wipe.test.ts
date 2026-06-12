@@ -4,7 +4,7 @@ import { db } from '../../db';
 import { resetDb } from '../helpers/db-helpers';
 import {
   enableParanoid, unlockWithPassphrase, lock, configureMaxUnlockAttempts,
-  isParanoidEnabled, isUnlocked, __resetVaultStateForTests,
+  isParanoidEnabled, isUnlocked, getLastUnlockFailure, __resetVaultStateForTests,
 } from '../../db/vault';
 import type { Task } from '../../db/models';
 
@@ -63,6 +63,35 @@ describe('failed-attempt wipe', () => {
     await db.vault.update('vault', { secrets: 'not-valid-ciphertext' });
     expect(await unlockWithPassphrase(PASS)).toBe(false);
     expect(isUnlocked()).toBe(false);
+  });
+
+  it('a corrupt vault with the CORRECT passphrase burns no attempts and never trips the wipe', async () => {
+    await enableParanoid(PASS);
+    await configureMaxUnlockAttempts(1); // hair trigger: any counted failure would wipe
+    lock();
+    await db.vault.update('vault', { secrets: 'not-valid-ciphertext' });
+
+    expect(await unlockWithPassphrase(PASS)).toBe(false);
+    expect(getLastUnlockFailure()).toBe('corrupt-vault');
+
+    // The verifier proved the passphrase right — no attempt counted, no wipe fired.
+    const vault = await db.vault.get('vault');
+    expect(vault).toBeDefined();
+    expect(vault?.failedUnlockAttempts ?? 0).toBe(0);
+    expect(await db.tasks.count()).toBe(1);
+  });
+
+  it('reports wrong-credential for an actually wrong passphrase', async () => {
+    await enableParanoid(PASS);
+    await configureMaxUnlockAttempts(0);
+    lock();
+
+    expect(await unlockWithPassphrase('nope')).toBe(false);
+    expect(getLastUnlockFailure()).toBe('wrong-credential');
+    expect((await db.vault.get('vault'))?.failedUnlockAttempts).toBe(1);
+
+    expect(await unlockWithPassphrase(PASS)).toBe(true);
+    expect(getLastUnlockFailure()).toBeNull();
   });
 
   it('wipes local data after the configured number of failed attempts', async () => {

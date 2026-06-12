@@ -9,6 +9,7 @@ import { useVault } from './hooks/use-vault';
 import { touchVaultActivity, lock, isParanoidEnabled, DEFAULT_IDLE_MINUTES } from './db/vault';
 import { startSystemIdleLock } from './lib/system-idle';
 import { checkRecurringTasks } from './hooks/use-recurring';
+import { recordError } from './lib/diagnostics';
 import { SpecialListProvider } from './hooks/use-special-list';
 import { SyncProvider } from './sync/use-sync';
 import { usePomodoroClock } from './hooks/use-pomodoro-clock';
@@ -59,10 +60,13 @@ function UnlockedApp() {
     ensureDefaults();
   }, []);
 
-  // Check recurring tasks on startup and every 60s
+  // Check recurring tasks on startup and every 60s. A persistent DB failure here
+  // is otherwise invisible (recurring tasks silently stop resetting) — tag it in
+  // the diagnostics log with context.
   useEffect(() => {
-    checkRecurringTasks();
-    const interval = setInterval(checkRecurringTasks, 60_000);
+    const check = () => void checkRecurringTasks().catch((e) => recordError('recurring.check', e));
+    check();
+    const interval = setInterval(check, 60_000);
     return () => clearInterval(interval);
   }, []);
 
