@@ -41,4 +41,51 @@ describe('Input', () => {
     expect(input).toHaveAttribute('type', 'password');
     expect(input).toBeRequired();
   });
+
+  describe('password reveal toggle', () => {
+    it('does not render a toggle for non-password inputs', () => {
+      render(<Input label="Name" />);
+      expect(screen.queryByRole('button')).not.toBeInTheDocument();
+    });
+
+    it('reveals and re-hides the value on toggle', async () => {
+      const user = userEvent.setup();
+      render(<Input label="Passphrase" type="password" />);
+      const input = screen.getByLabelText('Passphrase');
+      expect(input).toHaveAttribute('type', 'password');
+
+      await user.click(screen.getByRole('button', { name: 'Show password' }));
+      expect(input).toHaveAttribute('type', 'text');
+
+      await user.click(screen.getByRole('button', { name: 'Hide password' }));
+      expect(input).toHaveAttribute('type', 'password');
+    });
+
+    it('keeps the typed value when toggling', async () => {
+      const user = userEvent.setup();
+      render(<Input label="Passphrase" type="password" />);
+      const input = screen.getByLabelText('Passphrase');
+
+      await user.type(input, 'hunter2');
+      await user.click(screen.getByRole('button', { name: 'Show password' }));
+      expect(input).toHaveValue('hunter2');
+    });
+
+    it('does not submit an enclosing form', async () => {
+      const user = userEvent.setup();
+      const onSubmit = vi.fn((e: React.FormEvent) => e.preventDefault());
+      render(
+        <form onSubmit={onSubmit}>
+          <Input label="Passphrase" type="password" />
+        </form>,
+      );
+      await user.click(screen.getByRole('button', { name: 'Show password' }));
+      expect(onSubmit).not.toHaveBeenCalled();
+    });
+
+    it('is disabled while the input is disabled', () => {
+      render(<Input label="Passphrase" type="password" disabled />);
+      expect(screen.getByRole('button', { name: 'Show password' })).toBeDisabled();
+    });
+  });
 });
