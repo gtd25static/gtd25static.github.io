@@ -3,6 +3,7 @@ import { Button } from '../ui/Button';
 import { StorageBar } from './StorageBar';
 import { SharedItemCard } from './SharedItemCard';
 import { CreateSnippetForm } from './CreateSnippetForm';
+import { PasteUploadDialog } from './PasteUploadDialog';
 import {
   useSharedItems,
   useSharedStorage,
@@ -10,6 +11,7 @@ import {
   createFileItem,
 } from '../../hooks/use-shared-items';
 import { isValidUrl, extractUrl } from '../../lib/link-utils';
+import { classifyClipboard, type PastePayload } from '../../lib/clipboard-capture';
 import { useVault } from '../../hooks/use-vault';
 import { toast } from '../ui/Toast';
 
@@ -19,6 +21,7 @@ export function SharedFolderView() {
   const { locked } = useVault();
   const [creatingSnippet, setCreatingSnippet] = useState(false);
   const [dragOver, setDragOver] = useState(false);
+  const [pastePayload, setPastePayload] = useState<PastePayload | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Add multiple files sequentially so the quota check sees each prior add.
@@ -28,8 +31,9 @@ export function SharedFolderView() {
     }
   }
 
-  // Clipboard paste → link (or files). Ignored while typing in a field so the
-  // snippet textarea keeps normal paste behavior.
+  // Clipboard paste → classify (files / link / text) and ask before uploading.
+  // Ignored while typing in a field so the snippet textarea keeps normal paste
+  // behavior. A newer paste replaces an open preview.
   useEffect(() => {
     if (locked) return;
     function onPaste(e: ClipboardEvent) {
@@ -39,18 +43,10 @@ export function SharedFolderView() {
       }
       const dt = e.clipboardData;
       if (!dt) return;
-      if (dt.files && dt.files.length > 0) {
-        e.preventDefault();
-        void addFiles(dt.files);
-        return;
-      }
-      const text = dt.getData('text')?.trim();
-      if (!text) return;
-      const url = isValidUrl(text) ? text : extractUrl(text);
-      if (url) {
-        e.preventDefault();
-        void createLinkItem(url);
-      }
+      const payload = classifyClipboard(Array.from(dt.files ?? []), dt.getData('text') ?? '');
+      if (!payload) return;
+      e.preventDefault();
+      setPastePayload(payload);
     }
     document.addEventListener('paste', onPaste);
     return () => document.removeEventListener('paste', onPaste);
@@ -152,6 +148,8 @@ export function SharedFolderView() {
           </div>
         )}
       </div>
+
+      <PasteUploadDialog payload={pastePayload} onClose={() => setPastePayload(null)} />
     </div>
   );
 }
