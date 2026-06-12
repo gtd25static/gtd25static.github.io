@@ -35,8 +35,8 @@ describe('PasswordStrengthBar', () => {
   });
 
   it('holds sync secrets to the higher (PBKDF2) threshold', () => {
-    // ~53 bits: over the vault line, under the sync line
-    const secret = '5162943870516294';
+    // ~46.5 bits: over the vault line (~45.8), under the sync line (~49.2)
+    const secret = '51629438705162';
     render(<PasswordStrengthBar secret={secret} kind="sync" />);
     expect(screen.getByText(/Crackable/)).toBeInTheDocument();
   });

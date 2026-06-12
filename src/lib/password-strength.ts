@@ -3,9 +3,12 @@
 // This is NOT a zxcvbn replacement. Strength is an entropy estimate priced against
 // the offline attacker model in THREAT_MODEL.md ("Key sizes, KDFs & brute-force
 // economics"): a secret passes only when its average offline crack time exceeds
-// ONE YEAR at the doc's aggregate guess rates — PBKDF2-600k ~1e9 guess/s for the
-// sync password, Argon2id 64 MiB ~1e8 guess/s for the vault passphrase. There are
-// no composition rules: a long lowercase-only passphrase passes on entropy alone.
+// ONE YEAR against a dedicated ~1,000-GPU professional cracking farm — PBKDF2-600k
+// ~1e7 guess/s for the sync password, Argon2id 64 MiB ~1e6 guess/s for the vault
+// passphrase. Frontier-cluster (~100k-GPU, the previous calibration) resistance is
+// an explicit NON-goal for a personal task vault; users who want it add roughly one
+// more diceware word (~+6.6 bits per 100×). There are no composition rules: a long
+// lowercase-only passphrase passes on entropy alone.
 
 const COMMON = new Set([
   'password', 'passw0rd', 'password1', 'password123', '123456', '1234567', '12345678',
@@ -20,8 +23,8 @@ export type SecretKind = 'sync' | 'vault';
 
 const YEAR_SECONDS = 31_557_600;
 const GUESS_RATE: Record<SecretKind, number> = {
-  sync: 1e9, // PBKDF2-600k, ~100k-GPU aggregate
-  vault: 1e8, // Argon2id 64 MiB, memory-hard
+  sync: 1e7, // PBKDF2-600k, ~1,000-GPU farm aggregate (~1e4 guess/s per GPU)
+  vault: 1e6, // Argon2id 64 MiB, memory-hard (~1e3 guess/s per GPU)
 };
 // A blacklisted secret is among the attacker's first few thousand guesses.
 const COMMON_BITS = 10;

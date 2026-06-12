@@ -5,17 +5,20 @@ import {
   formatCrackTime,
 } from '../../lib/password-strength';
 
-// Thresholds derive from THREAT_MODEL.md's attacker rates: >1 year average crack
-// time at ~1e9 guess/s (sync, PBKDF2) ≈ 55.8 bits; ~1e8 guess/s (vault, Argon2id)
-// ≈ 52.5 bits. Diceware word ≈ 12.9 bits → 4 words fail vault, 5 pass both.
+// Thresholds derive from THREAT_MODEL.md's attacker rates (~1,000-GPU professional
+// farm): >1 year average crack time at ~1e7 guess/s (sync, PBKDF2) ≈ 49.2 bits;
+// ~1e6 guess/s (vault, Argon2id) ≈ 45.8 bits. Diceware word ≈ 12.9 bits → 4 words
+// pass both, 3 words fail both.
 
-describe('estimateSecretStrength (ACR-014 v2)', () => {
+describe('estimateSecretStrength (ACR-014 v3)', () => {
   it('requires more entropy for the sync password than the vault passphrase', () => {
     const sync = estimateSecretStrength('x', 'sync');
     const vault = estimateSecretStrength('x', 'vault');
     expect(sync.requiredBits).toBeGreaterThan(vault.requiredBits);
-    expect(vault.requiredBits).toBeGreaterThan(52);
-    expect(sync.requiredBits).toBeLessThan(56);
+    expect(vault.requiredBits).toBeGreaterThan(45);
+    expect(vault.requiredBits).toBeLessThan(47);
+    expect(sync.requiredBits).toBeGreaterThan(48);
+    expect(sync.requiredBits).toBeLessThan(50);
   });
 
   it('accepts a long all-lowercase passphrase — no composition policy', () => {
@@ -29,10 +32,19 @@ describe('estimateSecretStrength (ACR-014 v2)', () => {
     expect(estimateSecretStrength(phrase, 'sync').ok).toBe(true);
   });
 
-  it('rejects ~4 separated words (≈52 bits — under a year of compute)', () => {
-    const est = estimateSecretStrength('alpha rhino cactus velvet', 'vault');
-    expect(est.ok).toBe(false);
-    expect(est.fraction).toBeGreaterThan(0.9); // close, but not over the line
+  it('accepts 4 separated words for both kinds (≈52 bits — the practical target)', () => {
+    const phrase = 'alpha rhino cactus velvet';
+    expect(estimateSecretStrength(phrase, 'vault').ok).toBe(true);
+    expect(estimateSecretStrength(phrase, 'sync').ok).toBe(true);
+  });
+
+  it('rejects 3 separated words for both kinds (≈39 bits — under a year of compute)', () => {
+    const phrase = 'alpha rhino cactus';
+    const vault = estimateSecretStrength(phrase, 'vault');
+    const sync = estimateSecretStrength(phrase, 'sync');
+    expect(vault.ok).toBe(false);
+    expect(sync.ok).toBe(false);
+    expect(vault.fraction).toBeGreaterThan(0.75); // close, but not over the line
   });
 
   it('rejects one or two dictionary-style words with the word hint', () => {
@@ -49,8 +61,8 @@ describe('estimateSecretStrength (ACR-014 v2)', () => {
   });
 
   it('prices digit-only secrets at ~3.3 bits/digit', () => {
-    expect(estimateSecretStrength('516294387051629438', 'sync').ok).toBe(true); // 18 digits ≈ 60 bits
-    expect(estimateSecretStrength('516294387051628', 'sync').ok).toBe(false); // 15 digits ≈ 50 bits
+    expect(estimateSecretStrength('516294387051629', 'sync').ok).toBe(true); // 15 digits ≈ 50 bits
+    expect(estimateSecretStrength('51629438705162', 'sync').ok).toBe(false); // 14 digits ≈ 46.5 bits
   });
 
   it('discounts repeated characters — length alone cannot buy entropy', () => {

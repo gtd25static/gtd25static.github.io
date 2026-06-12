@@ -9,6 +9,8 @@ import { deriveKey, cacheEncryptionKey, generateSalt } from '../../sync/crypto';
 import { useVault } from '../../hooks/use-vault';
 import { getVaultSecrets, setVaultSecrets } from '../../db/vault';
 import { recordError } from '../../lib/diagnostics';
+import { checkSecretStrength } from '../../lib/password-strength';
+import { PasswordStrengthBar } from '../ui/PasswordStrengthBar';
 
 export function GitHubSettings() {
   const local = useLocalSettings();
@@ -47,6 +49,10 @@ export function GitHubSettings() {
 
     // Require confirmation when setting/changing password
     if (passwordChanged && encPassword.trim()) {
+      // Same ACR-014 gate as EncryptionPasswordModal — this entry point must not
+      // be a strength-check bypass.
+      const strength = checkSecretStrength(encPassword.trim(), 'sync');
+      if (!strength.ok) { toast(strength.reason!, 'error'); return; }
       if (encPassword !== encPasswordConfirm) {
         toast('Passwords do not match', 'error');
         return;
@@ -137,6 +143,9 @@ export function GitHubSettings() {
           onChange={(e) => setEncPassword(e.target.value)}
           placeholder="Required for sync"
         />
+        {encPassword.trim() !== currentSyncPassword && encPassword.trim() !== '' && (
+          <PasswordStrengthBar secret={encPassword.trim()} kind="sync" />
+        )}
         {encPassword.trim() !== currentSyncPassword && encPassword.trim() && (
           <div className="mt-2">
             <Input
