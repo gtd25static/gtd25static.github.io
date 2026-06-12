@@ -5,7 +5,10 @@ import { eligibleForFocus, pickWeighted } from './focus-pick';
 /**
  * Focus Mode: a strict 2-3 task commitment device. Tasks with `focusedAt` set
  * form the focus set; membership is sticky (synced) until the task is completed
- * or deleted. Empty slots refill at most once per local day (see use-focus-mode).
+ * or deleted. Composition picks happen once per local day; a slot vacated by
+ * COMPLETING its task is held until tomorrow (the commitment payoff), while a
+ * slot lost any other way (recurring reset, blocked, archived, moved list,
+ * cross-device trim) is topped up continuously (see use-focus-mode).
  */
 
 export const FOCUS_LIST_ID = '__focus__';
@@ -35,9 +38,27 @@ export function focusMembers(tasks: Task[], allowedListIds: Set<string>): Task[]
     .sort((a, b) => a.focusedAt! - b.focusedAt! || a.id.localeCompare(b.id));
 }
 
-/** Members beyond the set size (to have focusedAt cleared by the daily trim). */
+/** Members beyond the set size (to have focusedAt cleared by the daily and continuous trims). */
 export function focusOverflow(members: Task[]): Task[] {
   return members.slice(FOCUS_SET_SIZE);
+}
+
+/**
+ * Done-today focus carriers: completed focus tasks that HOLD their slot until
+ * tomorrow's daily refresh, and drive the "cleared N today" count. Deleted
+ * tasks deliberately don't count (deleting disowns the slot). One definition
+ * shared by useFocusSet and maintainFocusSet — keep them in lockstep.
+ */
+export function focusCompletedToday(tasks: Task[], now: number): Task[] {
+  const dayStart = new Date(now);
+  dayStart.setHours(0, 0, 0, 0);
+  return tasks.filter(
+    (t) =>
+      t.focusedAt != null &&
+      !t.deletedAt &&
+      t.status === 'done' &&
+      (t.completedAt ?? 0) >= dayStart.getTime(),
+  );
 }
 
 /**

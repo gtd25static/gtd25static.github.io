@@ -4,7 +4,8 @@ import { FocusTaskCard } from './FocusTaskCard';
 
 /**
  * Focus Mode: the daily 2-3 task commitment view (default view on app open).
- * Tasks here can only be completed or deleted; empty slots refill once per day.
+ * Tasks here can only be completed or deleted; a completed slot is held until
+ * tomorrow, while slots lost any other way are topped up continuously.
  */
 export function FocusView() {
   useFocusModeDaily();

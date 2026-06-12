@@ -79,9 +79,11 @@ export interface Task {
   workedAt?: number;
   // Focus Mode membership: when this task entered the focus set. Plaintext
   // metadata (timestamp only, like workedAt) — synced, NOT in SENSITIVE_FIELDS.
-  // Cleared by the daily focus cleanup, by recurring reset, or on trim.
+  // Cleared by the daily focus cleanup, by recurring reset, or on trim (the
+  // trim runs both daily and continuously — see maintainFocusSet).
   // NOTE: kept on done tasks until the next daily cleanup so the Focus view's
-  // "cleared N today" count works — don't clear it on completion.
+  // "cleared N today" count works AND the slot stays held against the
+  // continuous top-up — don't clear it on completion.
   focusedAt?: number;
   // Additional links
   links?: TaskLink[];

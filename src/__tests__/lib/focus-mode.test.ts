@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   FOCUS_SET_SIZE,
+  focusCompletedToday,
   focusMembers,
   focusOverflow,
   localDayKey,
@@ -211,5 +212,43 @@ describe('selectFocusRefill', () => {
     const twoMembers = members.slice(0, 2);
     const picks = selectFocusRefill([...twoMembers, makeTask({ id: 'spare' })], twoMembers, NOW, () => 0);
     expect(picks.map((t) => t.id)).toEqual(['spare']);
+  });
+
+  it('done-today carriers passed as members occupy their slot AND their urgency role', () => {
+    // 1 live backlog member + 1 held (done, overdue) carrier → one open slot,
+    // and the urgent quota has one taken: the pick must be urgent, not backlog.
+    const live = makeTask({ id: 'live-backlog', focusedAt: NOW - DAY });
+    const held = makeTask({ id: 'held-urgent', focusedAt: NOW - DAY, status: 'done', dueDate: NOW - DAY });
+    const eligible = [
+      makeTask({ id: 'urgent-spare', dueDate: NOW - 2 * DAY }),
+      makeTask({ id: 'backlog-spare' }),
+    ];
+    const picks = selectFocusRefill(eligible, [live, held], NOW, () => 0);
+    expect(picks.map((t) => t.id)).toEqual(['urgent-spare']);
+
+    // Live + held at the set size → no slots at all.
+    const heldTwo = makeTask({ id: 'held-2', focusedAt: NOW, status: 'done' });
+    expect(selectFocusRefill(eligible, [live, held, heldTwo], NOW, () => 0)).toEqual([]);
+  });
+});
+
+describe('focusCompletedToday', () => {
+  it('counts done-today focus carriers and nothing else', () => {
+    const tasks = [
+      makeTask({ id: 'held', focusedAt: NOW - DAY, status: 'done', completedAt: NOW - 1000 }),
+      makeTask({ id: 'done-yesterday', focusedAt: NOW - DAY, status: 'done', completedAt: NOW - DAY }),
+      makeTask({ id: 'deleted-done', focusedAt: NOW - DAY, status: 'done', completedAt: NOW - 1000, deletedAt: NOW }),
+      makeTask({ id: 'live-member', focusedAt: NOW - DAY }),
+      makeTask({ id: 'done-unfocused', status: 'done', completedAt: NOW - 1000 }),
+      makeTask({ id: 'done-no-completedAt', focusedAt: NOW - DAY, status: 'done' }),
+    ];
+    expect(focusCompletedToday(tasks, NOW).map((t) => t.id)).toEqual(['held']);
+  });
+
+  it('uses the local-midnight boundary', () => {
+    const midnight = new Date(2026, 5, 3, 0, 0, 0, 0).getTime();
+    const atMidnight = makeTask({ id: 'at', focusedAt: NOW - DAY, status: 'done', completedAt: midnight });
+    const justBefore = makeTask({ id: 'before', focusedAt: NOW - DAY, status: 'done', completedAt: midnight - 1 });
+    expect(focusCompletedToday([atMidnight, justBefore], NOW).map((t) => t.id)).toEqual(['at']);
   });
 });

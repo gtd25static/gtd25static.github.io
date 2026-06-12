@@ -6,6 +6,7 @@ import { taskListIds } from '../lib/attention';
 import { eligibleForFocus } from '../lib/focus-pick';
 import {
   FOCUS_SET_SIZE,
+  focusCompletedToday,
   focusMembers,
   focusOverflow,
   localDayKey,
@@ -19,12 +20,13 @@ const CHECK_INTERVAL_MS = 60_000;
 export type FocusSetState = 'loading' | 'tasks' | 'all-done-today' | 'all-clear';
 
 /**
- * Once-per-local-day Focus Mode maintenance: clear focusedAt on members that are
- * no longer eligible (done/deleted/blocked/archived/list gone), trim a
+ * Tier 1 — once-per-local-day refresh: clear focusedAt on members that are no
+ * longer eligible (done/deleted/blocked/archived/list gone), trim a
  * cross-device over-fill to the FOCUS_SET_SIZE oldest, then refill empty slots
  * via selectFocusRefill. The day is stamped BEFORE picks are written (two-tab
- * guard, like useNudges) and even when no slots are empty, so a mid-day
- * completion never refills the same day. All writes go through updateTask /
+ * guard, like useNudges) and even when no slots are empty. A mid-day completion
+ * holds its slot for the rest of the day — only non-completion exits are topped
+ * up, by maintainFocusSet. All writes go through updateTask /
  * updateLocalSettings so sync, field timestamps and at-rest encryption apply.
  */
 export async function maybeRefillFocus(now: number = Date.now()): Promise<void> {
@@ -54,13 +56,65 @@ export async function maybeRefillFocus(now: number = Date.now()): Promise<void> 
   }
 }
 
-/** Drives maybeRefillFocus on mount, on tab-visible, and once a minute (day rollover). */
+let maintainInFlight = false;
+
+/**
+ * Tier 2 — continuous same-day repair. Keeps the visible set at FOCUS_SET_SIZE
+ * when a member leaves for a NON-completion reason (recurring reset, blocked,
+ * archived, moved list, cross-device trim). Done-today carriers HOLD their slot
+ * (focusCompletedToday) so finishing focus tasks still ends the day — passing
+ * them to selectFocusRefill as members occupies their slot and urgency role
+ * without being re-pickable (the eligible pool excludes done). Never
+ * stale-clears (that would break held slots / the cleared-today count) and
+ * writes nothing in steady state. Gated on today's daily refresh having stamped
+ * lastFocusRefillDay, so it can't pre-empt the composition pick or run against
+ * yesterday's context after midnight. Known wrinkle, accepted: a long-offline
+ * date-based recurrer that is also top-urgent can clear/re-pick once per tick
+ * while its nextOccurrence catches up — bounded and self-terminating.
+ */
+export async function maintainFocusSet(now: number = Date.now()): Promise<void> {
+  if (maintainInFlight) return;
+  maintainInFlight = true;
+  try {
+    const local = await db.localSettings.get('local');
+    if (!local || local.lastFocusRefillDay !== localDayKey(now)) return;
+
+    const [tasks, lists] = await Promise.all([db.tasks.toArray(), db.taskLists.toArray()]);
+    const allowed = taskListIds(lists);
+    const members = focusMembers(tasks, allowed);
+    const keep = members.slice(0, FOCUS_SET_SIZE);
+    const overflow = focusOverflow(members);
+    const held = focusCompletedToday(tasks, now);
+    if (overflow.length === 0 && keep.length + held.length >= FOCUS_SET_SIZE) return;
+
+    for (const task of overflow) {
+      await updateTask(task.id, { focusedAt: undefined });
+    }
+    const picks = selectFocusRefill(eligibleForFocus(tasks, allowed), [...keep, ...held], now);
+    for (const pick of picks) {
+      await updateTask(pick.id, { focusedAt: now });
+    }
+  } finally {
+    maintainInFlight = false;
+  }
+}
+
+/**
+ * Drives the two maintenance tiers on mount, on tab-visible, and once a minute:
+ * the daily refresh first (so a new day is stamped and composed), then the
+ * continuous top-up against the freshly stamped day.
+ */
 export function useFocusModeDaily(): void {
   useEffect(() => {
-    void maybeRefillFocus();
-    const interval = setInterval(() => void maybeRefillFocus(), CHECK_INTERVAL_MS);
+    const tick = async () => {
+      const now = Date.now();
+      await maybeRefillFocus(now);
+      await maintainFocusSet(now);
+    };
+    void tick();
+    const interval = setInterval(() => void tick(), CHECK_INTERVAL_MS);
     const onVisible = () => {
-      if (document.visibilityState === 'visible') void maybeRefillFocus();
+      if (document.visibilityState === 'visible') void tick();
     };
     document.addEventListener('visibilitychange', onVisible);
     return () => {
@@ -102,16 +156,9 @@ export function useFocusSet(): {
   const eligibleCount = eligibleForFocus(data.tasks, allowed).length;
 
   // Done focus tasks keep focusedAt until the next daily cleanup (see models.ts),
-  // which is what makes this count possible. Deleted tasks deliberately don't count.
-  const dayStart = new Date(now);
-  dayStart.setHours(0, 0, 0, 0);
-  const completedTodayCount = data.tasks.filter(
-    (t) =>
-      t.focusedAt != null &&
-      !t.deletedAt &&
-      t.status === 'done' &&
-      (t.completedAt ?? 0) >= dayStart.getTime(),
-  ).length;
+  // which is what makes this count possible — and what holds their slot against
+  // the continuous top-up (maintainFocusSet shares this exact definition).
+  const completedTodayCount = focusCompletedToday(data.tasks, now).length;
 
   // Until today's refill has stamped the day, an empty set is indeterminate —
   // report 'loading' instead of flashing a celebration on first open of the day.
