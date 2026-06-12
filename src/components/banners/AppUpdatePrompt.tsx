@@ -101,17 +101,33 @@ export function AppUpdatePrompt() {
     return () => offSyncSuccess(checkForUpdate);
   }, [checkForUpdate]);
 
-  // When the (modal) update prompt is about to show, close any open native <dialog>
-  // (Settings, Pomodoro settings, etc.). Those render in the browser's TOP LAYER —
-  // above any z-index — so the prompt would otherwise be hidden behind them. Closing
-  // fires each dialog's onClose, so React state stays consistent and they don't re-open.
+  const changes = info ? changelogFor(info, GIT_COMMIT) : [];
+  const sameCommit = info?.commit === GIT_COMMIT;
+  const sameCommitRefresh = needRefresh && !syncIncompat && versionChecked && sameCommit && changes.length === 0;
+  const waitingForVersionCheck = needRefresh && !syncIncompat && !versionChecked;
+  const available = (needRefresh || syncIncompat) && !sameCommitRefresh;
+  const promptVisible = available && !waitingForVersionCheck && !dismissed && !updateInstalledNoticeVisible;
+
+  // While the (modal) update prompt is visible, keep native <dialog>s closed
+  // (Settings, confirm/password prompts, the focus nudge, …): they all use
+  // showModal(), whose top layer paints above any z-index and would hide the
+  // prompt — including ones that open AFTER it (e.g. a focus nudge firing on
+  // its timer), hence the observer, not a one-shot sweep. close() fires each
+  // dialog's onClose, so React state stays consistent and they don't re-open.
+  // (Overlays that must survive — lock screen, remote-approval, the encryption
+  // password gate — are plain divs, layered by z-index/DOM order instead.)
   useEffect(() => {
-    if ((needRefresh || syncIncompat) && !dismissed) {
+    if (!promptVisible) return;
+    const closeOpenDialogs = () => {
       document.querySelectorAll('dialog[open]').forEach((d) => {
         try { (d as HTMLDialogElement).close(); } catch { /* ignore */ }
       });
-    }
-  }, [needRefresh, syncIncompat, dismissed]);
+    };
+    closeOpenDialogs();
+    const observer = new MutationObserver(closeOpenDialogs);
+    observer.observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ['open'] });
+    return () => observer.disconnect();
+  }, [promptVisible]);
 
   useEffect(() => {
     if (deferUntilLocked && vault.locked && !updating) {
@@ -122,11 +138,6 @@ export function AppUpdatePrompt() {
     }
   }, [applyUpdate, deferUntilLocked, info?.commit, needRefresh, updating, vault.locked]);
 
-  const changes = info ? changelogFor(info, GIT_COMMIT) : [];
-  const sameCommit = info?.commit === GIT_COMMIT;
-  const sameCommitRefresh = needRefresh && !syncIncompat && versionChecked && sameCommit && changes.length === 0;
-  const waitingForVersionCheck = needRefresh && !syncIncompat && !versionChecked;
-  const available = (needRefresh || syncIncompat) && !sameCommitRefresh;
   if (updateInstalledNoticeVisible) {
     return (
       <div className="fixed inset-x-0 top-0 z-[300] flex items-center justify-between gap-3 bg-green-600 px-4 py-2 text-sm font-medium text-white">

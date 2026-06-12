@@ -137,9 +137,12 @@ export function EncryptionPasswordModal() {
     }
   }
 
+  // Plain div, NOT <dialog>: this overlay must stay below top-layer elements
+  // and out of the update prompt's "close all open dialogs" sweep.
   return (
-    <dialog
-      open
+    <div
+      role="dialog"
+      aria-modal="true"
       className="fixed inset-0 z-[100] m-auto flex h-screen w-screen items-center justify-center bg-black/30 p-0"
     >
       <form
@@ -237,6 +240,6 @@ export function EncryptionPasswordModal() {
           )}
         </div>
       </form>
-    </dialog>
+    </div>
   );
 }
