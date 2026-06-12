@@ -221,6 +221,14 @@ export function useKeyboard() {
         return;
       }
 
+      // Everything below binds BARE keys. With Ctrl/Cmd/Alt held this is a
+      // browser/system chord (Ctrl+V paste, Ctrl+R reload, Ctrl+L address bar,
+      // Ctrl+D bookmark, …) — intercepting the keydown would preventDefault the
+      // chord's native action; notably, cancelling Ctrl+V's keydown stops the
+      // browser from ever firing the `paste` event the Shared Folder relies on.
+      // (Shift stays allowed: '?' and shift-extended j/k selection need it.)
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+
       const items = s.focusZone === 'sidebar' ? listsRef.current : mainRef.current;
       const idx = items.findIndex((i) => i.id === s.focusedItemId);
 
