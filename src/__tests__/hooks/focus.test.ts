@@ -12,6 +12,8 @@ let listId: string;
 beforeEach(async () => {
   await resetDb();
   resetAppState();
+  // revealTask now schedules a centre-scroll; jsdom has no scrollIntoView.
+  HTMLElement.prototype.scrollIntoView = vi.fn();
   const list = await createTaskList('List');
   listId = list.id;
 });
@@ -31,6 +33,8 @@ describe('focusTask', () => {
     expect(useAppState.getState().selectedListId).toBe(listId);
     expect(useAppState.getState().expandedTaskIds.has(task.id)).toBe(true);
     expect(useAppState.getState().navigateToTaskId).toBe(task.id);
+    expect(useAppState.getState().focusZone).toBe('main');
+    expect(useAppState.getState().focusedItemId).toBe(task.id);
   });
 
   it('leaves an existing workedAt untouched', async () => {
