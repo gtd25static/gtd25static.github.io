@@ -49,7 +49,7 @@ describe('AppUpdatePrompt — takes precedence over open dialogs', () => {
     const dlg = openModalDialog();
     render(<AppUpdatePrompt />);
     await screen.findByText('Update available');
-    expect(dlg.hasAttribute('open')).toBe(false);
+    await waitFor(() => expect(dlg.hasAttribute('open')).toBe(false));
   });
 
   it('closes modal dialogs that open while the prompt is visible', async () => {
