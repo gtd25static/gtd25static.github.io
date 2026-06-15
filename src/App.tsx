@@ -7,7 +7,7 @@ import { useKeyboard } from './hooks/use-keyboard';
 import { useTheme } from './components/settings/ThemeSettings';
 import { useVault } from './hooks/use-vault';
 import { touchVaultActivity, lock, isParanoidEnabled, DEFAULT_IDLE_MINUTES } from './db/vault';
-import { startSystemIdleLock } from './lib/system-idle';
+import { startSystemIdleLock, DEFAULT_SYSTEM_LOCK_GRACE_MINUTES } from './lib/system-idle';
 import { checkRecurringTasks } from './hooks/use-recurring';
 import { recordError } from './lib/diagnostics';
 import { SpecialListProvider } from './hooks/use-special-list';
@@ -90,7 +90,9 @@ function UnlockedApp() {
     void (async () => {
       if (!isParanoidEnabled() || !localSettings.paranoidSystemIdleLock) return;
       const thresholdMs = (localSettings.paranoidIdleTimeoutMinutes ?? DEFAULT_IDLE_MINUTES) * 60_000;
-      const screenLockGraceMs = localSettings.paranoidSystemLockGraceEnabled ? 10 * 60_000 : 0;
+      const screenLockGraceMs = localSettings.paranoidSystemLockGraceEnabled
+        ? (localSettings.paranoidSystemLockGraceMinutes ?? DEFAULT_SYSTEM_LOCK_GRACE_MINUTES) * 60_000
+        : 0;
       const s = await startSystemIdleLock(thresholdMs, () => lock(), { screenLockGraceMs });
       if (cancelled) s(); else stop = s;
     })();
@@ -99,6 +101,7 @@ function UnlockedApp() {
     localSettings.paranoidIdleTimeoutMinutes,
     localSettings.paranoidSystemIdleLock,
     localSettings.paranoidSystemLockGraceEnabled,
+    localSettings.paranoidSystemLockGraceMinutes,
   ]);
 
   useKeyboard();

@@ -5,7 +5,10 @@ import { toast } from '../ui/Toast';
 import { confirmDialog } from '../ui/ConfirmDialog';
 import { useVault } from '../../hooks/use-vault';
 import { useLocalSettings, updateLocalSettings } from '../../hooks/use-settings';
-import { isSystemIdleSupported, requestSystemIdlePermission } from '../../lib/system-idle';
+import {
+  isSystemIdleSupported, requestSystemIdlePermission,
+  DEFAULT_SYSTEM_LOCK_GRACE_MINUTES, clampSystemLockGraceMinutes,
+} from '../../lib/system-idle';
 import {
   enableParanoid, disableParanoid, changePassphrase, configureIdleTimeout,
   configureMaxUnlockAttempts, verifyAtRestIntegrity, lock, addSecurityKey, removeSecurityKey,
@@ -179,9 +182,21 @@ function SecurityKeySection({ hasSecurityKey }: { hasSecurityKey: boolean }) {
   );
 }
 
-function SystemIdleToggle({ enabled, graceEnabled }: { enabled: boolean; graceEnabled: boolean }) {
+function SystemIdleToggle({ enabled, graceEnabled, graceMinutes }: { enabled: boolean; graceEnabled: boolean; graceMinutes: number }) {
   const supported = isSystemIdleSupported();
   const [busy, setBusy] = useState(false);
+  const [grace, setGrace] = useState(String(graceMinutes));
+
+  useEffect(() => {
+    setGrace(String(graceMinutes));
+  }, [graceMinutes]);
+
+  async function saveGrace() {
+    const n = clampSystemLockGraceMinutes(grace);
+    await updateLocalSettings({ paranoidSystemLockGraceMinutes: n });
+    setGrace(String(n));
+    toast(`Will wait ${n} ${n === 1 ? 'minute' : 'minutes'} after screen lock before locking GTD25`, 'success');
+  }
 
   async function toggle() {
     setBusy(true);
@@ -213,29 +228,44 @@ function SystemIdleToggle({ enabled, graceEnabled }: { enabled: boolean; graceEn
             {enabled ? 'Disable system idle lock' : 'Enable system idle lock'}
           </Button>
           {enabled && (
-            <label className="flex items-start gap-2 rounded-md bg-zinc-50 p-2 text-xs text-zinc-600 dark:bg-zinc-800/40 dark:text-zinc-300">
-              <input
-                type="checkbox"
-                checked={graceEnabled}
-                onChange={async (e) => {
-                  const enabled = e.currentTarget.checked;
-                  await updateLocalSettings({ paranoidSystemLockGraceEnabled: enabled });
-                  toast(
-                    enabled
-                      ? 'Will wait 10 minutes after screen lock before locking GTD25'
-                      : 'Will lock GTD25 immediately on screen lock',
-                    'success',
-                  );
-                }}
-                className="mt-0.5 rounded accent-accent-600"
-              />
-              <span>
-                Delay GTD25 lock for 10 minutes after screen lock
-                <span className="block text-[11px] text-zinc-400 dark:text-zinc-500">
-                  Avoids a full app unlock for brief macOS locks. System idle still locks normally.
+            <div className="space-y-2 rounded-md bg-zinc-50 p-2 dark:bg-zinc-800/40">
+              <label className="flex items-start gap-2 text-xs text-zinc-600 dark:text-zinc-300">
+                <input
+                  type="checkbox"
+                  checked={graceEnabled}
+                  onChange={async (e) => {
+                    const on = e.currentTarget.checked;
+                    await updateLocalSettings({ paranoidSystemLockGraceEnabled: on });
+                    toast(
+                      on
+                        ? 'Will delay GTD25 lock after screen lock'
+                        : 'Will lock GTD25 immediately on screen lock',
+                      'success',
+                    );
+                  }}
+                  className="mt-0.5 rounded accent-accent-600"
+                />
+                <span>
+                  Delay GTD25 lock after a brief screen lock
+                  <span className="block text-[11px] text-zinc-400 dark:text-zinc-500">
+                    Avoids a full app unlock for short screen locks. System idle still locks normally.
+                  </span>
                 </span>
-              </span>
-            </label>
+              </label>
+              {graceEnabled && (
+                <div className="flex items-end gap-2 pl-6">
+                  <Input
+                    label="Delay after screen lock (minutes)"
+                    type="number"
+                    min={1}
+                    max={60}
+                    value={grace}
+                    onChange={(e) => setGrace(e.target.value)}
+                  />
+                  <Button size="sm" variant="secondary" onClick={saveGrace}>Save</Button>
+                </div>
+              )}
+            </div>
           )}
         </>
       ) : (
@@ -247,7 +277,7 @@ function SystemIdleToggle({ enabled, graceEnabled }: { enabled: boolean; graceEn
   );
 }
 
-function ManageForm({ idleMinutes, maxAttempts, systemIdleOn, systemLockGraceOn, hasSecurityKey }: { idleMinutes: number; maxAttempts: number; systemIdleOn: boolean; systemLockGraceOn: boolean; hasSecurityKey: boolean }) {
+function ManageForm({ idleMinutes, maxAttempts, systemIdleOn, systemLockGraceOn, systemLockGraceMinutes, hasSecurityKey }: { idleMinutes: number; maxAttempts: number; systemIdleOn: boolean; systemLockGraceOn: boolean; systemLockGraceMinutes: number; hasSecurityKey: boolean }) {
   const [idle, setIdle] = useState(String(idleMinutes));
   const [attempts, setAttempts] = useState(String(maxAttempts));
   const [newPass, setNewPass] = useState('');
@@ -391,7 +421,7 @@ function ManageForm({ idleMinutes, maxAttempts, systemIdleOn, systemLockGraceOn,
         <Button size="sm" variant="secondary" onClick={handleChangePass} disabled={busy}>Change passphrase</Button>
       </div>
 
-      <SystemIdleToggle enabled={systemIdleOn} graceEnabled={systemLockGraceOn} />
+      <SystemIdleToggle enabled={systemIdleOn} graceEnabled={systemLockGraceOn} graceMinutes={systemLockGraceMinutes} />
 
       <SecurityKeySection hasSecurityKey={hasSecurityKey} />
 
@@ -754,6 +784,7 @@ export function SecuritySettings() {
       maxAttempts={local.paranoidMaxUnlockAttempts ?? DEFAULT_MAX_ATTEMPTS}
       systemIdleOn={!!local.paranoidSystemIdleLock}
       systemLockGraceOn={!!local.paranoidSystemLockGraceEnabled}
+      systemLockGraceMinutes={local.paranoidSystemLockGraceMinutes ?? DEFAULT_SYSTEM_LOCK_GRACE_MINUTES}
       hasSecurityKey={hasSecurityKey}
     />
   );

@@ -198,7 +198,8 @@ export interface LocalSettings {
   paranoidIdleTimeoutMinutes?: number;
   paranoidMaxUnlockAttempts?: number;   // device-local mirror of Vault.maxUnlockAttempts
   paranoidSystemIdleLock?: boolean;     // lock on system-wide idle / screen lock (IdleDetector)
-  paranoidSystemLockGraceEnabled?: boolean; // device-local 10-minute app-lock grace after screen lock
+  paranoidSystemLockGraceEnabled?: boolean; // device-local: defer app-lock after screen lock
+  paranoidSystemLockGraceMinutes?: number;  // device-local grace duration (min) when grace enabled; default DEFAULT_SYSTEM_LOCK_GRACE_MINUTES
   // Remote unlock & wipe (device-local; not synced as-is). This device's long-term
   // identity keypairs (P-256). Plaintext: the ECDSA private key must sign unlock
   // requests while the vault is LOCKED, and it unlocks nothing on its own.

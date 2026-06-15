@@ -1,6 +1,7 @@
 import { vi } from 'vitest';
 import {
   isSystemIdleSupported, requestSystemIdlePermission, startSystemIdleLock,
+  DEFAULT_SYSTEM_LOCK_GRACE_MINUTES, clampSystemLockGraceMinutes,
 } from '../../lib/system-idle';
 
 interface GlobalWithIdle { IdleDetector?: unknown }
@@ -125,5 +126,43 @@ describe('system-idle (IdleDetector)', () => {
     vi.advanceTimersByTime(10 * 60_000);
 
     expect(onLock).not.toHaveBeenCalled();
+  });
+});
+
+describe('screen-lock grace config', () => {
+  it('defaults to 10 minutes', () => {
+    expect(DEFAULT_SYSTEM_LOCK_GRACE_MINUTES).toBe(10);
+  });
+
+  it('clamps the grace to [1, 60] minutes and floors fractions', () => {
+    expect(clampSystemLockGraceMinutes('15')).toBe(15);
+    expect(clampSystemLockGraceMinutes(15)).toBe(15);
+    expect(clampSystemLockGraceMinutes('0')).toBe(1);
+    expect(clampSystemLockGraceMinutes('-5')).toBe(1);
+    expect(clampSystemLockGraceMinutes('999')).toBe(60);
+    expect(clampSystemLockGraceMinutes('12.9')).toBe(12);
+  });
+
+  it('falls back to the default for non-numeric input', () => {
+    expect(clampSystemLockGraceMinutes('')).toBe(DEFAULT_SYSTEM_LOCK_GRACE_MINUTES);
+    expect(clampSystemLockGraceMinutes('abc')).toBe(DEFAULT_SYSTEM_LOCK_GRACE_MINUTES);
+  });
+
+  it('defers the app lock by the default grace when fed as the screen-lock grace', async () => {
+    vi.useFakeTimers();
+    const detector = installFakeIdleDetector('granted');
+    const onLock = vi.fn();
+
+    await startSystemIdleLock(60_000, onLock, {
+      screenLockGraceMs: DEFAULT_SYSTEM_LOCK_GRACE_MINUTES * 60_000,
+    });
+
+    detector.screenState = 'locked';
+    detector.cb();
+    vi.advanceTimersByTime(DEFAULT_SYSTEM_LOCK_GRACE_MINUTES * 60_000 - 1);
+    expect(onLock).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(1);
+    expect(onLock).toHaveBeenCalledTimes(1);
   });
 });

@@ -22,6 +22,20 @@ export interface SystemIdleLockOptions {
   screenLockGraceMs?: number;
 }
 
+/** Default screen-lock grace, in minutes, when the grace is enabled but unset. */
+export const DEFAULT_SYSTEM_LOCK_GRACE_MINUTES = 10;
+
+/**
+ * Clamp a user-entered screen-lock grace to a sane [1, 60] minute range. A larger
+ * grace keeps the DEK resident longer after an OS screen lock (see THREAT_MODEL
+ * Scenario 3), so the upper bound is deliberately tighter than the idle timeout.
+ */
+export function clampSystemLockGraceMinutes(value: string | number): number {
+  const n = typeof value === 'number' ? value : parseInt(value, 10);
+  if (Number.isNaN(n)) return DEFAULT_SYSTEM_LOCK_GRACE_MINUTES;
+  return Math.max(1, Math.min(60, Math.floor(n)));
+}
+
 function getCtor(): IdleDetectorCtor | null {
   return (globalThis as { IdleDetector?: IdleDetectorCtor }).IdleDetector ?? null;
 }
