@@ -173,6 +173,15 @@ export interface SyncMeta {
   lastMainSquashAt?: number;
 }
 
+/**
+ * Per-weekday override on the global nudge window, keyed in
+ * `LocalSettings.nudgeDayOverrides` by `Date.getDay()` (0=Sun..6=Sat).
+ */
+export interface NudgeDayOverride {
+  off?: boolean; // silence this weekday entirely
+  end?: number;  // earlier end hour (0–23) for this weekday; start stays the global window start
+}
+
 export interface LocalSettings {
   id: string; // always 'local'
   githubPat?: string;
@@ -188,6 +197,9 @@ export interface LocalSettings {
   nudgeIntervalHours?: number;
   nudgeWindowStart?: number; // hour 0–23
   nudgeWindowEnd?: number;   // hour 0–23
+  // Per-weekday overrides on the window above, keyed by Date.getDay() (0=Sun..6=Sat):
+  // silence a day (off) or give it an earlier end hour. Absent ⇒ global window applies.
+  nudgeDayOverrides?: Record<number, NudgeDayOverride>;
   nudgeSoundEnabled?: boolean;
   lastNudgeAt?: number;
   lastReviewedAt?: number;   // last weekly-review completion (shown in the sidebar)

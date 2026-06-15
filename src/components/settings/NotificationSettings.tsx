@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useLocalSettings, updateLocalSettings } from '../../hooks/use-settings';
-import type { LocalSettings } from '../../db/models';
+import type { LocalSettings, NudgeDayOverride } from '../../db/models';
 import { Button } from '../ui/Button';
 import { Input } from '../ui/Input';
 import { toast } from '../ui/Toast';
@@ -13,6 +13,24 @@ function clampInt(value: string, min: number, max: number, fallback: number): nu
   const n = parseInt(value, 10);
   if (Number.isNaN(n)) return fallback;
   return Math.max(min, Math.min(max, n));
+}
+
+// Weekday rows in Mon-first display order; idx is the Date.getDay() value (0=Sun).
+const DAY_ORDER: { idx: number; label: string }[] = [
+  { idx: 1, label: 'Mon' }, { idx: 2, label: 'Tue' }, { idx: 3, label: 'Wed' },
+  { idx: 4, label: 'Thu' }, { idx: 5, label: 'Fri' }, { idx: 6, label: 'Sat' },
+  { idx: 0, label: 'Sun' },
+];
+
+type DayState = { off: boolean; endStr: string };
+
+function seedDayState(overrides?: Record<number, NudgeDayOverride>): Record<number, DayState> {
+  const out: Record<number, DayState> = {};
+  for (let d = 0; d < 7; d++) {
+    const o = overrides?.[d];
+    out[d] = { off: !!o?.off, endStr: o?.end != null ? String(o.end) : '' };
+  }
+  return out;
 }
 
 function permissionState(): NotificationPermission | 'unsupported' {
@@ -53,7 +71,26 @@ function NudgeForm({ local }: { local: LocalSettings }) {
   const [windowStart, setWindowStart] = useState(String(local.nudgeWindowStart ?? NUDGE_DEFAULTS.windowStart));
   const [windowEnd, setWindowEnd] = useState(String(local.nudgeWindowEnd ?? NUDGE_DEFAULTS.windowEnd));
   const [soundEnabled, setSoundEnabled] = useState(local.nudgeSoundEnabled !== false);
+  const [dayState, setDayState] = useState<Record<number, DayState>>(() => seedDayState(local.nudgeDayOverrides));
   const [perm, setPerm] = useState<NotificationPermission | 'unsupported'>(permissionState());
+
+  function updateDay(idx: number, patch: Partial<DayState>) {
+    setDayState((s) => ({ ...s, [idx]: { ...s[idx], ...patch } }));
+  }
+
+  // Persist only the days that differ from the global window: off, or an earlier end.
+  function buildDayOverrides(): Record<number, NudgeDayOverride> {
+    const out: Record<number, NudgeDayOverride> = {};
+    for (let d = 0; d < 7; d++) {
+      const s = dayState[d];
+      if (s.off) { out[d] = { off: true }; continue; }
+      const trimmed = s.endStr.trim();
+      if (trimmed === '') continue;
+      const n = parseInt(trimmed, 10);
+      if (!Number.isNaN(n)) out[d] = { end: Math.max(0, Math.min(23, n)) };
+    }
+    return out;
+  }
 
   async function handleToggleEnabled() {
     const next = !enabled;
@@ -77,13 +114,16 @@ function NudgeForm({ local }: { local: LocalSettings }) {
       toast('Active window start and end must differ', 'error');
       return;
     }
+    const dayOverrides = buildDayOverrides();
     setIntervalHours(String(iv));
     setWindowStart(String(ws));
     setWindowEnd(String(we));
+    setDayState(seedDayState(dayOverrides)); // normalise displayed end hours / clear invalid
     await updateLocalSettings({
       nudgeIntervalHours: iv,
       nudgeWindowStart: ws,
       nudgeWindowEnd: we,
+      nudgeDayOverrides: dayOverrides,
       nudgeSoundEnabled: soundEnabled,
     });
     toast('Notification settings saved', 'success');
@@ -144,6 +184,43 @@ function NudgeForm({ local }: { local: LocalSettings }) {
           value={windowEnd}
           onChange={(e) => setWindowEnd(e.target.value)}
         />
+      </div>
+
+      <div className="space-y-1.5">
+        <p className="text-xs font-medium text-zinc-500 dark:text-zinc-300">Quiet days / earlier cutoffs</p>
+        <p className="text-xs text-zinc-400 dark:text-zinc-500">
+          Turn a day off, or give it an end hour earlier than “To”. The start stays the global “From”.
+        </p>
+        <div className="space-y-1.5">
+          {DAY_ORDER.map(({ idx, label }) => {
+            const ds = dayState[idx];
+            return (
+              <div key={idx} className="flex items-center gap-3">
+                <span className="w-24">
+                  <Toggle checked={!ds.off} onChange={() => updateDay(idx, { off: !ds.off })} label={label} />
+                </span>
+                {ds.off ? (
+                  <span className="text-xs text-zinc-400 dark:text-zinc-500">silenced</span>
+                ) : (
+                  <label className="flex items-center gap-1.5 text-xs text-zinc-500 dark:text-zinc-400">
+                    until
+                    <Input
+                      className="w-16"
+                      type="number"
+                      min={0}
+                      max={23}
+                      aria-label={`${label} end hour`}
+                      value={ds.endStr}
+                      placeholder={windowEnd || String(NUDGE_DEFAULTS.windowEnd)}
+                      onChange={(e) => updateDay(idx, { endStr: e.target.value })}
+                    />
+                    :00
+                  </label>
+                )}
+              </div>
+            );
+          })}
+        </div>
       </div>
 
       <Toggle

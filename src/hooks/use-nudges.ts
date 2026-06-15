@@ -37,6 +37,9 @@ export async function hasPendingWorkLocked(now: number): Promise<boolean> {
 export function useNudges() {
   const settings = useLocalSettings();
   const enabled = !!settings.nudgesEnabled;
+  // Stable key so changing the per-day schedule re-arms the effect promptly, without
+  // churning on every lastNudgeAt stamp (a fresh object ref each emission would).
+  const overridesKey = JSON.stringify(settings.nudgeDayOverrides ?? null);
 
   useEffect(() => {
     if (!enabled) return;
@@ -70,7 +73,7 @@ export function useNudges() {
       document.removeEventListener('visibilitychange', onVisible);
     };
     // lastNudgeAt is intentionally excluded so firing a nudge doesn't reset the timer.
-  }, [enabled, settings.nudgeIntervalHours, settings.nudgeWindowStart, settings.nudgeWindowEnd]);
+  }, [enabled, settings.nudgeIntervalHours, settings.nudgeWindowStart, settings.nudgeWindowEnd, overridesKey]);
 }
 
 /**
@@ -84,6 +87,7 @@ export function useLockedNudge() {
   const settings = useLocalSettings();
   const { locked } = useVault();
   const enabled = !!settings.nudgesEnabled;
+  const overridesKey = JSON.stringify(settings.nudgeDayOverrides ?? null);
 
   useEffect(() => {
     if (!enabled || !locked) return;
@@ -113,5 +117,5 @@ export function useLockedNudge() {
       clearInterval(interval);
       document.removeEventListener('visibilitychange', onVisible);
     };
-  }, [enabled, locked, settings.nudgeIntervalHours, settings.nudgeWindowStart, settings.nudgeWindowEnd]);
+  }, [enabled, locked, settings.nudgeIntervalHours, settings.nudgeWindowStart, settings.nudgeWindowEnd, overridesKey]);
 }

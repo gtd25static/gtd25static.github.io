@@ -1,4 +1,4 @@
-import type { Subtask, Task, TaskList } from '../db/models';
+import type { NudgeDayOverride, Subtask, Task, TaskList } from '../db/models';
 import { collectDueItems, taskListIds } from './attention';
 import { FOCUS_SET_SIZE, focusMembers } from './focus-mode';
 import { eligibleForFocus, pickWeighted } from './focus-pick';
@@ -22,6 +22,7 @@ export interface NudgeSettings {
   nudgeIntervalHours?: number;
   nudgeWindowStart?: number;
   nudgeWindowEnd?: number;
+  nudgeDayOverrides?: Record<number, NudgeDayOverride>;
   lastNudgeAt?: number;
 }
 
@@ -154,13 +155,20 @@ export function computeNudge(
  * Pure gate deciding whether a nudge may fire at `now`: enabled, inside the active
  * hour window, and at least the configured interval since the last nudge.
  * The window may wrap past midnight (start > end).
+ *
+ * Per-weekday overrides (keyed by Date.getDay()) may silence a day entirely or pull
+ * its end hour earlier; the start always stays the global window start.
  */
 export function shouldNudgeNow(settings: NudgeSettings, now: number): boolean {
   if (!settings.nudgesEnabled) return false;
 
+  const when = new Date(now);
+  const override = settings.nudgeDayOverrides?.[when.getDay()];
+  if (override?.off) return false; // this weekday is fully silenced
+
   const start = settings.nudgeWindowStart ?? NUDGE_DEFAULTS.windowStart;
-  const end = settings.nudgeWindowEnd ?? NUDGE_DEFAULTS.windowEnd;
-  const hour = new Date(now).getHours();
+  const end = override?.end ?? settings.nudgeWindowEnd ?? NUDGE_DEFAULTS.windowEnd;
+  const hour = when.getHours();
 
   const inWindow =
     start === end

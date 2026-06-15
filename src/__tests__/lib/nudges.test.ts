@@ -288,4 +288,29 @@ describe('shouldNudgeNow', () => {
     expect(NUDGE_DEFAULTS.windowStart).toBe(9);
     expect(shouldNudgeNow({ nudgesEnabled: true }, NOW)).toBe(true);
   });
+
+  it('silences a weekday marked off, even inside the global window', () => {
+    const t = new Date(2026, 5, 3, 12, 0, 0); // noon — inside the global 9–18 window
+    const day = t.getDay();
+    expect(shouldNudgeNow({ ...base, nudgeDayOverrides: { [day]: { off: true } } }, t.getTime())).toBe(false);
+  });
+
+  it('applies a per-day earlier end cutoff while the start stays global', () => {
+    const at14 = new Date(2026, 5, 3, 14, 0, 0);
+    const at16 = new Date(2026, 5, 3, 16, 0, 0);
+    const overrides = { [at14.getDay()]: { end: 15 } }; // cutoff 15:00; global end is 18
+    expect(shouldNudgeNow({ ...base, nudgeDayOverrides: overrides }, at14.getTime())).toBe(true);
+    expect(shouldNudgeNow({ ...base, nudgeDayOverrides: overrides }, at16.getTime())).toBe(false);
+  });
+
+  it("ignores an override that targets a different weekday", () => {
+    const t = new Date(2026, 5, 3, 16, 0, 0); // 16:00 — inside the global 9–18 window
+    const otherDay = (t.getDay() + 1) % 7;
+    expect(shouldNudgeNow({ ...base, nudgeDayOverrides: { [otherDay]: { off: true, end: 10 } } }, t.getTime())).toBe(true);
+  });
+
+  it('treats a per-day end equal to the start as an empty day (never fires)', () => {
+    const t = new Date(2026, 5, 3, 12, 0, 0);
+    expect(shouldNudgeNow({ ...base, nudgeDayOverrides: { [t.getDay()]: { end: 9 } } }, t.getTime())).toBe(false);
+  });
 });
