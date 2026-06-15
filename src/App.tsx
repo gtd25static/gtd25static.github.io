@@ -22,6 +22,8 @@ import { useAppBadge } from './hooks/use-app-badge';
 import { ServiceWorkerProvider } from './hooks/use-service-worker';
 import { AppUpdatePrompt } from './components/banners/AppUpdatePrompt';
 import { useLocalSettings } from './hooks/use-settings';
+import { useRelaxedUnlock } from './hooks/use-relaxed-unlock';
+import { useRelaxedUnlockStore } from './stores/relaxed-unlock';
 
 export default function App() {
   // Theme is localStorage-only (no DB), safe to apply even while the vault is
@@ -89,10 +91,18 @@ function UnlockedApp() {
     let cancelled = false;
     void (async () => {
       if (!isParanoidEnabled() || !localSettings.paranoidSystemIdleLock) return;
+      // The OS system-idle threshold stays at the BASE value (Relaxed unlock does not
+      // relax true-absence detection, and it can't be live-adjusted without resetting
+      // OS idle detection). Only the screen-lock grace is relaxed, read live at lock time.
       const thresholdMs = (localSettings.paranoidIdleTimeoutMinutes ?? DEFAULT_IDLE_MINUTES) * 60_000;
-      const screenLockGraceMs = localSettings.paranoidSystemLockGraceEnabled
+      const baseGraceMs = localSettings.paranoidSystemLockGraceEnabled
         ? (localSettings.paranoidSystemLockGraceMinutes ?? DEFAULT_SYSTEM_LOCK_GRACE_MINUTES) * 60_000
         : 0;
+      const relaxed = !!localSettings.relaxedUnlockEnabled;
+      const screenLockGraceMs = () =>
+        baseGraceMs === 0 || !relaxed
+          ? baseGraceMs
+          : useRelaxedUnlockStore.getState().effectiveGraceMs || baseGraceMs;
       const s = await startSystemIdleLock(thresholdMs, () => lock(), { screenLockGraceMs });
       if (cancelled) s(); else stop = s;
     })();
@@ -102,12 +112,14 @@ function UnlockedApp() {
     localSettings.paranoidSystemIdleLock,
     localSettings.paranoidSystemLockGraceEnabled,
     localSettings.paranoidSystemLockGraceMinutes,
+    localSettings.relaxedUnlockEnabled,
   ]);
 
   useKeyboard();
   useUrlCapture();
   useShareTarget();
   useNudges();
+  useRelaxedUnlock();
   useAppBadge();
 
   return (

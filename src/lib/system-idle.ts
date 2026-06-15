@@ -19,7 +19,10 @@ interface IdleDetectorCtor {
 }
 
 export interface SystemIdleLockOptions {
-  screenLockGraceMs?: number;
+  // A number, or a getter evaluated at each screen-lock event — so "Relaxed unlock"
+  // can vary the grace live without rebuilding the detector (which would reset OS
+  // idle detection).
+  screenLockGraceMs?: number | (() => number);
 }
 
 /** Default screen-lock grace, in minutes, when the grace is enabled but unset. */
@@ -71,7 +74,8 @@ export async function startSystemIdleLock(
   try {
     const controller = new AbortController();
     const detector = new Ctor();
-    const screenLockGraceMs = Math.max(0, options.screenLockGraceMs ?? 0);
+    const graceOpt = options.screenLockGraceMs ?? 0;
+    const getGraceMs = () => Math.max(0, typeof graceOpt === 'function' ? graceOpt() : graceOpt);
     let screenLockTimer: ReturnType<typeof setTimeout> | null = null;
     const clearScreenLockTimer = () => {
       if (screenLockTimer) {
@@ -89,10 +93,11 @@ export async function startSystemIdleLock(
         return;
       }
       if (detector.screenState === 'locked') {
-        if (screenLockGraceMs === 0) {
+        const graceMs = getGraceMs(); // read live (Relaxed unlock may have changed it)
+        if (graceMs === 0) {
           lockNow();
         } else if (!screenLockTimer) {
-          screenLockTimer = setTimeout(lockNow, screenLockGraceMs);
+          screenLockTimer = setTimeout(lockNow, graceMs);
         }
         return;
       }

@@ -9,6 +9,8 @@ import {
   isSystemIdleSupported, requestSystemIdlePermission,
   DEFAULT_SYSTEM_LOCK_GRACE_MINUTES, clampSystemLockGraceMinutes,
 } from '../../lib/system-idle';
+import { useRelaxedUnlockStore } from '../../stores/relaxed-unlock';
+import { unlocksInLast24h, effectiveMinutes } from '../../lib/relaxed-unlock';
 import {
   enableParanoid, disableParanoid, changePassphrase, configureIdleTimeout,
   configureMaxUnlockAttempts, verifyAtRestIntegrity, lock, addSecurityKey, removeSecurityKey,
@@ -277,6 +279,43 @@ function SystemIdleToggle({ enabled, graceEnabled, graceMinutes }: { enabled: bo
   );
 }
 
+function RelaxedUnlockToggle() {
+  const local = useLocalSettings();
+  const enabled = !!local.relaxedUnlockEnabled;
+  const multiplier = useRelaxedUnlockStore((s) => s.multiplier);
+  const baseIdle = local.paranoidIdleTimeoutMinutes ?? DEFAULT_IDLE_MINUTES;
+  const baseGrace = local.paranoidSystemLockGraceMinutes ?? DEFAULT_SYSTEM_LOCK_GRACE_MINUTES;
+  const graceOn = !!local.paranoidSystemLockGraceEnabled;
+  const n24 = unlocksInLast24h(local.unlockHistory ?? [], Date.now());
+
+  async function toggle() {
+    await updateLocalSettings({ relaxedUnlockEnabled: !enabled });
+    toast(enabled ? 'Relaxed unlock disabled' : 'Relaxed unlock enabled', 'success');
+  }
+
+  return (
+    <div className="space-y-1 border-t border-zinc-200 pt-3 dark:border-zinc-700">
+      <h4 className="text-sm font-medium">Relaxed unlock</h4>
+      <p className="text-xs text-zinc-400 dark:text-zinc-500">
+        On busy days, stretch “auto-lock after” and “delay after screen lock” by +10% for each
+        re-unlock in the last 24h (the first unlock doesn’t count), up to 2×. Never more than double
+        the values above; system idle still locks at the base time.
+      </p>
+      <Button size="sm" variant="secondary" onClick={toggle}>
+        {enabled ? 'Disable relaxed unlock' : 'Enable relaxed unlock'}
+      </Button>
+      {enabled && (
+        <p className="rounded-md bg-zinc-50 p-2 text-xs text-zinc-600 dark:bg-zinc-800/40 dark:text-zinc-300">
+          Currently <span className="font-medium">+{Math.round((multiplier - 1) * 100)}%</span> — auto-lock
+          ~{effectiveMinutes(baseIdle, multiplier, 240)} min
+          {graceOn && <> · screen-lock grace ~{effectiveMinutes(baseGrace, multiplier, 60)} min</>}
+          {' '}({n24} unlock{n24 === 1 ? '' : 's'} in the last 24h).
+        </p>
+      )}
+    </div>
+  );
+}
+
 function ManageForm({ idleMinutes, maxAttempts, systemIdleOn, systemLockGraceOn, systemLockGraceMinutes, hasSecurityKey }: { idleMinutes: number; maxAttempts: number; systemIdleOn: boolean; systemLockGraceOn: boolean; systemLockGraceMinutes: number; hasSecurityKey: boolean }) {
   const [idle, setIdle] = useState(String(idleMinutes));
   const [attempts, setAttempts] = useState(String(maxAttempts));
@@ -422,6 +461,8 @@ function ManageForm({ idleMinutes, maxAttempts, systemIdleOn, systemLockGraceOn,
       </div>
 
       <SystemIdleToggle enabled={systemIdleOn} graceEnabled={systemLockGraceOn} graceMinutes={systemLockGraceMinutes} />
+
+      <RelaxedUnlockToggle />
 
       <SecurityKeySection hasSecurityKey={hasSecurityKey} />
 

@@ -20,6 +20,7 @@ import { registerPrfCredential, getPrfOutput } from '../sync/webauthn-prf';
 import { b64encode, b64decode } from '../sync/remote-unlock-crypto';
 import { PARANOID_FLAG, isParanoidFlagSet } from './paranoid-flag';
 import { recordError } from '../lib/diagnostics';
+import { pruneHistory } from '../lib/relaxed-unlock';
 import type { LocalSettings, Vault, PrfCredential } from './models';
 
 // Synchronous mirror of "a security-key credential is enrolled", so the lock
@@ -108,6 +109,25 @@ function resetIdleTimer(): void {
 }
 /** Call on user interaction to defer the idle re-lock. */
 export function touchVaultActivity(): void { resetIdleTimer(); }
+
+// "Relaxed unlock" adjusts the idle window live. It sets the value WITHOUT
+// re-arming: the next touchVaultActivity() re-arms with it. Re-arming here (e.g. on
+// the engine's periodic tick) would restart the idle countdown and could keep the
+// vault unlocked indefinitely. Distinct from configureIdleTimeout (persists the base).
+export function setRuntimeIdleTimeoutMs(ms: number): void {
+  idleTimeoutMs = Math.max(60_000, ms);
+}
+
+// Record a successful unlock for the Relaxed-unlock multiplier (device-local,
+// pruned to 24h, never synced). No-op unless the feature is enabled, and
+// best-effort — a telemetry write must never break the unlock.
+async function recordUnlockEvent(): Promise<void> {
+  const local = await db.localSettings.get('local');
+  if (!local?.relaxedUnlockEnabled) return;
+  const now = Date.now();
+  const history = pruneHistory([...(local.unlockHistory ?? []), now], now);
+  await db.localSettings.update('local', { unlockHistory: history });
+}
 
 // DEK access only — does NOT count as user activity (see the key-provider note
 // above); the idle timer is re-armed solely by touchVaultActivity() / unlock / config.
@@ -422,6 +442,7 @@ async function finishUnlock(vault: Vault, dek: CryptoKey): Promise<boolean> {
     return false;
   }
 
+  await recordUnlockEvent().catch((err) => recordError('vault.recordUnlockEvent', err));
   resetIdleTimer();
   emit();
   return true;

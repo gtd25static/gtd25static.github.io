@@ -113,6 +113,28 @@ describe('system-idle (IdleDetector)', () => {
     expect(onLock).toHaveBeenCalledTimes(1);
   });
 
+  it('reads a screen-lock grace getter live at each lock event', async () => {
+    vi.useFakeTimers();
+    const detector = installFakeIdleDetector('granted');
+    const onLock = vi.fn();
+    let grace = 0;
+    await startSystemIdleLock(60_000, onLock, { screenLockGraceMs: () => grace });
+
+    // grace 0 right now → screen lock locks immediately.
+    detector.screenState = 'locked';
+    detector.cb();
+    expect(onLock).toHaveBeenCalledTimes(1);
+
+    // Raise the grace, then re-lock: the new value is read at this lock event.
+    grace = 5 * 60_000;
+    detector.screenState = 'unlocked'; detector.userState = 'active'; detector.cb();
+    detector.screenState = 'locked'; detector.cb();
+    vi.advanceTimersByTime(5 * 60_000 - 1);
+    expect(onLock).toHaveBeenCalledTimes(1); // still deferred by the live grace
+    vi.advanceTimersByTime(1);
+    expect(onLock).toHaveBeenCalledTimes(2);
+  });
+
   it('clears a pending screen-lock timer when stopped', async () => {
     vi.useFakeTimers();
     const detector = installFakeIdleDetector('granted');

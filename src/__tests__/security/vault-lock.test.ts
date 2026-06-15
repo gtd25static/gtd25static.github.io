@@ -4,7 +4,7 @@ import { db } from '../../db';
 import { resetDb } from '../helpers/db-helpers';
 import {
   enableParanoid, lock, unlockWithPassphrase, isUnlocked,
-  getDEK, getVaultSecrets, touchVaultActivity,
+  getDEK, getVaultSecrets, touchVaultActivity, setRuntimeIdleTimeoutMs,
   __resetVaultStateForTests, __setIdleTimeoutMsForTests,
 } from '../../db/vault';
 
@@ -78,5 +78,30 @@ describe('vault lock/unlock', () => {
     expect(isUnlocked()).toBe(true);
     await delay(90); // > 120ms since reset -> locked
     expect(isUnlocked()).toBe(false);
+  });
+
+  it('setRuntimeIdleTimeoutMs updates the value WITHOUT re-arming the pending timer', async () => {
+    await enableParanoid(PASSPHRASE);
+    __setIdleTimeoutMsForTests(40);        // arms a 40ms idle timer
+    setRuntimeIdleTimeoutMs(10 * 60_000);  // change value only — must not reset the 40ms countdown
+    await delay(90);
+    expect(isUnlocked()).toBe(false);      // the original 40ms timer still fired (no re-arm)
+  });
+
+  it('records unlock timestamps only while relaxed unlock is enabled', async () => {
+    await enableParanoid(PASSPHRASE);
+
+    // Disabled by default: an unlock must not record anything.
+    lock();
+    expect(await unlockWithPassphrase(PASSPHRASE)).toBe(true);
+    expect((await db.localSettings.get('local'))?.unlockHistory ?? []).toEqual([]);
+
+    // Enabled: each successful unlock appends a timestamp.
+    await db.localSettings.update('local', { relaxedUnlockEnabled: true });
+    lock();
+    expect(await unlockWithPassphrase(PASSPHRASE)).toBe(true);
+    const hist = (await db.localSettings.get('local'))?.unlockHistory ?? [];
+    expect(hist).toHaveLength(1);
+    expect(typeof hist[0]).toBe('number');
   });
 });
