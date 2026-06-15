@@ -8,6 +8,7 @@ import { Button } from '../ui/Button';
 
 const PARANOID_UPDATE_NOTICE_KEY = 'gtd25-paranoid-update-notice';
 const PARANOID_UPDATE_NOTICE_TTL_MS = 24 * 60 * 60 * 1000;
+const UPDATE_NOTICE_AUTO_DISMISS_MS = 5000;
 
 type ParanoidUpdateNotice = {
   from: string;
@@ -138,18 +139,40 @@ export function AppUpdatePrompt() {
     }
   }, [applyUpdate, deferUntilLocked, info?.commit, needRefresh, updating, vault.locked]);
 
+  // The post-update green notice auto-dismisses after a few seconds; the Dismiss
+  // button's fill animation visualizes the same countdown. This timer is the
+  // authoritative dismissal (robust even if the CSS animation is suppressed).
+  useEffect(() => {
+    if (!updateInstalledNoticeVisible) return;
+    const timer = setTimeout(() => setUpdateInstalledNoticeVisible(false), UPDATE_NOTICE_AUTO_DISMISS_MS);
+    return () => clearTimeout(timer);
+  }, [updateInstalledNoticeVisible]);
+
   if (updateInstalledNoticeVisible) {
     return (
-      <div className="fixed inset-x-0 top-0 z-[300] flex items-center justify-between gap-3 bg-green-600 px-4 py-2 text-sm font-medium text-white">
-        <span>GTD25 updated. Your Paranoid vault is locked for safety.</span>
-        <button
-          type="button"
-          onClick={() => setUpdateInstalledNoticeVisible(false)}
-          className="shrink-0 rounded-md bg-white/20 px-3 py-1 text-xs font-bold hover:bg-white/30"
-        >
-          Dismiss
-        </button>
-      </div>
+      <>
+        <style>{`
+          @keyframes update-notice-fill {
+            from { width: 0%; }
+            to { width: 100%; }
+          }
+        `}</style>
+        <div className="fixed inset-x-0 top-0 z-[300] flex items-center justify-between gap-3 bg-green-600 px-4 py-2 text-sm font-medium text-white">
+          <span>GTD25 updated. Your Paranoid vault is locked for safety.</span>
+          <button
+            type="button"
+            onClick={() => setUpdateInstalledNoticeVisible(false)}
+            className="relative shrink-0 overflow-hidden rounded-md bg-white/20 px-3 py-1 text-xs font-bold hover:bg-white/30"
+          >
+            <span
+              aria-hidden
+              className="absolute inset-y-0 left-0 bg-white/40"
+              style={{ animation: `update-notice-fill ${UPDATE_NOTICE_AUTO_DISMISS_MS}ms linear forwards` }}
+            />
+            <span className="relative">Dismiss</span>
+          </button>
+        </div>
+      </>
     );
   }
   if (!available || waitingForVersionCheck) return null;

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { vi } from 'vitest';
-import { render, screen, act, waitFor } from '@testing-library/react';
+import { render, screen, act, waitFor, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import '../../__tests__/setup-component';
 
@@ -99,6 +99,38 @@ describe('AppUpdatePrompt', () => {
 
     expect(screen.getByText('GTD25 updated. Your Paranoid vault is locked for safety.')).toBeInTheDocument();
     expect(localStorage.getItem(PARANOID_UPDATE_NOTICE_KEY)).toBeNull();
+  });
+
+  it('auto-dismisses the post-update notice after 5s, with a filling Dismiss button', () => {
+    vi.useFakeTimers();
+    try {
+      h.sw.needRefresh = false;
+      localStorage.setItem(PARANOID_UPDATE_NOTICE_KEY, JSON.stringify({ from: 'old1', to: 'dev', at: Date.now() }));
+
+      render(<AppUpdatePrompt />);
+      const notice = 'GTD25 updated. Your Paranoid vault is locked for safety.';
+      expect(screen.getByText(notice)).toBeInTheDocument();
+
+      // The Dismiss button carries the 5s fill animation as the visual countdown.
+      const fill = screen.getByRole('button', { name: 'Dismiss' }).querySelector('[style*="update-notice-fill"]');
+      expect(fill).not.toBeNull();
+
+      act(() => { vi.advanceTimersByTime(4999); });
+      expect(screen.getByText(notice)).toBeInTheDocument();          // still up just before the deadline
+      act(() => { vi.advanceTimersByTime(1); });
+      expect(screen.queryByText(notice)).not.toBeInTheDocument();     // gone when the fill completes
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('lets you dismiss the post-update notice immediately', () => {
+    h.sw.needRefresh = false;
+    localStorage.setItem(PARANOID_UPDATE_NOTICE_KEY, JSON.stringify({ from: 'old1', to: 'dev', at: Date.now() }));
+
+    render(<AppUpdatePrompt />);
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
+    expect(screen.queryByText('GTD25 updated. Your Paranoid vault is locked for safety.')).not.toBeInTheDocument();
   });
 
   it('does not show the post-update Paranoid notice before the build changes', () => {
