@@ -119,7 +119,7 @@ export function setRuntimeIdleTimeoutMs(ms: number): void {
 }
 
 // Record a successful unlock for the Relaxed-unlock multiplier (device-local,
-// pruned to 24h, never synced). No-op unless the feature is enabled, and
+// pruned to 36h, never synced). No-op unless the feature is enabled, and
 // best-effort — a telemetry write must never break the unlock.
 async function recordUnlockEvent(): Promise<void> {
   const local = await db.localSettings.get('local');

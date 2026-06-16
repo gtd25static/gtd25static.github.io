@@ -1,12 +1,12 @@
 import {
-  computeUnlockMultiplier, unlocksInLast24h, effectiveMinutes, pruneHistory,
+  computeUnlockMultiplier, unlocksInWindow, effectiveMinutes, pruneHistory,
   RELAXED_MAX_MULTIPLIER,
 } from '../../lib/relaxed-unlock';
 
 const NOW = new Date(2026, 5, 15, 12, 0, 0).getTime();
 const HOUR = 60 * 60 * 1000;
 
-// n unlock timestamps, all within the last hour (so they count toward 24h).
+// n unlock timestamps, all within the last hour (so they count toward 36h).
 const recent = (n: number) => Array.from({ length: n }, (_, i) => NOW - (i + 1) * 60_000);
 
 describe('computeUnlockMultiplier', () => {
@@ -33,27 +33,27 @@ describe('computeUnlockMultiplier', () => {
     }
   });
 
-  it('only counts unlocks within the last 24h', () => {
+  it('only counts unlocks within the last 36h', () => {
     const history = [
       NOW - 1 * HOUR,   // in
-      NOW - 23 * HOUR,  // in
-      NOW - 25 * HOUR,  // out (older than 24h)
+      NOW - 35 * HOUR,  // in (within 36h)
+      NOW - 37 * HOUR,  // out (older than 36h)
       NOW - 48 * HOUR,  // out
     ];
-    expect(unlocksInLast24h(history, NOW)).toBe(2);   // → 1 additional → ×1.10
+    expect(unlocksInWindow(history, NOW)).toBe(2);   // → 1 additional → ×1.10
     expect(computeUnlockMultiplier(history, NOW)).toBeCloseTo(1.1, 5);
   });
 
   it('counts regardless of order and ignores future timestamps', () => {
-    expect(unlocksInLast24h([NOW - 3 * HOUR, NOW - 1 * HOUR, NOW - 2 * HOUR], NOW)).toBe(3);
-    expect(unlocksInLast24h([NOW + 5 * HOUR], NOW)).toBe(0); // clock-skew guard
+    expect(unlocksInWindow([NOW - 3 * HOUR, NOW - 1 * HOUR, NOW - 2 * HOUR], NOW)).toBe(3);
+    expect(unlocksInWindow([NOW + 5 * HOUR], NOW)).toBe(0); // clock-skew guard
   });
 });
 
 describe('pruneHistory', () => {
-  it('drops timestamps older than 24h and any in the future', () => {
-    const history = [NOW - 1 * HOUR, NOW - 25 * HOUR, NOW + HOUR, NOW - 12 * HOUR];
-    expect(pruneHistory(history, NOW)).toEqual([NOW - 1 * HOUR, NOW - 12 * HOUR]);
+  it('drops timestamps older than 36h and any in the future', () => {
+    const history = [NOW - 1 * HOUR, NOW - 25 * HOUR, NOW - 37 * HOUR, NOW + HOUR, NOW - 12 * HOUR];
+    expect(pruneHistory(history, NOW)).toEqual([NOW - 1 * HOUR, NOW - 25 * HOUR, NOW - 12 * HOUR]);
   });
 });
 

@@ -213,8 +213,8 @@ export interface LocalSettings {
   paranoidSystemLockGraceEnabled?: boolean; // device-local: defer app-lock after screen lock
   paranoidSystemLockGraceMinutes?: number;  // device-local grace duration (min) when grace enabled; default DEFAULT_SYSTEM_LOCK_GRACE_MINUTES
   // "Relaxed unlock" (device-local; not synced): stretch idle/grace by +10% per
-  // re-unlock in the last 24h (first unlock excluded), capped ×2. unlockHistory is
-  // unlock timestamps pruned to 24h, recorded only while the feature is enabled.
+  // re-unlock in the last 36h (first unlock excluded), capped ×2. unlockHistory is
+  // unlock timestamps pruned to 36h, recorded only while the feature is enabled.
   relaxedUnlockEnabled?: boolean;
   unlockHistory?: number[];
   // Remote unlock & wipe (device-local; not synced as-is). This device's long-term

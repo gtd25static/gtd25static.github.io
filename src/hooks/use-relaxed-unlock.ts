@@ -10,13 +10,13 @@ import { recordError } from '../lib/diagnostics';
 // Absolute ceilings (same as the settings inputs) the multiplied values can't exceed.
 const ABS_MAX_IDLE_MIN = 240;
 const ABS_MAX_GRACE_MIN = 60;
-// Recompute periodically so the multiplier decays as unlocks age out of the 24h window.
+// Recompute periodically so the multiplier decays as unlocks age out of the 36h window.
 const RECOMPUTE_INTERVAL_MS = 5 * 60_000;
 
 /**
  * Drives "Relaxed unlock". While enabled (and Paranoid on + unlocked — this hook is
  * mounted in UnlockedApp), it multiplies the in-app idle auto-lock and the
- * screen-lock grace by computeUnlockMultiplier() over the device-local 24h unlock
+ * screen-lock grace by computeUnlockMultiplier() over the device-local 36h unlock
  * history. Recomputes on mount (= just unlocked), on a timer, and on tab focus; the
  * idle value is updated WITHOUT re-arming (the next interaction re-arms it). On
  * disable/unmount it restores the base idle window and resets the shared store.
