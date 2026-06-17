@@ -124,13 +124,15 @@ export function FollowUpCard({ task, index, dragHandleProps }: Props) {
   }
 
   return (
-    <div data-focus-id={task.id} onContextMenu={handleContextMenu} className={`group mb-2 flex items-start gap-3 rounded-lg border px-3 py-3 shadow-sm transition-shadow hover:shadow-md ${
+    <div data-focus-id={task.id} onContextMenu={handleContextMenu} className={`group mb-2 flex flex-col md:flex-row md:items-start gap-2 md:gap-3 rounded-lg border px-3 py-3 shadow-sm transition-shadow hover:shadow-md ${
       focused
         ? 'border-accent-500 ring-2 ring-accent-500/40 dark:border-accent-400 dark:ring-accent-400/30'
         : 'border-zinc-200 dark:border-zinc-700/60'
     } ${inCooldown ? 'opacity-40' : ''} ${
       index !== undefined && index % 2 === 1 ? 'bg-zinc-50/70 dark:bg-zinc-800/30' : 'bg-white dark:bg-zinc-900/50'
     }`}>
+      {/* Title + content region — its own row on phones, dissolves into the card row on md+ */}
+      <div className="flex items-start gap-3 md:contents">
       {/* Drag handle */}
       {dragHandleProps && (
         <div
@@ -217,7 +219,10 @@ export function FollowUpCard({ task, index, dragHandleProps }: Props) {
           <LinksList primaryLink={task.link} primaryTitle={task.linkTitle} links={task.links} />
         </div>
       </div>
+      </div>
 
+      {/* Action chips — a second row on phones (wraps if needed), inline on the card row on md+ */}
+      <div className="flex flex-wrap items-center gap-2 md:contents">
       {/* Unsnooze — one click to wake a snoozed follow-up early */}
       {!task.archived && inCooldown && (
         <button
@@ -309,6 +314,7 @@ export function FollowUpCard({ task, index, dragHandleProps }: Props) {
             }, danger: true },
           ]}
         />
+      </div>
       </div>
 
       {editing && (
