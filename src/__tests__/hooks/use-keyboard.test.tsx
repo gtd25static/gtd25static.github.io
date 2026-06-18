@@ -39,7 +39,6 @@ beforeEach(() => {
     quickCaptureOpen: false,
     settingsOpen: false,
     trashOpen: false,
-    weeklyReviewOpen: false,
   });
 });
 

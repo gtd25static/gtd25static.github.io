@@ -25,13 +25,13 @@ function getTimeOfDay(): TimeOfDay {
   return 'night';
 }
 
-function startOfDay(date: Date): number {
+export function startOfDay(date: Date): number {
   const d = new Date(date);
   d.setHours(0, 0, 0, 0);
   return d.getTime();
 }
 
-function startOfWeek(date: Date): number {
+export function startOfWeek(date: Date): number {
   const d = new Date(date);
   d.setHours(0, 0, 0, 0);
   const day = d.getDay() || 7; // treat Sunday (0) as 7
@@ -39,7 +39,7 @@ function startOfWeek(date: Date): number {
   return d.getTime();
 }
 
-function startOfMonth(date: Date): number {
+export function startOfMonth(date: Date): number {
   const d = new Date(date);
   d.setHours(0, 0, 0, 0);
   d.setDate(1);

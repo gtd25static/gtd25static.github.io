@@ -22,7 +22,6 @@ function resetStore() {
     quickCaptureOpen: false,
     bulkMode: false,
     selectedTaskIds: new Set(),
-    weeklyReviewOpen: false,
   });
 }
 
@@ -151,11 +150,6 @@ describe('app-state store', () => {
     it('setQuickCaptureOpen', () => {
       getState().setQuickCaptureOpen(true);
       expect(getState().quickCaptureOpen).toBe(true);
-    });
-
-    it('setWeeklyReviewOpen', () => {
-      getState().setWeeklyReviewOpen(true);
-      expect(getState().weeklyReviewOpen).toBe(true);
     });
   });
 

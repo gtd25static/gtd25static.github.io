@@ -202,7 +202,6 @@ export interface LocalSettings {
   nudgeDayOverrides?: Record<number, NudgeDayOverride>;
   nudgeSoundEnabled?: boolean;
   lastNudgeAt?: number;
-  lastReviewedAt?: number;   // last weekly-review completion (shown in the sidebar)
   lastFocusRefillDay?: string; // local 'YYYY-MM-DD' of the last Focus Mode refill (device-local)
   // Paranoid Mode (device-local; not synced). Persistent record of the mode;
   // the synchronous gate flag lives in localStorage ('gtd25-paranoid').

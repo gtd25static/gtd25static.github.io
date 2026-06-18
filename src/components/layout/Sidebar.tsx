@@ -28,20 +28,9 @@ import { moveTaskToList } from '../../hooks/use-tasks';
 import { useSpecialListContext } from '../../hooks/use-special-list';
 import { useFocusSet } from '../../hooks/use-focus-mode';
 import { useSharedStorage, formatBytes } from '../../hooks/use-shared-items';
-import { useReviewData } from '../../hooks/use-review-data';
 import { useVault } from '../../hooks/use-vault';
 import { lock as lockVault } from '../../db/vault';
 import { CheckForUpdatesButton } from './CheckForUpdatesButton';
-
-function formatLastReviewed(ts: number): string {
-  const diff = Date.now() - ts;
-  const hours = Math.floor(diff / (1000 * 60 * 60));
-  if (hours < 1) return 'just now';
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.floor(hours / 24);
-  if (days === 1) return '1d ago';
-  return `${days}d ago`;
-}
 
 function useAllTaskCounts(listIds: string[]): Map<string, number> {
   const key = listIds.join(',');
@@ -265,7 +254,7 @@ function SortableListItem({ list, selected, onSelect, highlight, focused, count,
 
 export function Sidebar() {
   const lists = useTaskLists();
-  const { selectedListId, selectList, setSidebarOpen, setSettingsOpen, setTrashOpen, setWeeklyReviewOpen, searchQuery, setSearchQuery } = useAppState(useShallow(s => ({ selectedListId: s.selectedListId, selectList: s.selectList, setSidebarOpen: s.setSidebarOpen, setSettingsOpen: s.setSettingsOpen, setTrashOpen: s.setTrashOpen, setWeeklyReviewOpen: s.setWeeklyReviewOpen, searchQuery: s.searchQuery, setSearchQuery: s.setSearchQuery })));
+  const { selectedListId, selectList, setSidebarOpen, setSettingsOpen, setTrashOpen, searchQuery, setSearchQuery } = useAppState(useShallow(s => ({ selectedListId: s.selectedListId, selectList: s.selectList, setSidebarOpen: s.setSidebarOpen, setSettingsOpen: s.setSettingsOpen, setTrashOpen: s.setTrashOpen, searchQuery: s.searchQuery, setSearchQuery: s.setSearchQuery })));
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState('');
   const [newType, setNewType] = useState<ListType>('tasks');
@@ -275,7 +264,6 @@ export function Sidebar() {
   const taskCounts = useAllTaskCounts(lists.map((l) => l.id));
   const { warningCount, blockedCount, recurringCount } = useSpecialListContext();
   const specialTotal = warningCount + blockedCount + recurringCount;
-  const reviewData = useReviewData();
   const { enabled: paranoidEnabled } = useVault();
   const sharedStorage = useSharedStorage();
   const focusCount = useFocusSet().members.length;
@@ -593,6 +581,30 @@ export function Sidebar() {
         </button>
       </div>
 
+      {/* Insights dashboard */}
+      <div className="px-2 pb-1">
+        <button
+          onClick={() => {
+            selectList('__insights__');
+            setSidebarOpen(false);
+          }}
+          className={`flex w-full items-center gap-3 rounded-full px-3 py-3.5 md:py-2 text-sm transition-colors ${
+            selectedListId === '__insights__'
+              ? 'bg-accent-50 text-accent-700 font-medium dark:bg-accent-900/20 dark:text-accent-300'
+              : 'text-zinc-700 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800'
+          }`}
+        >
+          {/* Bar chart icon */}
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className={selectedListId === '__insights__' ? 'text-accent-600' : 'text-zinc-400'}>
+            <path d="M3 3v18h18" strokeLinecap="round" strokeLinejoin="round" />
+            <rect x="7" y="12" width="3" height="5" rx="0.5" />
+            <rect x="12" y="8" width="3" height="9" rx="0.5" />
+            <rect x="17" y="5" width="3" height="12" rx="0.5" />
+          </svg>
+          <span className="flex-1 text-left">Insights</span>
+        </button>
+      </div>
+
       <nav className="flex-1 overflow-y-auto px-2 pt-1 scrollbar-thin">
         {/* Task lists section */}
         {taskLists.length > 0 && (
@@ -656,19 +668,6 @@ export function Sidebar() {
           </button>
         )}
         <CheckForUpdatesButton onActivate={() => setSidebarOpen(false)} />
-        <button
-          onClick={() => { setWeeklyReviewOpen(true); setSidebarOpen(false); }}
-          className="flex w-full items-center gap-3 rounded-full px-3 py-3.5 md:py-2 text-sm text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800"
-        >
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-            <path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" strokeLinecap="round" />
-            <path d="M9 12l2 2 4-4" strokeLinecap="round" strokeLinejoin="round" />
-          </svg>
-          <span className="flex-1 text-left">Weekly Review</span>
-          {reviewData?.lastReviewedAt && (
-            <span className="text-[10px] text-zinc-400">{formatLastReviewed(reviewData.lastReviewedAt)}</span>
-          )}
-        </button>
         <button
           onClick={() => setTrashOpen(true)}
           className="flex w-full items-center gap-3 rounded-full px-3 py-3.5 md:py-2 text-sm text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800"

@@ -18,8 +18,6 @@ interface AppState {
   // Bulk operations
   bulkMode: boolean;
   selectedTaskIds: Set<string>;
-  // Weekly review
-  weeklyReviewOpen: boolean;
 
   selectList: (id: string | null) => void;
   toggleTaskExpanded: (id: string) => void;
@@ -41,8 +39,6 @@ interface AppState {
   toggleTaskSelected: (id: string) => void;
   selectAllTasks: (ids: string[]) => void;
   clearSelection: () => void;
-  // Weekly review
-  setWeeklyReviewOpen: (open: boolean) => void;
 }
 
 export const useAppState = create<AppState>((set) => ({
@@ -64,7 +60,6 @@ export const useAppState = create<AppState>((set) => ({
   quickCaptureOpen: false,
   bulkMode: false,
   selectedTaskIds: new Set(),
-  weeklyReviewOpen: false,
 
   selectList: (id) => set({ selectedListId: id, searchQuery: '', bulkMode: false, selectedTaskIds: new Set() }),
   toggleTaskExpanded: (id) =>
@@ -103,5 +98,4 @@ export const useAppState = create<AppState>((set) => ({
     }),
   selectAllTasks: (ids) => set({ selectedTaskIds: new Set(ids) }),
   clearSelection: () => set({ selectedTaskIds: new Set(), bulkMode: false }),
-  setWeeklyReviewOpen: (open) => set({ weeklyReviewOpen: open }),
 }));

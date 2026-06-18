@@ -10,6 +10,7 @@ import { SpecialListView } from '../tasks/SpecialListView';
 import { SearchResults } from '../tasks/SearchResults';
 import { SharedFolderView } from '../shared-folder/SharedFolderView';
 import { FocusView } from '../focus/FocusView';
+import { InsightsView } from '../insights/InsightsView';
 import { SettingsModal } from '../settings/SettingsModal';
 import { EncryptionPasswordModal } from '../settings/EncryptionPasswordModal';
 import { TrashModal } from '../trash/TrashModal';
@@ -19,7 +20,6 @@ import { ToastContainer } from '../ui/Toast';
 import { ConfirmDialogContainer } from '../ui/ConfirmDialog';
 import { PasswordPromptContainer } from '../ui/PasswordPrompt';
 import { QuickCapture } from '../tasks/QuickCapture';
-import { WeeklyReviewModal } from '../review/WeeklyReviewModal';
 import { useSpecialListContext } from '../../hooks/use-special-list';
 import { PomodoroSettingsModal } from '../pomodoro/PomodoroSettingsModal';
 import { MobileTimerWidget } from '../pomodoro/MobileTimerWidget';
@@ -136,13 +136,12 @@ export function AppShell() {
 
         {/* Banner is hidden on the Focus view (distraction-free); search wins over the pseudo-list, like the content branch below */}
         {(searchQuery || selectedListId !== '__focus__') && <TopBanner />}
-        {searchQuery ? <SearchResults /> : selectedListId === '__focus__' ? <FocusView /> : selectedListId === '__shared__' ? <SharedFolderView /> : selectedListId === '__special__' ? <SpecialListView /> : <TaskListView />}
+        {searchQuery ? <SearchResults /> : selectedListId === '__focus__' ? <FocusView /> : selectedListId === '__insights__' ? <InsightsView /> : selectedListId === '__shared__' ? <SharedFolderView /> : selectedListId === '__special__' ? <SpecialListView /> : <TaskListView />}
       </div>
 
       <SettingsModal />
       <EncryptionPasswordModal />
       <TrashModal />
-      <WeeklyReviewModal />
       <PomodoroSettingsModal />
       <HelpOverlay />
 

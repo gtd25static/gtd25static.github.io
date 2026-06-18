@@ -182,11 +182,10 @@ export function useKeyboard() {
         return; // Let QuickCapture handle its own keys
       }
 
-      if (s.settingsOpen || s.trashOpen || s.weeklyReviewOpen) {
+      if (s.settingsOpen || s.trashOpen) {
         if (e.key === 'Escape') {
           s.setSettingsOpen(false);
           s.setTrashOpen(false);
-          s.setWeeklyReviewOpen(false);
         }
         return;
       }
@@ -471,13 +470,6 @@ export function useKeyboard() {
             const task = await db.tasks.get(sItem.id);
             if (task) await updateTask(task.id, { starred: !task.starred });
           }
-          break;
-        }
-
-        case 'r': {
-          // Open weekly review
-          e.preventDefault();
-          s.setWeeklyReviewOpen(true);
           break;
         }
 
