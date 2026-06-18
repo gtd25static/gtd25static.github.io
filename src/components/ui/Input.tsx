@@ -1,8 +1,12 @@
 import { forwardRef, useState, type InputHTMLAttributes } from 'react';
+import { openNativePicker } from '../../lib/native-picker';
 
 interface Props extends InputHTMLAttributes<HTMLInputElement> {
   label?: string;
 }
+
+// Native controls whose dropdown picker we open on click (anywhere in the field).
+const PICKER_TYPES = new Set(['date', 'datetime-local', 'time', 'month', 'week']);
 
 function EyeIcon() {
   return (
@@ -23,10 +27,11 @@ function EyeOffIcon() {
 }
 
 export const Input = forwardRef<HTMLInputElement, Props>(
-  ({ label, className = '', id, type, disabled, ...props }, ref) => {
+  ({ label, className = '', id, type, disabled, onClick, ...props }, ref) => {
     const inputId = id ?? label?.toLowerCase().replace(/\s+/g, '-');
     const [revealed, setRevealed] = useState(false);
     const isPassword = type === 'password';
+    const isPicker = !!type && PICKER_TYPES.has(type);
 
     // ::-ms-reveal is Edge's built-in password eye — hidden so there aren't two toggles.
     const input = (
@@ -35,6 +40,11 @@ export const Input = forwardRef<HTMLInputElement, Props>(
         id={inputId}
         type={isPassword && revealed ? 'text' : type}
         disabled={disabled}
+        onClick={(e) => {
+          onClick?.(e);
+          // Click anywhere in a date/time field opens its native picker, not just the icon.
+          if (isPicker) openNativePicker(e.currentTarget);
+        }}
         className={`rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-base md:text-sm text-zinc-900
           placeholder:text-zinc-400 focus:border-accent-500 focus:outline-none focus:ring-1 focus:ring-accent-500
           dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100 dark:placeholder:text-zinc-500 dark:[color-scheme:dark]

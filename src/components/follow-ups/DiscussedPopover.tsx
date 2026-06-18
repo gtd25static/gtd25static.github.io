@@ -3,6 +3,7 @@ import type { Task, PingCooldown, DiscussionEntry } from '../../db/models';
 import { updateTask } from '../../hooks/use-tasks';
 import { applyDiscussed } from '../../hooks/use-follow-ups';
 import { newId } from '../../lib/id';
+import { openNativePicker } from '../../lib/native-picker';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -139,6 +140,7 @@ export function DiscussedPopover({ task, align, onDone }: Props) {
             min={minDate}
             value={customDate}
             onChange={(e) => setCustomDate(e.target.value)}
+            onClick={(e) => openNativePicker(e.currentTarget)}
             autoFocus
             className="w-full rounded border border-zinc-300 bg-white px-2 py-1 text-xs outline-none focus:border-accent-500 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200"
           />

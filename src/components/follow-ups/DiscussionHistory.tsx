@@ -4,6 +4,7 @@ import { Modal } from '../ui/Modal';
 import { confirmDialog } from '../ui/ConfirmDialog';
 import { updateTask } from '../../hooks/use-tasks';
 import { newId } from '../../lib/id';
+import { openNativePicker } from '../../lib/native-picker';
 
 interface Props {
   task: Task;
@@ -186,6 +187,7 @@ export function DiscussionHistory({ task, open, onClose }: Props) {
               value={newDate}
               max={localISODate()}
               onChange={(e) => setNewDate(e.target.value)}
+              onClick={(e) => openNativePicker(e.currentTarget)}
               className="min-h-[44px] rounded-lg border border-zinc-300 bg-white px-3 text-sm outline-none focus:border-accent-500 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200 md:min-h-0 md:py-2"
               title="When it was discussed (defaults to today)"
             />

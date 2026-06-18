@@ -104,4 +104,18 @@ describe('DiscussedPopover', () => {
     expect(payload.snoozeCadenceDays).toBeGreaterThan(0);
     expect(payload.pingCooldownUntil).toBe(new Date(2099, 5, 22, 23, 59, 59, 999).getTime());
   });
+
+  it('clicking the custom date field opens the native picker', async () => {
+    const showPicker = vi.fn();
+    HTMLInputElement.prototype.showPicker = showPicker as unknown as () => void;
+    try {
+      const { user, container } = renderPopover();
+      await user.click(screen.getByText('custom'));
+      const input = container.querySelector('input[type="date"]') as HTMLInputElement;
+      await user.click(input);
+      expect(showPicker).toHaveBeenCalled();
+    } finally {
+      Reflect.deleteProperty(HTMLInputElement.prototype, 'showPicker');
+    }
+  });
 });

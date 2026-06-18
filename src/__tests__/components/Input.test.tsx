@@ -88,4 +88,41 @@ describe('Input', () => {
       expect(screen.getByRole('button', { name: 'Show password' })).toBeDisabled();
     });
   });
+
+  describe('native picker on click', () => {
+    let showPicker: ReturnType<typeof vi.fn>;
+
+    beforeEach(() => {
+      // jsdom doesn't implement showPicker; stub it so we can observe the call.
+      showPicker = vi.fn();
+      HTMLInputElement.prototype.showPicker = showPicker as unknown as () => void;
+    });
+
+    afterEach(() => {
+      Reflect.deleteProperty(HTMLInputElement.prototype, 'showPicker');
+    });
+
+    it('opens the native picker when a date input is clicked', async () => {
+      const user = userEvent.setup();
+      render(<Input type="date" label="Due date" />);
+      await user.click(screen.getByLabelText('Due date'));
+      expect(showPicker).toHaveBeenCalled();
+    });
+
+    it('does not open a picker for a plain text input', async () => {
+      const user = userEvent.setup();
+      render(<Input type="text" label="Name" />);
+      await user.click(screen.getByLabelText('Name'));
+      expect(showPicker).not.toHaveBeenCalled();
+    });
+
+    it('still forwards a caller-provided onClick', async () => {
+      const onClick = vi.fn();
+      const user = userEvent.setup();
+      render(<Input type="date" label="Due date" onClick={onClick} />);
+      await user.click(screen.getByLabelText('Due date'));
+      expect(onClick).toHaveBeenCalledTimes(1);
+      expect(showPicker).toHaveBeenCalledTimes(1);
+    });
+  });
 });
