@@ -18,6 +18,7 @@ import type { DragItemData } from '../layout/DndProvider';
 import { FollowUpCard } from './FollowUpCard';
 import { InlineTaskForm } from '../tasks/InlineTaskForm';
 import { DropdownMenu } from '../ui/DropdownMenu';
+import { MergeSuggestionsCard } from '../tasks/MergeSuggestionsCard';
 import { sortFollowUpsForDisplay } from '../../lib/task-sort';
 
 function SortableFollowUpItem({ task, index, listId }: { task: Task; index: number; listId: string }) {
@@ -146,6 +147,9 @@ export function FollowUpList({ listId, listName }: Props) {
               ]}
             />
           </div>
+
+          {/* Possible-duplicate merge suggestions */}
+          <MergeSuggestionsCard listId={listId} listType="follow-ups" />
 
           {/* Add inline */}
           {creating ? (

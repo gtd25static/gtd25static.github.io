@@ -22,6 +22,7 @@ import { DropdownMenu } from '../ui/DropdownMenu';
 import { FollowUpList } from '../follow-ups/FollowUpList';
 import { BulkActionBar } from './BulkActionBar';
 import { InboxListView } from './InboxListView';
+import { MergeSuggestionsCard } from './MergeSuggestionsCard';
 import { isInboxList } from '../../lib/constants';
 import { sortTasksForDisplay, sortTasksByDate, sortTasksByName, sortCompletedTasksForDisplay } from '../../lib/task-sort';
 
@@ -194,6 +195,9 @@ export function TaskListView() {
               ]}
             />
           </div>
+
+          {/* Possible-duplicate merge suggestions */}
+          <MergeSuggestionsCard listId={selectedListId} listType="tasks" />
 
           {/* Add a task inline */}
           {creating ? (

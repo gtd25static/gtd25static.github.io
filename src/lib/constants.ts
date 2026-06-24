@@ -16,6 +16,14 @@ export const MAX_LIST_NAME_LENGTH = 100;
 // Shared Folder overall storage cap (30 MB). Per-item cap = remaining free space.
 export const MAX_SHARED_FOLDER_BYTES = 30 * 1024 * 1024;
 
+// Local de-duplication (merge suggestions). Two entries in the same list are
+// flagged as likely duplicates when their title similarity is >= the threshold.
+// The default is conservative to favour precision (fewer false suggestions) and
+// is a single knob to tune after observing real data. Detection is skipped for
+// lists larger than DEDUPE_MAX_ITEMS to bound the O(n^2) pairwise comparison.
+export const DEDUPE_TITLE_THRESHOLD = 0.72;
+export const DEDUPE_MAX_ITEMS = 400;
+
 export const INBOX_LIST_NAME = 'Inbox';
 
 export function isInboxList(list: { name: string; type: string }): boolean {

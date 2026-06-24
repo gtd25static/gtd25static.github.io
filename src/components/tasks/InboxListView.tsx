@@ -1,5 +1,6 @@
 import { useTasks } from '../../hooks/use-tasks';
 import { InboxCard } from './InboxCard';
+import { MergeSuggestionsCard } from './MergeSuggestionsCard';
 
 interface Props {
   listId: string;
@@ -21,6 +22,9 @@ export function InboxListView({ listId }: Props) {
               <span className="md:hidden">Tap Process on each item to move it to a list</span>
             </p>
           </div>
+
+          {/* Possible-duplicate merge suggestions */}
+          <MergeSuggestionsCard listId={listId} listType="tasks" />
 
           {/* Inbox items */}
           {activeTasks.length === 0 ? (
