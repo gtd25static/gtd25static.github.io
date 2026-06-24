@@ -9,7 +9,7 @@ import {
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { useFollowUps } from '../../hooks/use-follow-ups';
+import { useFollowUps, isInCooldown } from '../../hooks/use-follow-ups';
 import { createTask, reorderTasks } from '../../hooks/use-tasks';
 import { useAppState } from '../../stores/app-state';
 import { useShallow } from 'zustand/react/shallow';
@@ -53,6 +53,10 @@ interface Props {
 export function FollowUpList({ listId, listName }: Props) {
   const { active: rawActive, archived } = useFollowUps(listId);
   const active = sortFollowUpsForDisplay(rawActive);
+  const [showSnoozed, setShowSnoozed] = useState(false);
+  // Snoozed items always sort to the bottom of `active`; the toggle hides them by default.
+  const snoozed = active.filter(isInCooldown);
+  const visible = showSnoozed ? active : active.filter((t) => !isInCooldown(t));
   const resolved = [...archived].sort((a, b) => {
     const aResolved = a.updatedAt ?? a.order;
     const bResolved = b.updatedAt ?? b.order;
@@ -93,13 +97,16 @@ export function FollowUpList({ listId, listName }: Props) {
       if (activeData.type !== 'follow-up' || overData.type !== 'follow-up') return;
       if (activeData.listId !== overData.listId || activeData.listId !== listId) return;
 
-      const oldIndex = active.findIndex((t) => t.id === dragActive.id);
-      const newIndex = active.findIndex((t) => t.id === over.id);
+      const oldIndex = visible.findIndex((t) => t.id === dragActive.id);
+      const newIndex = visible.findIndex((t) => t.id === over.id);
       if (oldIndex === -1 || newIndex === -1) return;
-      const newOrder = [...active];
+      const newOrder = [...visible];
       const [moved] = newOrder.splice(oldIndex, 1);
       newOrder.splice(newIndex, 0, moved);
-      reorderTasks([...newOrder].reverse().map((t) => t.id));
+      // When snoozed are hidden they stay out of `visible`; re-append them (in their
+      // current order) so their relative order is preserved after the reorder.
+      const hidden = showSnoozed ? [] : snoozed;
+      reorderTasks([...newOrder, ...hidden].reverse().map((t) => t.id));
     },
   });
 
@@ -108,8 +115,24 @@ export function FollowUpList({ listId, listName }: Props) {
       <div className="flex-1 overflow-y-auto scrollbar-thin">
         <div className="mx-auto w-full max-w-2xl lg:max-w-3xl xl:max-w-4xl px-4 py-4">
           {/* Header */}
-          <div className="mb-1 flex items-center justify-between">
-            <h2 className="text-lg font-normal text-zinc-800 dark:text-zinc-200">{listName}</h2>
+          <div className="mb-1 flex items-center justify-between gap-2">
+            <div className="flex min-w-0 items-center gap-2">
+              <h2 className="truncate text-lg font-normal text-zinc-800 dark:text-zinc-200">{listName}</h2>
+              {snoozed.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setShowSnoozed((v) => !v)}
+                  aria-pressed={showSnoozed}
+                  className={`shrink-0 rounded-full px-3 py-1 text-sm font-medium transition-colors ${
+                    showSnoozed
+                      ? 'bg-accent-100 text-accent-700 dark:bg-accent-900/40 dark:text-accent-300'
+                      : 'text-zinc-500 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800'
+                  }`}
+                >
+                  {showSnoozed ? 'Hide' : 'Show'} snoozed ({snoozed.length})
+                </button>
+              )}
+            </div>
             <DropdownMenu
               trigger={
                 <svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor" className="text-zinc-400">
@@ -144,18 +167,20 @@ export function FollowUpList({ listId, listName }: Props) {
             </button>
           )}
 
-          {active.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-16 text-zinc-400">
-              <p className="text-sm">No follow-ups yet</p>
-            </div>
-          ) : (
-            <SortableContext items={active.map((t) => t.id)} strategy={verticalListSortingStrategy}>
+          {visible.length > 0 ? (
+            <SortableContext items={visible.map((t) => t.id)} strategy={verticalListSortingStrategy}>
               <div>
-                {active.map((task, i) => (
+                {visible.map((task, i) => (
                   <SortableFollowUpItem key={task.id} task={task} index={i} listId={listId} />
                 ))}
               </div>
             </SortableContext>
+          ) : (
+            <div className="flex flex-col items-center justify-center py-16 text-zinc-400">
+              <p className="text-sm">
+                {snoozed.length > 0 && !showSnoozed ? 'All follow-ups are snoozed' : 'No follow-ups yet'}
+              </p>
+            </div>
           )}
 
           {resolved.length > 0 && (
