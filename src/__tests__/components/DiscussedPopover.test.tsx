@@ -22,6 +22,27 @@ describe('DiscussedPopover', () => {
     return { task, user, ...result };
   }
 
+  it('opens downward by default when there is room below', () => {
+    const { container } = renderPopover();
+    const panel = container.firstChild as HTMLElement;
+    expect(panel.className).toContain('top-full');
+    expect(panel.className).not.toContain('bottom-full');
+  });
+
+  it('flips upward when the panel would overflow the bottom of the viewport', () => {
+    const spy = vi
+      .spyOn(HTMLElement.prototype, 'getBoundingClientRect')
+      .mockReturnValue({ bottom: window.innerHeight + 100 } as DOMRect);
+    try {
+      const { container } = renderPopover();
+      const panel = container.firstChild as HTMLElement;
+      expect(panel.className).toContain('bottom-full');
+      expect(panel.className).not.toContain('top-full');
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it('renders the current cadence presets and a custom option', () => {
     renderPopover();
     expect(screen.getByText('20h')).toBeInTheDocument();

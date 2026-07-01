@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import type { Task, PingCooldown, DiscussionEntry } from '../../db/models';
 import { updateTask } from '../../hooks/use-tasks';
 import { applyDiscussed } from '../../hooks/use-follow-ups';
@@ -46,6 +46,17 @@ export function DiscussedPopover({ task, align, onDone }: Props) {
   const [note, setNote] = useState('');
   const [cadence, setCadence] = useState<PingCooldown>(initialCadence(task));
   const [customDate, setCustomDate] = useState<string>('');
+  const rootRef = useRef<HTMLDivElement>(null);
+  const [openUp, setOpenUp] = useState(false);
+
+  // The panel opens downward by default. If that would spill past the bottom of
+  // the viewport (e.g. a card near the screen edge), flip it to open upward over
+  // the chip so it stays fully visible. 8px matches the ContextMenu gutter.
+  useEffect(() => {
+    const el = rootRef.current;
+    if (!el) return;
+    if (el.getBoundingClientRect().bottom > window.innerHeight - 8) setOpenUp(true);
+  }, []);
 
   // Minimum date for the custom picker: tomorrow.
   const tomorrow = new Date();
@@ -93,7 +104,8 @@ export function DiscussedPopover({ task, align, onDone }: Props) {
 
   return (
     <div
-      className={`absolute z-50 mt-1 w-64 rounded-xl border border-zinc-200 bg-white p-3 shadow-lg dark:border-zinc-700 dark:bg-zinc-900 ${align === 'right' ? 'right-0' : 'left-0'}`}
+      ref={rootRef}
+      className={`absolute z-50 w-64 rounded-xl border border-zinc-200 bg-white p-3 shadow-lg dark:border-zinc-700 dark:bg-zinc-900 ${align === 'right' ? 'right-0' : 'left-0'} ${openUp ? 'bottom-full mb-1' : 'top-full mt-1'}`}
     >
       <label className="mb-1 block text-xs font-medium text-zinc-500 dark:text-zinc-400">
         Note (optional)
