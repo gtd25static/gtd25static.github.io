@@ -17,6 +17,7 @@ import {
   reparentMindmapNode,
   deleteMindmapNodeSubtree,
   createMindmapFromOutline,
+  exportMindmapOutline,
   clampMindmapLabel,
 } from '../../hooks/use-mindmaps';
 import { restoreFromTrash, permanentlyDelete } from '../../hooks/use-trash';
@@ -246,6 +247,18 @@ describe('createMindmapFromOutline', () => {
     const entries = (await db.changeLog.toArray()).filter((e) => e.entityType.startsWith('mindmap'));
     expect(entries).toHaveLength(5);
     expect(new Set(entries.map((e) => e.timestamp)).size).toBe(1);
+  });
+
+  it('exportMindmapOutline emits the live tree as markdown (deleted maps → null)', async () => {
+    const map = assertDefined(await createMindmapFromOutline('Trip', 'Trip plan', [
+      { label: 'Pack', children: [{ label: 'Boots', children: [] }] },
+    ]));
+    const exported = assertDefined(await exportMindmapOutline(map.id) ?? undefined, 'export');
+    expect(exported.filename).toBe('Trip.md');
+    expect(exported.content).toBe('# Trip plan\n\n- Pack\n  - Boots\n');
+
+    await deleteMindmap(map.id);
+    expect(await exportMindmapOutline(map.id)).toBeNull();
   });
 
   it('rejects an outline above the node cap', async () => {

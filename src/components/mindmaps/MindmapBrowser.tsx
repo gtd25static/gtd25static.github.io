@@ -22,6 +22,8 @@ import {
   deleteMindmap,
 } from '../../hooks/use-mindmaps';
 import { MoveToFolderModal } from './MoveToFolderModal';
+import { OutlineImportModal } from './OutlineImportModal';
+import { downloadOutline } from './outline-actions';
 
 type NameDialog =
   | { kind: 'new-folder' }
@@ -42,6 +44,7 @@ export function MindmapBrowser() {
   const [currentFolderId, setCurrentFolderId] = useState<string | undefined>(undefined);
   const [nameDialog, setNameDialog] = useState<NameDialog | null>(null);
   const [moveDialog, setMoveDialog] = useState<MoveDialog | null>(null);
+  const [importOpen, setImportOpen] = useState(false);
 
   const folderById = useMemo(() => new Map(folders.map((f) => [f.id, f])), [folders]);
 
@@ -132,6 +135,7 @@ export function MindmapBrowser() {
           <div className="flex shrink-0 items-center gap-2">
             <Button size="sm" onClick={() => setNameDialog({ kind: 'new-map' })}>New map</Button>
             <Button size="sm" variant="secondary" onClick={() => setNameDialog({ kind: 'new-folder' })}>New folder</Button>
+            <Button size="sm" variant="secondary" onClick={() => setImportOpen(true)}>Import</Button>
           </div>
         </div>
       </div>
@@ -171,6 +175,7 @@ export function MindmapBrowser() {
                   { label: 'Open', onClick: () => setOpenMindmapId(map.id) },
                   { label: 'Rename', onClick: () => setNameDialog({ kind: 'rename-map', map }) },
                   { label: 'Move to…', onClick: () => setMoveDialog({ kind: 'map', map }) },
+                  { label: 'Export outline (.md)', onClick: () => void downloadOutline(map.id) },
                   { label: 'Delete', danger: true, onClick: () => void handleDeleteMap(map) },
                 ]}
               />
@@ -187,6 +192,12 @@ export function MindmapBrowser() {
           onOpenMap={(id) => setOpenMindmapId(id)}
         />
       )}
+      <OutlineImportModal
+        open={importOpen}
+        onClose={() => setImportOpen(false)}
+        folderId={effectiveFolderId}
+        onImported={(id) => setOpenMindmapId(id)}
+      />
       {moveDialog && (
         <MoveToFolderModal
           open

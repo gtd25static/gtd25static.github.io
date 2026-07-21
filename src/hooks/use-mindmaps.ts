@@ -9,6 +9,8 @@ import { initFieldTimestamps, stampUpdatedFields } from '../sync/field-timestamp
 import { encryptRow, getActiveAtRestKey } from '../db/vault-middleware';
 import { SYNC_VERSION } from '../sync/version';
 import { MAX_MINDMAP_LABEL_LENGTH, MAX_MINDMAP_IMPORT_NODES } from '../lib/constants';
+import { buildTree } from '../lib/mindmap-tree';
+import { mapToOutline, type OutlineNode } from '../lib/mindmap-outline';
 
 // --- Queries ---
 
@@ -606,12 +608,25 @@ export async function deleteMindmapNodeSubtree(id: string): Promise<void> {
   }
 }
 
-// --- Outline import ---
+// --- Outline export / import ---
 
-export interface OutlineNode {
-  label: string;
-  children: OutlineNode[];
+/** Markdown outline of a map, or null if the map/root doesn't exist. */
+export async function exportMindmapOutline(mapId: string): Promise<{ filename: string; content: string } | null> {
+  try {
+    const map = await db.mindmaps.get(mapId);
+    if (!map || map.deletedAt) return null;
+    const nodes = (await db.mindmapNodes.where('mapId').equals(mapId).toArray()).filter((n) => !n.deletedAt);
+    const tree = buildTree(nodes);
+    if (!tree.root) return null;
+    const safeName = map.name.replace(/[\\/:*?"<>|]/g, '_').slice(0, 80) || 'mindmap';
+    return { filename: `${safeName}.md`, content: mapToOutline(tree) };
+  } catch (error) {
+    handleDbError(error, 'export mindmap outline');
+    return null;
+  }
 }
+
+export type { OutlineNode } from '../lib/mindmap-outline';
 
 function countOutlineNodes(nodes: OutlineNode[]): number {
   return nodes.reduce((sum, n) => sum + 1 + countOutlineNodes(n.children), 0);
