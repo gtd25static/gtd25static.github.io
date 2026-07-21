@@ -9,7 +9,7 @@ import { stampUpdatedFields } from '../sync/field-timestamps';
 
 export interface TrashItem {
   id: string;
-  type: 'list' | 'task' | 'subtask';
+  type: 'list' | 'task' | 'subtask' | 'mindmap' | 'mindmapFolder';
   title: string;
   deletedAt: number;
   parentTitle?: string;
@@ -24,6 +24,10 @@ export function useTrash() {
     const lists = await db.taskLists.filter((l) => !!l.deletedAt).toArray();
     const tasks = await db.tasks.filter((t) => !!t.deletedAt).toArray();
     const subtasks = await db.subtasks.filter((s) => !!s.deletedAt).toArray();
+    // Individual mindmap nodes restore with their map (like subtasks with tasks)
+    // and are deliberately not listed.
+    const mindmaps = await db.mindmaps.filter((m) => !!m.deletedAt).toArray();
+    const mindmapFolders = await db.mindmapFolders.filter((f) => !!f.deletedAt).toArray();
 
     const taskMap = new Map<string, string>();
     const allTasks = await db.tasks.toArray();
@@ -39,6 +43,8 @@ export function useTrash() {
         deletedAt: s.deletedAt!,
         parentTitle: taskMap.get(s.taskId),
       })),
+      ...mindmaps.map((m) => ({ id: m.id, type: 'mindmap' as const, title: m.name, deletedAt: m.deletedAt! })),
+      ...mindmapFolders.map((f) => ({ id: f.id, type: 'mindmapFolder' as const, title: f.name, deletedAt: f.deletedAt! })),
     ];
 
     items.sort((a, b) => b.deletedAt - a.deletedAt);
@@ -90,6 +96,55 @@ export async function permanentlyDelete(item: TrashItem) {
           await recordChangeInTx('subtask', item.id, 'delete');
         });
         break;
+      case 'mindmap': {
+        const nodes = await db.mindmapNodes.where('mapId').equals(item.id).toArray();
+        await db.transaction('rw', [db.mindmaps, db.mindmapNodes, db.changeLog], async () => {
+          await db.mindmapNodes.where('mapId').equals(item.id).delete();
+          await db.mindmaps.delete(item.id);
+          const batch = nodes.map((n) => ({
+            entityType: 'mindmapNode' as const,
+            entityId: n.id,
+            operation: 'delete' as const,
+          }));
+          if (batch.length > 0) await recordChangeBatchInTx(batch);
+          await recordChangeInTx('mindmap', item.id, 'delete');
+        });
+        break;
+      }
+      case 'mindmapFolder': {
+        // Hard-delete the folder subtree (incl. tombstoned descendants), the maps
+        // inside it and their nodes — mirrors the 'list' cascade.
+        const allFolders = await db.mindmapFolders.toArray();
+        const folderIds = new Set<string>([item.id]);
+        let grew = true;
+        while (grew) {
+          grew = false;
+          for (const f of allFolders) {
+            if (f.parentId && folderIds.has(f.parentId) && !folderIds.has(f.id)) {
+              folderIds.add(f.id);
+              grew = true;
+            }
+          }
+        }
+        const maps = (await db.mindmaps.toArray()).filter((m) => m.folderId && folderIds.has(m.folderId));
+        const mapIds = maps.map((m) => m.id);
+        await db.transaction('rw', [db.mindmapFolders, db.mindmaps, db.mindmapNodes, db.changeLog], async () => {
+          const batch: Array<{ entityType: 'mindmapFolder' | 'mindmap' | 'mindmapNode'; entityId: string; operation: 'delete' }> = [];
+          for (const mapId of mapIds) {
+            const nodes = await db.mindmapNodes.where('mapId').equals(mapId).toArray();
+            await db.mindmapNodes.where('mapId').equals(mapId).delete();
+            for (const n of nodes) batch.push({ entityType: 'mindmapNode', entityId: n.id, operation: 'delete' });
+            await db.mindmaps.delete(mapId);
+            batch.push({ entityType: 'mindmap', entityId: mapId, operation: 'delete' });
+          }
+          for (const folderId of folderIds) {
+            await db.mindmapFolders.delete(folderId);
+            batch.push({ entityType: 'mindmapFolder', entityId: folderId, operation: 'delete' });
+          }
+          await recordChangeBatchInTx(batch);
+        });
+        break;
+      }
     }
     scheduleSyncDebounced();
   } catch (error) {
@@ -165,6 +220,16 @@ export async function restoreFromTrash(item: TrashItem) {
           }
         });
         break;
+      }
+      case 'mindmap': {
+        const { restoreMindmap } = await import('./use-mindmaps');
+        await restoreMindmap(item.id);
+        return; // restoreMindmap schedules sync itself
+      }
+      case 'mindmapFolder': {
+        const { restoreMindmapFolder } = await import('./use-mindmaps');
+        await restoreMindmapFolder(item.id);
+        return;
       }
     }
     scheduleSyncDebounced();

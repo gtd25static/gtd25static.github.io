@@ -8,12 +8,16 @@ const typeLabels: Record<TrashItem['type'], string> = {
   list: 'List',
   task: 'Task',
   subtask: 'Subtask',
+  mindmap: 'Mindmap',
+  mindmapFolder: 'Map folder',
 };
 
 const typeBadgeColors: Record<TrashItem['type'], string> = {
   list: 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-300',
   task: 'bg-accent-100 text-accent-700 dark:bg-accent-900/30 dark:text-accent-300',
   subtask: 'bg-zinc-100 text-zinc-600 dark:bg-zinc-700 dark:text-zinc-300',
+  mindmap: 'bg-teal-100 text-teal-700 dark:bg-teal-900/30 dark:text-teal-300',
+  mindmapFolder: 'bg-teal-100 text-teal-700 dark:bg-teal-900/30 dark:text-teal-300',
 };
 
 function timeAgo(timestamp: number): string {
