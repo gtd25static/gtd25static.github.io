@@ -581,6 +581,34 @@ export function Sidebar() {
         </button>
       </div>
 
+      {/* Mindmaps */}
+      <div className="px-2 pb-1">
+        <button
+          onClick={() => {
+            // Clicking again while already in the section pops back to the browser
+            if (selectedListId === '__mindmaps__') {
+              useAppState.getState().setOpenMindmapId(null);
+            }
+            selectList('__mindmaps__');
+            setSidebarOpen(false);
+          }}
+          className={`flex w-full items-center gap-3 rounded-full px-3 py-3.5 md:py-2 text-sm transition-colors ${
+            selectedListId === '__mindmaps__'
+              ? 'bg-accent-50 text-accent-700 font-medium dark:bg-accent-900/20 dark:text-accent-300'
+              : 'text-zinc-700 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800'
+          }`}
+        >
+          {/* Node-graph icon */}
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className={selectedListId === '__mindmaps__' ? 'text-accent-600' : 'text-zinc-400'}>
+            <circle cx="5" cy="12" r="2.5" />
+            <circle cx="18" cy="5.5" r="2.5" />
+            <circle cx="18" cy="18.5" r="2.5" />
+            <path d="M7.4 11l8.2-4.3M7.4 13l8.2 4.3" strokeLinecap="round" />
+          </svg>
+          <span className="flex-1 text-left">Mindmaps</span>
+        </button>
+      </div>
+
       {/* Insights dashboard */}
       <div className="px-2 pb-1">
         <button

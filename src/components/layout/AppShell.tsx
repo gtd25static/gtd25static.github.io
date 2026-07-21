@@ -9,6 +9,7 @@ import { TaskListView } from '../tasks/TaskListView';
 import { SpecialListView } from '../tasks/SpecialListView';
 import { SearchResults } from '../tasks/SearchResults';
 import { SharedFolderView } from '../shared-folder/SharedFolderView';
+import { MindmapsView } from '../mindmaps/MindmapsView';
 import { FocusView } from '../focus/FocusView';
 import { InsightsView } from '../insights/InsightsView';
 import { SettingsModal } from '../settings/SettingsModal';
@@ -136,7 +137,7 @@ export function AppShell() {
 
         {/* Banner is hidden on the Focus view (distraction-free); search wins over the pseudo-list, like the content branch below */}
         {(searchQuery || selectedListId !== '__focus__') && <TopBanner />}
-        {searchQuery ? <SearchResults /> : selectedListId === '__focus__' ? <FocusView /> : selectedListId === '__insights__' ? <InsightsView /> : selectedListId === '__shared__' ? <SharedFolderView /> : selectedListId === '__special__' ? <SpecialListView /> : <TaskListView />}
+        {searchQuery ? <SearchResults /> : selectedListId === '__focus__' ? <FocusView /> : selectedListId === '__insights__' ? <InsightsView /> : selectedListId === '__shared__' ? <SharedFolderView /> : selectedListId === '__mindmaps__' ? <MindmapsView /> : selectedListId === '__special__' ? <SpecialListView /> : <TaskListView />}
       </div>
 
       <SettingsModal />

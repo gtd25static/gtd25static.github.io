@@ -15,6 +15,9 @@ interface AppState {
   searchQuery: string;
   navigateToTaskId: string | null;
   quickCaptureOpen: boolean;
+  // Mindmaps: id of the map open in the editor (null = folder browser).
+  // Survives switching sections so returning to Mindmaps restores the open map.
+  openMindmapId: string | null;
   // Bulk operations
   bulkMode: boolean;
   selectedTaskIds: Set<string>;
@@ -34,6 +37,7 @@ interface AppState {
   setSearchQuery: (query: string) => void;
   setNavigateToTaskId: (id: string | null) => void;
   setQuickCaptureOpen: (open: boolean) => void;
+  setOpenMindmapId: (id: string | null) => void;
   // Bulk operations
   setBulkMode: (on: boolean) => void;
   toggleTaskSelected: (id: string) => void;
@@ -58,6 +62,7 @@ export const useAppState = create<AppState>((set) => ({
   searchQuery: '',
   navigateToTaskId: null,
   quickCaptureOpen: false,
+  openMindmapId: null,
   bulkMode: false,
   selectedTaskIds: new Set(),
 
@@ -88,6 +93,7 @@ export const useAppState = create<AppState>((set) => ({
   setSearchQuery: (query) => set({ searchQuery: query }),
   setNavigateToTaskId: (id) => set({ navigateToTaskId: id }),
   setQuickCaptureOpen: (open) => set({ quickCaptureOpen: open }),
+  setOpenMindmapId: (id) => set({ openMindmapId: id }),
   setBulkMode: (on) => set({ bulkMode: on, selectedTaskIds: on ? new Set() : new Set() }),
   toggleTaskSelected: (id) =>
     set((state) => {
