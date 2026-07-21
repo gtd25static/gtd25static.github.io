@@ -33,6 +33,9 @@ const ENTITY_TYPE_BY_TABLE: Record<string, string> = {
   subtasks: 'subtask',
   taskLists: 'taskList',
   sharedItems: 'sharedItem',
+  mindmapFolders: 'mindmapFolder',
+  mindmaps: 'mindmap',
+  mindmapNodes: 'mindmapNode',
 };
 
 function isHandledTable(name: string): boolean {

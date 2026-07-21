@@ -4,7 +4,7 @@ import { __resetForTesting as resetSyncEngine } from '../../sync/sync-engine';
 import { __resetForTesting as resetRemoteBackups } from '../../sync/remote-backups';
 import { clearEncryptionKey } from '../../sync/crypto';
 import { clearDeviceIdCache } from '../../sync/change-log';
-import type { ChangeEntry, SharedItem } from '../../db/models';
+import type { ChangeEntry, SharedItem, MindmapFolder, Mindmap, MindmapNode } from '../../db/models';
 import { newId } from '../../lib/id';
 
 const SYNC_LOCALSTORAGE_KEYS = [
@@ -78,6 +78,43 @@ export function makeSharedItem(overrides?: Partial<SharedItem>): SharedItem {
     name: 'Example',
     size: 32,
     url: 'https://example.com',
+    order: 0,
+    createdAt: now,
+    updatedAt: now,
+    ...overrides,
+  };
+}
+
+export function makeMindmapFolder(overrides?: Partial<MindmapFolder>): MindmapFolder {
+  const now = Date.now();
+  return {
+    id: newId(),
+    name: 'Folder',
+    order: 0,
+    createdAt: now,
+    updatedAt: now,
+    ...overrides,
+  };
+}
+
+export function makeMindmap(overrides?: Partial<Mindmap>): Mindmap {
+  const now = Date.now();
+  return {
+    id: newId(),
+    name: 'Map',
+    order: 0,
+    createdAt: now,
+    updatedAt: now,
+    ...overrides,
+  };
+}
+
+export function makeMindmapNode(overrides?: Partial<MindmapNode>): MindmapNode {
+  const now = Date.now();
+  return {
+    id: newId(),
+    mapId: 'map-1',
+    label: 'Node',
     order: 0,
     createdAt: now,
     updatedAt: now,

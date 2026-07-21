@@ -29,6 +29,9 @@ function encryptedTables(): Array<Table<unknown, string>> {
     db.subtasks as unknown as Table<unknown, string>,
     db.changeLog as unknown as Table<unknown, string>,
     db.sharedItems as unknown as Table<unknown, string>,
+    db.mindmapFolders as unknown as Table<unknown, string>,
+    db.mindmaps as unknown as Table<unknown, string>,
+    db.mindmapNodes as unknown as Table<unknown, string>,
   ];
 }
 

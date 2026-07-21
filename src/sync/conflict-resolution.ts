@@ -8,6 +8,9 @@ export function cleanupSoftDeletes(data: SyncData, maxAgeMs: number = 30 * 24 * 
     tasks: data.tasks.filter((t) => !t.deletedAt || t.deletedAt > cutoff),
     subtasks: data.subtasks.filter((s) => !s.deletedAt || s.deletedAt > cutoff),
     sharedItems: data.sharedItems?.filter((i) => !i.deletedAt || i.deletedAt > cutoff),
+    mindmapFolders: data.mindmapFolders?.filter((f) => !f.deletedAt || f.deletedAt > cutoff),
+    mindmaps: data.mindmaps?.filter((m) => !m.deletedAt || m.deletedAt > cutoff),
+    mindmapNodes: data.mindmapNodes?.filter((n) => !n.deletedAt || n.deletedAt > cutoff),
     soundPresets: data.soundPresets?.filter((p) => !p.deletedAt || p.deletedAt > cutoff),
   };
 }

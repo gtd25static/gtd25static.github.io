@@ -11,6 +11,11 @@ const SENSITIVE_FIELDS: Record<string, string[]> = {
   // Shared Folder: everything except opaque id/order/timestamps is encrypted —
   // no filename, type, size, URL or blob-ref leaks. Same exposure level as tasks.
   sharedItem: ['type', 'name', 'size', 'url', 'blobId', 'mimeType'],
+  // Mindmaps: names/labels are content; structural refs (parentId/folderId/mapId)
+  // stay plaintext so structure merges without decrypting (like Task.listId).
+  mindmapFolder: ['name'],
+  mindmap: ['name'],
+  mindmapNode: ['label'],
 };
 
 // --- Key cache ---
@@ -244,11 +249,14 @@ export async function decryptEntity(
 // --- SyncData-level encryption ---
 
 export async function encryptSyncData(key: CryptoKey, data: SyncData): Promise<SyncData> {
-  const [taskLists, tasks, subtasks, sharedItems] = await Promise.all([
+  const [taskLists, tasks, subtasks, sharedItems, mindmapFolders, mindmaps, mindmapNodes] = await Promise.all([
     Promise.all(data.taskLists.map((e) => encryptEntity(key, e as unknown as Record<string, unknown>, 'taskList'))),
     Promise.all(data.tasks.map((e) => encryptEntity(key, e as unknown as Record<string, unknown>, 'task'))),
     Promise.all(data.subtasks.map((e) => encryptEntity(key, e as unknown as Record<string, unknown>, 'subtask'))),
     Promise.all((data.sharedItems ?? []).map((e) => encryptEntity(key, e as unknown as Record<string, unknown>, 'sharedItem'))),
+    Promise.all((data.mindmapFolders ?? []).map((e) => encryptEntity(key, e as unknown as Record<string, unknown>, 'mindmapFolder'))),
+    Promise.all((data.mindmaps ?? []).map((e) => encryptEntity(key, e as unknown as Record<string, unknown>, 'mindmap'))),
+    Promise.all((data.mindmapNodes ?? []).map((e) => encryptEntity(key, e as unknown as Record<string, unknown>, 'mindmapNode'))),
   ]);
 
   return {
@@ -257,15 +265,21 @@ export async function encryptSyncData(key: CryptoKey, data: SyncData): Promise<S
     tasks: tasks as unknown as SyncData['tasks'],
     subtasks: subtasks as unknown as SyncData['subtasks'],
     ...(data.sharedItems ? { sharedItems: sharedItems as unknown as SyncData['sharedItems'] } : {}),
+    ...(data.mindmapFolders ? { mindmapFolders: mindmapFolders as unknown as SyncData['mindmapFolders'] } : {}),
+    ...(data.mindmaps ? { mindmaps: mindmaps as unknown as SyncData['mindmaps'] } : {}),
+    ...(data.mindmapNodes ? { mindmapNodes: mindmapNodes as unknown as SyncData['mindmapNodes'] } : {}),
   };
 }
 
 export async function decryptSyncData(key: CryptoKey, data: SyncData): Promise<SyncData> {
-  const [taskLists, tasks, subtasks, sharedItems] = await Promise.all([
+  const [taskLists, tasks, subtasks, sharedItems, mindmapFolders, mindmaps, mindmapNodes] = await Promise.all([
     Promise.all(data.taskLists.map((e) => decryptEntity(key, e as unknown as Record<string, unknown>, 'taskList'))),
     Promise.all(data.tasks.map((e) => decryptEntity(key, e as unknown as Record<string, unknown>, 'task'))),
     Promise.all(data.subtasks.map((e) => decryptEntity(key, e as unknown as Record<string, unknown>, 'subtask'))),
     Promise.all((data.sharedItems ?? []).map((e) => decryptEntity(key, e as unknown as Record<string, unknown>, 'sharedItem'))),
+    Promise.all((data.mindmapFolders ?? []).map((e) => decryptEntity(key, e as unknown as Record<string, unknown>, 'mindmapFolder'))),
+    Promise.all((data.mindmaps ?? []).map((e) => decryptEntity(key, e as unknown as Record<string, unknown>, 'mindmap'))),
+    Promise.all((data.mindmapNodes ?? []).map((e) => decryptEntity(key, e as unknown as Record<string, unknown>, 'mindmapNode'))),
   ]);
 
   return {
@@ -274,6 +288,9 @@ export async function decryptSyncData(key: CryptoKey, data: SyncData): Promise<S
     tasks: tasks as unknown as SyncData['tasks'],
     subtasks: subtasks as unknown as SyncData['subtasks'],
     ...(data.sharedItems ? { sharedItems: sharedItems as unknown as SyncData['sharedItems'] } : {}),
+    ...(data.mindmapFolders ? { mindmapFolders: mindmapFolders as unknown as SyncData['mindmapFolders'] } : {}),
+    ...(data.mindmaps ? { mindmaps: mindmaps as unknown as SyncData['mindmaps'] } : {}),
+    ...(data.mindmapNodes ? { mindmapNodes: mindmapNodes as unknown as SyncData['mindmapNodes'] } : {}),
   };
 }
 

@@ -80,6 +80,14 @@ const localMigrations: LocalMigration[] = [
       });
     },
   },
+  {
+    fromVersion: 5,
+    toVersion: 6,
+    migrate: async () => {
+      // No-op: the Mindmaps tables (mindmapFolders/mindmaps/mindmapNodes) are
+      // created by the Dexie v8 schema; nothing to backfill.
+    },
+  },
 ];
 
 export async function runLocalMigrations(database: Gtd25DB, from: number, to: number): Promise<void> {

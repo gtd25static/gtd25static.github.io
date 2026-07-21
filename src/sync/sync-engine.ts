@@ -74,24 +74,33 @@ async function reconcileFromSnapshot(snapshot: SyncData) {
 
   // Pre-v5 snapshot bytes can still carry the removed 'working' status (this path
   // re-parses the pre-migration snapshot within the same sync) — normalize first.
-  const [taskListsToPut, tasksToPut, subtasksToPut, sharedItemsToPut] = await Promise.all([
+  const [taskListsToPut, tasksToPut, subtasksToPut, sharedItemsToPut, mindmapFoldersToPut, mindmapsToPut, mindmapNodesToPut] = await Promise.all([
     reconcileCollection(db.taskLists, snapshot.taskLists),
     reconcileCollection(db.tasks, normalizeLegacyWorkingStatus(snapshot.tasks)),
     reconcileCollection(db.subtasks, normalizeLegacyWorkingStatus(snapshot.subtasks)),
     reconcileCollection(db.sharedItems, snapshot.sharedItems ?? []),
+    reconcileCollection(db.mindmapFolders, snapshot.mindmapFolders ?? []),
+    reconcileCollection(db.mindmaps, snapshot.mindmaps ?? []),
+    reconcileCollection(db.mindmapNodes, snapshot.mindmapNodes ?? []),
   ]);
-  const [taskLists, tasks, subtasks, sharedItems] = await Promise.all([
+  const [taskLists, tasks, subtasks, sharedItems, mindmapFolders, mindmaps, mindmapNodes] = await Promise.all([
     prepareEntityRowsForAtRest('taskLists', taskListsToPut),
     prepareEntityRowsForAtRest('tasks', tasksToPut),
     prepareEntityRowsForAtRest('subtasks', subtasksToPut),
     prepareEntityRowsForAtRest('sharedItems', sharedItemsToPut),
+    prepareEntityRowsForAtRest('mindmapFolders', mindmapFoldersToPut),
+    prepareEntityRowsForAtRest('mindmaps', mindmapsToPut),
+    prepareEntityRowsForAtRest('mindmapNodes', mindmapNodesToPut),
   ]);
 
-  await db.transaction('rw', [db.taskLists, db.tasks, db.subtasks, db.sharedItems], async () => {
+  await db.transaction('rw', [db.taskLists, db.tasks, db.subtasks, db.sharedItems, db.mindmapFolders, db.mindmaps, db.mindmapNodes], async () => {
     if (taskLists.length > 0) await db.taskLists.bulkPut(taskLists);
     if (tasks.length > 0) await db.tasks.bulkPut(tasks);
     if (subtasks.length > 0) await db.subtasks.bulkPut(subtasks);
     if (sharedItems.length > 0) await db.sharedItems.bulkPut(sharedItems);
+    if (mindmapFolders.length > 0) await db.mindmapFolders.bulkPut(mindmapFolders);
+    if (mindmaps.length > 0) await db.mindmaps.bulkPut(mindmaps);
+    if (mindmapNodes.length > 0) await db.mindmapNodes.bulkPut(mindmapNodes);
   });
 
   // Reconcile pomodoro settings (outside entity transaction)
@@ -116,7 +125,7 @@ async function reconcileFromSnapshot(snapshot: SyncData) {
   }
 }
 
-async function replaceLocalEntitiesFromSnapshot(snapshot: Pick<SyncData, 'taskLists' | 'tasks' | 'subtasks' | 'sharedItems'>): Promise<void> {
+async function replaceLocalEntitiesFromSnapshot(snapshot: Pick<SyncData, 'taskLists' | 'tasks' | 'subtasks' | 'sharedItems' | 'mindmapFolders' | 'mindmaps' | 'mindmapNodes'>): Promise<void> {
   // Bootstrap / force-pull / ZIP import / backup-restore can all carry pre-v5
   // data with the removed 'working' status — normalize before writing locally.
   const prepared = await prepareSyncDataForAtRest({
@@ -132,7 +141,16 @@ async function replaceLocalEntitiesFromSnapshot(snapshot: Pick<SyncData, 'taskLi
   const sharedItems = replaceShared
     ? await prepareEntityRowsForAtRest('sharedItems', snapshot.sharedItems ?? [])
     : [];
-  await db.transaction('rw', [db.taskLists, db.tasks, db.subtasks, db.sharedItems], async () => {
+  // Same guard for mindmaps (added in v6): pre-v6 sources omit the fields.
+  const replaceMindmaps = snapshot.mindmaps !== undefined;
+  const [mindmapFolders, mindmaps, mindmapNodes] = replaceMindmaps
+    ? await Promise.all([
+        prepareEntityRowsForAtRest('mindmapFolders', snapshot.mindmapFolders ?? []),
+        prepareEntityRowsForAtRest('mindmaps', snapshot.mindmaps ?? []),
+        prepareEntityRowsForAtRest('mindmapNodes', snapshot.mindmapNodes ?? []),
+      ])
+    : [[], [], []];
+  await db.transaction('rw', [db.taskLists, db.tasks, db.subtasks, db.sharedItems, db.mindmapFolders, db.mindmaps, db.mindmapNodes], async () => {
     await db.taskLists.clear();
     await db.tasks.clear();
     await db.subtasks.clear();
@@ -142,6 +160,14 @@ async function replaceLocalEntitiesFromSnapshot(snapshot: Pick<SyncData, 'taskLi
     if (replaceShared) {
       await db.sharedItems.clear();
       if (sharedItems.length > 0) await db.sharedItems.bulkPut(sharedItems);
+    }
+    if (replaceMindmaps) {
+      await db.mindmapFolders.clear();
+      await db.mindmaps.clear();
+      await db.mindmapNodes.clear();
+      if (mindmapFolders.length > 0) await db.mindmapFolders.bulkPut(mindmapFolders);
+      if (mindmaps.length > 0) await db.mindmaps.bulkPut(mindmaps);
+      if (mindmapNodes.length > 0) await db.mindmapNodes.bulkPut(mindmapNodes);
     }
   });
 }
@@ -500,14 +526,17 @@ async function getCredentials() {
 }
 
 export async function getLocalSnapshot(): Promise<SyncData> {
-  const { taskLists, tasks, subtasks, sharedItems } = await db.transaction(
+  const { taskLists, tasks, subtasks, sharedItems, mindmapFolders, mindmaps, mindmapNodes } = await db.transaction(
     'r',
-    [db.taskLists, db.tasks, db.subtasks, db.sharedItems],
+    [db.taskLists, db.tasks, db.subtasks, db.sharedItems, db.mindmapFolders, db.mindmaps, db.mindmapNodes],
     async () => ({
       taskLists: await db.taskLists.toArray(),
       tasks: await db.tasks.toArray(),
       subtasks: await db.subtasks.toArray(),
       sharedItems: await db.sharedItems.toArray(),
+      mindmapFolders: await db.mindmapFolders.toArray(),
+      mindmaps: await db.mindmaps.toArray(),
+      mindmapNodes: await db.mindmapNodes.toArray(),
     }),
   );
   const settings: Settings = {
@@ -516,7 +545,8 @@ export async function getLocalSnapshot(): Promise<SyncData> {
   const pomodoroSettings = await db.pomodoroSettings.get('pomodoro') ?? undefined;
   const soundPresets = await db.soundPresets.toArray();
   return {
-    syncVersion: SYNC_VERSION, taskLists, tasks, subtasks, sharedItems, settings,
+    syncVersion: SYNC_VERSION, taskLists, tasks, subtasks, sharedItems,
+    mindmapFolders, mindmaps, mindmapNodes, settings,
     pomodoroSettings, soundPresets,
   };
 }
@@ -1249,7 +1279,7 @@ async function compactSnapshot(pat: string, repo: string, encKey: CryptoKey) {
         snapshot = await decryptSyncData(encKey, snapshot);
       }
     } else {
-      snapshot = { taskLists: [], tasks: [], subtasks: [], settings: { theme: 'system' } };
+      snapshot = { taskLists: [], tasks: [], subtasks: [], sharedItems: [], mindmapFolders: [], mindmaps: [], mindmapNodes: [], settings: { theme: 'system' } };
     }
 
     // Get fresh changelog
@@ -1271,6 +1301,9 @@ async function compactSnapshot(pat: string, repo: string, encKey: CryptoKey) {
       task: new Map(snapshot.tasks.map((e) => [e.id, e])),
       subtask: new Map(snapshot.subtasks.map((e) => [e.id, e])),
       sharedItem: new Map((snapshot.sharedItems ?? []).map((e) => [e.id, e])),
+      mindmapFolder: new Map((snapshot.mindmapFolders ?? []).map((e) => [e.id, e])),
+      mindmap: new Map((snapshot.mindmaps ?? []).map((e) => [e.id, e])),
+      mindmapNode: new Map((snapshot.mindmapNodes ?? []).map((e) => [e.id, e])),
     };
 
     const sorted = [...entries].sort((a, b) => a.timestamp - b.timestamp);
@@ -1306,6 +1339,9 @@ async function compactSnapshot(pat: string, repo: string, encKey: CryptoKey) {
     snapshot.tasks = Array.from(entityMaps.task.values());
     snapshot.subtasks = Array.from(entityMaps.subtask.values());
     snapshot.sharedItems = Array.from(entityMaps.sharedItem.values());
+    snapshot.mindmapFolders = Array.from(entityMaps.mindmapFolder.values());
+    snapshot.mindmaps = Array.from(entityMaps.mindmap.values());
+    snapshot.mindmapNodes = Array.from(entityMaps.mindmapNode.values());
 
     // Cleanup soft-deletes older than 30 days
     snapshot = cleanupSoftDeletes(snapshot);
@@ -1425,10 +1461,13 @@ export async function forcePush() {
     // Data-loss guard: refuse to overwrite a POPULATED remote with an EMPTY local
     // database (e.g. a mis-click right after a wipe, before pulling). Force push
     // is destructive and propagates to every device — never let it silently wipe.
-    const localEmpty = localData.taskLists.length === 0 && localData.tasks.length === 0 && localData.subtasks.length === 0;
+    const localEmpty = localData.taskLists.length === 0 && localData.tasks.length === 0 && localData.subtasks.length === 0
+      && (localData.mindmaps?.length ?? 0) === 0;
     if (localEmpty && existing) {
       const p = safeParseJson<SyncData>(existing.data, 'existing snapshot (force push empty guard)');
-      const remoteCount = p.ok ? (p.value.taskLists.length + p.value.tasks.length + p.value.subtasks.length) : 0;
+      const remoteCount = p.ok
+        ? (p.value.taskLists.length + p.value.tasks.length + p.value.subtasks.length + (p.value.mindmaps?.length ?? 0))
+        : 0;
       if (remoteCount > 0) {
         reportProgress('error', 'Force push refused', 0);
         toast('Force push refused: local data is empty but remote has data. Pull first.', 'error');
@@ -1592,8 +1631,12 @@ export async function wipeAllData() {
       db.subtasks.clear(),
       db.sharedItems.clear(),
       db.sharedBlobs.clear(),
+      db.mindmapFolders.clear(),
+      db.mindmaps.clear(),
+      db.mindmapNodes.clear(),
       clearPendingEntries(),
     ]);
+    localStorage.removeItem('gtd25-mindmap-ui');
 
     // Push empty snapshot to remote if sync is configured
     const creds = await getCredentials();
@@ -1610,6 +1653,9 @@ export async function wipeAllData() {
         tasks: [],
         subtasks: [],
         sharedItems: [],
+        mindmapFolders: [],
+        mindmaps: [],
+        mindmapNodes: [],
         settings: { theme: (localStorage.getItem('gtd25-theme') as Settings['theme']) ?? 'system' },
         pomodoroSettings: currentPomSettings,
         soundPresets: currentSoundPresets,
@@ -1679,11 +1725,32 @@ export async function importData(data: ImportData) {
       console.warn(`Import FK validation: skipped ${skippedTasks} task(s), ${skippedSubtasks} subtask(s) with broken references`);
     }
 
+    // Mindmaps (present only in v3+ backups): nodes must reference an imported
+    // map; dangling folder refs are cleared (moved to top level) rather than
+    // dropped. Absent fields ⇒ preserve local mindmaps (same guard as sharedItems).
+    const hasMindmaps = data.mindmaps !== undefined;
+    const importedFolderIds = new Set((data.mindmapFolders ?? []).map((f) => f.id));
+    const validMindmapFolders = (data.mindmapFolders ?? []).map((f) =>
+      f.parentId && !importedFolderIds.has(f.parentId) ? { ...f, parentId: undefined } : f);
+    const validMindmaps = (data.mindmaps ?? []).map((m) =>
+      m.folderId && !importedFolderIds.has(m.folderId) ? { ...m, folderId: undefined } : m);
+    const validMapIds = new Set(validMindmaps.map((m) => m.id));
+    const validMindmapNodes = (data.mindmapNodes ?? []).filter((n) => validMapIds.has(n.mapId));
+    const skippedNodes = (data.mindmapNodes ?? []).length - validMindmapNodes.length;
+    if (skippedNodes > 0) {
+      console.warn(`Import FK validation: skipped ${skippedNodes} mindmap node(s) with broken references`);
+    }
+
     // Replace local data
     await replaceLocalEntitiesFromSnapshot({
       taskLists: data.taskLists,
       tasks: validTasks,
       subtasks: validSubtasks,
+      ...(hasMindmaps ? {
+        mindmapFolders: validMindmapFolders,
+        mindmaps: validMindmaps,
+        mindmapNodes: validMindmapNodes,
+      } : {}),
     });
     if (data.pomodoroSettings) {
       await db.pomodoroSettings.put(data.pomodoroSettings);
@@ -1708,6 +1775,11 @@ export async function importData(data: ImportData) {
         taskLists: data.taskLists,
         tasks: validTasks,
         subtasks: validSubtasks,
+        ...(hasMindmaps ? {
+          mindmapFolders: validMindmapFolders,
+          mindmaps: validMindmaps,
+          mindmapNodes: validMindmapNodes,
+        } : {}),
         settings: { theme },
         pomodoroSettings: data.pomodoroSettings,
         soundPresets: data.soundPresets,
@@ -1833,6 +1905,9 @@ export async function restoreFromBackup(tier: BackupTier) {
       taskLists: backupData.taskLists,
       tasks: backupData.tasks,
       subtasks: backupData.subtasks,
+      mindmapFolders: backupData.mindmapFolders,
+      mindmaps: backupData.mindmaps,
+      mindmapNodes: backupData.mindmapNodes,
       settings: backupData.settings ?? {
         theme: (localStorage.getItem('gtd25-theme') as Settings['theme']) ?? 'system',
       },

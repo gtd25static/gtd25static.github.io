@@ -142,6 +142,49 @@ export interface SharedItem {
   fieldTimestamps?: Record<string, number>;
 }
 
+// Mindmaps: hierarchical node diagrams organized in nested folders. All three
+// entities sync like tasks (changelog + field-level LWW). Only `name`/`label`
+// are SENSITIVE (encrypted on the wire and at rest); structural refs
+// (parentId/folderId/mapId) and order/timestamps stay plaintext so devices can
+// merge structure without decrypting — same exposure level as Task.listId.
+
+export interface MindmapFolder {
+  id: string;
+  name: string;
+  parentId?: string; // absent = top level of the folder tree
+  order: number;
+  createdAt: number;
+  updatedAt: number;
+  deletedAt?: number;
+  fieldTimestamps?: Record<string, number>;
+}
+
+export interface Mindmap {
+  id: string;
+  name: string;
+  folderId?: string; // absent = top level
+  order: number;
+  createdAt: number;
+  updatedAt: number;
+  deletedAt?: number;
+  fieldTimestamps?: Record<string, number>;
+}
+
+// A single node of a mindmap. The map's root is the node with no parentId;
+// tree-building resolves anomalies (two roots, cycles from concurrent
+// reparents) deterministically — see src/lib/mindmap-tree.ts.
+export interface MindmapNode {
+  id: string;
+  mapId: string;
+  parentId?: string; // absent = THE root node of the map
+  order: number;     // sibling order
+  label: string;     // 1..1000 chars, markdown subset — SENSITIVE
+  createdAt: number;
+  updatedAt: number;
+  deletedAt?: number;
+  fieldTimestamps?: Record<string, number>;
+}
+
 // Device-local cache of a Shared Folder blob's bytes (NEVER synced). `data` holds
 // plaintext bytes when Paranoid Mode is off, and DEK-encrypted bytes when it's on
 // (applied explicitly by shared-blobs.ts since the field-oriented vault middleware
@@ -293,7 +336,7 @@ export interface ChangeEntry {
   id: string;
   deviceId: string;
   timestamp: number;
-  entityType: 'taskList' | 'task' | 'subtask' | 'sharedItem';
+  entityType: 'taskList' | 'task' | 'subtask' | 'sharedItem' | 'mindmapFolder' | 'mindmap' | 'mindmapNode';
   entityId: string;
   operation: 'upsert' | 'delete';
   data?: Record<string, unknown>;
@@ -309,6 +352,9 @@ export interface SyncData {
   tasks: Task[];
   subtasks: Subtask[];
   sharedItems?: SharedItem[];
+  mindmapFolders?: MindmapFolder[];
+  mindmaps?: Mindmap[];
+  mindmapNodes?: MindmapNode[];
   settings: Settings;
   pomodoroSettings?: PomodoroSettings;
   soundPresets?: SoundPreset[];

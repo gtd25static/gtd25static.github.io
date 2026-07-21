@@ -1,13 +1,16 @@
-import type { SyncData, Task, TaskList, Subtask, SharedItem } from '../db/models';
+import type { SyncData, Task, TaskList, Subtask, SharedItem, MindmapFolder, Mindmap, MindmapNode } from '../db/models';
 import { encryptRow, getActiveAtRestKey, type Row } from '../db/vault-middleware';
 
-type AtRestTableName = 'taskLists' | 'tasks' | 'subtasks' | 'sharedItems';
-type AtRestRow = TaskList | Task | Subtask | SharedItem;
+type AtRestTableName = 'taskLists' | 'tasks' | 'subtasks' | 'sharedItems' | 'mindmapFolders' | 'mindmaps' | 'mindmapNodes';
+type AtRestRow = TaskList | Task | Subtask | SharedItem | MindmapFolder | Mindmap | MindmapNode;
 
 export function prepareEntityRowsForAtRest(tableName: 'taskLists', rows: TaskList[]): Promise<TaskList[]>;
 export function prepareEntityRowsForAtRest(tableName: 'tasks', rows: Task[]): Promise<Task[]>;
 export function prepareEntityRowsForAtRest(tableName: 'subtasks', rows: Subtask[]): Promise<Subtask[]>;
 export function prepareEntityRowsForAtRest(tableName: 'sharedItems', rows: SharedItem[]): Promise<SharedItem[]>;
+export function prepareEntityRowsForAtRest(tableName: 'mindmapFolders', rows: MindmapFolder[]): Promise<MindmapFolder[]>;
+export function prepareEntityRowsForAtRest(tableName: 'mindmaps', rows: Mindmap[]): Promise<Mindmap[]>;
+export function prepareEntityRowsForAtRest(tableName: 'mindmapNodes', rows: MindmapNode[]): Promise<MindmapNode[]>;
 export async function prepareEntityRowsForAtRest(
   tableName: AtRestTableName,
   rows: AtRestRow[],

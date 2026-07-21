@@ -16,6 +16,11 @@ export const MAX_LIST_NAME_LENGTH = 100;
 // Shared Folder overall storage cap (30 MB). Per-item cap = remaining free space.
 export const MAX_SHARED_FOLDER_BYTES = 30 * 1024 * 1024;
 
+// Mindmaps: node label length cap (chars) and outline-import node cap. The node
+// cap bounds both changelog volume on bulk import and the canvas render load.
+export const MAX_MINDMAP_LABEL_LENGTH = 1000;
+export const MAX_MINDMAP_IMPORT_NODES = 2000;
+
 // Local de-duplication (merge suggestions). Two entries in the same list are
 // flagged as likely duplicates when their title similarity is >= the threshold.
 // The default is conservative to favour precision (fewer false suggestions) and

@@ -21,7 +21,7 @@ export async function purgeOldTrashItems() {
     await db.sharedItems.bulkDelete(oldShared.map((i) => i.id));
   }
 
-  await db.transaction('rw', [db.taskLists, db.tasks, db.subtasks], async () => {
+  await db.transaction('rw', [db.taskLists, db.tasks, db.subtasks, db.mindmapFolders, db.mindmaps, db.mindmapNodes], async () => {
     const oldLists = await db.taskLists.filter((l) => !!l.deletedAt && l.deletedAt < cutoff).toArray();
     for (const l of oldLists) await db.taskLists.delete(l.id);
 
@@ -30,5 +30,14 @@ export async function purgeOldTrashItems() {
 
     const oldSubs = await db.subtasks.filter((s) => !!s.deletedAt && s.deletedAt < cutoff).toArray();
     for (const s of oldSubs) await db.subtasks.delete(s.id);
+
+    const oldFolders = await db.mindmapFolders.filter((f) => !!f.deletedAt && f.deletedAt < cutoff).toArray();
+    for (const f of oldFolders) await db.mindmapFolders.delete(f.id);
+
+    const oldMaps = await db.mindmaps.filter((m) => !!m.deletedAt && m.deletedAt < cutoff).toArray();
+    for (const m of oldMaps) await db.mindmaps.delete(m.id);
+
+    const oldNodes = await db.mindmapNodes.filter((n) => !!n.deletedAt && n.deletedAt < cutoff).toArray();
+    for (const n of oldNodes) await db.mindmapNodes.delete(n.id);
   });
 }

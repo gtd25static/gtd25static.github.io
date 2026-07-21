@@ -52,6 +52,13 @@ const migrations: RemoteMigration[] = [
       syncVersion: 5,
     }),
   },
+  {
+    // v6 adds Mindmaps (mindmapFolders/mindmaps/mindmapNodes). Additive: older
+    // snapshots simply lack the fields and are treated as no mindmaps.
+    fromVersion: 5,
+    toVersion: 6,
+    migrate: (data) => ({ ...data, syncVersion: 6 }),
+  },
 ];
 
 export function runRemoteMigrations(data: SyncData, from: number, to: number): SyncData {

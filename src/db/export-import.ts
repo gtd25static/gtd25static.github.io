@@ -1,18 +1,23 @@
 import { db } from './index';
-import type { TaskList, Task, Subtask, Settings, PomodoroSettings, SoundPreset } from './models';
+import type { TaskList, Task, Subtask, Settings, PomodoroSettings, SoundPreset, MindmapFolder, Mindmap, MindmapNode } from './models';
 import type JSZip from 'jszip';
 import { generateSalt, deriveKey, encryptBlob, decryptBlob, createVerifier, checkVerifier } from '../sync/crypto';
+import { MAX_MINDMAP_LABEL_LENGTH } from '../lib/constants';
 
 export interface ImportData {
   taskLists: TaskList[];
   tasks: Task[];
   subtasks: Subtask[];
+  // Mindmaps (export v3+). Absent on older backups ⇒ local mindmaps are preserved.
+  mindmapFolders?: MindmapFolder[];
+  mindmaps?: Mindmap[];
+  mindmapNodes?: MindmapNode[];
   settings?: Settings;
   pomodoroSettings?: PomodoroSettings;
   soundPresets?: SoundPreset[];
 }
 
-const CURRENT_EXPORT_VERSION = 2;
+const CURRENT_EXPORT_VERSION = 3;
 const EXPORT_FORMAT = 'gtd25-export';
 const PBKDF2_ITERATIONS = 600_000;
 
@@ -44,6 +49,9 @@ interface ExportPayload {
   taskLists: TaskList[];
   tasks: Task[];
   subtasks: Subtask[];
+  mindmapFolders?: MindmapFolder[];
+  mindmaps?: Mindmap[];
+  mindmapNodes?: MindmapNode[];
   settings: Settings;
   pomodoroSettings?: PomodoroSettings;
   soundPresets?: SoundPreset[];
@@ -62,10 +70,13 @@ export interface ImportOptions {
 }
 
 async function buildPayload(): Promise<ExportPayload> {
-  const [taskLists, tasks, subtasks, pomodoroSettings, soundPresets] = await Promise.all([
+  const [taskLists, tasks, subtasks, mindmapFolders, mindmaps, mindmapNodes, pomodoroSettings, soundPresets] = await Promise.all([
     db.taskLists.toArray(),
     db.tasks.toArray(),
     db.subtasks.toArray(),
+    db.mindmapFolders.toArray(),
+    db.mindmaps.toArray(),
+    db.mindmapNodes.toArray(),
     db.pomodoroSettings.get('pomodoro'),
     db.soundPresets.toArray(),
   ]);
@@ -80,6 +91,9 @@ async function buildPayload(): Promise<ExportPayload> {
     taskLists,
     tasks,
     subtasks,
+    mindmapFolders,
+    mindmaps,
+    mindmapNodes,
     settings,
     pomodoroSettings: pomodoroSettings ?? undefined,
     soundPresets: soundPresets.length > 0 ? soundPresets : undefined,
@@ -220,6 +234,9 @@ function validatePayload(parsed: ExportPayload): ImportData {
   if (parsed.taskLists.length > MAX_RECORDS_PER_ARRAY
     || parsed.tasks.length > MAX_RECORDS_PER_ARRAY
     || parsed.subtasks.length > MAX_RECORDS_PER_ARRAY
+    || (Array.isArray(parsed.mindmapFolders) && parsed.mindmapFolders.length > MAX_RECORDS_PER_ARRAY)
+    || (Array.isArray(parsed.mindmaps) && parsed.mindmaps.length > MAX_RECORDS_PER_ARRAY)
+    || (Array.isArray(parsed.mindmapNodes) && parsed.mindmapNodes.length > MAX_RECORDS_PER_ARRAY)
     || (Array.isArray(parsed.soundPresets) && parsed.soundPresets.length > MAX_RECORDS_PER_ARRAY)) {
     throw new Error('Invalid backup: too many records');
   }
@@ -283,6 +300,42 @@ function validatePayload(parsed: ExportPayload): ImportData {
     return true;
   });
 
+  // Validate mindmaps (optional; export v3+). Only distinguish "fields absent"
+  // (preserve local mindmaps) from "fields present" (replace) via hasMindmaps.
+  const hasMindmaps = parsed.mindmaps !== undefined;
+  let validMindmapFolders: MindmapFolder[] | undefined;
+  let validMindmaps: Mindmap[] | undefined;
+  let validMindmapNodes: MindmapNode[] | undefined;
+  if (hasMindmaps) {
+    if (!Array.isArray(parsed.mindmaps)
+      || (parsed.mindmapFolders !== undefined && !Array.isArray(parsed.mindmapFolders))
+      || (parsed.mindmapNodes !== undefined && !Array.isArray(parsed.mindmapNodes))) {
+      throw new Error('Invalid backup: malformed mindmap arrays');
+    }
+    validMindmapFolders = (parsed.mindmapFolders ?? []).filter((f) => {
+      if (!f.id || typeof f.id !== 'string') { warnings.push('Skipped mindmap folder without valid id'); return false; }
+      if (!f.name || typeof f.name !== 'string') { warnings.push(`Skipped mindmap folder ${f.id}: missing name`); return false; }
+      if (!isValidNumber(f.createdAt) || !isValidNumber(f.updatedAt)) { warnings.push(`Skipped mindmap folder ${f.id}: invalid timestamps`); return false; }
+      return true;
+    });
+    validMindmaps = parsed.mindmaps.filter((m) => {
+      if (!m.id || typeof m.id !== 'string') { warnings.push('Skipped mindmap without valid id'); return false; }
+      if (!m.name || typeof m.name !== 'string') { warnings.push(`Skipped mindmap ${m.id}: missing name`); return false; }
+      if (!isValidNumber(m.createdAt) || !isValidNumber(m.updatedAt)) { warnings.push(`Skipped mindmap ${m.id}: invalid timestamps`); return false; }
+      return true;
+    });
+    const validMapIds = new Set(validMindmaps.map((m) => m.id));
+    validMindmapNodes = (parsed.mindmapNodes ?? []).filter((n) => {
+      if (!n.id || typeof n.id !== 'string') { warnings.push('Skipped mindmap node without valid id'); return false; }
+      if (typeof n.label !== 'string' || n.label.length === 0) { warnings.push(`Skipped mindmap node ${n.id}: missing label`); return false; }
+      if (!isValidNumber(n.createdAt) || !isValidNumber(n.updatedAt)) { warnings.push(`Skipped mindmap node ${n.id}: invalid timestamps`); return false; }
+      if (!n.mapId || typeof n.mapId !== 'string' || !validMapIds.has(n.mapId)) { warnings.push(`Skipped mindmap node ${n.id}: references non-existent map`); return false; }
+      return true;
+    }).map((n) => (n.label.length > MAX_MINDMAP_LABEL_LENGTH
+      ? { ...n, label: n.label.slice(0, MAX_MINDMAP_LABEL_LENGTH) }
+      : n));
+  }
+
   // Validate pomodoro settings (optional)
   let validPomodoroSettings: PomodoroSettings | undefined;
   if (parsed.pomodoroSettings) {
@@ -314,6 +367,9 @@ function validatePayload(parsed: ExportPayload): ImportData {
     taskLists: validLists,
     tasks: fkValidTasks,
     subtasks: fkValidSubtasks,
+    mindmapFolders: validMindmapFolders,
+    mindmaps: validMindmaps,
+    mindmapNodes: validMindmapNodes,
     settings: parsed.settings,
     pomodoroSettings: validPomodoroSettings,
     soundPresets: validSoundPresets,

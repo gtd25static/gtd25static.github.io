@@ -41,14 +41,63 @@ describe('exportToZip', () => {
     expect(dataFile).toBeTruthy();
   });
 
-  it('has exportVersion:2 and exportedAt', async () => {
+  it('has exportVersion:3 and exportedAt', async () => {
     const blob = await exportToZip();
     const buf = await blobToUint8Array(blob);
     const zip = await JSZip.loadAsync(buf);
     const raw = await zip.file('data.json')!.async('string');
     const data = JSON.parse(raw);
-    expect(data.exportVersion).toBe(2);
+    expect(data.exportVersion).toBe(3);
     expect(data.exportedAt).toBeGreaterThan(0);
+  });
+
+  it('includes mindmap collections and round-trips them through import', async () => {
+    const now = Date.now();
+    await db.mindmapFolders.add({ id: 'f1', name: 'Folder', order: 0, createdAt: now, updatedAt: now });
+    await db.mindmaps.add({ id: 'm1', name: 'Map', folderId: 'f1', order: 0, createdAt: now, updatedAt: now });
+    await db.mindmapNodes.add({ id: 'n1', mapId: 'm1', label: 'Root', order: 0, createdAt: now, updatedAt: now });
+
+    const blob = await exportToZip();
+    const buf = await blobToUint8Array(blob);
+    const zip = await JSZip.loadAsync(buf);
+    const raw = await zip.file('data.json')!.async('string');
+    const imported = await parseImportZip(await makeTestZip(raw));
+
+    expect(imported.mindmapFolders).toHaveLength(1);
+    expect(imported.mindmaps?.[0].name).toBe('Map');
+    expect(imported.mindmapNodes?.[0].label).toBe('Root');
+  });
+
+  it('an old (v2) backup without mindmap fields imports with them undefined', async () => {
+    const file = await makeTestZip(JSON.stringify({
+      exportVersion: 2,
+      exportedAt: Date.now(),
+      taskLists: [], tasks: [], subtasks: [],
+    }));
+    const imported = await parseImportZip(file);
+    // Absent (not []) so importData preserves local mindmaps instead of wiping them
+    expect(imported.mindmaps).toBeUndefined();
+    expect(imported.mindmapFolders).toBeUndefined();
+    expect(imported.mindmapNodes).toBeUndefined();
+  });
+
+  it('skips mindmap nodes referencing a non-existent map and truncates oversized labels', async () => {
+    const now = Date.now();
+    const file = await makeTestZip(JSON.stringify({
+      exportVersion: 3,
+      exportedAt: now,
+      taskLists: [], tasks: [], subtasks: [],
+      mindmapFolders: [],
+      mindmaps: [{ id: 'm1', name: 'Map', order: 0, createdAt: now, updatedAt: now }],
+      mindmapNodes: [
+        { id: 'good', mapId: 'm1', label: 'x'.repeat(2000), order: 0, createdAt: now, updatedAt: now },
+        { id: 'bad', mapId: 'missing', label: 'orphan', order: 0, createdAt: now, updatedAt: now },
+      ],
+    }));
+    const imported = await parseImportZip(file);
+    expect(imported.mindmapNodes).toHaveLength(1);
+    expect(imported.mindmapNodes?.[0].id).toBe('good');
+    expect(imported.mindmapNodes?.[0].label).toHaveLength(1000);
   });
 
   it('includes all DB records', async () => {

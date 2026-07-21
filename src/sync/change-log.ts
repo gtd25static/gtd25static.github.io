@@ -5,9 +5,9 @@ import { SYNC_VERSION } from './version';
 import { migrateEntryData } from './migrations';
 import { mergeEntity, stampUpdatedFields } from './field-timestamps';
 import { prepareEntityRowsForAtRest } from './at-rest-writes';
-import type { Subtask, Task, TaskList, SharedItem } from '../db/models';
+import type { Subtask, Task, TaskList, SharedItem, MindmapFolder, Mindmap, MindmapNode } from '../db/models';
 
-type EntityRow = TaskList | Task | Subtask | SharedItem;
+type EntityRow = TaskList | Task | Subtask | SharedItem | MindmapFolder | Mindmap | MindmapNode;
 
 async function getDeviceId(): Promise<string> {
   const local = await db.localSettings.get('local');
@@ -128,6 +128,9 @@ const tableForEntity = {
   task: () => db.tasks,
   subtask: () => db.subtasks,
   sharedItem: () => db.sharedItems,
+  mindmapFolder: () => db.mindmapFolders,
+  mindmap: () => db.mindmaps,
+  mindmapNode: () => db.mindmapNodes,
 } as const;
 
 const tableNameForEntity = {
@@ -135,6 +138,9 @@ const tableNameForEntity = {
   task: 'tasks',
   subtask: 'subtasks',
   sharedItem: 'sharedItems',
+  mindmapFolder: 'mindmapFolders',
+  mindmap: 'mindmaps',
+  mindmapNode: 'mindmapNodes',
 } as const;
 
 const requiredFields: Record<ChangeEntry['entityType'], string[]> = {
@@ -142,6 +148,10 @@ const requiredFields: Record<ChangeEntry['entityType'], string[]> = {
   task: ['id', 'listId', 'title', 'status', 'order', 'createdAt', 'updatedAt'],
   subtask: ['id', 'taskId', 'title', 'status', 'order', 'createdAt', 'updatedAt'],
   sharedItem: ['id', 'type', 'name', 'size', 'order', 'createdAt', 'updatedAt'],
+  mindmapFolder: ['id', 'name', 'order', 'createdAt', 'updatedAt'],
+  mindmap: ['id', 'name', 'order', 'createdAt', 'updatedAt'],
+  // parentId is deliberately NOT required: the root node has none.
+  mindmapNode: ['id', 'mapId', 'label', 'order', 'createdAt', 'updatedAt'],
 };
 
 function validateEntityShape(data: Record<string, unknown> | undefined, entityType: ChangeEntry['entityType']): boolean {
@@ -161,12 +171,18 @@ export async function applyRemoteEntries(entries: ChangeEntry[]) {
     task: new Map<string, EntityRow | null>(),
     subtask: new Map<string, EntityRow | null>(),
     sharedItem: new Map<string, EntityRow | null>(),
+    mindmapFolder: new Map<string, EntityRow | null>(),
+    mindmap: new Map<string, EntityRow | null>(),
+    mindmapNode: new Map<string, EntityRow | null>(),
   };
   const writes: Record<ChangeEntry['entityType'], Map<string, EntityRow>> = {
     taskList: new Map<string, EntityRow>(),
     task: new Map<string, EntityRow>(),
     subtask: new Map<string, EntityRow>(),
     sharedItem: new Map<string, EntityRow>(),
+    mindmapFolder: new Map<string, EntityRow>(),
+    mindmap: new Map<string, EntityRow>(),
+    mindmapNode: new Map<string, EntityRow>(),
   };
 
   async function getCurrent(entityType: ChangeEntry['entityType'], entityId: string): Promise<EntityRow | null> {
@@ -229,16 +245,20 @@ export async function applyRemoteEntries(entries: ChangeEntry[]) {
     }
   }
 
-  const [taskLists, tasks, subtasks, sharedItems] = await Promise.all([
+  const [taskLists, tasks, subtasks, sharedItems, mindmapFolders, mindmaps, mindmapNodes] = await Promise.all([
     prepareEntityRowsForAtRest(tableNameForEntity.taskList, Array.from(writes.taskList.values()) as TaskList[]),
     prepareEntityRowsForAtRest(tableNameForEntity.task, Array.from(writes.task.values()) as Task[]),
     prepareEntityRowsForAtRest(tableNameForEntity.subtask, Array.from(writes.subtask.values()) as Subtask[]),
     prepareEntityRowsForAtRest(tableNameForEntity.sharedItem, Array.from(writes.sharedItem.values()) as SharedItem[]),
+    prepareEntityRowsForAtRest(tableNameForEntity.mindmapFolder, Array.from(writes.mindmapFolder.values()) as MindmapFolder[]),
+    prepareEntityRowsForAtRest(tableNameForEntity.mindmap, Array.from(writes.mindmap.values()) as Mindmap[]),
+    prepareEntityRowsForAtRest(tableNameForEntity.mindmapNode, Array.from(writes.mindmapNode.values()) as MindmapNode[]),
   ]);
 
-  if (taskLists.length === 0 && tasks.length === 0 && subtasks.length === 0 && sharedItems.length === 0) return;
+  if (taskLists.length === 0 && tasks.length === 0 && subtasks.length === 0 && sharedItems.length === 0
+    && mindmapFolders.length === 0 && mindmaps.length === 0 && mindmapNodes.length === 0) return;
 
-  await db.transaction('rw', [db.taskLists, db.tasks, db.subtasks, db.sharedItems], async () => {
+  await db.transaction('rw', [db.taskLists, db.tasks, db.subtasks, db.sharedItems, db.mindmapFolders, db.mindmaps, db.mindmapNodes], async () => {
     if (taskLists.length > 0) {
       await db.taskLists.bulkPut(taskLists);
     }
@@ -250,6 +270,15 @@ export async function applyRemoteEntries(entries: ChangeEntry[]) {
     }
     if (sharedItems.length > 0) {
       await db.sharedItems.bulkPut(sharedItems);
+    }
+    if (mindmapFolders.length > 0) {
+      await db.mindmapFolders.bulkPut(mindmapFolders);
+    }
+    if (mindmaps.length > 0) {
+      await db.mindmaps.bulkPut(mindmaps);
+    }
+    if (mindmapNodes.length > 0) {
+      await db.mindmapNodes.bulkPut(mindmapNodes);
     }
   });
 }

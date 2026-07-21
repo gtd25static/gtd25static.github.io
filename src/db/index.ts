@@ -1,5 +1,5 @@
 import Dexie, { type Table } from 'dexie';
-import type { TaskList, Task, Subtask, SyncMeta, LocalSettings, ChangeEntry, PomodoroSound, SoundPreset, PomodoroSettings, Vault, SharedItem, SharedBlob } from './models';
+import type { TaskList, Task, Subtask, SyncMeta, LocalSettings, ChangeEntry, PomodoroSound, SoundPreset, PomodoroSettings, Vault, SharedItem, SharedBlob, MindmapFolder, Mindmap, MindmapNode } from './models';
 import { newId } from '../lib/id';
 import { createLocalBackup } from './backup';
 import { purgeOldTrashItems } from './purge';
@@ -22,6 +22,9 @@ export class Gtd25DB extends Dexie {
   vault!: Table<Vault, string>;
   sharedItems!: Table<SharedItem, string>;
   sharedBlobs!: Table<SharedBlob, string>;
+  mindmapFolders!: Table<MindmapFolder, string>;
+  mindmaps!: Table<Mindmap, string>;
+  mindmapNodes!: Table<MindmapNode, string>;
 
   constructor() {
     super('gtd25');
@@ -57,6 +60,12 @@ export class Gtd25DB extends Dexie {
     this.version(7).stores({
       sharedItems: 'id, order, deletedAt',
       sharedBlobs: 'id',
+    });
+    // Mindmaps: folders / maps / nodes, all synced entities.
+    this.version(8).stores({
+      mindmapFolders: 'id, parentId, order, deletedAt',
+      mindmaps: 'id, folderId, order, deletedAt',
+      mindmapNodes: 'id, mapId, parentId, order, deletedAt',
     });
   }
 }
@@ -119,6 +128,157 @@ export async function cleanOrphans() {
 
   if (orphanedSubtasks > 0 || orphanedTasks > 0) {
     console.warn(`Orphan cleanup: ${orphanedSubtasks} subtask(s), ${orphanedTasks} task(s)`);
+  }
+
+  await cleanMindmapOrphans();
+}
+
+// Repair dangling mindmap references left by out-of-order remote entries or
+// concurrent reparents (applyRemoteEntries does no referential checks, same as
+// tasks). Existence checks are against hard-missing rows only — soft-deleted
+// rows still "exist" and are restored/purged through their own lifecycle.
+export async function cleanMindmapOrphans() {
+  const now = Date.now();
+  let repairs = 0;
+
+  await ensureDeviceId();
+  await db.transaction('rw', [db.mindmapFolders, db.mindmaps, db.mindmapNodes, db.changeLog], async () => {
+    const changeBatch: Array<{ entityType: 'mindmapFolder' | 'mindmap' | 'mindmapNode'; entityId: string; operation: 'upsert'; data: Record<string, unknown> }> = [];
+
+    const folders = await db.mindmapFolders.toArray();
+    const maps = await db.mindmaps.toArray();
+    const nodes = await db.mindmapNodes.toArray();
+    const folderIds = new Set(folders.map((f) => f.id));
+    const mapIds = new Set(maps.map((m) => m.id));
+
+    async function repairFolder(id: string, changes: Partial<MindmapFolder>, fields: string[]) {
+      const row = await db.mindmapFolders.get(id);
+      if (!row) return;
+      const ft = stampUpdatedFields(row.fieldTimestamps, fields, now);
+      await db.mindmapFolders.update(id, { ...changes, updatedAt: now, fieldTimestamps: ft });
+      const updated = await db.mindmapFolders.get(id);
+      if (updated) changeBatch.push({ entityType: 'mindmapFolder', entityId: id, operation: 'upsert', data: updated as unknown as Record<string, unknown> });
+      repairs++;
+    }
+
+    async function repairMap(id: string, changes: Partial<Mindmap>, fields: string[]) {
+      const row = await db.mindmaps.get(id);
+      if (!row) return;
+      const ft = stampUpdatedFields(row.fieldTimestamps, fields, now);
+      await db.mindmaps.update(id, { ...changes, updatedAt: now, fieldTimestamps: ft });
+      const updated = await db.mindmaps.get(id);
+      if (updated) changeBatch.push({ entityType: 'mindmap', entityId: id, operation: 'upsert', data: updated as unknown as Record<string, unknown> });
+      repairs++;
+    }
+
+    async function repairNode(id: string, changes: Partial<MindmapNode>, fields: string[]) {
+      const row = await db.mindmapNodes.get(id);
+      if (!row) return;
+      const ft = stampUpdatedFields(row.fieldTimestamps, fields, now);
+      await db.mindmapNodes.update(id, { ...changes, updatedAt: now, fieldTimestamps: ft });
+      const updated = await db.mindmapNodes.get(id);
+      if (updated) changeBatch.push({ entityType: 'mindmapNode', entityId: id, operation: 'upsert', data: updated as unknown as Record<string, unknown> });
+      repairs++;
+    }
+
+    // Folder/map pointing at a hard-missing parent folder → move to top level.
+    // Dexie update() can't delete a key, so parentId/folderId are set undefined.
+    for (const f of folders) {
+      if (f.parentId && !folderIds.has(f.parentId) && !f.deletedAt) {
+        await repairFolder(f.id, { parentId: undefined }, ['parentId']);
+      }
+    }
+    for (const m of maps) {
+      if (m.folderId && !folderIds.has(m.folderId) && !m.deletedAt) {
+        await repairMap(m.id, { folderId: undefined }, ['folderId']);
+      }
+    }
+
+    // Node whose map is hard-missing → soft-delete.
+    const nodeIds = new Set(nodes.map((n) => n.id));
+    const liveNodesByMap = new Map<string, MindmapNode[]>();
+    for (const n of nodes) {
+      if (!mapIds.has(n.mapId)) {
+        if (!n.deletedAt) await repairNode(n.id, { deletedAt: now }, ['deletedAt']);
+        continue;
+      }
+      if (n.deletedAt) continue;
+      const list = liveNodesByMap.get(n.mapId) ?? [];
+      list.push(n);
+      liveNodesByMap.set(n.mapId, list);
+    }
+
+    // Per map: re-point nodes with a hard-missing parent to the root, then break
+    // reparent cycles (all parents exist but a subtree is unreachable from root).
+    for (const [, mapNodes] of liveNodesByMap) {
+      const byId = new Map(mapNodes.map((n) => [n.id, n]));
+      // Deterministic root: oldest createdAt, then smallest id, among no-parent nodes.
+      const rootCandidates = mapNodes.filter((n) => !n.parentId)
+        .sort((a, b) => a.createdAt - b.createdAt || (a.id < b.id ? -1 : 1));
+      let root = rootCandidates[0];
+      if (!root) {
+        // No root at all (e.g. full cycle): promote the oldest live node.
+        const promoted = [...mapNodes].sort((a, b) => a.createdAt - b.createdAt || (a.id < b.id ? -1 : 1))[0];
+        if (!promoted) continue;
+        await repairNode(promoted.id, { parentId: undefined }, ['parentId']);
+        promoted.parentId = undefined;
+        root = promoted;
+      }
+
+      for (const n of mapNodes) {
+        if (n.parentId && !nodeIds.has(n.parentId)) {
+          await repairNode(n.id, { parentId: root.id === n.id ? undefined : root.id }, ['parentId']);
+          n.parentId = root.id === n.id ? undefined : root.id;
+        }
+      }
+
+      // Cycle breaking: BFS from root; while live nodes stay unreachable,
+      // re-point one deterministic cycle member to the root and retry.
+      for (let guard = 0; guard < mapNodes.length; guard++) {
+        const reachable = new Set<string>([root.id]);
+        const queue = [root.id];
+        while (queue.length > 0) {
+          const cur = queue.pop()!;
+          for (const n of mapNodes) {
+            if (n.parentId === cur && !reachable.has(n.id)) {
+              reachable.add(n.id);
+              queue.push(n.id);
+            }
+          }
+        }
+        const unreachable = mapNodes.filter((n) => !reachable.has(n.id));
+        if (unreachable.length === 0) break;
+        // Re-point the subtree's attachment point, not an arbitrary descendant:
+        // prefer the top of an orphaned subtree (parent soft-deleted, i.e. not
+        // among live nodes), then an actual cycle member (walking the parent
+        // chain returns to the node itself). Smallest id for determinism.
+        const isCycleMember = (n: MindmapNode): boolean => {
+          const seen = new Set<string>();
+          let cur = n.parentId ? byId.get(n.parentId) : undefined;
+          while (cur) {
+            if (cur.id === n.id) return true;
+            if (seen.has(cur.id)) return false; // a cycle that doesn't include n
+            seen.add(cur.id);
+            cur = cur.parentId ? byId.get(cur.parentId) : undefined;
+          }
+          return false;
+        };
+        const tops = unreachable.filter((n) => n.parentId && !byId.has(n.parentId));
+        const cycleMembers = tops.length > 0 ? [] : unreachable.filter(isCycleMember);
+        const candidates = tops.length > 0 ? tops : (cycleMembers.length > 0 ? cycleMembers : unreachable);
+        const target = candidates.sort((a, b) => (a.id < b.id ? -1 : 1))[0];
+        await repairNode(target.id, { parentId: root.id }, ['parentId']);
+        target.parentId = root.id;
+      }
+    }
+
+    if (changeBatch.length > 0) {
+      await recordChangeBatchInTx(changeBatch);
+    }
+  });
+
+  if (repairs > 0) {
+    console.warn(`Mindmap orphan cleanup: ${repairs} repair(s)`);
   }
 }
 
