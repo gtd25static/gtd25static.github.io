@@ -1,6 +1,7 @@
 import { useAppState } from '../../stores/app-state';
 import { useVault } from '../../hooks/use-vault';
 import { MindmapBrowser } from './MindmapBrowser';
+import { MindmapEditor } from './MindmapEditor';
 
 export function MindmapsView() {
   const openMindmapId = useAppState((s) => s.openMindmapId);
@@ -14,6 +15,7 @@ export function MindmapsView() {
     );
   }
 
-  // The editor branch is wired in MindmapEditor once the canvas exists.
-  return <MindmapBrowser key={openMindmapId ?? 'browser'} />;
+  return openMindmapId
+    ? <MindmapEditor key={openMindmapId} mapId={openMindmapId} />
+    : <MindmapBrowser />;
 }
