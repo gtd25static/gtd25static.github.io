@@ -40,4 +40,11 @@ export async function purgeOldTrashItems() {
     const oldNodes = await db.mindmapNodes.filter((n) => !!n.deletedAt && n.deletedAt < cutoff).toArray();
     for (const n of oldNodes) await db.mindmapNodes.delete(n.id);
   });
+
+  // Drop device-local collapse state for maps that no longer exist.
+  try {
+    const liveMapIds = new Set((await db.mindmaps.toArray()).map((m) => m.id));
+    const { useMindmapUi } = await import('../stores/mindmap-ui');
+    useMindmapUi.getState().pruneMaps(liveMapIds);
+  } catch { /* store unavailable (e.g. bare node env) — cosmetic cleanup only */ }
 }

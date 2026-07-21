@@ -50,12 +50,13 @@ src/
 │   ├── subtasks/      Inline subtask UI
 │   ├── pomodoro/      Timer + sound presets
 │   ├── settings/      Settings panes incl. backups & sync
+│   ├── mindmaps/      Folder browser + SVG mindmap editor canvas
 │   ├── layout/        AppShell, Sidebar, DndProvider
 │   └── ui/            Reusable primitives (Button, Modal, ConfirmDialog…)
 ├── hooks/             Business logic exposed as React hooks
 │   (use-tasks, use-subtasks, use-follow-ups, use-recurring,
-│    use-search, use-trash, use-keyboard, …)
-├── stores/            Zustand stores (app-state, pomodoro-store)
+│    use-search, use-trash, use-keyboard, use-mindmaps, …)
+├── stores/            Zustand stores (app-state, pomodoro-store, mindmap-ui)
 ├── db/                Dexie schema, migrations, backup/export-import
 ├── sync/              GitHub backend — see dedicated section below
 ├── lib/               Pure utilities (id, date-utils, task-sort, link-utils)
@@ -73,12 +74,21 @@ All persistent entities live in IndexedDB via Dexie. Definitions: `src/db/models
 - **SyncMeta** — per-device sync bookkeeping (last pull/push, pending counts, remote SHAs).
 - **LocalSettings** — credentials (`githubPat`, `githubRepo`), `deviceId`, `encryptionPassword`, `syncEnabled`. PAT/password live in IndexedDB locally; **never** sent anywhere except GitHub for the PAT, and **never** sent at all for the password (it's used purely for client-side key derivation).
 - **PomodoroSettings**, **SoundPreset** — timer configuration and audio.
+- **MindmapFolder / Mindmap / MindmapNode** — the Mindmaps section: nested
+  folders, maps, and one row per node (`mapId`, optional `parentId` — absent on
+  the map's single root — sibling `order`, `label` ≤ 1000 chars with a markdown
+  subset). All three sync per-entity like tasks, so concurrent edits converge
+  per node. Names/labels are encrypted; structure is plaintext for merging.
+  Layout is computed, never stored (strict left-to-right auto-layout in
+  `src/lib/mindmap-layout.ts`; tree building + anomaly absorption in
+  `src/lib/mindmap-tree.ts`; markdown-outline interchange in
+  `src/lib/mindmap-outline.ts`).
 
 ## State Management
 
 Two layers, with a deliberate split:
 
-- **Zustand (`src/stores/app-state.ts`)** — pure UI state: selected list, expanded task ids, modal toggles, bulk-selection set, focus targets. Synchronous, not persisted.
+- **Zustand (`src/stores/app-state.ts`)** — pure UI state: selected list, expanded task ids, modal toggles, bulk-selection set, focus targets. Synchronous, not persisted. (`src/stores/mindmap-ui.ts` is the one exception: per-map collapse state, mirrored to the `gtd25-mindmap-ui` localStorage key — device-local by design, never synced.)
 - **Dexie (IndexedDB)** — every persistent entity, plus the change log and settings. Components read via `dexie-react-hooks` (`useLiveQuery`) so the UI auto-updates on writes.
 
 Business logic lives in hooks (`src/hooks/use-*.ts`), not in components or stores. A component calls `useTasks().createTask(...)`, the hook writes to Dexie, the live query re-fires, the UI re-renders, and the sync engine eventually pushes the change.
@@ -121,7 +131,7 @@ End-to-end encryption is mandatory once the user enables sync. The server (GitHu
 1. **Lock** — single in-flight sync per device (AbortController, 45 s timeout).
 2. **Fetch** — parallel GET of snapshot and changelog, each with their SHA.
 3. **Resolve key** — derive from password + salt; verify against `encryptionVerifier`.
-4. **Version gate** — refuse to sync if remote `syncVersion` exceeds the local `SYNC_VERSION` (currently `3`, see `src/sync/version.ts`). Older remote → migrate; newer → block with a user-visible toast asking them to update the app.
+4. **Version gate** — refuse to sync if remote `syncVersion` exceeds the local `SYNC_VERSION` (currently `6`, see `src/sync/version.ts`). Older remote → migrate; newer → block with a user-visible toast asking them to update the app.
 5. **Apply remote** — decrypt and replay the changelog into Dexie in timestamp order, then reconcile against the snapshot via field-level merge (see below).
 6. **Push local** — read pending entries from the local change log, encrypt, append to remote changelog. Optimistic concurrency uses the file SHA on `PUT`; on 409 the engine refetches and retries (up to a few times with jittered backoff, `src/sync/sync-engine.ts:960`).
 7. **Compact** — when the remote changelog exceeds **`MAX_CHANGELOG_ENTRIES = 500`** (`sync-engine.ts:33`), or on first-time encryption, fold it into the snapshot and reset the changelog to `[]`.
