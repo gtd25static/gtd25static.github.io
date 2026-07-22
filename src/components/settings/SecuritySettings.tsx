@@ -308,6 +308,12 @@ function ParanoidExtrasSection() {
         <BackgroundLockDelay seconds={local.paranoidBackgroundLockSeconds ?? DEFAULT_BACKGROUND_LOCK_SECONDS} />
       </ExtraToggle>
       <ExtraToggle
+        label="Redact mode (Ctrl/Cmd+Shift+H)"
+        description="Adds an eye button (sidebar, bottom) and a hotkey that blur titles and content across the app, revealing only what's under the cursor or keyboard focus. For working in public. Deterrence only — a photo of the screen still blurs, but the data is on the device."
+        checked={!!local.paranoidRedactModeEnabled}
+        onChange={(on) => updateLocalSettings({ paranoidRedactModeEnabled: on })}
+      />
+      <ExtraToggle
         label="Instant-lock hotkey (Ctrl/Cmd+Shift+L)"
         description="Lock the vault from anywhere with one chord — the reflex version of the sidebar lock button. Works even while typing in a field."
         checked={!!local.paranoidLockHotkeyEnabled}

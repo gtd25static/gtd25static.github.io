@@ -63,6 +63,7 @@ export function SubtaskItem({ subtask }: Props) {
   return (
     <div
       data-focus-id={subtask.id}
+      data-redact
       onContextMenu={handleContextMenu}
       className={`group flex items-center gap-2 rounded-md px-2 py-2.5 md:py-1 ${
         focused

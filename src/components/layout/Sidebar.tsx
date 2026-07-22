@@ -29,6 +29,7 @@ import { useSpecialListContext } from '../../hooks/use-special-list';
 import { useFocusSet } from '../../hooks/use-focus-mode';
 import { useSharedStorage, formatBytes } from '../../hooks/use-shared-items';
 import { useVault } from '../../hooks/use-vault';
+import { useLocalSettings } from '../../hooks/use-settings';
 import { lock as lockVault } from '../../db/vault';
 import { CheckForUpdatesButton } from './CheckForUpdatesButton';
 
@@ -191,7 +192,7 @@ function ListItem({ list, selected, onSelect, highlight, focused, count, allList
             <path d="M6 10l2.5 2.5L14 7" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
           </svg>
         )}
-        <span className="flex-1 min-w-0 break-words text-left"><HighlightedName name={list.name} highlight={highlight ?? ''} /></span>
+        <span data-redact className="flex-1 min-w-0 break-words text-left"><HighlightedName name={list.name} highlight={highlight ?? ''} /></span>
         {count > 0 && (
           <span className="text-xs text-zinc-400">{count}</span>
         )}
@@ -265,6 +266,9 @@ export function Sidebar() {
   const { warningCount, blockedCount, recurringCount } = useSpecialListContext();
   const specialTotal = warningCount + blockedCount + recurringCount;
   const { enabled: paranoidEnabled } = useVault();
+  const localSettings = useLocalSettings();
+  const redacted = useAppState((s) => s.redacted);
+  const setRedacted = useAppState((s) => s.setRedacted);
   const sharedStorage = useSharedStorage();
   const focusCount = useFocusSet().members.length;
 
@@ -683,6 +687,28 @@ export function Sidebar() {
 
       {/* Bottom actions */}
       <div className="border-t border-zinc-200 px-2 py-2 dark:border-zinc-800">
+        {paranoidEnabled && localSettings.paranoidRedactModeEnabled && (
+          <button
+            onClick={() => setRedacted(!redacted)}
+            aria-pressed={redacted}
+            className="flex w-full items-center gap-3 rounded-full px-3 py-3.5 md:py-2 text-sm text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800"
+          >
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+              {redacted ? (
+                <>
+                  <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19" />
+                  <path d="M1 1l22 22" />
+                </>
+              ) : (
+                <>
+                  <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+                  <circle cx="12" cy="12" r="3" />
+                </>
+              )}
+            </svg>
+            <span className="flex-1 text-left">{redacted ? 'Reveal content' : 'Redact content'}</span>
+          </button>
+        )}
         {paranoidEnabled && (
           <button
             onClick={() => { lockVault(); setSidebarOpen(false); }}

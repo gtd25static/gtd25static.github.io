@@ -169,3 +169,19 @@ input[type="checkbox"] {
   from { opacity: 0; }
   to   { opacity: 1; }
 }
+
+/* --- Paranoid shoulder-surfing redact mode ----------------------------------
+   While .gtd-redacted is on the shell root, everything tagged [data-redact]
+   blurs; hovering or keyboard-focusing an element reveals just that one.
+   Deterrence for working in public — the DOM still holds the plaintext. */
+.gtd-redacted [data-redact] {
+  filter: blur(6px);
+  transition: filter 120ms ease;
+}
+.gtd-redacted [data-redact]:hover,
+.gtd-redacted [data-redact]:focus-within {
+  filter: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .gtd-redacted [data-redact] { transition: none; }
+}

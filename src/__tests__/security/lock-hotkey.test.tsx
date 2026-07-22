@@ -7,10 +7,13 @@ let paranoidOn = true;
 let unlocked = true;
 const mockLock = vi.fn();
 
-// use-keyboard runs several liveQueries; the hotkey toggle is the only one
-// whose default value is `false` — key off that to feed it, arrays for the rest.
+// use-keyboard runs several liveQueries; the paranoid-hotkeys one is the only
+// one whose default is an object with a `lock` key — key off that to feed it.
 vi.mock('dexie-react-hooks', () => ({
-  useLiveQuery: (_fn: unknown, _deps: unknown, def?: unknown) => (def === false ? hotkeyEnabled : []),
+  useLiveQuery: (_fn: unknown, _deps: unknown, def?: unknown) =>
+    (def && typeof def === 'object' && 'lock' in (def as object)
+      ? { lock: hotkeyEnabled, redact: false }
+      : []),
 }));
 vi.mock('../../db', () => ({ db: {} }));
 vi.mock('../../db/vault', () => ({

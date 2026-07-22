@@ -28,15 +28,18 @@ export function useKeyboard() {
   const selectedListId = useAppState((s) => s.selectedListId);
   const focusedItemId = useAppState((s) => s.focusedItemId);
 
-  // The lock hotkey's toggle, readable synchronously from the key handler
+  // Paranoid-extra toggles, readable synchronously from the key handler
   // (preventDefault can't wait for an async read).
-  const lockHotkeyEnabled = useLiveQuery(
-    async () => !!(await db.localSettings.get('local'))?.paranoidLockHotkeyEnabled,
+  const paranoidHotkeys = useLiveQuery(
+    async () => {
+      const local = await db.localSettings.get('local');
+      return { lock: !!local?.paranoidLockHotkeyEnabled, redact: !!local?.paranoidRedactModeEnabled };
+    },
     [],
-    false,
+    { lock: false, redact: false },
   );
-  const lockHotkeyRef = useRef(lockHotkeyEnabled);
-  lockHotkeyRef.current = lockHotkeyEnabled;
+  const paranoidHotkeysRef = useRef(paranoidHotkeys);
+  paranoidHotkeysRef.current = paranoidHotkeys;
 
   // Sidebar items
   const lists = useLiveQuery(
@@ -191,9 +194,18 @@ export function useKeyboard() {
       // Ctrl+Shift+L: instant vault lock (Paranoid extra, opt-in). Global —
       // works from inputs too; when you need it, you need it NOW.
       if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === 'L' || e.key === 'l')) {
-        if (isParanoidEnabled() && isUnlocked() && lockHotkeyRef.current) {
+        if (isParanoidEnabled() && isUnlocked() && paranoidHotkeysRef.current.lock) {
           e.preventDefault();
           lock();
+        }
+        return;
+      }
+
+      // Ctrl+Shift+H: toggle the shoulder-surfing redact veil (Paranoid extra).
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === 'H' || e.key === 'h')) {
+        if (isParanoidEnabled() && paranoidHotkeysRef.current.redact) {
+          e.preventDefault();
+          s.setRedacted(!s.redacted);
         }
         return;
       }

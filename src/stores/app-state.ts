@@ -18,6 +18,10 @@ interface AppState {
   // Mindmaps: id of the map open in the editor (null = folder browser).
   // Survives switching sections so returning to Mindmaps restores the open map.
   openMindmapId: string | null;
+  // Paranoid extra: shoulder-surfing redact mode is ACTIVE (feature gate lives
+  // in localSettings). Mirrored to localStorage so it survives a lock/unlock
+  // cycle in public — the one moment you most need it to stick.
+  redacted: boolean;
   // Bulk operations
   bulkMode: boolean;
   selectedTaskIds: Set<string>;
@@ -38,6 +42,7 @@ interface AppState {
   setNavigateToTaskId: (id: string | null) => void;
   setQuickCaptureOpen: (open: boolean) => void;
   setOpenMindmapId: (id: string | null) => void;
+  setRedacted: (on: boolean) => void;
   // Bulk operations
   setBulkMode: (on: boolean) => void;
   toggleTaskSelected: (id: string) => void;
@@ -59,6 +64,7 @@ export const useAppState = create<AppState>((set) => ({
   settingsOpen: false,
   helpOpen: false,
   trashOpen: false,
+  redacted: typeof localStorage !== 'undefined' && localStorage.getItem('gtd25-redacted') === '1',
   searchQuery: '',
   navigateToTaskId: null,
   quickCaptureOpen: false,
@@ -94,6 +100,13 @@ export const useAppState = create<AppState>((set) => ({
   setNavigateToTaskId: (id) => set({ navigateToTaskId: id }),
   setQuickCaptureOpen: (open) => set({ quickCaptureOpen: open }),
   setOpenMindmapId: (id) => set({ openMindmapId: id }),
+  setRedacted: (on) => {
+    try {
+      if (on) localStorage.setItem('gtd25-redacted', '1');
+      else localStorage.removeItem('gtd25-redacted');
+    } catch { /* best-effort */ }
+    set({ redacted: on });
+  },
   setBulkMode: (on) => set({ bulkMode: on, selectedTaskIds: on ? new Set() : new Set() }),
   toggleTaskSelected: (id) =>
     set((state) => {

@@ -96,7 +96,7 @@ export function SharedItemCard({ item }: { item: SharedItem }) {
   }
 
   return (
-    <div className="group flex items-center gap-3 rounded-xl border border-zinc-200 bg-white px-3 py-2.5 dark:border-zinc-700 dark:bg-zinc-800/50">
+    <div data-redact className="group flex items-center gap-3 rounded-xl border border-zinc-200 bg-white px-3 py-2.5 dark:border-zinc-700 dark:bg-zinc-800/50">
       <TypeIcon type={item.type} />
       <div className="min-w-0 flex-1">
         {item.type === 'link' && item.url ? (

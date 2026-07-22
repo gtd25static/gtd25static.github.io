@@ -151,6 +151,7 @@ export const MindmapNodeView = memo(function MindmapNodeView({
           // @ts-expect-error xmlns is required on HTML content inside foreignObject
           xmlns="http://www.w3.org/1999/xhtml"
           data-mindmap-node={leaving ? undefined : node.id}
+          data-redact
           onPointerDown={(e) => onPointerDown(e, node.id)}
           className={`flex h-full w-full items-center justify-center ${editing ? 'cursor-text' : 'cursor-grab'}`}
           style={{ color: style.fg }}

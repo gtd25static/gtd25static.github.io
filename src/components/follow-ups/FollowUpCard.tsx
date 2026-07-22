@@ -124,7 +124,7 @@ export function FollowUpCard({ task, index, dragHandleProps }: Props) {
   }
 
   return (
-    <div data-focus-id={task.id} onContextMenu={handleContextMenu} className={`group mb-2 flex flex-col md:flex-row md:items-start gap-2 md:gap-3 rounded-lg border px-3 py-3 shadow-sm transition-shadow hover:shadow-md ${
+    <div data-focus-id={task.id} data-redact onContextMenu={handleContextMenu} className={`group mb-2 flex flex-col md:flex-row md:items-start gap-2 md:gap-3 rounded-lg border px-3 py-3 shadow-sm transition-shadow hover:shadow-md ${
       focused
         ? 'border-accent-500 ring-2 ring-accent-500/40 dark:border-accent-400 dark:ring-accent-400/30'
         : 'border-zinc-200 dark:border-zinc-700/60'

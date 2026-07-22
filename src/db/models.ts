@@ -271,6 +271,7 @@ export interface LocalSettings {
   paranoidBackgroundLockEnabled?: boolean;  // lock the vault after the tab has been hidden N seconds
   paranoidBackgroundLockSeconds?: number;   // 0 = the instant it hides; clamped 0-300, default 30
   paranoidLockHotkeyEnabled?: boolean;      // Ctrl/Cmd+Shift+L locks the vault instantly
+  paranoidRedactModeEnabled?: boolean;      // offer the shoulder-surfing redact toggle (Ctrl/Cmd+Shift+H)
   // "Relaxed unlock" (device-local; not synced): stretch idle/grace by +10% per
   // re-unlock in the last 36h (first unlock excluded), capped ×2. unlockHistory is
   // unlock timestamps pruned to 36h, recorded only while the feature is enabled.

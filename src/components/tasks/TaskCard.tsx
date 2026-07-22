@@ -92,7 +92,7 @@ export function TaskCard({ task, index, dragHandleProps }: Props) {
   }
 
   return (
-    <div data-task-id={task.id} data-focus-id={task.id} className={`mb-1.5 rounded-lg transition-colors duration-700 ${justCompleted ? 'bg-green-50 dark:bg-green-900/20' : ''} ${focused ? 'relative z-10 ring-2 ring-accent-500 dark:ring-accent-400' : ''} ${bulkMode && isSelected ? 'ring-2 ring-accent-500/40' : ''}`} onContextMenu={bulkMode ? undefined : handleContextMenu} onTouchStart={handleTouchStart} onTouchEnd={handleTouchEnd} onTouchMove={handleTouchEnd}>
+    <div data-task-id={task.id} data-focus-id={task.id} data-redact className={`mb-1.5 rounded-lg transition-colors duration-700 ${justCompleted ? 'bg-green-50 dark:bg-green-900/20' : ''} ${focused ? 'relative z-10 ring-2 ring-accent-500 dark:ring-accent-400' : ''} ${bulkMode && isSelected ? 'ring-2 ring-accent-500/40' : ''}`} onContextMenu={bulkMode ? undefined : handleContextMenu} onTouchStart={handleTouchStart} onTouchEnd={handleTouchEnd} onTouchMove={handleTouchEnd}>
       <div
         className={`group flex items-center gap-2 rounded-t-lg px-2 py-3 md:py-1.5 cursor-pointer border transition-shadow ${
           focused

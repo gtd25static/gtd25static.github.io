@@ -32,6 +32,7 @@ export function FocusTaskCard({ task }: { task: Task }) {
 
   return (
     <div
+      data-redact
       onClick={() => revealTask(task.id, task.listId)}
       className="cursor-pointer rounded-xl border border-zinc-200 bg-white p-5 shadow-sm transition-colors hover:border-zinc-300 dark:border-zinc-700/60 dark:bg-zinc-900/50 dark:hover:border-zinc-600"
     >

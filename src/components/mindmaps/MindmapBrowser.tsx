@@ -227,7 +227,7 @@ function BrowserRow({ icon, name, detail, onOpen, menu }: {
       <button onClick={onOpen} className="flex min-w-0 flex-1 items-center gap-3 text-left">
         <span className="shrink-0 text-zinc-400">{icon}</span>
         <span className="min-w-0 flex-1">
-          <span className="block truncate text-sm text-zinc-800 dark:text-zinc-100">{name}</span>
+          <span data-redact className="block truncate text-sm text-zinc-800 dark:text-zinc-100">{name}</span>
           <span className="block text-xs text-zinc-400">{detail}</span>
         </span>
       </button>

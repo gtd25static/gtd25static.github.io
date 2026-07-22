@@ -64,6 +64,7 @@ export function InboxCard({ task, index }: Props) {
   return (
     <div
       ref={cardRef}
+      data-redact
       onContextMenu={handleContextMenu}
       className={`group mb-1.5 flex items-center gap-2 rounded-lg border border-zinc-200 px-2 py-3 md:py-2 shadow-sm transition-shadow hover:shadow-md dark:border-zinc-700/60 ${
         index % 2 === 1 ? 'bg-zinc-50/70 dark:bg-zinc-800/30' : 'bg-white dark:bg-zinc-900/50'
