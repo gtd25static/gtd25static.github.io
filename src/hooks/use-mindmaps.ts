@@ -364,6 +364,29 @@ export async function createMindmap(name: string, folderId?: string): Promise<Mi
   }
 }
 
+/** Set (hex) or clear (null) the map's canvas background. */
+export async function setMindmapBackground(id: string, color: string | null): Promise<boolean> {
+  try {
+    const existing = await db.mindmaps.get(id);
+    if (!existing || existing.deletedAt) return false;
+    const background = isHexColor(color) ? color : undefined;
+    if (existing.background === background) return true;
+    const now = Date.now();
+    const updated: Mindmap = {
+      ...existing,
+      background,
+      updatedAt: now,
+      fieldTimestamps: stampUpdatedFields(existing.fieldTimestamps, ['background'], now),
+    };
+    if (background === undefined) delete updated.background;
+    await putMindmapRows([{ table: 'mindmaps', entityType: 'mindmap', row: updated }]);
+    return true;
+  } catch (error) {
+    handleDbError(error, 'set mindmap background');
+    return false;
+  }
+}
+
 export async function renameMindmap(id: string, name: string): Promise<void> {
   try {
     const clean = clampMindmapLabel(name);
@@ -701,6 +724,25 @@ export async function restoreMindmapNodeSubtree(ids: string[]): Promise<void> {
 // --- Outline export / import ---
 
 /** Markdown outline of a map, or null if the map/root doesn't exist. */
+/** A map's live nodes plus a filename-safe version of its name, for exporters. */
+export async function getMindmapExportData(
+  mapId: string,
+): Promise<{ safeName: string; nodes: MindmapNode[]; background?: string } | null> {
+  try {
+    const map = await db.mindmaps.get(mapId);
+    if (!map || map.deletedAt) return null;
+    const nodes = (await db.mindmapNodes.where('mapId').equals(mapId).toArray()).filter((n) => !n.deletedAt);
+    return { safeName: safeFileName(map.name), nodes, background: map.background };
+  } catch (error) {
+    handleDbError(error, 'read mindmap for export');
+    return null;
+  }
+}
+
+function safeFileName(name: string): string {
+  return name.replace(/[\\/:*?"<>|]/g, '_').slice(0, 80) || 'mindmap';
+}
+
 export async function exportMindmapOutline(mapId: string): Promise<{ filename: string; content: string } | null> {
   try {
     const map = await db.mindmaps.get(mapId);
@@ -708,8 +750,7 @@ export async function exportMindmapOutline(mapId: string): Promise<{ filename: s
     const nodes = (await db.mindmapNodes.where('mapId').equals(mapId).toArray()).filter((n) => !n.deletedAt);
     const tree = buildTree(nodes);
     if (!tree.root) return null;
-    const safeName = map.name.replace(/[\\/:*?"<>|]/g, '_').slice(0, 80) || 'mindmap';
-    return { filename: `${safeName}.md`, content: mapToOutline(tree) };
+    return { filename: `${safeFileName(map.name)}.md`, content: mapToOutline(tree) };
   } catch (error) {
     handleDbError(error, 'export mindmap outline');
     return null;

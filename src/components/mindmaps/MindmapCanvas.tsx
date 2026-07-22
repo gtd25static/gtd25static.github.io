@@ -44,7 +44,7 @@ const UNDO_TOAST_MS = 8000;
 //   the open editor = commit and leave edit mode.
 // The per-node action buttons follow the mouse (see mindmap-hover.ts) and fall
 // back to the selected node, which is what touch — no hover — and the keyboard use.
-export function MindmapCanvas({ mapId }: { mapId: string }) {
+export function MindmapCanvas({ mapId, background }: { mapId: string; background?: string }) {
   const nodes = useMindmapNodes(mapId);
   const collapsedArr = useMindmapUi((s) => s.collapsed[mapId]);
   const collapsedSet = useMemo(() => new Set(collapsedArr ?? []), [collapsedArr]);
@@ -504,6 +504,7 @@ export function MindmapCanvas({ mapId }: { mapId: string }) {
       tabIndex={0}
       onKeyDown={onKeyDown}
       className="relative flex-1 overflow-hidden outline-none"
+      style={background ? { background } : undefined}
       data-testid="mindmap-canvas"
     >
       <svg

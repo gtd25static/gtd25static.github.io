@@ -163,6 +163,8 @@ export interface Mindmap {
   id: string;
   name: string;
   folderId?: string; // absent = top level
+  /** Canvas background, '#rrggbb'. Absent = the theme's surface. SENSITIVE. */
+  background?: string;
   order: number;
   createdAt: number;
   updatedAt: number;

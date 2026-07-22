@@ -14,7 +14,7 @@ const SENSITIVE_FIELDS: Record<string, string[]> = {
   // Mindmaps: names/labels are content; structural refs (parentId/folderId/mapId)
   // stay plaintext so structure merges without decrypting (like Task.listId).
   mindmapFolder: ['name'],
-  mindmap: ['name'],
+  mindmap: ['name', 'background'],
   // Formatting rides along encrypted: a palette is content ("red = blocked"),
   // and it costs nothing to hide it. Structure (parentId/order) stays plaintext.
   mindmapNode: ['label', 'shape', 'palette', 'colorBg', 'colorFg', 'colorBorder'],

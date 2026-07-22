@@ -7,6 +7,7 @@ import { MindmapStyleToolbar } from './MindmapStyleToolbar';
 import { useMindmapUi } from '../../stores/mindmap-ui';
 import { DropdownMenu } from '../ui/DropdownMenu';
 import { downloadOutline, copyOutline } from './outline-actions';
+import { copyMindmapPng, downloadMindmapPng, downloadMindmapSvg } from './image-actions';
 
 export function MindmapEditor({ mapId }: { mapId: string }) {
   const map = useMindmap(mapId);
@@ -51,15 +52,22 @@ export function MindmapEditor({ mapId }: { mapId: string }) {
             </svg>
           }
           items={[
+            { label: 'Copy PNG to clipboard', onClick: () => void copyMindmapPng(mapId) },
+            { label: 'Download PNG', onClick: () => void downloadMindmapPng(mapId) },
+            { label: 'Download SVG', onClick: () => void downloadMindmapSvg(mapId) },
             { label: 'Download outline (.md)', onClick: () => void downloadOutline(mapId) },
             { label: 'Copy outline', onClick: () => void copyOutline(mapId) },
           ]}
         />
       </div>
-      {selectedNode && (
-        <MindmapStyleToolbar node={selectedNode} isRoot={!selectedNode.parentId} />
-      )}
-      <MindmapCanvas mapId={mapId} />
+      <MindmapStyleToolbar
+        mapId={mapId}
+        node={selectedNode}
+        isRoot={!!selectedNode && !selectedNode.parentId}
+        nodes={nodes}
+        background={map.background}
+      />
+      <MindmapCanvas mapId={mapId} background={map.background} />
     </div>
   );
 }

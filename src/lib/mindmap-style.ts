@@ -48,6 +48,15 @@ function paletteVars(id: 'default' | 'root' | string): { bg: string; fg: string;
   };
 }
 
+/** A colour trio the user saved to reuse (corporate colours, etc.). */
+export interface CustomPalette {
+  id: string;
+  name: string;
+  bg: string;
+  fg: string;
+  border: string;
+}
+
 export interface NodeStylePatch {
   shape?: MindmapNodeShape;
   /** null clears the preset back to the default look. */

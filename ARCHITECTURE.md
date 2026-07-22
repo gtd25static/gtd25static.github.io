@@ -85,7 +85,10 @@ All persistent entities live in IndexedDB via Dexie. Definitions: `src/db/models
   `src/lib/mindmap-outline.ts`; per-node shape/colour formatting in
   `src/lib/mindmap-style.ts` (presets stored as ids that resolve to CSS
   variables, so they follow the theme; custom colours validated to `#rrggbb`
-  on write *and* on render); hover/action-button geometry in
+  on write *and* on render); PNG/SVG export rebuilt from the layout in
+  `src/lib/mindmap-export-svg.ts` (real SVG `<text>`, not a DOM dump — the
+  canvas draws labels in a foreignObject, which vector editors and
+  SVG-as-`<img>` rasterisation don't handle); hover/action-button geometry in
   `src/lib/mindmap-hover.ts` — hover is resolved from pointer coordinates, not
   DOM enter/leave, because the buttons float over tightly packed neighbours).
 

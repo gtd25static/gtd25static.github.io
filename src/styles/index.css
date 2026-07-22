@@ -151,3 +151,15 @@ input[type="checkbox"] {
   --mm-slate-fg: #f1f5f9;
   --mm-slate-border: #94a3b8;
 }
+
+/* Page colours for PNG/SVG export (see components/mindmaps/image-actions.ts).
+   Own variables rather than the app's surfaces: an export is a document, and
+   it should stay legible on whatever the viewer opens it against. */
+:root {
+  --mm-export-bg: #ffffff;
+  --mm-export-edge: #d4d4d8;
+}
+.dark {
+  --mm-export-bg: #18181b;
+  --mm-export-edge: #52525b;
+}
