@@ -82,7 +82,9 @@ All persistent entities live in IndexedDB via Dexie. Definitions: `src/db/models
   Layout is computed, never stored (strict left-to-right auto-layout in
   `src/lib/mindmap-layout.ts`; tree building + anomaly absorption in
   `src/lib/mindmap-tree.ts`; markdown-outline interchange in
-  `src/lib/mindmap-outline.ts`).
+  `src/lib/mindmap-outline.ts`; hover/action-button geometry in
+  `src/lib/mindmap-hover.ts` — hover is resolved from pointer coordinates, not
+  DOM enter/leave, because the buttons float over tightly packed neighbours).
 
 ## State Management
 

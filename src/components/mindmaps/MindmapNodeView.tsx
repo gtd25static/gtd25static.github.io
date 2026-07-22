@@ -10,6 +10,8 @@ interface Props {
   /** Layout position; undefined while the node is still unmeasured. */
   rect: LayoutRect | undefined;
   selected: boolean;
+  /** Pointer-resolved hover (see mindmap-hover.ts) — owns the action buttons. */
+  hovered: boolean;
   editing: boolean;
   isRoot: boolean;
   isDragSource: boolean;
@@ -28,7 +30,7 @@ interface Props {
 // sizes. Long labels clamp to 3 lines unless the node is selected/editing —
 // the resulting size change re-layouts, which is intended.
 export const MindmapNodeView = memo(function MindmapNodeView({
-  node, rect, selected, editing, isRoot, isDragSource, isDropTarget,
+  node, rect, selected, hovered, editing, isRoot, isDragSource, isDropTarget,
   onMeasure, onPointerDown, onStartEdit, onCommitEdit, onCancelEdit,
 }: Props) {
   const boxRef = useRef<HTMLDivElement>(null);
@@ -59,11 +61,16 @@ export const MindmapNodeView = memo(function MindmapNodeView({
     }
   }, [editing, node.label]);
 
+  // The action buttons float over the neighbours (siblings are 12px apart), so
+  // the node that owns them is marked — otherwise it's ambiguous which node a
+  // button belongs to.
   const border = isDropTarget
     ? 'border-accent-500 ring-2 ring-accent-300 dark:ring-accent-700'
     : selected
       ? 'border-accent-500 shadow-md'
-      : 'border-zinc-300 hover:border-zinc-400 dark:border-zinc-600 dark:hover:border-zinc-500';
+      : hovered
+        ? 'border-accent-400 shadow-sm dark:border-accent-500'
+        : 'border-zinc-300 dark:border-zinc-600';
 
   return (
     <foreignObject

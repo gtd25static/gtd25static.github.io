@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { MindmapNode } from '../../db/models';
 import { buildTree, descendantIds } from '../../lib/mindmap-tree';
-import { layoutMindmap, type NodeSize } from '../../lib/mindmap-layout';
+import { layoutMindmap, type LayoutRect, type NodeSize } from '../../lib/mindmap-layout';
+import { anchorPoints, nodeActionAnchors, resolveHoverTarget } from '../../lib/mindmap-hover';
 import {
   useMindmapNodes,
   createMindmapNode,
@@ -28,6 +29,8 @@ const DRAG_THRESHOLD_PX = 8;
 //   node drag past 8px = re-parent (ghost + drop-target ring; the root, the
 //   node itself and its descendants are not valid targets) · tap = select ·
 //   double-tap / F2 = edit label inline.
+// The per-node action buttons follow the mouse (see mindmap-hover.ts) and fall
+// back to the selected node, which is what touch — no hover — and the keyboard use.
 export function MindmapCanvas({ mapId }: { mapId: string }) {
   const nodes = useMindmapNodes(mapId);
   const collapsedArr = useMindmapUi((s) => s.collapsed[mapId]);
@@ -70,6 +73,9 @@ export function MindmapCanvas({ mapId }: { mapId: string }) {
   viewportRef.current = viewport;
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [hoveredId, setHoveredId] = useState<string | null>(null);
+  const hoveredIdRef = useRef<string | null>(null);
+  hoveredIdRef.current = hoveredId;
   const [editingId, setEditingId] = useState<string | null>(null);
   const editingIdRef = useRef<string | null>(null);
   editingIdRef.current = editingId;
@@ -251,7 +257,28 @@ export function MindmapCanvas({ mapId }: { mapId: string }) {
     panRef.current = { pointerId: e.pointerId, sx: e.clientX, sy: e.clientY, tx0: tx, ty0: ty, moved: false };
   };
 
+  // Mouse-only: touch has no hover, and during a gesture (drag/pan/pinch) or an
+  // inline edit the actions are hidden anyway.
+  const updateHover = (e: React.PointerEvent) => {
+    if (e.pointerType !== 'mouse') return;
+    if (editingIdRef.current || dragRef.current || panRef.current || pinchRef.current) return;
+    const currentId = hoveredIdRef.current;
+    const currentRect = currentId ? layout.rects.get(currentId) : undefined;
+    const current = currentId && currentRect
+      ? {
+          id: currentId,
+          anchors: anchorPoints(nodeActionAnchors(currentRect, {
+            isRoot: !nodesById.get(currentId)?.parentId,
+            hasToggle: parentIds.has(currentId),
+          })),
+        }
+      : null;
+    const next = resolveHoverTarget(screenToWorld(e.clientX, e.clientY), layout.rects, current);
+    if (next !== currentId) setHoveredId(next);
+  };
+
   const onPointerMove = (e: React.PointerEvent) => {
+    updateHover(e);
     if (pointersRef.current.has(e.pointerId)) {
       pointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
     }
@@ -365,6 +392,8 @@ export function MindmapCanvas({ mapId }: { mapId: string }) {
 
   const onKeyDown = (e: React.KeyboardEvent) => {
     if (editingIdRef.current) return; // the textarea handles its own keys
+    // A stale hover would keep the actions on a node the keyboard just left.
+    if (hoveredIdRef.current) setHoveredId(null);
     const sel = selectedId;
     switch (e.key) {
       case 'Enter':
@@ -402,8 +431,10 @@ export function MindmapCanvas({ mapId }: { mapId: string }) {
     else if (!sizes.has(n.id)) hiddenUnmeasured.push(n);
   }
 
-  const selectedRect = selectedId ? layout.rects.get(selectedId) : undefined;
-  const selectedRow = selectedId ? nodesById.get(selectedId) : undefined;
+  // Hover wins over selection: the buttons sit on the node under the mouse.
+  const actionsId = hoveredId ?? selectedId;
+  const actionsRect = actionsId ? layout.rects.get(actionsId) : undefined;
+  const actionsRow = actionsId ? nodesById.get(actionsId) : undefined;
 
   return (
     <div
@@ -421,6 +452,7 @@ export function MindmapCanvas({ mapId }: { mapId: string }) {
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
         onPointerCancel={onPointerUp}
+        onPointerLeave={() => setHoveredId(null)}
       >
         <g transform={`translate(${viewport.tx},${viewport.ty}) scale(${viewport.k})`}>
           <MindmapEdges
@@ -435,6 +467,7 @@ export function MindmapCanvas({ mapId }: { mapId: string }) {
               node={n}
               rect={layout.rects.get(n.id)}
               selected={n.id === selectedId}
+              hovered={n.id === hoveredId}
               editing={n.id === editingId}
               isRoot={tree.root?.node.id === n.id}
               isDragSource={drag?.id === n.id}
@@ -452,6 +485,7 @@ export function MindmapCanvas({ mapId }: { mapId: string }) {
               node={n}
               rect={undefined}
               selected={false}
+              hovered={false}
               editing={false}
               isRoot={false}
               isDragSource={false}
@@ -463,15 +497,15 @@ export function MindmapCanvas({ mapId }: { mapId: string }) {
               onCancelEdit={cancelEdit}
             />
           ))}
-          {selectedRect && selectedRow && !editingId && !drag && (
-            <SelectedNodeActions
-              rect={selectedRect}
-              isRoot={!selectedRow.parentId}
-              hasToggle={parentIds.has(selectedRow.id)}
-              onAddChild={() => void addChild(selectedRow.id)}
-              onAddSibling={() => void addSibling(selectedRow.id)}
-              onEdit={() => startEdit(selectedRow.id)}
-              onDelete={() => void deleteSubtree(selectedRow.id)}
+          {actionsRect && actionsRow && !editingId && !drag && (
+            <NodeActions
+              rect={actionsRect}
+              isRoot={!actionsRow.parentId}
+              hasToggle={parentIds.has(actionsRow.id)}
+              onAddChild={() => void addChild(actionsRow.id)}
+              onAddSibling={() => void addSibling(actionsRow.id)}
+              onEdit={() => startEdit(actionsRow.id)}
+              onDelete={() => void deleteSubtree(actionsRow.id)}
             />
           )}
           {drag && (
@@ -518,8 +552,8 @@ function CanvasButton({ label, onClick, children }: { label: string; onClick: ()
   );
 }
 
-function SelectedNodeActions({ rect, isRoot, hasToggle, onAddChild, onAddSibling, onEdit, onDelete }: {
-  rect: { x: number; y: number; w: number; h: number };
+function NodeActions({ rect, isRoot, hasToggle, onAddChild, onAddSibling, onEdit, onDelete }: {
+  rect: LayoutRect;
   isRoot: boolean;
   hasToggle: boolean;
   onAddChild: () => void;
@@ -527,22 +561,22 @@ function SelectedNodeActions({ rect, isRoot, hasToggle, onAddChild, onAddSibling
   onEdit: () => void;
   onDelete: () => void;
 }) {
-  const cy = rect.y + rect.h / 2;
+  const a = nodeActionAnchors(rect, { isRoot, hasToggle });
   return (
     <g>
-      <ActionButton x={rect.x + rect.w + (hasToggle ? 36 : 16)} y={cy} title="Add child (Tab)" onActivate={onAddChild}>
+      <ActionButton x={a.addChild.x} y={a.addChild.y} title="Add child (Tab)" onActivate={onAddChild}>
         <PlusIcon />
       </ActionButton>
-      {!isRoot && (
-        <ActionButton x={rect.x + rect.w / 2} y={rect.y + rect.h + 18} title="Add sibling (Enter)" onActivate={onAddSibling}>
+      {a.addSibling && (
+        <ActionButton x={a.addSibling.x} y={a.addSibling.y} title="Add sibling (Enter)" onActivate={onAddSibling}>
           <PlusIcon />
         </ActionButton>
       )}
-      <ActionButton x={rect.x + rect.w - 10} y={rect.y - 16} title="Edit (F2 / double-tap)" onActivate={onEdit}>
+      <ActionButton x={a.edit.x} y={a.edit.y} title="Edit (F2 / double-tap)" onActivate={onEdit}>
         <path d="M -3.5 3.5 L 3 -3 L 4.5 -1.5 L -2 5 L -4 5.2 Z M 2.2 -4.2 L 3.8 -2.6" className="fill-none stroke-accent-600 dark:stroke-accent-400" strokeWidth={1.3} strokeLinejoin="round" />
       </ActionButton>
-      {!isRoot && (
-        <ActionButton x={rect.x + rect.w + 14} y={rect.y - 16} title="Delete (Del)" danger onActivate={onDelete}>
+      {a.remove && (
+        <ActionButton x={a.remove.x} y={a.remove.y} title="Delete (Del)" danger onActivate={onDelete}>
           <path d="M -3.5 -3 H 3.5 M -2.5 -3 V 4 a 1 1 0 0 0 1 1 h 3 a 1 1 0 0 0 1 -1 V -3 M -1 -3 V -4.2 H 1 V -3 M -1 -1 V 3 M 1 -1 V 3" className="fill-none stroke-red-500" strokeWidth={1.2} strokeLinecap="round" />
         </ActionButton>
       )}
@@ -570,7 +604,9 @@ function ActionButton({ x, y, title, danger, onActivate, children }: {
       onClick={(e) => { e.stopPropagation(); onActivate(); }}
     >
       <title>{title}</title>
-      <circle r={20} fill="transparent" />
+      {/* Invisible target, kept just above the visible r=11 disc: the buttons
+          float over the neighbours, so a wider one would swallow their taps. */}
+      <circle r={14} fill="transparent" />
       <circle
         r={11}
         className={danger

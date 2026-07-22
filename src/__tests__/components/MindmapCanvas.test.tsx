@@ -36,6 +36,24 @@ function nodeEl(id: string): HTMLElement {
   return el as HTMLElement;
 }
 
+// The canvas resolves hover from pointer coordinates. jsdom reports an all-zero
+// getBoundingClientRect for the <svg>, so client == world + the initial {40,40}
+// pan; node boxes are read straight off their <foreignObject>.
+function nodeBox(id: string): { x: number; y: number; w: number; h: number } {
+  const fo = nodeEl(id).parentElement!;
+  const num = (a: string) => Number(fo.getAttribute(a) ?? 0);
+  return { x: num('x'), y: num('y'), w: num('width'), h: num('height') };
+}
+
+function movePointerOverNode(id: string, dx = 0, dy = 0) {
+  const box = nodeBox(id);
+  fireEvent.pointerMove(document.querySelector('svg')!, {
+    pointerType: 'mouse',
+    clientX: box.x + box.w / 2 + 40 + dx,
+    clientY: box.y + box.h / 2 + 40 + dy,
+  });
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   localStorage.removeItem('gtd25-mindmap-ui');
@@ -65,6 +83,53 @@ describe('MindmapCanvas', () => {
     expect(actionButton('Add child (Tab)')).toBeDefined();
     expect(actionButton('Add sibling (Enter)')).toBeDefined();
     expect(actionButton('Delete (Del)')).toBeDefined();
+  });
+
+  it('hovering a node shows its actions without clicking, and they follow the mouse', async () => {
+    render(<MindmapCanvas mapId="map-1" />);
+    expect(actionButton('Add child (Tab)')).toBeUndefined();
+
+    movePointerOverNode('a');
+    expect(actionButton('Add child (Tab)')).toBeDefined();
+    fireEvent.click(actionButton('Add child (Tab)')!.parentElement!);
+    await waitFor(() => expect(mockCreateNode).toHaveBeenCalledWith('map-1', 'a'));
+
+    mockCreateNode.mockClear();
+    movePointerOverNode('b');
+    fireEvent.click(actionButton('Add child (Tab)')!.parentElement!);
+    await waitFor(() => expect(mockCreateNode).toHaveBeenCalledWith('map-1', 'b'));
+  });
+
+  it('keeps the actions alive while the pointer travels off the box onto a button', async () => {
+    render(<MindmapCanvas mapId="map-1" />);
+    const a = nodeBox('a');
+    movePointerOverNode('a');
+    // The delete button floats above/right of the box, past the grace band
+    fireEvent.pointerMove(document.querySelector('svg')!, {
+      pointerType: 'mouse',
+      clientX: a.x + a.w + 14 + 40,
+      clientY: a.y - 16 + 40,
+    });
+    expect(actionButton('Delete (Del)')).toBeDefined();
+    // …and the actions still belong to a, not to whatever is underneath
+    fireEvent.click(actionButton('Add child (Tab)')!.parentElement!);
+    await waitFor(() => expect(mockCreateNode).toHaveBeenCalledWith('map-1', 'a'));
+  });
+
+  it('leaving the canvas hides the hover actions, and touch never triggers them', () => {
+    render(<MindmapCanvas mapId="map-1" />);
+    movePointerOverNode('a');
+    expect(actionButton('Add child (Tab)')).toBeDefined();
+    fireEvent.pointerLeave(document.querySelector('svg')!);
+    expect(actionButton('Add child (Tab)')).toBeUndefined();
+
+    const box = nodeBox('a');
+    fireEvent.pointerMove(document.querySelector('svg')!, {
+      pointerType: 'touch',
+      clientX: box.x + box.w / 2 + 40,
+      clientY: box.y + box.h / 2 + 40,
+    });
+    expect(actionButton('Add child (Tab)')).toBeUndefined();
   });
 
   it('the root shows no sibling/delete actions', async () => {
