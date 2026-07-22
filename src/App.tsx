@@ -19,6 +19,7 @@ import { useNudges, useLockedNudge } from './hooks/use-nudges';
 import { useRemoteWipeCommands } from './hooks/use-remote-unlock';
 import { RemoteApprovalPrompt } from './components/security/RemoteApprovalPrompt';
 import { PrivacyOverlay } from './components/security/PrivacyOverlay';
+import { useBackgroundLock, DEFAULT_BACKGROUND_LOCK_SECONDS } from './hooks/use-background-lock';
 import { useAppBadge } from './hooks/use-app-badge';
 import { ServiceWorkerProvider } from './hooks/use-service-worker';
 import { AppUpdatePrompt } from './components/banners/AppUpdatePrompt';
@@ -117,6 +118,10 @@ function UnlockedApp() {
   ]);
 
   useKeyboard();
+  useBackgroundLock(
+    !!localSettings.paranoidBackgroundLockEnabled,
+    localSettings.paranoidBackgroundLockSeconds ?? DEFAULT_BACKGROUND_LOCK_SECONDS,
+  );
   useUrlCapture();
   useShareTarget();
   useNudges();

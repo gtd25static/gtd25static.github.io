@@ -10,6 +10,7 @@ import {
   DEFAULT_SYSTEM_LOCK_GRACE_MINUTES, clampSystemLockGraceMinutes,
 } from '../../lib/system-idle';
 import { useRelaxedUnlockStore } from '../../stores/relaxed-unlock';
+import { clampBackgroundLockSeconds, DEFAULT_BACKGROUND_LOCK_SECONDS } from '../../hooks/use-background-lock';
 import { unlocksInWindow, effectiveMinutes } from '../../lib/relaxed-unlock';
 import {
   enableParanoid, disableParanoid, changePassphrase, configureIdleTimeout,
@@ -298,6 +299,43 @@ function ParanoidExtrasSection() {
         checked={!!local.paranoidPrivacyOverlayEnabled}
         onChange={(on) => updateLocalSettings({ paranoidPrivacyOverlayEnabled: on })}
       />
+      <ExtraToggle
+        label="Lock when hidden"
+        description="Lock the vault once this tab has been in the background for the delay below (0 = immediately). Catches tab switches, which the system idle lock doesn't see. Background timers are throttled, so read it as “at least” that many seconds."
+        checked={!!local.paranoidBackgroundLockEnabled}
+        onChange={(on) => updateLocalSettings({ paranoidBackgroundLockEnabled: on })}
+      >
+        <BackgroundLockDelay seconds={local.paranoidBackgroundLockSeconds ?? DEFAULT_BACKGROUND_LOCK_SECONDS} />
+      </ExtraToggle>
+    </div>
+  );
+}
+
+function BackgroundLockDelay({ seconds }: { seconds: number }) {
+  const [value, setValue] = useState(String(seconds));
+  useEffect(() => { setValue(String(seconds)); }, [seconds]);
+  return (
+    <div className="flex items-end gap-2 pl-6">
+      <Input
+        label="Delay (seconds, 0 = instant)"
+        type="number"
+        min={0}
+        max={300}
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+      />
+      <Button
+        size="sm"
+        variant="secondary"
+        onClick={async () => {
+          const n = clampBackgroundLockSeconds(value);
+          await updateLocalSettings({ paranoidBackgroundLockSeconds: n });
+          setValue(String(n));
+          toast(n === 0 ? 'Will lock the instant the tab hides' : `Will lock after ${n}s in the background`, 'success');
+        }}
+      >
+        Save
+      </Button>
     </div>
   );
 }
