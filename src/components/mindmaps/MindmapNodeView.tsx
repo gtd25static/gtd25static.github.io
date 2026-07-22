@@ -113,7 +113,8 @@ export const MindmapNodeView = memo(function MindmapNodeView({
         leaving ? 'mm-node-out' : animateInRef.current && rect ? 'mm-node-in' : ''
       }`}
       style={{
-        transformOrigin: `${placed.x + placed.w / 2}px ${placed.y + placed.h / 2}px`,
+        // Scale pivot comes from CSS (.mm-node-box → transform-box: fill-box);
+        // a px transform-origin here would be in the wrong SVG coordinate space.
         opacity: rect ? (isDragSource ? 0.4 : undefined) : 0,
         pointerEvents: rect && !leaving ? undefined : 'none',
       }}

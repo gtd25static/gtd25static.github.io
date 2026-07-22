@@ -654,8 +654,8 @@ function NodeActions({ rect, open, isRoot, hasToggle, onAddChild, onAddSibling, 
   return (
     <g
       className={`mm-actions ${open ? '' : 'mm-actions-closed'}`}
-      // Grow out of the node's right edge, not the canvas origin
-      style={{ transformOrigin: `${rect.x + rect.w}px ${rect.y + rect.h / 2}px` }}
+      // Pivot from CSS (transform-box: fill-box → the group's own centre); a px
+      // transform-origin here would be in the wrong SVG coordinate space.
       aria-hidden={!open}
     >
       <ActionButton x={a.addChild.x} y={a.addChild.y} title="Add child (Tab)" onActivate={onAddChild}>

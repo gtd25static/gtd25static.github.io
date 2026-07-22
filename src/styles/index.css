@@ -64,6 +64,20 @@ input[type="checkbox"] {
   to   { opacity: 0; transform: scale(0.86); }
 }
 
+/* The node group is an SVG <g>. A CSS transform on an SVG element defaults to
+   `transform-box: view-box`, so a scale would pivot around the canvas origin
+   (far off-screen) — the scale-in then looks like nothing happens. fill-box +
+   center pivots around the node's own bounding box, which is what makes the
+   enter/exit/editing animations actually show. Shared by every transformed
+   node/action class below. */
+.mm-node-in,
+.mm-node-out,
+.mm-node-box,
+.mm-actions {
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
 /* A node arriving (expand, create) and leaving (collapse, delete). */
 .mm-node-in  { animation: mm-node-in 170ms var(--mm-ease-bounce); }
 .mm-node-out { animation: mm-node-out 130ms ease-in forwards; }
@@ -74,9 +88,7 @@ input[type="checkbox"] {
 .mm-node-editing { transform: scale(1.03); }
 .mm-node-shape { transition: fill 150ms ease, stroke 150ms ease; }
 
-/* The action buttons opening/closing around the node under the pointer.
-   transform-origin is set per node (the box's right-edge midpoint) so they
-   grow out of the node rather than from the canvas origin. */
+/* The action buttons opening/closing around the node under the pointer. */
 .mm-actions { transition: opacity 130ms ease, transform 130ms var(--mm-ease-bounce); }
 .mm-actions-closed { opacity: 0; transform: scale(0.7); pointer-events: none; }
 
