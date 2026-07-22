@@ -9,7 +9,9 @@ import {
   updateMindmapNodeLabel,
   reparentMindmapNode,
   deleteMindmapNodeSubtree,
+  restoreMindmapNodeSubtree,
 } from '../../hooks/use-mindmaps';
+import { toast } from '../ui/Toast';
 import { useMindmapUi } from '../../stores/mindmap-ui';
 import { MindmapNodeView } from './MindmapNodeView';
 import { MindmapEdges } from './MindmapEdges';
@@ -21,6 +23,9 @@ interface Viewport { tx: number; ty: number; k: number }
 const MIN_ZOOM = 0.2;
 const MAX_ZOOM = 3;
 const DRAG_THRESHOLD_PX = 8;
+// A deleted subtree is only a click away from coming back — the default toast
+// window (4s floor for undo toasts) is short for "did I just delete the wrong node?".
+const UNDO_TOAST_MS = 8000;
 
 // The interactive mindmap canvas: one <svg> whose world lives in a single
 // translated+scaled <g>. All gestures are raw pointer events (dnd-kit is
@@ -203,7 +208,15 @@ export function MindmapCanvas({ mapId }: { mapId: string }) {
     }
     setSelectedId(row.parentId);
     setEditingId(null);
-    await deleteMindmapNodeSubtree(id);
+    setHoveredId(null); // the node under the pointer is about to vanish
+    const deleted = await deleteMindmapNodeSubtree(id);
+    if (deleted.length === 0) return;
+    toast(
+      deleted.length > 1 ? `${deleted.length} nodes deleted` : 'Node deleted',
+      'info',
+      () => void restoreMindmapNodeSubtree(deleted),
+      UNDO_TOAST_MS,
+    );
   }, [nodesById]);
 
   // --- Pointer gestures ---

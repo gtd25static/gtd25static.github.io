@@ -582,14 +582,20 @@ export async function reparentMindmapNode(id: string, newParentId: string): Prom
   }
 }
 
-/** Soft-delete a node and its whole subtree. The root cannot be deleted. */
-export async function deleteMindmapNodeSubtree(id: string): Promise<void> {
+/**
+ * Soft-delete a node and its whole subtree. The root cannot be deleted.
+ * Returns the ids actually stamped, which is what undo feeds back to
+ * `restoreMindmapNodeSubtree` — nodes already deleted before this call must
+ * stay deleted.
+ */
+export async function deleteMindmapNodeSubtree(id: string): Promise<string[]> {
   try {
     const node = await db.mindmapNodes.get(id);
-    if (!node || node.deletedAt || !node.parentId) return; // root: delete the map instead
+    if (!node || node.deletedAt || !node.parentId) return []; // root: delete the map instead
     const descendants = await descendantNodeIds(id, node.mapId);
     const ids = [id, ...descendants];
     const now = Date.now();
+    const deleted: string[] = [];
     await ensureDeviceId();
     await db.transaction('rw', [db.mindmapNodes, db.changeLog], async () => {
       const batch: Array<{ entityType: 'mindmapNode'; entityId: string; operation: 'delete' }> = [];
@@ -599,12 +605,48 @@ export async function deleteMindmapNodeSubtree(id: string): Promise<void> {
         const ft = stampUpdatedFields(n.fieldTimestamps, ['deletedAt'], now);
         await db.mindmapNodes.update(nodeId, { deletedAt: now, updatedAt: now, fieldTimestamps: ft });
         batch.push({ entityType: 'mindmapNode', entityId: nodeId, operation: 'delete' });
+        deleted.push(nodeId);
+      }
+      await recordChangeBatchInTx(batch);
+    });
+    scheduleSyncDebounced();
+    return deleted;
+  } catch (error) {
+    handleDbError(error, 'delete mindmap node');
+    return [];
+  }
+}
+
+/**
+ * Undo of the above: un-deletes exactly the given ids. Nodes whose map went to
+ * the trash meanwhile stay deleted (they'd be invisible anyway, and restoring
+ * the map already restores its nodes). A node whose parent was deleted after
+ * the undo window opened comes back under the root — buildTree absorbs orphans.
+ */
+export async function restoreMindmapNodeSubtree(ids: string[]): Promise<void> {
+  if (ids.length === 0) return;
+  try {
+    const now = Date.now();
+    await ensureDeviceId();
+    await db.transaction('rw', [db.mindmaps, db.mindmapNodes, db.changeLog], async () => {
+      const batch: Array<{ entityType: 'mindmapNode'; entityId: string; operation: 'upsert'; data: Record<string, unknown> }> = [];
+      for (const nodeId of ids) {
+        const n = await db.mindmapNodes.get(nodeId);
+        if (!n || !n.deletedAt) continue;
+        const map = await db.mindmaps.get(n.mapId);
+        if (!map || map.deletedAt) continue;
+        const ft = stampUpdatedFields(n.fieldTimestamps, ['deletedAt'], now);
+        await db.mindmapNodes.update(nodeId, { deletedAt: undefined, updatedAt: now, fieldTimestamps: ft });
+        const restored = await db.mindmapNodes.get(nodeId);
+        if (restored) {
+          batch.push({ entityType: 'mindmapNode', entityId: nodeId, operation: 'upsert', data: restored as unknown as Record<string, unknown> });
+        }
       }
       await recordChangeBatchInTx(batch);
     });
     scheduleSyncDebounced();
   } catch (error) {
-    handleDbError(error, 'delete mindmap node');
+    handleDbError(error, 'restore mindmap node');
   }
 }
 

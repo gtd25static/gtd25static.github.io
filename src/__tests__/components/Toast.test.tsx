@@ -30,6 +30,20 @@ describe('ToastContainer', () => {
     expect(screen.queryByText('Bye')).not.toBeInTheDocument();
   });
 
+  it('an explicit duration overrides the message-length heuristic', () => {
+    render(<ToastContainer />);
+    act(() => { toast('Node deleted', 'info', () => {}, 8000); });
+
+    // The heuristic would have dropped it at 4s (undo floor)…
+    act(() => { vi.advanceTimersByTime(4000 + 300); });
+    expect(screen.getByText('Node deleted')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Undo' })).toBeInTheDocument();
+
+    act(() => { vi.advanceTimersByTime(4000); });
+    act(() => { vi.advanceTimersByTime(300); });
+    expect(screen.queryByText('Node deleted')).not.toBeInTheDocument();
+  });
+
   it('lingers to the 6s max for a long (10+ word) message', () => {
     const long = 'one two three four five six seven eight nine ten eleven';
     render(<ToastContainer />);

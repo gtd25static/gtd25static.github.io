@@ -16,6 +16,7 @@ import {
   updateMindmapNodeLabel,
   reparentMindmapNode,
   deleteMindmapNodeSubtree,
+  restoreMindmapNodeSubtree,
   createMindmapFromOutline,
   exportMindmapOutline,
   clampMindmapLabel,
@@ -120,13 +121,50 @@ describe('nodes', () => {
     const a1 = assertDefined(await createMindmapNode(map.id, a.id, 'A1'));
     const b = assertDefined(await createMindmapNode(map.id, root.id, 'B'));
 
-    await deleteMindmapNodeSubtree(a.id);
+    const deleted = await deleteMindmapNodeSubtree(a.id);
+    expect(new Set(deleted)).toEqual(new Set([a.id, a1.id]));
     expect((await db.mindmapNodes.get(a.id))?.deletedAt).toBeTruthy();
     expect((await db.mindmapNodes.get(a1.id))?.deletedAt).toBeTruthy();
     expect((await db.mindmapNodes.get(b.id))?.deletedAt).toBeFalsy();
 
-    await deleteMindmapNodeSubtree(root.id); // no-op
+    expect(await deleteMindmapNodeSubtree(root.id)).toEqual([]); // no-op
     expect((await db.mindmapNodes.get(root.id))?.deletedAt).toBeFalsy();
+  });
+
+  it('restoreMindmapNodeSubtree brings back exactly the ids it is given', async () => {
+    const map = assertDefined(await createMindmap('M'));
+    const root = await rootOf(map.id);
+    const a = assertDefined(await createMindmapNode(map.id, root.id, 'A'));
+    const a1 = assertDefined(await createMindmapNode(map.id, a.id, 'A1'));
+    const b = assertDefined(await createMindmapNode(map.id, root.id, 'B'));
+
+    // b was already in the bin before a's subtree went — undo must not revive it
+    await deleteMindmapNodeSubtree(b.id);
+    const deleted = await deleteMindmapNodeSubtree(a.id);
+
+    await restoreMindmapNodeSubtree(deleted);
+    expect((await db.mindmapNodes.get(a.id))?.deletedAt).toBeFalsy();
+    expect((await db.mindmapNodes.get(a1.id))?.deletedAt).toBeFalsy();
+    expect((await db.mindmapNodes.get(b.id))?.deletedAt).toBeTruthy();
+    expect((await db.mindmapNodes.get(a.id))?.fieldTimestamps?.deletedAt).toBeGreaterThan(0);
+
+    // Sync learns about the restore as an upsert carrying the live row
+    const log = (await db.changeLog.toArray()).filter((c) => c.entityId === a.id);
+    const upsert = log.find((c) => c.operation === 'upsert');
+    expect(upsert).toBeDefined();
+    expect((upsert?.data as { deletedAt?: number } | undefined)?.deletedAt).toBeUndefined();
+  });
+
+  it('restore is a no-op for an empty list or once the whole map is in the trash', async () => {
+    const map = assertDefined(await createMindmap('M'));
+    const root = await rootOf(map.id);
+    const a = assertDefined(await createMindmapNode(map.id, root.id, 'A'));
+    const deleted = await deleteMindmapNodeSubtree(a.id);
+
+    await restoreMindmapNodeSubtree([]);
+    await deleteMindmap(map.id);
+    await restoreMindmapNodeSubtree(deleted);
+    expect((await db.mindmapNodes.get(a.id))?.deletedAt).toBeTruthy();
   });
 });
 

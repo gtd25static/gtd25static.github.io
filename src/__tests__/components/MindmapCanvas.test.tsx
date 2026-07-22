@@ -8,7 +8,13 @@ const mockUseNodes = vi.fn<() => MindmapNode[]>(() => []);
 const mockCreateNode = vi.fn(async () => undefined as MindmapNode | undefined);
 const mockUpdateLabel = vi.fn(async () => true);
 const mockReparent = vi.fn(async () => true);
-const mockDeleteSubtree = vi.fn(async () => {});
+const mockDeleteSubtree = vi.fn(async () => [] as string[]);
+const mockRestoreSubtree = vi.fn(async () => {});
+const mockToast = vi.fn();
+
+vi.mock('../../components/ui/Toast', () => ({
+  toast: (...a: unknown[]) => mockToast(...a),
+}));
 
 vi.mock('../../hooks/use-mindmaps', () => ({
   useMindmapNodes: () => mockUseNodes(),
@@ -16,6 +22,7 @@ vi.mock('../../hooks/use-mindmaps', () => ({
   updateMindmapNodeLabel: (...a: unknown[]) => (mockUpdateLabel as (...x: unknown[]) => unknown)(...a),
   reparentMindmapNode: (...a: unknown[]) => (mockReparent as (...x: unknown[]) => unknown)(...a),
   deleteMindmapNodeSubtree: (...a: unknown[]) => (mockDeleteSubtree as (...x: unknown[]) => unknown)(...a),
+  restoreMindmapNodeSubtree: (...a: unknown[]) => (mockRestoreSubtree as (...x: unknown[]) => unknown)(...a),
 }));
 
 import { MindmapCanvas } from '../../components/mindmaps/MindmapCanvas';
@@ -56,6 +63,7 @@ function movePointerOverNode(id: string, dx = 0, dy = 0) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockDeleteSubtree.mockResolvedValue([]);
   localStorage.removeItem('gtd25-mindmap-ui');
   useMindmapUi.setState({ collapsed: {} });
   mockUseNodes.mockReturnValue([
@@ -207,6 +215,40 @@ describe('MindmapCanvas', () => {
     await user.click(nodeEl('root'));
     fireEvent.keyDown(screen.getByTestId('mindmap-canvas'), { key: 'Delete' });
     expect(mockDeleteSubtree).not.toHaveBeenCalled();
+  });
+
+  it('deleting offers an undo toast that restores exactly the deleted nodes', async () => {
+    const user = userEvent.setup();
+    mockDeleteSubtree.mockResolvedValue(['b']);
+    render(<MindmapCanvas mapId="map-1" />);
+    await user.click(nodeEl('b'));
+    fireEvent.click(actionButton('Delete (Del)')!.parentElement!);
+
+    await waitFor(() => expect(mockToast).toHaveBeenCalled());
+    const [message, type, onUndo, durationMs] = mockToast.mock.calls[0] as [string, string, () => void, number];
+    expect(message).toBe('Node deleted');
+    expect(type).toBe('info');
+    expect(durationMs).toBeGreaterThanOrEqual(5000);
+
+    onUndo();
+    expect(mockRestoreSubtree).toHaveBeenCalledWith(['b']);
+  });
+
+  it('the undo toast counts the whole deleted subtree, and stays silent when nothing was deleted', async () => {
+    const user = userEvent.setup();
+    mockDeleteSubtree.mockResolvedValue(['b', 'b-child']);
+    render(<MindmapCanvas mapId="map-1" />);
+    await user.click(nodeEl('b'));
+    fireEvent.keyDown(screen.getByTestId('mindmap-canvas'), { key: 'Delete' });
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith('2 nodes deleted', 'info', expect.any(Function), expect.any(Number)));
+
+    // Nothing stamped (already gone / raced with another device) → no undo offered
+    mockToast.mockClear();
+    mockDeleteSubtree.mockResolvedValue([]);
+    await user.click(nodeEl('b'));
+    fireEvent.keyDown(screen.getByTestId('mindmap-canvas'), { key: 'Delete' });
+    await waitFor(() => expect(mockDeleteSubtree).toHaveBeenCalledTimes(2));
+    expect(mockToast).not.toHaveBeenCalled();
   });
 
   it('arrow keys navigate the tree', async () => {

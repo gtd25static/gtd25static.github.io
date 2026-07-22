@@ -8,10 +8,13 @@ interface ToastData {
   leaving?: boolean;
 }
 
-let addToastFn: ((message: string, type?: ToastData['type'], onUndo?: () => void) => void) | null = null;
+type AddToast = (message: string, type?: ToastData['type'], onUndo?: () => void, durationMs?: number) => void;
 
-export function toast(message: string, type: ToastData['type'] = 'info', onUndo?: () => void) {
-  addToastFn?.(message, type, onUndo);
+let addToastFn: AddToast | null = null;
+
+/** `durationMs` overrides the message-length heuristic below (for undos that need a longer window). */
+export function toast(message: string, type: ToastData['type'] = 'info', onUndo?: () => void, durationMs?: number) {
+  addToastFn?.(message, type, onUndo, durationMs);
 }
 
 // Longer messages linger longer: 3s for short toasts, scaling linearly to 6s at
@@ -43,10 +46,10 @@ export function ToastContainer() {
     }, 300);
   }, []);
 
-  const addToast = useCallback((message: string, type: ToastData['type'] = 'info', onUndo?: () => void) => {
+  const addToast = useCallback<AddToast>((message, type = 'info', onUndo, durationMs) => {
     const id = nextId.current++;
     setToasts((prev) => [...prev, { id, message, type, onUndo }]);
-    setTimeout(() => dismiss(id), toastDurationMs(message, !!onUndo));
+    setTimeout(() => dismiss(id), durationMs ?? toastDurationMs(message, !!onUndo));
   }, [dismiss]);
 
   useEffect(() => {
