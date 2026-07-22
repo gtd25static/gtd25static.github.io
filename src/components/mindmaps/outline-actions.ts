@@ -1,5 +1,6 @@
 import { exportMindmapOutline } from '../../hooks/use-mindmaps';
 import { toast } from '../ui/Toast';
+import { writeTextWithHygiene } from '../../lib/clipboard-hygiene';
 
 /** Download a map's markdown outline as a .md file. */
 export async function downloadOutline(mapId: string): Promise<void> {
@@ -25,7 +26,7 @@ export async function copyOutline(mapId: string): Promise<void> {
     return;
   }
   try {
-    await navigator.clipboard.writeText(result.content);
+    await writeTextWithHygiene(result.content);
     toast('Outline copied to clipboard.', 'success');
   } catch {
     toast('Could not access the clipboard.', 'error');

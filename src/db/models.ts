@@ -274,6 +274,8 @@ export interface LocalSettings {
   paranoidRedactModeEnabled?: boolean;      // offer the shoulder-surfing redact toggle (Ctrl/Cmd+Shift+H)
   paranoidUnlockLogEnabled?: boolean;       // keep a device-local unlock/attempt audit trail
   unlockLog?: import('../lib/unlock-audit').UnlockLogEntry[]; // capped at MAX_UNLOCK_LOG; never synced
+  paranoidClipboardClearEnabled?: boolean;  // wipe the clipboard N seconds after copying app content
+  paranoidClipboardClearSeconds?: number;   // clamped 10-300, default 60
   // "Relaxed unlock" (device-local; not synced): stretch idle/grace by +10% per
   // re-unlock in the last 36h (first unlock excluded), capped ×2. unlockHistory is
   // unlock timestamps pruned to 36h, recorded only while the feature is enabled.

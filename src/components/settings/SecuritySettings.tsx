@@ -30,6 +30,7 @@ import { panicWipe } from '../../lib/panic-wipe';
 import { exportToZip } from '../../db/export-import';
 import { recordError } from '../../lib/diagnostics';
 import { clearUnlockLog } from '../../lib/unlock-audit';
+import { clampClipboardClearSeconds, DEFAULT_CLIPBOARD_CLEAR_SECONDS } from '../../lib/clipboard-hygiene';
 import { checkSecretStrength } from '../../lib/password-strength';
 import { PasswordStrengthBar } from '../ui/PasswordStrengthBar';
 
@@ -328,6 +329,43 @@ function ParanoidExtrasSection() {
       >
         <UnlockLogView log={local.unlockLog ?? []} />
       </ExtraToggle>
+      <ExtraToggle
+        label="Auto-clear clipboard"
+        description="After you copy from the app (an outline, a PNG, a diagnostics report), wipe the clipboard once the delay below passes. Best-effort: it can't reach OS clipboard history, and needs the app focused to clear."
+        checked={!!local.paranoidClipboardClearEnabled}
+        onChange={(on) => updateLocalSettings({ paranoidClipboardClearEnabled: on })}
+      >
+        <ClipboardClearDelay seconds={local.paranoidClipboardClearSeconds ?? DEFAULT_CLIPBOARD_CLEAR_SECONDS} />
+      </ExtraToggle>
+    </div>
+  );
+}
+
+function ClipboardClearDelay({ seconds }: { seconds: number }) {
+  const [value, setValue] = useState(String(seconds));
+  useEffect(() => { setValue(String(seconds)); }, [seconds]);
+  return (
+    <div className="flex items-end gap-2 pl-6">
+      <Input
+        label="Clear after (seconds)"
+        type="number"
+        min={10}
+        max={300}
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+      />
+      <Button
+        size="sm"
+        variant="secondary"
+        onClick={async () => {
+          const n = clampClipboardClearSeconds(value);
+          await updateLocalSettings({ paranoidClipboardClearSeconds: n });
+          setValue(String(n));
+          toast(`Clipboard will clear ${n}s after copying`, 'success');
+        }}
+      >
+        Save
+      </Button>
     </div>
   );
 }

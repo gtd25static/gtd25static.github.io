@@ -1,6 +1,7 @@
 import { useEffect, useState, useSyncExternalStore } from 'react';
 import { Button } from '../ui/Button';
 import { toast } from '../ui/Toast';
+import { writeTextWithHygiene } from '../../lib/clipboard-hygiene';
 import {
   getBuildInfo, detectFeatures, getErrorLog, clearErrorLog, subscribeErrors,
   isStoragePersisted, getStorageEstimate, forceServiceWorkerUpdate,
@@ -53,7 +54,7 @@ export function DiagnosticsSettings() {
       errors: errors.map((e) => ({ at: new Date(e.at).toISOString(), context: e.context, message: e.message, stack: e.stack })),
     };
     try {
-      await navigator.clipboard.writeText(JSON.stringify(report, null, 2));
+      await writeTextWithHygiene(JSON.stringify(report, null, 2));
       toast('Diagnostics copied to clipboard', 'success');
     } catch {
       toast('Could not copy — clipboard unavailable', 'error');
