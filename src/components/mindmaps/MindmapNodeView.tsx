@@ -16,6 +16,10 @@ interface Props {
   isRoot: boolean;
   isDragSource: boolean;
   isDropTarget: boolean;
+  /** Animate the box in on mount (off until the canvas has settled). */
+  animateIn: boolean;
+  /** A ghost of a node that just left, playing its exit animation. */
+  leaving?: boolean;
   onMeasure: (id: string, size: { w: number; h: number }) => void;
   onPointerDown: (e: React.PointerEvent, id: string) => void;
   onCommitEdit: (id: string, label: string) => void;
@@ -30,13 +34,16 @@ interface Props {
 // the resulting size change re-layouts, which is intended.
 export const MindmapNodeView = memo(function MindmapNodeView({
   node, rect, selected, hovered, editing, isRoot, isDragSource, isDropTarget,
-  onMeasure, onPointerDown, onCommitEdit, onCancelEdit,
+  animateIn, leaving, onMeasure, onPointerDown, onCommitEdit, onCancelEdit,
 }: Props) {
   const boxRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [draft, setDraft] = useState(node.label);
   const draftRef = useRef(draft);
   draftRef.current = draft;
+  // Pinned at mount: adding the class later (when the canvas flips to
+  // "animate") would replay the entrance on every node already on screen.
+  const animateInRef = useRef(animateIn);
 
   const clamped = !selected && !editing;
 
@@ -57,7 +64,7 @@ export const MindmapNodeView = memo(function MindmapNodeView({
 
   useLayoutEffect(() => {
     const el = boxRef.current;
-    if (!el) return;
+    if (!el || leaving) return; // a ghost must not feed the layout it just left
     const w = el.offsetWidth;
     const h = el.offsetHeight;
     if (w > 0 && h > 0) onMeasure(node.id, { w, h });
@@ -95,15 +102,21 @@ export const MindmapNodeView = memo(function MindmapNodeView({
       width={rect ? rect.w : NODE_MAX_WIDTH + 40}
       height={rect ? rect.h : 600}
       className="overflow-visible"
-      style={rect ? undefined : { opacity: 0, pointerEvents: 'none' }}
+      style={
+        rect
+          ? (leaving ? { pointerEvents: 'none' } : undefined)
+          : { opacity: 0, pointerEvents: 'none' }
+      }
     >
       <div
         ref={boxRef}
         // @ts-expect-error xmlns is required on HTML content inside foreignObject
         xmlns="http://www.w3.org/1999/xhtml"
-        data-mindmap-node={node.id}
+        data-mindmap-node={leaving ? undefined : node.id}
         onPointerDown={(e) => onPointerDown(e, node.id)}
-        className={`select-none rounded-xl border-2 px-3 py-1.5 text-sm leading-snug transition-colors ${border} ${
+        className={`mm-node-box select-none rounded-xl border-2 px-3 py-1.5 text-sm leading-snug ${
+          leaving ? 'mm-node-out' : animateInRef.current && rect ? 'mm-node-in' : ''
+        } ${editing ? 'mm-node-editing' : ''} ${border} ${
           isRoot
             ? 'bg-accent-50 text-zinc-900 dark:bg-accent-900/30 dark:text-zinc-50'
             : 'bg-white text-zinc-800 dark:bg-zinc-800 dark:text-zinc-100'

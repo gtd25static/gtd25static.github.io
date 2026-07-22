@@ -45,3 +45,51 @@ input[type="checkbox"] {
   height: 1rem;
   accent-color: var(--color-accent-600);
 }
+
+/* --- Mindmap motion ---------------------------------------------------------
+   Fast, with a very light overshoot (~3%) — a hint of bounce, not a bounce.
+   The JS twin of this curve is easeOutBackTiny() in lib/mindmap-motion.ts,
+   which drives the layout glide (node boxes + edge curves together). */
+:root {
+  --mm-ease-bounce: cubic-bezier(0.32, 1.28, 0.62, 1);
+}
+
+@keyframes mm-node-in {
+  from { opacity: 0; transform: scale(0.86); }
+  to   { opacity: 1; transform: scale(1); }
+}
+
+@keyframes mm-node-out {
+  from { opacity: 1; transform: scale(1); }
+  to   { opacity: 0; transform: scale(0.86); }
+}
+
+/* A node arriving (expand, create) and leaving (collapse, delete). */
+.mm-node-in  { animation: mm-node-in 170ms var(--mm-ease-bounce); }
+.mm-node-out { animation: mm-node-out 130ms ease-in forwards; }
+
+/* The node box: colour changes (hover/selected/drop-target) plus the nudge it
+   gets while its inline editor is open. One rule, because a bare
+   `transition: transform` here would override Tailwind's transition-colors. */
+.mm-node-box {
+  transition:
+    transform 140ms var(--mm-ease-bounce),
+    color 150ms ease,
+    background-color 150ms ease,
+    border-color 150ms ease,
+    box-shadow 150ms ease;
+}
+.mm-node-editing { transform: scale(1.03); }
+
+/* The action buttons opening/closing around the node under the pointer.
+   transform-origin is set per node (the box's right-edge midpoint) so they
+   grow out of the node rather than from the canvas origin. */
+.mm-actions { transition: opacity 130ms ease, transform 130ms var(--mm-ease-bounce); }
+.mm-actions-closed { opacity: 0; transform: scale(0.7); pointer-events: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  .mm-node-in,
+  .mm-node-out { animation: none; }
+  .mm-node-box,
+  .mm-actions { transition: none; }
+}

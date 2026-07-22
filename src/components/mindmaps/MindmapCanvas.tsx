@@ -3,6 +3,7 @@ import type { MindmapNode } from '../../db/models';
 import { buildTree, descendantIds } from '../../lib/mindmap-tree';
 import { layoutMindmap, type LayoutRect, type NodeSize } from '../../lib/mindmap-layout';
 import { anchorPoints, nodeActionAnchors, resolveHoverTarget } from '../../lib/mindmap-hover';
+import { useAnimatedLayout } from '../../hooks/use-animated-layout';
 import {
   useMindmapNodes,
   createMindmapNode,
@@ -78,7 +79,11 @@ export function MindmapCanvas({ mapId }: { mapId: string }) {
     });
   }, []);
 
-  const layout = useMemo(() => layoutMindmap(tree, sizes, collapsedSet), [tree, sizes, collapsedSet]);
+  const targetLayout = useMemo(() => layoutMindmap(tree, sizes, collapsedSet), [tree, sizes, collapsedSet]);
+  // Motion only starts once the map has been laid out and fitted, so opening a
+  // map doesn't animate every node in from wherever it was first measured.
+  const [motionReady, setMotionReady] = useState(false);
+  const { layout, exiting } = useAnimatedLayout(targetLayout, motionReady);
 
   const [viewport, setViewport] = useState<Viewport>({ tx: 40, ty: 40, k: 1 });
   const viewportRef = useRef(viewport);
@@ -101,6 +106,8 @@ export function MindmapCanvas({ mapId }: { mapId: string }) {
   const pinchRef = useRef<{ d0: number; cx0: number; cy0: number; wx0: number; wy0: number; k0: number } | null>(null);
   const dragRef = useRef<{ id: string; sx: number; sy: number; active: boolean; forbidden: Set<string> } | null>(null);
   const lastTapRef = useRef<{ id: string; t: number; x: number; y: number } | null>(null);
+  const rowCacheRef = useRef(new Map<string, MindmapNode>());
+  const lastActionsRef = useRef<{ rect: LayoutRect; row: MindmapNode } | null>(null);
 
   // Refs the gesture handlers read without re-binding
   const layoutRef = useRef(layout);
@@ -171,6 +178,8 @@ export function MindmapCanvas({ mapId }: { mapId: string }) {
     if (!didFitRef.current && layout.rects.size > 0 && sizes.size > 0) {
       didFitRef.current = true;
       zoomToFit();
+      const raf = requestAnimationFrame(() => setMotionReady(true));
+      return () => cancelAnimationFrame(raf);
     }
   }, [layout, sizes, zoomToFit]);
 
@@ -463,10 +472,25 @@ export function MindmapCanvas({ mapId }: { mapId: string }) {
     else if (!sizes.has(n.id)) hiddenUnmeasured.push(n);
   }
 
+  // Rows for the nodes on their way out (collapsed, or deleted — those are
+  // already gone from `nodes`, so the last version of each row is kept around).
+  const rowCache = rowCacheRef.current;
+  for (const n of nodes) rowCache.set(n.id, n);
+  for (const id of rowCache.keys()) {
+    if (!nodesById.has(id) && !exiting.has(id)) rowCache.delete(id);
+  }
+
   // Hover wins over selection: the buttons sit on the node under the mouse.
   const actionsId = hoveredId ?? selectedId;
   const actionsRect = actionsId ? layout.rects.get(actionsId) : undefined;
   const actionsRow = actionsId ? nodesById.get(actionsId) : undefined;
+  const actionsOpen = !!(actionsRect && actionsRow) && !editingId && !drag;
+  if (actionsOpen) lastActionsRef.current = { rect: actionsRect!, row: actionsRow! };
+  // Closed buttons stay mounted (invisible, inert) only while animating, so
+  // they have something to animate out from.
+  const actions = actionsOpen
+    ? { rect: actionsRect!, row: actionsRow! }
+    : motionReady ? lastActionsRef.current : null;
 
   return (
     <div
@@ -504,12 +528,35 @@ export function MindmapCanvas({ mapId }: { mapId: string }) {
               isRoot={tree.root?.node.id === n.id}
               isDragSource={drag?.id === n.id}
               isDropTarget={drag?.targetId === n.id}
+              animateIn={motionReady}
               onMeasure={onMeasure}
               onPointerDown={onNodePointerDown}
               onCommitEdit={commitEdit}
               onCancelEdit={cancelEdit}
             />
           ))}
+          {[...exiting].map(([id, rect]) => {
+            const row = rowCache.get(id);
+            return row ? (
+              <MindmapNodeView
+                key={`leaving-${id}`}
+                node={row}
+                rect={rect}
+                selected={false}
+                hovered={false}
+                editing={false}
+                isRoot={false}
+                isDragSource={false}
+                isDropTarget={false}
+                animateIn={false}
+                leaving
+                onMeasure={onMeasure}
+                onPointerDown={onNodePointerDown}
+                onCommitEdit={commitEdit}
+                onCancelEdit={cancelEdit}
+              />
+            ) : null;
+          })}
           {hiddenUnmeasured.map((n) => (
             <MindmapNodeView
               key={n.id}
@@ -521,21 +568,23 @@ export function MindmapCanvas({ mapId }: { mapId: string }) {
               isRoot={false}
               isDragSource={false}
               isDropTarget={false}
+              animateIn={false}
               onMeasure={onMeasure}
               onPointerDown={onNodePointerDown}
               onCommitEdit={commitEdit}
               onCancelEdit={cancelEdit}
             />
           ))}
-          {actionsRect && actionsRow && !editingId && !drag && (
+          {actions && (
             <NodeActions
-              rect={actionsRect}
-              isRoot={!actionsRow.parentId}
-              hasToggle={parentIds.has(actionsRow.id)}
-              onAddChild={() => void addChild(actionsRow.id)}
-              onAddSibling={() => void addSibling(actionsRow.id)}
-              onEdit={() => startEdit(actionsRow.id)}
-              onDelete={() => void deleteSubtree(actionsRow.id)}
+              rect={actions.rect}
+              open={actionsOpen}
+              isRoot={!actions.row.parentId}
+              hasToggle={parentIds.has(actions.row.id)}
+              onAddChild={() => void addChild(actions.row.id)}
+              onAddSibling={() => void addSibling(actions.row.id)}
+              onEdit={() => startEdit(actions.row.id)}
+              onDelete={() => void deleteSubtree(actions.row.id)}
             />
           )}
           {drag && (
@@ -582,8 +631,10 @@ function CanvasButton({ label, onClick, children }: { label: string; onClick: ()
   );
 }
 
-function NodeActions({ rect, isRoot, hasToggle, onAddChild, onAddSibling, onEdit, onDelete }: {
+function NodeActions({ rect, open, isRoot, hasToggle, onAddChild, onAddSibling, onEdit, onDelete }: {
   rect: LayoutRect;
+  /** False while the group animates out — kept mounted, invisible and inert. */
+  open: boolean;
   isRoot: boolean;
   hasToggle: boolean;
   onAddChild: () => void;
@@ -593,7 +644,12 @@ function NodeActions({ rect, isRoot, hasToggle, onAddChild, onAddSibling, onEdit
 }) {
   const a = nodeActionAnchors(rect, { isRoot, hasToggle });
   return (
-    <g>
+    <g
+      className={`mm-actions ${open ? '' : 'mm-actions-closed'}`}
+      // Grow out of the node's right edge, not the canvas origin
+      style={{ transformOrigin: `${rect.x + rect.w}px ${rect.y + rect.h / 2}px` }}
+      aria-hidden={!open}
+    >
       <ActionButton x={a.addChild.x} y={a.addChild.y} title="Add child (Tab)" onActivate={onAddChild}>
         <PlusIcon />
       </ActionButton>

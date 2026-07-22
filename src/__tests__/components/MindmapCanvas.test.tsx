@@ -323,6 +323,40 @@ describe('MindmapCanvas', () => {
     await waitFor(() => expect(mockCreateNode).toHaveBeenCalledWith('map-1', 'b'));
   });
 
+  // Motion stays off until the map has been measured and fitted — which never
+  // happens in jsdom (offsetWidth is 0), so every other test runs unanimated.
+  // Faking the measurement turns it on and exercises the enter/exit wiring.
+  it('with motion on, the actions close instead of vanishing and collapsed nodes leave a ghost', async () => {
+    const measured = { configurable: true, value: 120 };
+    Object.defineProperty(HTMLElement.prototype, 'offsetWidth', measured);
+    Object.defineProperty(HTMLElement.prototype, 'offsetHeight', { configurable: true, value: 36 });
+    try {
+      const user = userEvent.setup();
+      render(<MindmapCanvas mapId="map-1" />);
+      await user.click(nodeEl('a'));
+      expect(actionButton('Add child (Tab)')).toBeDefined();
+
+      // Deselect: the group is kept, inert, to animate out
+      fireEvent.keyDown(screen.getByTestId('mindmap-canvas'), { key: 'Escape' });
+      await waitFor(() => expect(document.querySelector('.mm-actions-closed')).toBeTruthy());
+      expect(document.querySelector('.mm-actions-closed')).toHaveAttribute('aria-hidden', 'true');
+
+      // Collapsing 'a' hides 'a1' — it lingers as a ghost, then goes
+      act(() => useMindmapUi.getState().toggleCollapsed('map-1', 'a'));
+      // The ghost takes over on the first animation frame and lives EXIT_MS,
+      // so sample faster than waitFor's default 50ms.
+      await waitFor(() => {
+        const ghost = document.querySelector('.mm-node-out');
+        expect(ghost).toHaveTextContent('Grandchild');
+        expect(ghost?.getAttribute('data-mindmap-node')).toBeNull(); // not a hit target
+      }, { interval: 5 });
+      await waitFor(() => expect(document.querySelector('.mm-node-out')).toBeNull(), { interval: 5 });
+    } finally {
+      Reflect.deleteProperty(HTMLElement.prototype, 'offsetWidth');
+      Reflect.deleteProperty(HTMLElement.prototype, 'offsetHeight');
+    }
+  });
+
   it('renders markdown in labels as elements, never HTML', () => {
     mockUseNodes.mockReturnValue([
       node('root', { label: 'has **bold** and <img src=x onerror=alert(1)>' }),
