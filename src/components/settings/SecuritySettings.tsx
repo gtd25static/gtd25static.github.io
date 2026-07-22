@@ -16,6 +16,7 @@ import {
   enableParanoid, disableParanoid, changePassphrase, configureIdleTimeout,
   configureMaxUnlockAttempts, verifyAtRestIntegrity, lock, addSecurityKey, removeSecurityKey,
   listSecurityKeys, DEFAULT_IDLE_MINUTES, DEFAULT_MAX_ATTEMPTS,
+  setSecondaryPassphrase, clearSecondaryPassphrase,
 } from '../../db/vault';
 import { isWebAuthnSupported } from '../../sync/webauthn-prf';
 import {
@@ -183,6 +184,60 @@ function SecurityKeySection({ hasSecurityKey }: { hasSecurityKey: boolean }) {
           </p>
         </>
       )}
+    </div>
+  );
+}
+
+// A second passphrase that opens the vault into a separate, self-contained
+// workspace and, once first used, re-keys this device to keep only that
+// workspace (other devices are untouched). Deliberately understated in the UI
+// and code — see THREAT_MODEL "Coerced unlock". The control is identical whether
+// or not one is configured (there is no way, by design, to tell).
+function SecondaryPassphraseSection() {
+  const [pass, setPass] = useState('');
+  const [confirm, setConfirm] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  async function save() {
+    if (pass !== confirm) { toast('Passphrases do not match', 'error'); return; }
+    setBusy(true);
+    try {
+      await setSecondaryPassphrase(pass.trim());
+      setPass(''); setConfirm('');
+      toast('Secondary passphrase saved', 'success');
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Could not save', 'error');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function remove() {
+    if (!await confirmDialog('Remove the secondary passphrase, if one is set?', { confirmLabel: 'Remove' })) return;
+    setBusy(true);
+    try {
+      await clearSecondaryPassphrase();
+      toast('Secondary passphrase removed', 'success');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="space-y-2 border-t border-zinc-200 pt-3 dark:border-zinc-700">
+      <h4 className="text-sm font-medium">Secondary passphrase</h4>
+      <p className="text-xs text-zinc-400 dark:text-zinc-500">
+        An additional passphrase that opens this vault into a separate workspace. The first time it is
+        used to unlock, this device keeps only that workspace — your other devices are not affected. It
+        must be as strong as, and different from, your main passphrase.
+      </p>
+      <Input label="Secondary passphrase" type="password" value={pass} onChange={(e) => setPass(e.target.value)} disabled={busy} />
+      <PasswordStrengthBar secret={pass.trim()} kind="vault" />
+      <Input label="Confirm" type="password" value={confirm} onChange={(e) => setConfirm(e.target.value)} disabled={busy} />
+      <div className="flex gap-2">
+        <Button size="sm" variant="secondary" onClick={save} disabled={busy || !pass.trim()}>Save</Button>
+        <Button size="sm" variant="secondary" onClick={remove} disabled={busy}>Remove</Button>
+      </div>
     </div>
   );
 }
@@ -630,6 +685,8 @@ function ManageForm({ idleMinutes, maxAttempts, systemIdleOn, systemLockGraceOn,
         <Input label="Confirm new passphrase" type="password" value={newPassConfirm} onChange={(e) => setNewPassConfirm(e.target.value)} placeholder="Repeat new passphrase" disabled={busy} />
         <Button size="sm" variant="secondary" onClick={handleChangePass} disabled={busy}>Change passphrase</Button>
       </div>
+
+      <SecondaryPassphraseSection />
 
       <SystemIdleToggle enabled={systemIdleOn} graceEnabled={systemLockGraceOn} graceMinutes={systemLockGraceMinutes} />
 

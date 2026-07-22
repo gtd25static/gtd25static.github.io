@@ -44,6 +44,19 @@ export async function unwrapDek(kek: CryptoKey, wrapped: string): Promise<Crypto
   return importDekRaw(await decryptBlob(kek, wrapped));
 }
 
+/**
+ * A correctly-sized, unremovable garbage slot-2 blob (the DEK wrapped by a
+ * throwaway KEK): no user passphrase can unwrap it, and it is byte-shaped like a
+ * real duress wrap, so slot 2's contents never reveal whether duress is set up.
+ */
+export async function generateGarbageSlot(): Promise<string> {
+  const [kek, dek] = await Promise.all([
+    crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, true, ['encrypt', 'decrypt']),
+    generateDek(),
+  ]);
+  return wrapDek(kek, dek);
+}
+
 /** Import 32 raw bytes (e.g. a WebAuthn PRF output) as an AES-GCM KEK. */
 export function importKekFromBytes(raw: ArrayBuffer | Uint8Array): Promise<CryptoKey> {
   const bytes = raw instanceof Uint8Array ? raw : new Uint8Array(raw);

@@ -13,7 +13,7 @@ import {
   encryptBlob, decryptBlob, clearEncryptionKey,
 } from '../sync/crypto';
 import { deriveVaultKek, DEFAULT_ARGON2, LEGACY_KDF, type KdfParams } from './vault-kdf';
-import { generateDek, wrapDek, unwrapDek, importKekFromBytes } from './vault-crypto';
+import { generateDek, wrapDek, unwrapDek, importKekFromBytes, generateGarbageSlot } from './vault-crypto';
 import { setVaultKeyProvider } from './vault-middleware';
 import { encryptAllAtRest, decryptAllAtRest } from './vault-migration';
 import { registerPrfCredential, getPrfOutput } from '../sync/webauthn-prf';
@@ -22,6 +22,8 @@ import { PARANOID_FLAG, isParanoidFlagSet } from './paranoid-flag';
 import { recordError } from '../lib/diagnostics';
 import { recordUnlockAttempt, type UnlockMethod } from '../lib/unlock-audit';
 import { pruneHistory } from '../lib/relaxed-unlock';
+import { checkSecretStrength } from '../lib/password-strength';
+import { reinitVaultWithPlaceholders } from './vault-reinit';
 import type { LocalSettings, Vault, PrfCredential } from './models';
 
 // Synchronous mirror of "a security-key credential is enrolled", so the lock
@@ -224,6 +226,7 @@ export async function enableParanoid(passphrase: string, idleMinutes = DEFAULT_I
   const passSalt = generateSalt();
   const kek = await deriveVaultKek(passphrase, passSalt, kdfParams);
   const dekWrappedByPass = await wrapDek(kek, dek);
+  const wrappedDek2 = await generateGarbageSlot(); // uniform slot 2 (no duress yet)
   const verifier = await createVerifier(dek);
   const prfSalt = generateSalt();
 
@@ -239,6 +242,7 @@ export async function enableParanoid(passphrase: string, idleMinutes = DEFAULT_I
   await db.vault.put({
     id: 'vault',
     dekWrappedByPass,
+    wrappedDek2,
     passSalt,
     kdf: kdfParams,
     prfSalt,
@@ -336,7 +340,18 @@ async function doUnlockWithPassphrase(passphrase: string): Promise<boolean> {
   let dek: CryptoKey | null = null;
   try {
     dek = await unwrapDek(kek, vault.dekWrappedByPass);
-  } catch { /* wrong passphrase -> AES-GCM auth failure */ }
+  } catch { /* not the real passphrase -> try the duress slot below */ }
+
+  // Slot 2: the duress passphrase. Unwraps the real DEK, then re-keys the vault
+  // to decoy content and finishes as a completely normal 'passphrase' unlock.
+  if (!dek && vault.wrappedDek2) {
+    let altDek: CryptoKey | null = null;
+    try {
+      altDek = await unwrapDek(kek, vault.wrappedDek2);
+    } catch { /* neither slot -> genuinely wrong */ }
+    if (altDek) return applySecondaryUnlock(vault, altDek, kek);
+  }
+
   if (!dek) lastUnlockFailure = 'wrong-credential';
 
   const ok = dek ? await finishUnlock(vault, dek, 'passphrase') : false;
@@ -351,6 +366,67 @@ async function doUnlockWithPassphrase(passphrase: string): Promise<boolean> {
     await rewrapPassphrase(passphrase);
   }
   return true;
+}
+
+// The duress path: real DEK just unwrapped from slot 2. Re-key the vault to
+// decoy content (destroying every trace of the real content that a fresh DEK
+// can't read), then finish as an ordinary passphrase unlock so the coercer sees
+// nothing unusual. Any failure here must NOT reveal the duress path — it falls
+// back to a normal 'wrong credential', because the re-key is atomic (rolled back
+// on error) and the real passphrase still works afterwards.
+async function applySecondaryUnlock(vault: Vault, realDek: CryptoKey, secondaryKek: CryptoKey): Promise<boolean> {
+  try {
+    currentDek = realDek; // make the real DEK the middleware read-key for the re-key
+    const newDek = await reinitVaultWithPlaceholders(vault, realDek, secondaryKek);
+    currentDek = null;
+    setKeyFlag(false); // PRF security keys were dropped in the re-key
+    const rekeyed = await db.vault.get('vault');
+    if (!rekeyed) { lastUnlockFailure = 'corrupt-vault'; return false; }
+    return await finishUnlock(rekeyed, newDek, 'passphrase');
+  } catch (err) {
+    // Roll back any in-memory key; the transaction already rolled back on disk.
+    currentDek = null;
+    recordError('vault.secondaryUnlock', err);
+    lastUnlockFailure = 'wrong-credential';
+    return false;
+  }
+}
+
+/**
+ * Configure (or replace) the duress passphrase. Requires the vault unlocked.
+ * Slot 2 will wrap the REAL DEK under this passphrase, so it must clear the same
+ * strength gate as the main passphrase, and must differ from it. There is
+ * deliberately NO stored flag and NO way to query whether duress is set — the
+ * settings UI always offers the same "set/replace" action.
+ */
+export async function setSecondaryPassphrase(duressPassphrase: string): Promise<void> {
+  if (!currentDek) throw new Error('Unlock the vault before setting a secondary passphrase');
+  const trimmed = duressPassphrase.trim();
+  if (!trimmed) throw new Error('Choose a secondary passphrase');
+  const strength = checkSecretStrength(trimmed, 'vault');
+  if (!strength.ok) throw new Error(strength.reason ?? 'Secondary passphrase is too weak');
+
+  const vault = await db.vault.get('vault');
+  if (!vault) throw new Error('Vault not found');
+  const kek = await deriveVaultKek(trimmed, vault.passSalt, vault.kdf ?? LEGACY_KDF);
+
+  // Reject a duress phrase equal to the real one: if it unwraps slot 1, it is the
+  // real passphrase (we never store the real passphrase to compare directly).
+  try {
+    await unwrapDek(kek, vault.dekWrappedByPass);
+    throw new Error('The secondary passphrase must be different from your main passphrase');
+  } catch (e) {
+    if (e instanceof Error && e.message.startsWith('The secondary')) throw e;
+    /* expected: real passphrase KEK differs, so slot 1 won't unwrap */
+  }
+
+  await db.vault.update('vault', { wrappedDek2: await wrapDek(kek, currentDek) });
+}
+
+/** Remove any duress passphrase by re-randomising slot 2. Requires unlock. */
+export async function clearSecondaryPassphrase(): Promise<void> {
+  if (!currentDek) throw new Error('Unlock the vault first');
+  await db.vault.update('vault', { wrappedDek2: await generateGarbageSlot() });
 }
 
 // Count a failed passphrase unlock; trip the panic wipe at the configured limit.
@@ -455,6 +531,11 @@ async function finishUnlock(vault: Vault, dek: CryptoKey, method: UnlockMethod =
     return false;
   }
 
+  // Backfill a uniform garbage slot 2 for vaults enabled before duress existed,
+  // so its presence never signals whether duress is configured.
+  if (!vault.wrappedDek2) {
+    await db.vault.update('vault', { wrappedDek2: await generateGarbageSlot() }).catch(() => {});
+  }
   await recordUnlockEvent().catch((err) => recordError('vault.recordUnlockEvent', err));
   await recordUnlockAttempt(method, true, Date.now());
   resetIdleTimer();

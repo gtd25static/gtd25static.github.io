@@ -4,7 +4,7 @@ import type { SyncData, ChangeEntry } from '../db/models';
 const PBKDF2_ITERATIONS = 600_000;
 const VERIFIER_PLAINTEXT = 'gtd25-encryption-check';
 
-const SENSITIVE_FIELDS: Record<string, string[]> = {
+export const SENSITIVE_FIELDS: Record<string, string[]> = {
   taskList: ['name'],
   task: ['title', 'description', 'link', 'linkTitle', 'links', 'discussionLog'],
   subtask: ['title', 'link', 'linkTitle', 'links'],
