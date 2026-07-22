@@ -77,6 +77,35 @@ describe('MindmapStyleToolbar', () => {
     expect(useMindmapUi.getState().stylePreview).toBeNull();
   });
 
+  it('renders the advanced popover outside the toolbar, which clips its children', async () => {
+    const user = userEvent.setup();
+    const { container } = render(<MindmapStyleToolbar node={node()} isRoot={false} />);
+    await user.click(screen.getByLabelText('Advanced colours'));
+
+    const popover = screen.getByRole('dialog', { name: 'Advanced colours' });
+    // The bar scrolls horizontally, and a scroll container clips in both axes —
+    // in the flow the popover disappeared under the canvas.
+    const bar = container.firstElementChild!;
+    expect(bar.className).toContain('overflow-x-auto');
+    expect(bar.contains(popover)).toBe(false);
+    expect(document.body.contains(popover)).toBe(true);
+  });
+
+  it('the trigger closes the popover again instead of re-opening it', async () => {
+    const user = userEvent.setup();
+    render(<MindmapStyleToolbar node={node()} isRoot={false} />);
+    const trigger = screen.getByLabelText('Advanced colours');
+
+    await user.click(trigger);
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    await user.click(trigger); // outside the portal — must not fight the toggle
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+
+    await user.click(trigger);
+    fireEvent.pointerDown(document.body); // a genuine outside press still closes it
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
   it('opens the advanced popover and writes one part at a time', async () => {
     const user = userEvent.setup();
     render(<MindmapStyleToolbar node={node({ palette: 'sky' })} isRoot={false} />);

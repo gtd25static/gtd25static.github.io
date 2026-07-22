@@ -108,12 +108,18 @@ export const SHAPE_TEXT_MAX_WIDTH: Record<MindmapNodeShape, number> = {
 };
 
 const MIN_SIDE = 48;
+/** Decision diamonds are always this much wider than tall — a flow-chart look. */
+const DIAMOND_ASPECT = 1.4;
 
 /**
- * Outer box for a measured label. A circle takes the label's diagonal; a
- * diamond has to grow both ways (an axis-aligned w×h rect fits inside a rhombus
- * W×H only while w/W + h/H ≤ 1 — here 0.6 + 0.4, which keeps them from becoming
- * absurdly wide).
+ * Outer box for a measured label. A circle takes the label's diagonal.
+ *
+ * A diamond has to grow both ways: an axis-aligned w×h label fits inside a
+ * rhombus W×H only while w/W + h/H ≤ 1. Rather than splitting that budget by a
+ * fixed ratio (which made short labels come out taller than wide), the aspect
+ * is pinned to DIAMOND_ASPECT and the equation solved for it — W = r·H with
+ * H = w/r + h satisfies it exactly, so this is the *smallest* diamond of that
+ * shape that still contains the label.
  */
 export function shapeSize(shape: MindmapNodeShape, textW: number, textH: number): { w: number; h: number } {
   switch (shape) {
@@ -121,11 +127,12 @@ export function shapeSize(shape: MindmapNodeShape, textW: number, textH: number)
       const d = Math.max(Math.ceil(Math.hypot(textW, textH)) + 16, MIN_SIDE);
       return { w: d, h: d };
     }
-    case 'diamond':
-      return {
-        w: Math.max(Math.ceil(textW / 0.6) + 24, MIN_SIDE),
-        h: Math.max(Math.ceil(textH / 0.4) + 24, MIN_SIDE),
-      };
+    case 'diamond': {
+      const w0 = textW + 12; // breathing room before solving, or the label
+      const h0 = textH + 8;  // touches the sloped edges
+      const h = Math.max(Math.ceil(w0 / DIAMOND_ASPECT + h0), MIN_SIDE);
+      return { w: Math.ceil(h * DIAMOND_ASPECT), h };
+    }
     default:
       return { w: textW + 28, h: textH + 16 };
   }

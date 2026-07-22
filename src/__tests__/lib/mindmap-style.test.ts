@@ -101,16 +101,24 @@ describe('shapeSize', () => {
   });
 
   it('grows a diamond enough to actually contain its label', () => {
-    const textW = 90;
-    const textH = 30;
-    const { w, h } = shapeSize('diamond', textW, textH);
-    // An axis-aligned rect fits in a rhombus while w/W + h/H <= 1
-    expect(textW / w + textH / h).toBeLessThanOrEqual(1);
+    for (const [textW, textH] of [[90, 30], [15, 18], [120, 54], [8, 60]] as const) {
+      const { w, h } = shapeSize('diamond', textW, textH);
+      // An axis-aligned rect fits in a rhombus while w/W + h/H <= 1
+      expect(textW / w + textH / h).toBeLessThanOrEqual(1);
+    }
+  });
+
+  it('always makes a diamond slightly wider than tall, whatever the label', () => {
+    for (const [textW, textH] of [[90, 30], [15, 18], [120, 54], [8, 60], [200, 12]] as const) {
+      const { w, h } = shapeSize('diamond', textW, textH);
+      expect(w).toBeGreaterThan(h);
+      expect(w / h).toBeCloseTo(1.4, 1);
+    }
   });
 
   it('never goes below a minimum side for the round shapes', () => {
     expect(shapeSize('circle', 4, 4).w).toBe(48);
-    expect(shapeSize('diamond', 4, 4)).toEqual({ w: 48, h: 48 });
+    expect(shapeSize('diamond', 4, 4)).toEqual({ w: 68, h: 48 });
   });
 
   it('caps label width per shape so round shapes stay usable', () => {

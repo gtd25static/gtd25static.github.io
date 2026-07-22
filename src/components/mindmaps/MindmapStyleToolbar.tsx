@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import type { MindmapNode, MindmapNodeShape } from '../../db/models';
 import { updateMindmapNodeStyle } from '../../hooks/use-mindmaps';
 import { useMindmapUi } from '../../stores/mindmap-ui';
@@ -15,6 +16,7 @@ import {
 export function MindmapStyleToolbar({ node, isRoot }: { node: MindmapNode; isRoot: boolean }) {
   const setPreview = useMindmapUi((s) => s.setStylePreview);
   const [advancedOpen, setAdvancedOpen] = useState(false);
+  const advancedAnchorRef = useRef<HTMLDivElement>(null);
 
   const apply = (patch: NodeStylePatch) => {
     setPreview(null);
@@ -70,7 +72,7 @@ export function MindmapStyleToolbar({ node, isRoot }: { node: MindmapNode; isRoo
 
       <Divider />
 
-      <div className="relative shrink-0">
+      <div className="shrink-0" ref={advancedAnchorRef}>
         <ToolButton
           label="Advanced colours"
           active={advancedOpen}
@@ -85,6 +87,7 @@ export function MindmapStyleToolbar({ node, isRoot }: { node: MindmapNode; isRoo
           <AdvancedColours
             node={node}
             current={current}
+            anchorRef={advancedAnchorRef}
             onClose={() => setAdvancedOpen(false)}
             onApply={apply}
           />
@@ -178,17 +181,40 @@ function readColor(value: string, fallback: string): string {
   return isHexColor(resolved) ? resolved : fallback;
 }
 
-function AdvancedColours({ node, current, onClose, onApply }: {
+// Rendered into <body>: the toolbar is a horizontal scroll container
+// (overflow-x), which clips absolutely-positioned children in *both* axes, so
+// an in-flow popover opened here is invisible under the canvas.
+function AdvancedColours({ node, current, anchorRef, onClose, onApply }: {
   node: MindmapNode;
   current: { bg: string; fg: string; border: string };
+  anchorRef: React.RefObject<HTMLDivElement | null>;
   onClose: () => void;
   onApply: (patch: NodeStylePatch) => void;
 }) {
   const popoverRef = useRef<HTMLDivElement>(null);
+  const [position, setPosition] = useState<{ top: number; left: number } | null>(null);
+
+  useLayoutEffect(() => {
+    const place = () => {
+      const anchor = anchorRef.current?.getBoundingClientRect();
+      if (!anchor) return;
+      const width = 224; // w-56
+      setPosition({
+        top: anchor.bottom + 4,
+        left: Math.max(8, Math.min(anchor.right - width, window.innerWidth - width - 8)),
+      });
+    };
+    place();
+    window.addEventListener('resize', place);
+    return () => window.removeEventListener('resize', place);
+  }, [anchorRef]);
 
   useEffect(() => {
     const onDown = (e: PointerEvent) => {
-      if (e.target instanceof Node && !popoverRef.current?.contains(e.target)) onClose();
+      if (!(e.target instanceof Node)) return;
+      // The trigger handles its own toggle — closing here too would re-open it
+      if (popoverRef.current?.contains(e.target) || anchorRef.current?.contains(e.target)) return;
+      onClose();
     };
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
     document.addEventListener('pointerdown', onDown, true);
@@ -197,7 +223,7 @@ function AdvancedColours({ node, current, onClose, onApply }: {
       document.removeEventListener('pointerdown', onDown, true);
       document.removeEventListener('keydown', onKey);
     };
-  }, [onClose]);
+  }, [onClose, anchorRef]);
 
   const rows: Array<{ field: 'colorBg' | 'colorFg' | 'colorBorder'; label: string; value: string }> = [
     { field: 'colorBg', label: 'Background', value: readColor(current.bg, '#ffffff') },
@@ -205,12 +231,13 @@ function AdvancedColours({ node, current, onClose, onApply }: {
     { field: 'colorBorder', label: 'Border', value: readColor(current.border, '#d4d4d8') },
   ];
 
-  return (
+  return createPortal(
     <div
       ref={popoverRef}
       role="dialog"
       aria-label="Advanced colours"
-      className="absolute right-0 top-full z-30 mt-1 w-56 rounded-xl border border-zinc-200 bg-white p-2 shadow-lg dark:border-zinc-700 dark:bg-zinc-800"
+      style={{ top: position?.top ?? 0, left: position?.left ?? 0, visibility: position ? undefined : 'hidden' }}
+      className="fixed z-50 w-56 rounded-xl border border-zinc-200 bg-white p-2 shadow-lg dark:border-zinc-700 dark:bg-zinc-800"
     >
       {rows.map((row) => (
         <label key={row.field} className="flex items-center justify-between gap-2 rounded-lg px-2 py-1.5 text-sm text-zinc-700 hover:bg-zinc-50 dark:text-zinc-200 dark:hover:bg-zinc-700/50">
@@ -237,6 +264,7 @@ function AdvancedColours({ node, current, onClose, onApply }: {
       <p className="px-2 pt-1 text-[11px] leading-snug text-zinc-400">
         Custom colours are fixed — unlike the presets, they don't adapt to dark mode.
       </p>
-    </div>
+    </div>,
+    document.body,
   );
 }
