@@ -307,6 +307,12 @@ function ParanoidExtrasSection() {
       >
         <BackgroundLockDelay seconds={local.paranoidBackgroundLockSeconds ?? DEFAULT_BACKGROUND_LOCK_SECONDS} />
       </ExtraToggle>
+      <ExtraToggle
+        label="Instant-lock hotkey (Ctrl/Cmd+Shift+L)"
+        description="Lock the vault from anywhere with one chord — the reflex version of the sidebar lock button. Works even while typing in a field."
+        checked={!!local.paranoidLockHotkeyEnabled}
+        onChange={(on) => updateLocalSettings({ paranoidLockHotkeyEnabled: on })}
+      />
     </div>
   );
 }

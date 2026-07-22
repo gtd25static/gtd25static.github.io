@@ -11,6 +11,7 @@ import { deleteTasksBatch } from './use-bulk-operations';
 import { toast } from '../components/ui/Toast';
 import { confirmDialog } from '../components/ui/ConfirmDialog';
 import type { ListType } from '../db/models';
+import { isParanoidEnabled, isUnlocked, lock } from '../db/vault';
 
 interface NavItem {
   id: string;
@@ -26,6 +27,16 @@ export function useKeyboard() {
   const expandedTaskIds = useAppState((s) => s.expandedTaskIds);
   const selectedListId = useAppState((s) => s.selectedListId);
   const focusedItemId = useAppState((s) => s.focusedItemId);
+
+  // The lock hotkey's toggle, readable synchronously from the key handler
+  // (preventDefault can't wait for an async read).
+  const lockHotkeyEnabled = useLiveQuery(
+    async () => !!(await db.localSettings.get('local'))?.paranoidLockHotkeyEnabled,
+    [],
+    false,
+  );
+  const lockHotkeyRef = useRef(lockHotkeyEnabled);
+  lockHotkeyRef.current = lockHotkeyEnabled;
 
   // Sidebar items
   const lists = useLiveQuery(
@@ -174,6 +185,16 @@ export function useKeyboard() {
       if ((e.ctrlKey || e.metaKey) && e.key === 'n') {
         e.preventDefault();
         s.setQuickCaptureOpen(!s.quickCaptureOpen);
+        return;
+      }
+
+      // Ctrl+Shift+L: instant vault lock (Paranoid extra, opt-in). Global —
+      // works from inputs too; when you need it, you need it NOW.
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === 'L' || e.key === 'l')) {
+        if (isParanoidEnabled() && isUnlocked() && lockHotkeyRef.current) {
+          e.preventDefault();
+          lock();
+        }
         return;
       }
 
