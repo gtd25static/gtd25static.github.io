@@ -65,7 +65,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockDeleteSubtree.mockResolvedValue([]);
   localStorage.removeItem('gtd25-mindmap-ui');
-  useMindmapUi.setState({ collapsed: {} });
+  useMindmapUi.setState({ collapsed: {}, selectedNodeId: null, stylePreview: null });
   mockUseNodes.mockReturnValue([
     node('root', { label: 'Root topic' }),
     node('a', { parentId: 'root', label: 'Child A' }),
@@ -156,9 +156,10 @@ describe('MindmapCanvas', () => {
     // Grandchild leaves the layout (it may stay mounted invisibly for measuring —
     // assert it is not part of any laid-out, visible foreignObject)
     const el = document.querySelector('[data-mindmap-node="a1"]');
-    // (closest('foreignObject') doesn't match SVG camelCase tags in jsdom)
-    const fo = el?.parentElement;
-    expect(fo?.getAttribute('style') ?? '').toContain('opacity: 0');
+    // The node's <g> wrapper carries the hidden-while-measuring style
+    // (closest() doesn't match SVG camelCase tags in jsdom, hence the walk up)
+    const group = el?.parentElement?.parentElement;
+    expect(group?.getAttribute('style') ?? '').toContain('opacity: 0');
   });
 
   // Double-click is detected from our own pointer events (the svg's pointer

@@ -68,18 +68,11 @@ input[type="checkbox"] {
 .mm-node-in  { animation: mm-node-in 170ms var(--mm-ease-bounce); }
 .mm-node-out { animation: mm-node-out 130ms ease-in forwards; }
 
-/* The node box: colour changes (hover/selected/drop-target) plus the nudge it
-   gets while its inline editor is open. One rule, because a bare
-   `transition: transform` here would override Tailwind's transition-colors. */
-.mm-node-box {
-  transition:
-    transform 140ms var(--mm-ease-bounce),
-    color 150ms ease,
-    background-color 150ms ease,
-    border-color 150ms ease,
-    box-shadow 150ms ease;
-}
+/* The node: a nudge while its inline editor is open, and a fade between
+   palettes so switching preset (or previewing one) doesn't snap. */
+.mm-node-box { transition: transform 140ms var(--mm-ease-bounce); }
 .mm-node-editing { transform: scale(1.03); }
+.mm-node-shape { transition: fill 150ms ease, stroke 150ms ease; }
 
 /* The action buttons opening/closing around the node under the pointer.
    transform-origin is set per node (the box's right-edge midpoint) so they
@@ -91,5 +84,70 @@ input[type="checkbox"] {
   .mm-node-in,
   .mm-node-out { animation: none; }
   .mm-node-box,
+  .mm-node-shape,
   .mm-actions { transition: none; }
+}
+
+/* --- Mindmap node palettes --------------------------------------------------
+   Presets are stored on the node as an id, never as literal colours, so each
+   one can carry a light and a dark set. Only the advanced picker writes hex.
+   Named --mm-<paletteId>-{bg,fg,border}; see lib/mindmap-style.ts. */
+:root {
+  --mm-default-bg: #ffffff;
+  --mm-default-fg: #27272a;
+  --mm-default-border: #d4d4d8;
+
+  --mm-root-bg: #e8f0fe;
+  --mm-root-fg: #18181b;
+  --mm-root-border: #8ab4f8;
+
+  --mm-sky-bg: #e0f2fe;
+  --mm-sky-fg: #075985;
+  --mm-sky-border: #38bdf8;
+
+  --mm-mint-bg: #dcfce7;
+  --mm-mint-fg: #166534;
+  --mm-mint-border: #4ade80;
+
+  --mm-amber-bg: #fef3c7;
+  --mm-amber-fg: #854d0e;
+  --mm-amber-border: #fbbf24;
+
+  --mm-rose-bg: #ffe4e6;
+  --mm-rose-fg: #9f1239;
+  --mm-rose-border: #fb7185;
+
+  --mm-slate-bg: #e2e8f0;
+  --mm-slate-fg: #1e293b;
+  --mm-slate-border: #94a3b8;
+}
+
+.dark {
+  --mm-default-bg: #27272a;
+  --mm-default-fg: #f4f4f5;
+  --mm-default-border: #52525b;
+
+  --mm-root-bg: #1c3055;
+  --mm-root-fg: #f8fafc;
+  --mm-root-border: #4285f4;
+
+  --mm-sky-bg: #0c4a6e;
+  --mm-sky-fg: #e0f2fe;
+  --mm-sky-border: #0ea5e9;
+
+  --mm-mint-bg: #14532d;
+  --mm-mint-fg: #dcfce7;
+  --mm-mint-border: #22c55e;
+
+  --mm-amber-bg: #713f12;
+  --mm-amber-fg: #fef3c7;
+  --mm-amber-border: #f59e0b;
+
+  --mm-rose-bg: #881337;
+  --mm-rose-fg: #ffe4e6;
+  --mm-rose-border: #f43f5e;
+
+  --mm-slate-bg: #334155;
+  --mm-slate-fg: #f1f5f9;
+  --mm-slate-border: #94a3b8;
 }

@@ -89,7 +89,11 @@ export function MindmapCanvas({ mapId }: { mapId: string }) {
   const viewportRef = useRef(viewport);
   viewportRef.current = viewport;
 
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  // Selection lives in the store: the format toolbar is a row of the editor,
+  // above this component, and acts on whatever is selected here.
+  const selectedId = useMindmapUi((s) => s.selectedNodeId);
+  const setSelectedId = useMindmapUi((s) => s.setSelectedNodeId);
+  const stylePreview = useMindmapUi((s) => s.stylePreview);
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const hoveredIdRef = useRef<string | null>(null);
   hoveredIdRef.current = hoveredId;
@@ -114,6 +118,8 @@ export function MindmapCanvas({ mapId }: { mapId: string }) {
   layoutRef.current = layout;
   const treeRef = useRef(tree);
   treeRef.current = tree;
+
+  useEffect(() => () => setSelectedId(null), [mapId, setSelectedId]);
 
   const screenToWorld = useCallback((clientX: number, clientY: number) => {
     const svg = svgRef.current;
@@ -188,7 +194,7 @@ export function MindmapCanvas({ mapId }: { mapId: string }) {
   const startEdit = useCallback((id: string) => {
     setSelectedId(id);
     setEditingId(id);
-  }, []);
+  }, [setSelectedId]);
 
   const commitEdit = useCallback((id: string, label: string) => {
     if (editingIdRef.current !== id) return; // blur after Enter already committed
@@ -234,7 +240,7 @@ export function MindmapCanvas({ mapId }: { mapId: string }) {
       () => void restoreMindmapNodeSubtree(deleted),
       UNDO_TOAST_MS,
     );
-  }, [nodesById]);
+  }, [nodesById, setSelectedId]);
 
   // --- Pointer gestures ---
 
@@ -529,6 +535,7 @@ export function MindmapCanvas({ mapId }: { mapId: string }) {
               isDragSource={drag?.id === n.id}
               isDropTarget={drag?.targetId === n.id}
               animateIn={motionReady}
+              stylePreview={n.id === selectedId ? stylePreview : null}
               onMeasure={onMeasure}
               onPointerDown={onNodePointerDown}
               onCommitEdit={commitEdit}

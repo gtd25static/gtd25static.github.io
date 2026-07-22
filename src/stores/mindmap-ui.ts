@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import type { NodeStylePatch } from '../lib/mindmap-style';
 
 // Device-local mindmap view state: which nodes are collapsed, per map.
 // Deliberately NOT synced — phone and desktop want different collapse states,
@@ -10,6 +11,13 @@ const STORAGE_KEY = 'gtd25-mindmap-ui';
 
 interface MindmapUiState {
   collapsed: Record<string, string[]>;
+  /** The node the format toolbar acts on. Lives here because the canvas owns
+   *  selection but the toolbar sits above it, outside the canvas. Not persisted. */
+  selectedNodeId: string | null;
+  setSelectedNodeId: (id: string | null) => void;
+  /** Toolbar hovering a preset: drawn on the selected node, never stored. */
+  stylePreview: NodeStylePatch | null;
+  setStylePreview: (patch: NodeStylePatch | null) => void;
   toggleCollapsed: (mapId: string, nodeId: string) => void;
   isCollapsed: (mapId: string, nodeId: string) => boolean;
   expand: (mapId: string, nodeId: string) => void;
@@ -41,6 +49,10 @@ function persist(collapsed: Record<string, string[]>) {
 
 export const useMindmapUi = create<MindmapUiState>((set, get) => ({
   collapsed: loadInitial(),
+  selectedNodeId: null,
+  setSelectedNodeId: (id) => set((s) => (s.selectedNodeId === id ? s : { selectedNodeId: id, stylePreview: null })),
+  stylePreview: null,
+  setStylePreview: (patch) => set({ stylePreview: patch }),
   toggleCollapsed: (mapId, nodeId) =>
     set((state) => {
       const current = state.collapsed[mapId] ?? [];

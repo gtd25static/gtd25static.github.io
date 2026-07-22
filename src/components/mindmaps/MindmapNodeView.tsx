@@ -1,9 +1,16 @@
 import { memo, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { MindmapNode } from '../../db/models';
 import type { LayoutRect } from '../../lib/mindmap-layout';
+import {
+  SHAPE_TEXT_MAX_WIDTH,
+  diamondPoints,
+  resolveNodeStyle,
+  shapeSize,
+  type NodeStylePatch,
+} from '../../lib/mindmap-style';
 import { MdLabel } from './MdLabel';
 
-export const NODE_MAX_WIDTH = 240;
+export const NODE_MAX_WIDTH = SHAPE_TEXT_MAX_WIDTH.rect;
 
 interface Props {
   node: MindmapNode;
@@ -20,21 +27,23 @@ interface Props {
   animateIn: boolean;
   /** A ghost of a node that just left, playing its exit animation. */
   leaving?: boolean;
+  /** Toolbar hovering a preset: draw the node with it, without storing it. */
+  stylePreview?: NodeStylePatch | null;
   onMeasure: (id: string, size: { w: number; h: number }) => void;
   onPointerDown: (e: React.PointerEvent, id: string) => void;
   onCommitEdit: (id: string, label: string) => void;
   onCancelEdit: () => void;
 }
 
-// One mindmap node: an HTML rounded rect inside a foreignObject. The box sizes
-// itself (width: max-content capped at NODE_MAX_WIDTH), measures itself after
-// every content/clamp change via offsetWidth/Height (layout px — unaffected by
-// the canvas zoom transform) and reports up; the canvas lays out from those
-// sizes. Long labels clamp to 3 lines unless the node is selected/editing —
-// the resulting size change re-layouts, which is intended.
+// One mindmap node: the shape is an SVG element (a rect/ellipse/polygon can
+// carry a real border, which a clip-path'd HTML box cannot) and the label lives
+// in a foreignObject centred on top of it. The label measures itself
+// (width: max-content, capped per shape) and the canvas lays out from
+// shapeSize() of that — so a circle takes its label's diagonal and a diamond
+// grows both ways. Long labels clamp to 3 lines unless selected/editing.
 export const MindmapNodeView = memo(function MindmapNodeView({
   node, rect, selected, hovered, editing, isRoot, isDragSource, isDropTarget,
-  animateIn, leaving, onMeasure, onPointerDown, onCommitEdit, onCancelEdit,
+  animateIn, leaving, stylePreview, onMeasure, onPointerDown, onCommitEdit, onCancelEdit,
 }: Props) {
   const boxRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -45,7 +54,17 @@ export const MindmapNodeView = memo(function MindmapNodeView({
   // "animate") would replay the entrance on every node already on screen.
   const animateInRef = useRef(animateIn);
 
+  const style = resolveNodeStyle(node, { isRoot, preview: stylePreview });
+  const textMaxWidth = SHAPE_TEXT_MAX_WIDTH[style.shape];
   const clamped = !selected && !editing;
+
+  useLayoutEffect(() => {
+    const el = boxRef.current;
+    if (!el || leaving) return; // a ghost must not feed the layout it just left
+    const w = el.offsetWidth;
+    const h = el.offsetHeight;
+    if (w > 0 && h > 0) onMeasure(node.id, shapeSize(style.shape, w, h));
+  });
 
   // Pressing anywhere outside the open editor commits and closes it. Blur alone
   // isn't enough: a press can land on something that never takes focus (the
@@ -63,14 +82,6 @@ export const MindmapNodeView = memo(function MindmapNodeView({
   }, [editing, node.id, onCommitEdit]);
 
   useLayoutEffect(() => {
-    const el = boxRef.current;
-    if (!el || leaving) return; // a ghost must not feed the layout it just left
-    const w = el.offsetWidth;
-    const h = el.offsetHeight;
-    if (w > 0 && h > 0) onMeasure(node.id, { w, h });
-  });
-
-  useLayoutEffect(() => {
     if (!editing) {
       setDraft(node.label);
       return;
@@ -84,75 +95,120 @@ export const MindmapNodeView = memo(function MindmapNodeView({
     }
   }, [editing, node.label]);
 
-  // The action buttons float over the neighbours (siblings are 12px apart), so
-  // the node that owns them is marked — otherwise it's ambiguous which node a
-  // button belongs to.
-  const border = isDropTarget
-    ? 'border-accent-500 ring-2 ring-accent-300 dark:ring-accent-700'
+  // Selection/hover draw an accent outline *around* the shape instead of
+  // recolouring its border, so a node's own colours survive being pointed at.
+  const outline = isDropTarget
+    ? { grow: 4, color: 'var(--color-accent-500)', width: 3 }
     : selected
-      ? 'border-accent-500 shadow-md'
+      ? { grow: 3, color: 'var(--color-accent-500)', width: 2 }
       : hovered
-        ? 'border-accent-400 shadow-sm dark:border-accent-500'
-        : 'border-zinc-300 dark:border-zinc-600';
+        ? { grow: 3, color: 'var(--color-accent-400)', width: 1.5 }
+        : null;
+
+  const placed = rect ?? { x: 0, y: 0, w: NODE_MAX_WIDTH + 40, h: 600 };
 
   return (
-    <foreignObject
-      x={rect?.x ?? 0}
-      y={rect?.y ?? 0}
-      width={rect ? rect.w : NODE_MAX_WIDTH + 40}
-      height={rect ? rect.h : 600}
-      className="overflow-visible"
-      style={
-        rect
-          ? (leaving ? { pointerEvents: 'none' } : undefined)
-          : { opacity: 0, pointerEvents: 'none' }
-      }
+    <g
+      className={`mm-node-box ${editing ? 'mm-node-editing' : ''} ${
+        leaving ? 'mm-node-out' : animateInRef.current && rect ? 'mm-node-in' : ''
+      }`}
+      style={{
+        transformOrigin: `${placed.x + placed.w / 2}px ${placed.y + placed.h / 2}px`,
+        opacity: rect ? (isDragSource ? 0.4 : undefined) : 0,
+        pointerEvents: rect && !leaving ? undefined : 'none',
+      }}
     >
-      <div
-        ref={boxRef}
-        // @ts-expect-error xmlns is required on HTML content inside foreignObject
-        xmlns="http://www.w3.org/1999/xhtml"
-        data-mindmap-node={leaving ? undefined : node.id}
-        onPointerDown={(e) => onPointerDown(e, node.id)}
-        className={`mm-node-box select-none rounded-xl border-2 px-3 py-1.5 text-sm leading-snug ${
-          leaving ? 'mm-node-out' : animateInRef.current && rect ? 'mm-node-in' : ''
-        } ${editing ? 'mm-node-editing' : ''} ${border} ${
-          isRoot
-            ? 'bg-accent-50 text-zinc-900 dark:bg-accent-900/30 dark:text-zinc-50'
-            : 'bg-white text-zinc-800 dark:bg-zinc-800 dark:text-zinc-100'
-        } ${isDragSource ? 'opacity-40' : ''} ${editing ? 'cursor-text' : 'cursor-grab'}`}
-        style={{ width: 'max-content', maxWidth: NODE_MAX_WIDTH }}
-      >
-        {editing ? (
-          <textarea
-            ref={textareaRef}
-            value={draft}
-            maxLength={1000}
-            rows={1}
-            onChange={(e) => {
-              setDraft(e.target.value);
-              e.target.style.height = 'auto';
-              e.target.style.height = `${e.target.scrollHeight}px`;
-            }}
-            onKeyDown={(e) => {
-              e.stopPropagation();
-              if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                onCommitEdit(node.id, draft);
-              } else if (e.key === 'Escape') {
-                onCancelEdit();
-              }
-            }}
-            onBlur={() => onCommitEdit(node.id, draft)}
-            onPointerDown={(e) => e.stopPropagation()}
-            className="block w-52 resize-none bg-transparent text-sm leading-snug outline-none"
+      {rect && (
+        <>
+          {outline && (
+            <NodeShape
+              shape={style.shape}
+              rect={rect}
+              grow={outline.grow}
+              fill="none"
+              stroke={outline.color}
+              strokeWidth={outline.width}
+            />
+          )}
+          <NodeShape
+            shape={style.shape}
+            rect={rect}
+            className="mm-node-shape"
+            fill={style.bg}
+            stroke={style.border}
+            strokeWidth={2}
           />
-        ) : (
-          <div className={clamped ? 'line-clamp-3' : undefined}>
-            <MdLabel label={node.label} />
+        </>
+      )}
+      <foreignObject
+        x={placed.x}
+        y={placed.y}
+        width={placed.w}
+        height={placed.h}
+        className="overflow-visible"
+      >
+        <div
+          // @ts-expect-error xmlns is required on HTML content inside foreignObject
+          xmlns="http://www.w3.org/1999/xhtml"
+          data-mindmap-node={leaving ? undefined : node.id}
+          onPointerDown={(e) => onPointerDown(e, node.id)}
+          className={`flex h-full w-full items-center justify-center ${editing ? 'cursor-text' : 'cursor-grab'}`}
+          style={{ color: style.fg }}
+        >
+          <div
+            ref={boxRef}
+            className={`select-none px-1 text-sm leading-snug ${clamped ? 'line-clamp-3' : ''}`}
+            style={{ width: 'max-content', maxWidth: textMaxWidth }}
+          >
+            {editing ? (
+              <textarea
+                ref={textareaRef}
+                value={draft}
+                maxLength={1000}
+                rows={1}
+                onChange={(e) => {
+                  setDraft(e.target.value);
+                  e.target.style.height = 'auto';
+                  e.target.style.height = `${e.target.scrollHeight}px`;
+                }}
+                onKeyDown={(e) => {
+                  e.stopPropagation();
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    onCommitEdit(node.id, draft);
+                  } else if (e.key === 'Escape') {
+                    onCancelEdit();
+                  }
+                }}
+                onBlur={() => onCommitEdit(node.id, draft)}
+                onPointerDown={(e) => e.stopPropagation()}
+                className="block w-full resize-none bg-transparent text-center text-sm leading-snug outline-none"
+                style={{ width: textMaxWidth, color: style.fg }}
+              />
+            ) : (
+              <MdLabel label={node.label} />
+            )}
           </div>
-        )}
-      </div>
-    </foreignObject>
+        </div>
+      </foreignObject>
+    </g>
   );
 });
+
+function NodeShape({ shape, rect, grow = 0, ...svg }: {
+  shape: MindmapNode['shape'];
+  rect: LayoutRect;
+  grow?: number;
+} & React.SVGProps<SVGRectElement & SVGEllipseElement & SVGPolygonElement>) {
+  const x = rect.x - grow;
+  const y = rect.y - grow;
+  const w = rect.w + grow * 2;
+  const h = rect.h + grow * 2;
+  if (shape === 'circle') {
+    return <ellipse cx={x + w / 2} cy={y + h / 2} rx={w / 2} ry={h / 2} {...svg} />;
+  }
+  if (shape === 'diamond') {
+    return <polygon points={diamondPoints(x, y, w, h)} {...svg} />;
+  }
+  return <rect x={x} y={y} width={w} height={h} rx={12 + grow} {...svg} />;
+}

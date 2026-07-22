@@ -173,12 +173,22 @@ export interface Mindmap {
 // A single node of a mindmap. The map's root is the node with no parentId;
 // tree-building resolves anomalies (two roots, cycles from concurrent
 // reparents) deterministically — see src/lib/mindmap-tree.ts.
+export type MindmapNodeShape = 'rect' | 'circle' | 'diamond';
+
 export interface MindmapNode {
   id: string;
   mapId: string;
   parentId?: string; // absent = THE root node of the map
   order: number;     // sibling order
   label: string;     // 1..1000 chars, markdown subset — SENSITIVE
+  // Formatting, all optional (absent = the theme's default look). SENSITIVE:
+  // a colour scheme is content (red = blocked, green = done). Validated on the
+  // way in and on render — see lib/mindmap-style.ts.
+  shape?: MindmapNodeShape;
+  palette?: string;      // preset id from PALETTES; unknown ids fall back to the default
+  colorBg?: string;      // '#rrggbb' override of the preset's background
+  colorFg?: string;      // '#rrggbb' override of the preset's text colour
+  colorBorder?: string;  // '#rrggbb' override of the preset's border
   createdAt: number;
   updatedAt: number;
   deletedAt?: number;

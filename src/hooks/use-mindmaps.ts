@@ -11,6 +11,7 @@ import { SYNC_VERSION } from '../sync/version';
 import { MAX_MINDMAP_LABEL_LENGTH, MAX_MINDMAP_IMPORT_NODES } from '../lib/constants';
 import { buildTree } from '../lib/mindmap-tree';
 import { mapToOutline, type OutlineNode } from '../lib/mindmap-outline';
+import { isHexColor, isNodeShape, isPaletteId, type NodeStylePatch } from '../lib/mindmap-style';
 
 // --- Queries ---
 
@@ -578,6 +579,53 @@ export async function reparentMindmapNode(id: string, newParentId: string): Prom
     return true;
   } catch (error) {
     handleDbError(error, 'reparent mindmap node');
+    return false;
+  }
+}
+
+/**
+ * Apply a formatting patch (shape / preset / per-part colours). A null value
+ * clears that part back to the default. Anything that isn't a known shape, a
+ * known preset id or a '#rrggbb' colour is dropped on the floor: these end up
+ * in style attributes, and remote devices are not a trusted source.
+ */
+export async function updateMindmapNodeStyle(id: string, patch: NodeStylePatch): Promise<boolean> {
+  try {
+    const existing = await db.mindmapNodes.get(id);
+    if (!existing || existing.deletedAt) return false;
+
+    const clean: Partial<MindmapNode> = {};
+    const touched: string[] = [];
+    type StyleField = 'shape' | 'palette' | 'colorBg' | 'colorFg' | 'colorBorder';
+    const set = <K extends StyleField>(field: K, value: MindmapNode[K]) => {
+      if (existing[field] === value) return;
+      clean[field] = value;
+      touched.push(field);
+    };
+
+    if ('shape' in patch) set('shape', isNodeShape(patch.shape) ? patch.shape : undefined);
+    if ('palette' in patch) set('palette', isPaletteId(patch.palette) ? patch.palette : undefined);
+    for (const field of ['colorBg', 'colorFg', 'colorBorder'] as const) {
+      if (field in patch) set(field, isHexColor(patch[field]) ? patch[field] : undefined);
+    }
+    if (touched.length === 0) return true;
+
+    const now = Date.now();
+    const updated: MindmapNode = {
+      ...existing,
+      ...clean,
+      updatedAt: now,
+      fieldTimestamps: stampUpdatedFields(existing.fieldTimestamps, touched, now),
+    };
+    // `undefined` means "no formatting"; keep the row free of empty keys so it
+    // round-trips through JSON (backups, sync payloads) unchanged.
+    for (const field of touched) {
+      if (updated[field as keyof MindmapNode] === undefined) delete updated[field as keyof MindmapNode];
+    }
+    await putMindmapRows([{ table: 'mindmapNodes', entityType: 'mindmapNode', row: updated }]);
+    return true;
+  } catch (error) {
+    handleDbError(error, 'update mindmap node style');
     return false;
   }
 }

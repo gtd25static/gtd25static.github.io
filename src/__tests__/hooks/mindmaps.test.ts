@@ -17,6 +17,7 @@ import {
   reparentMindmapNode,
   deleteMindmapNodeSubtree,
   restoreMindmapNodeSubtree,
+  updateMindmapNodeStyle,
   createMindmapFromOutline,
   exportMindmapOutline,
   clampMindmapLabel,
@@ -129,6 +130,46 @@ describe('nodes', () => {
 
     expect(await deleteMindmapNodeSubtree(root.id)).toEqual([]); // no-op
     expect((await db.mindmapNodes.get(root.id))?.deletedAt).toBeFalsy();
+  });
+
+  it('updateMindmapNodeStyle stores shape/preset/colours and stamps only what changed', async () => {
+    const map = assertDefined(await createMindmap('M'));
+    const root = await rootOf(map.id);
+    const a = assertDefined(await createMindmapNode(map.id, root.id, 'A'));
+
+    expect(await updateMindmapNodeStyle(a.id, { shape: 'diamond', palette: 'mint' })).toBe(true);
+    let stored = assertDefined(await db.mindmapNodes.get(a.id));
+    expect(stored.shape).toBe('diamond');
+    expect(stored.palette).toBe('mint');
+    expect(stored.fieldTimestamps?.shape).toBeGreaterThan(0);
+    expect(stored.fieldTimestamps?.palette).toBeGreaterThan(0);
+    expect(stored.fieldTimestamps?.label).toBeLessThanOrEqual(stored.fieldTimestamps!.shape!);
+
+    // null clears a part, and the key is removed rather than left undefined
+    expect(await updateMindmapNodeStyle(a.id, { palette: null, colorBg: '#0a0b0c' })).toBe(true);
+    stored = assertDefined(await db.mindmapNodes.get(a.id));
+    expect('palette' in stored).toBe(false);
+    expect(stored.colorBg).toBe('#0a0b0c');
+    expect(stored.shape).toBe('diamond'); // untouched parts survive
+  });
+
+  it('updateMindmapNodeStyle drops anything that is not a known shape/preset or #rrggbb', async () => {
+    const map = assertDefined(await createMindmap('M'));
+    const root = await rootOf(map.id);
+    const a = assertDefined(await createMindmapNode(map.id, root.id, 'A'));
+    await updateMindmapNodeStyle(a.id, { palette: 'sky', colorBg: '#ffffff' });
+
+    await updateMindmapNodeStyle(a.id, {
+      shape: 'triangle' as never,
+      palette: 'sky); background: url(evil',
+      colorBg: 'red; position: fixed',
+      colorFg: '#abc',
+    });
+    const stored = assertDefined(await db.mindmapNodes.get(a.id));
+    expect(stored.shape).toBeUndefined();
+    expect('palette' in stored).toBe(false); // the junk cleared it, never stored it
+    expect('colorBg' in stored).toBe(false);
+    expect('colorFg' in stored).toBe(false);
   });
 
   it('restoreMindmapNodeSubtree brings back exactly the ids it is given', async () => {

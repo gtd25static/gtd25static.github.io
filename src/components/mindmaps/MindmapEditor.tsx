@@ -3,6 +3,8 @@ import { useShallow } from 'zustand/react/shallow';
 import { useAppState } from '../../stores/app-state';
 import { useMindmap, useMindmapNodes } from '../../hooks/use-mindmaps';
 import { MindmapCanvas } from './MindmapCanvas';
+import { MindmapStyleToolbar } from './MindmapStyleToolbar';
+import { useMindmapUi } from '../../stores/mindmap-ui';
 import { DropdownMenu } from '../ui/DropdownMenu';
 import { downloadOutline, copyOutline } from './outline-actions';
 
@@ -10,6 +12,8 @@ export function MindmapEditor({ mapId }: { mapId: string }) {
   const map = useMindmap(mapId);
   const nodes = useMindmapNodes(mapId);
   const { setOpenMindmapId } = useAppState(useShallow((s) => ({ setOpenMindmapId: s.setOpenMindmapId })));
+  const selectedNodeId = useMindmapUi((s) => s.selectedNodeId);
+  const selectedNode = selectedNodeId ? nodes.find((n) => n.id === selectedNodeId) : undefined;
 
   // Map deleted (locally or by sync) → back to the browser.
   useEffect(() => {
@@ -52,6 +56,9 @@ export function MindmapEditor({ mapId }: { mapId: string }) {
           ]}
         />
       </div>
+      {selectedNode && (
+        <MindmapStyleToolbar node={selectedNode} isRoot={!selectedNode.parentId} />
+      )}
       <MindmapCanvas mapId={mapId} />
     </div>
   );
