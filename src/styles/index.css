@@ -163,3 +163,9 @@ input[type="checkbox"] {
   --mm-export-bg: #18181b;
   --mm-export-edge: #52525b;
 }
+
+/* Paranoid privacy overlay fade-in (gated by motion-safe at the class site). */
+@keyframes privacy-veil-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}

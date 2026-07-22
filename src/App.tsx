@@ -18,6 +18,7 @@ import { useShareTarget } from './hooks/use-share-target';
 import { useNudges, useLockedNudge } from './hooks/use-nudges';
 import { useRemoteWipeCommands } from './hooks/use-remote-unlock';
 import { RemoteApprovalPrompt } from './components/security/RemoteApprovalPrompt';
+import { PrivacyOverlay } from './components/security/PrivacyOverlay';
 import { useAppBadge } from './hooks/use-app-badge';
 import { ServiceWorkerProvider } from './hooks/use-service-worker';
 import { AppUpdatePrompt } from './components/banners/AppUpdatePrompt';
@@ -129,6 +130,8 @@ function UnlockedApp() {
             attention-grabbing approval overlay for managed devices' unlock requests. */}
         <RemoteApprovalPrompt />
         <AppShell />
+        {/* Paranoid extra (opt-in): blur veil while unlocked but unattended. */}
+        {isParanoidEnabled() && localSettings.paranoidPrivacyOverlayEnabled && <PrivacyOverlay />}
       </SpecialListProvider>
     </SyncProvider>
   );

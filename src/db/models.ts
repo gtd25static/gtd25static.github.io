@@ -266,6 +266,8 @@ export interface LocalSettings {
   paranoidSystemIdleLock?: boolean;     // lock on system-wide idle / screen lock (IdleDetector)
   paranoidSystemLockGraceEnabled?: boolean; // device-local: defer app-lock after screen lock
   paranoidSystemLockGraceMinutes?: number;  // device-local grace duration (min) when grace enabled; default DEFAULT_SYSTEM_LOCK_GRACE_MINUTES
+  // Paranoid extras — all opt-in (default off), all device-local, active only while Paranoid is on.
+  paranoidPrivacyOverlayEnabled?: boolean;  // blur veil when backgrounded / half-way to auto-lock
   // "Relaxed unlock" (device-local; not synced): stretch idle/grace by +10% per
   // re-unlock in the last 36h (first unlock excluded), capped ×2. unlockHistory is
   // unlock timestamps pruned to 36h, recorded only while the feature is enabled.

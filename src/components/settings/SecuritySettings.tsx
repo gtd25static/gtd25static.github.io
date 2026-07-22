@@ -279,6 +279,55 @@ function SystemIdleToggle({ enabled, graceEnabled, graceMinutes }: { enabled: bo
   );
 }
 
+// Paranoid extras: the opt-in add-ons for Paranoid Mode. Every toggle is
+// device-local and defaults off. Each renders its own row so the section
+// grows one <ExtraToggle> per feature.
+function ParanoidExtrasSection() {
+  const local = useLocalSettings();
+  return (
+    <div className="space-y-3 border-t border-zinc-200 pt-3 dark:border-zinc-700">
+      <div className="space-y-1">
+        <h4 className="text-sm font-medium">Paranoid extras</h4>
+        <p className="text-xs text-zinc-400 dark:text-zinc-500">
+          Optional hardening for this device. All off by default.
+        </p>
+      </div>
+      <ExtraToggle
+        label="Privacy screen"
+        description="Blur the whole app when it goes to the background or sits untouched for half the auto-lock time. Any movement or key brings it back. Hides the screen from onlookers — the real protection is still the auto-lock."
+        checked={!!local.paranoidPrivacyOverlayEnabled}
+        onChange={(on) => updateLocalSettings({ paranoidPrivacyOverlayEnabled: on })}
+      />
+    </div>
+  );
+}
+
+function ExtraToggle({ label, description, checked, onChange, children }: {
+  label: string;
+  description: string;
+  checked: boolean;
+  onChange: (on: boolean) => void | Promise<void>;
+  children?: React.ReactNode; // extra controls shown while enabled
+}) {
+  return (
+    <div className="space-y-2 rounded-md bg-zinc-50 p-2 dark:bg-zinc-800/40">
+      <label className="flex items-start gap-2 text-xs text-zinc-600 dark:text-zinc-300">
+        <input
+          type="checkbox"
+          checked={checked}
+          onChange={(e) => void onChange(e.currentTarget.checked)}
+          className="mt-0.5 rounded accent-accent-600"
+        />
+        <span>
+          {label}
+          <span className="block text-[11px] text-zinc-400 dark:text-zinc-500">{description}</span>
+        </span>
+      </label>
+      {checked && children}
+    </div>
+  );
+}
+
 function RelaxedUnlockToggle() {
   const local = useLocalSettings();
   const enabled = !!local.relaxedUnlockEnabled;
@@ -463,6 +512,8 @@ function ManageForm({ idleMinutes, maxAttempts, systemIdleOn, systemLockGraceOn,
       <SystemIdleToggle enabled={systemIdleOn} graceEnabled={systemLockGraceOn} graceMinutes={systemLockGraceMinutes} />
 
       <RelaxedUnlockToggle />
+
+      <ParanoidExtrasSection />
 
       <SecurityKeySection hasSecurityKey={hasSecurityKey} />
 

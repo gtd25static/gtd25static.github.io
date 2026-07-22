@@ -103,12 +103,23 @@ async function patchLocalSettings(updates: Partial<LocalSettings>): Promise<void
 setVaultKeyProvider(() => currentDek);
 
 // --- Idle re-lock ---
+let lastActivityAt = Date.now();
 function resetIdleTimer(): void {
   if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
+  lastActivityAt = Date.now();
   if (currentDek) idleTimer = setTimeout(() => { lock(); }, idleTimeoutMs);
 }
 /** Call on user interaction to defer the idle re-lock. */
 export function touchVaultActivity(): void { resetIdleTimer(); }
+
+/**
+ * Read-only view of the idle countdown, for the privacy overlay: when the
+ * last re-arming interaction happened and the *effective* window (relaxed
+ * unlock adjusts it at runtime). Reading this never defers the re-lock.
+ */
+export function getVaultIdleState(): { lastActivityAt: number; timeoutMs: number } {
+  return { lastActivityAt, timeoutMs: idleTimeoutMs };
+}
 
 // "Relaxed unlock" adjusts the idle window live. It sets the value WITHOUT
 // re-arming: the next touchVaultActivity() re-arms with it. Re-arming here (e.g. on
