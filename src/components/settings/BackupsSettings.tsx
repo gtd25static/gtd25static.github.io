@@ -3,6 +3,7 @@ import { Button } from '../ui/Button';
 import { useLocalSettings } from '../../hooks/use-settings';
 import { listRemoteBackups, type BackupInfo } from '../../sync/remote-backups';
 import { restoreFromBackup, wipeAllData, importData } from '../../sync/sync-engine';
+import { zipImportData } from '../../db/export-import';
 import { getLocalBackups, readLocalBackup } from '../../db/backup';
 import { parseImportZip } from '../../db/export-import';
 import { ExportDialog } from './ExportDialog';
@@ -84,6 +85,24 @@ export function BackupsSettings() {
     }
   }
 
+  // Safety backups only live in this device's localStorage; downloading one
+  // packages it in the standard backup zip so another device can import it.
+  async function handleDownloadLocal(backup: { key: string; timestamp: number }) {
+    try {
+      const blob = await zipImportData(readLocalBackup(backup.key), backup.timestamp);
+      const stamp = new Date(backup.timestamp).toISOString().slice(0, 16).replace(/[:T]/g, '-');
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `gtd25-safety-backup-${stamp}.zip`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      recordError('backups.downloadLocal', err);
+      toast(err instanceof Error ? err.message : 'Download failed', 'error');
+    }
+  }
+
   async function handleImportFile(file: File) {
     try {
       const data = await parseImportZip(file, {
@@ -146,18 +165,29 @@ export function BackupsSettings() {
               <div className="text-xs text-zinc-400 dark:text-zinc-500">
                 {new Date(b.timestamp).toLocaleString()}
               </div>
-              <Button
-                size="sm"
-                variant="secondary"
-                disabled={restoringLocalKey !== null}
-                onClick={() => handleRestoreLocal(b)}
-              >
-                {restoringLocalKey === b.key ? 'Restoring...' : 'Restore'}
-              </Button>
+              <div className="flex items-center gap-2">
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => void handleDownloadLocal(b)}
+                >
+                  Download
+                </Button>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  disabled={restoringLocalKey !== null}
+                  onClick={() => handleRestoreLocal(b)}
+                >
+                  {restoringLocalKey === b.key ? 'Restoring...' : 'Restore'}
+                </Button>
+              </div>
             </div>
           ))}
           <p className="text-xs text-zinc-400 dark:text-zinc-500">
-            Created automatically on this device at app start. Restore replaces all data and syncs to other devices.
+            Created automatically on this device at app start; they hold lists, tasks and subtasks (not mindmaps).
+            Restore replaces that data and syncs to other devices. Download saves an unencrypted backup zip you
+            can import on another device.
           </p>
         </div>
       )}

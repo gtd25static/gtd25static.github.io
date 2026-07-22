@@ -101,8 +101,25 @@ async function buildPayload(): Promise<ExportPayload> {
 }
 
 export async function exportToZip(opts?: ExportOptions): Promise<Blob> {
-  const payload = await buildPayload();
+  return packageZip(await buildPayload(), opts);
+}
 
+/**
+ * Package arbitrary ImportData as a backup zip — same container the exporter
+ * writes, so the file can be imported anywhere the app runs. Used to make the
+ * device-local safety backups portable; fields the source doesn't carry are
+ * left absent, which the importer reads as "keep what this device already has".
+ */
+export async function zipImportData(data: ImportData, exportedAt: number, opts?: ExportOptions): Promise<Blob> {
+  return packageZip({
+    ...data,
+    exportVersion: CURRENT_EXPORT_VERSION,
+    exportedAt,
+    settings: data.settings ?? { theme: 'system' },
+  }, opts);
+}
+
+async function packageZip(payload: ExportPayload, opts?: ExportOptions): Promise<Blob> {
   const JSZip = (await import('jszip')).default;
   const zip = new JSZip();
 
