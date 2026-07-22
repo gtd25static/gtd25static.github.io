@@ -161,6 +161,63 @@ describe('MindmapCanvas', () => {
     expect(fo?.getAttribute('style') ?? '').toContain('opacity: 0');
   });
 
+  // Double-click is detected from our own pointer events (the svg's pointer
+  // capture retargets the DOM's dblclick to the <svg>), so exercise it that way.
+  function tapNode(id: string, clientX = 0, clientY = 0) {
+    fireEvent.pointerDown(nodeEl(id), { pointerId: 1, clientX, clientY });
+    fireEvent.pointerUp(nodeEl(id), { pointerId: 1, clientX, clientY });
+  }
+
+  it('two taps on a node open the inline editor; one tap only selects', async () => {
+    render(<MindmapCanvas mapId="map-1" />);
+    tapNode('a');
+    expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
+    tapNode('a');
+    expect(await screen.findByRole('textbox')).toBeInTheDocument();
+  });
+
+  it('does not treat slow, far-apart or different-node taps as a double-click', () => {
+    const now = vi.spyOn(Date, 'now');
+    try {
+      render(<MindmapCanvas mapId="map-1" />);
+
+      now.mockReturnValue(1000);
+      tapNode('a');
+      now.mockReturnValue(1600); // 600ms later — past the double-tap window
+      tapNode('a');
+      expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
+
+      now.mockReturnValue(1700);
+      tapNode('a', 0, 0);
+      now.mockReturnValue(1750);
+      tapNode('a', 0, 40); // same node, but the pointer moved a long way
+      expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
+
+      now.mockReturnValue(1800);
+      tapNode('a');
+      now.mockReturnValue(1850);
+      tapNode('b');
+      expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it('pressing outside the open editor commits and leaves edit mode', async () => {
+    const user = userEvent.setup();
+    render(<MindmapCanvas mapId="map-1" />);
+    tapNode('a');
+    tapNode('a');
+    const textarea = await screen.findByRole('textbox');
+    await user.clear(textarea);
+    await user.type(textarea, 'Edited elsewhere');
+
+    // A press that lands on something which never takes focus (so no blur)
+    fireEvent.pointerDown(document.body);
+    await waitFor(() => expect(mockUpdateLabel).toHaveBeenCalledWith('a', 'Edited elsewhere'));
+    expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
+  });
+
   it('double-click starts inline edit; Enter commits the new label', async () => {
     const user = userEvent.setup();
     render(<MindmapCanvas mapId="map-1" />);
@@ -242,10 +299,11 @@ describe('MindmapCanvas', () => {
     fireEvent.keyDown(screen.getByTestId('mindmap-canvas'), { key: 'Delete' });
     await waitFor(() => expect(mockToast).toHaveBeenCalledWith('2 nodes deleted', 'info', expect.any(Function), expect.any(Number)));
 
-    // Nothing stamped (already gone / raced with another device) → no undo offered
+    // Nothing stamped (already gone / raced with another device) → no undo offered.
+    // A different node, because two quick clicks on the same one open the editor.
     mockToast.mockClear();
     mockDeleteSubtree.mockResolvedValue([]);
-    await user.click(nodeEl('b'));
+    await user.click(nodeEl('a1'));
     fireEvent.keyDown(screen.getByTestId('mindmap-canvas'), { key: 'Delete' });
     await waitFor(() => expect(mockDeleteSubtree).toHaveBeenCalledTimes(2));
     expect(mockToast).not.toHaveBeenCalled();

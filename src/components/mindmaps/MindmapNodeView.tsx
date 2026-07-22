@@ -1,4 +1,4 @@
-import { memo, useLayoutEffect, useRef, useState } from 'react';
+import { memo, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { MindmapNode } from '../../db/models';
 import type { LayoutRect } from '../../lib/mindmap-layout';
 import { MdLabel } from './MdLabel';
@@ -18,7 +18,6 @@ interface Props {
   isDropTarget: boolean;
   onMeasure: (id: string, size: { w: number; h: number }) => void;
   onPointerDown: (e: React.PointerEvent, id: string) => void;
-  onStartEdit: (id: string) => void;
   onCommitEdit: (id: string, label: string) => void;
   onCancelEdit: () => void;
 }
@@ -31,13 +30,30 @@ interface Props {
 // the resulting size change re-layouts, which is intended.
 export const MindmapNodeView = memo(function MindmapNodeView({
   node, rect, selected, hovered, editing, isRoot, isDragSource, isDropTarget,
-  onMeasure, onPointerDown, onStartEdit, onCommitEdit, onCancelEdit,
+  onMeasure, onPointerDown, onCommitEdit, onCancelEdit,
 }: Props) {
   const boxRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [draft, setDraft] = useState(node.label);
+  const draftRef = useRef(draft);
+  draftRef.current = draft;
 
   const clamped = !selected && !editing;
+
+  // Pressing anywhere outside the open editor commits and closes it. Blur alone
+  // isn't enough: a press can land on something that never takes focus (the
+  // canvas background, a toolbar icon), and on mobile Safari it may not fire at
+  // all. Capture phase, so handlers that stop propagation can't swallow it.
+  useEffect(() => {
+    if (!editing) return;
+    const onDocumentPointerDown = (e: PointerEvent) => {
+      const ta = textareaRef.current;
+      if (ta && e.target instanceof Node && ta.contains(e.target)) return;
+      onCommitEdit(node.id, draftRef.current);
+    };
+    document.addEventListener('pointerdown', onDocumentPointerDown, true);
+    return () => document.removeEventListener('pointerdown', onDocumentPointerDown, true);
+  }, [editing, node.id, onCommitEdit]);
 
   useLayoutEffect(() => {
     const el = boxRef.current;
@@ -87,7 +103,6 @@ export const MindmapNodeView = memo(function MindmapNodeView({
         xmlns="http://www.w3.org/1999/xhtml"
         data-mindmap-node={node.id}
         onPointerDown={(e) => onPointerDown(e, node.id)}
-        onDoubleClick={(e) => { e.stopPropagation(); onStartEdit(node.id); }}
         className={`select-none rounded-xl border-2 px-3 py-1.5 text-sm leading-snug transition-colors ${border} ${
           isRoot
             ? 'bg-accent-50 text-zinc-900 dark:bg-accent-900/30 dark:text-zinc-50'

@@ -23,6 +23,12 @@ interface Viewport { tx: number; ty: number; k: number }
 const MIN_ZOOM = 0.2;
 const MAX_ZOOM = 3;
 const DRAG_THRESHOLD_PX = 8;
+// Double-click/tap to edit is detected from our own pointer events rather than
+// the DOM's dblclick: the svg captures the pointer on node press, which
+// retargets the compatibility mouse events (click/dblclick) to the <svg>, so a
+// handler on the node box never fires. Tracking taps by node id also survives
+// the first click re-laying out the map (selecting un-clamps a long label).
+const DOUBLE_TAP_MS = 400;
 // A deleted subtree is only a click away from coming back — the default toast
 // window (4s floor for undo toasts) is short for "did I just delete the wrong node?".
 const UNDO_TOAST_MS = 8000;
@@ -33,7 +39,8 @@ const UNDO_TOAST_MS = 8000;
 //   background drag = pan · wheel = zoom at cursor · two pointers = pinch
 //   node drag past 8px = re-parent (ghost + drop-target ring; the root, the
 //   node itself and its descendants are not valid targets) · tap = select ·
-//   double-tap / F2 = edit label inline.
+//   double-click / double-tap / F2 = edit label inline · press anywhere outside
+//   the open editor = commit and leave edit mode.
 // The per-node action buttons follow the mouse (see mindmap-hover.ts) and fall
 // back to the selected node, which is what touch — no hover — and the keyboard use.
 export function MindmapCanvas({ mapId }: { mapId: string }) {
@@ -93,6 +100,7 @@ export function MindmapCanvas({ mapId }: { mapId: string }) {
   const panRef = useRef<{ pointerId: number; sx: number; sy: number; tx0: number; ty0: number; moved: boolean } | null>(null);
   const pinchRef = useRef<{ d0: number; cx0: number; cy0: number; wx0: number; wy0: number; k0: number } | null>(null);
   const dragRef = useRef<{ id: string; sx: number; sy: number; active: boolean; forbidden: Set<string> } | null>(null);
+  const lastTapRef = useRef<{ id: string; t: number; x: number; y: number } | null>(null);
 
   // Refs the gesture handlers read without re-binding
   const layoutRef = useRef(layout);
@@ -361,6 +369,17 @@ export function MindmapCanvas({ mapId }: { mapId: string }) {
       } else {
         setSelectedId(dragState.id);
         containerRef.current?.focus();
+        const last = lastTapRef.current;
+        const now = Date.now();
+        if (
+          last && last.id === dragState.id && now - last.t <= DOUBLE_TAP_MS &&
+          Math.hypot(e.clientX - last.x, e.clientY - last.y) < DRAG_THRESHOLD_PX
+        ) {
+          lastTapRef.current = null;
+          startEdit(dragState.id);
+        } else {
+          lastTapRef.current = { id: dragState.id, t: now, x: e.clientX, y: e.clientY };
+        }
       }
       return;
     }
@@ -487,7 +506,6 @@ export function MindmapCanvas({ mapId }: { mapId: string }) {
               isDropTarget={drag?.targetId === n.id}
               onMeasure={onMeasure}
               onPointerDown={onNodePointerDown}
-              onStartEdit={startEdit}
               onCommitEdit={commitEdit}
               onCancelEdit={cancelEdit}
             />
@@ -505,7 +523,6 @@ export function MindmapCanvas({ mapId }: { mapId: string }) {
               isDropTarget={false}
               onMeasure={onMeasure}
               onPointerDown={onNodePointerDown}
-              onStartEdit={startEdit}
               onCommitEdit={commitEdit}
               onCancelEdit={cancelEdit}
             />
