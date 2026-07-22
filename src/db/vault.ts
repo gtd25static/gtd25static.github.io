@@ -20,6 +20,7 @@ import { registerPrfCredential, getPrfOutput } from '../sync/webauthn-prf';
 import { b64encode, b64decode } from '../sync/remote-unlock-crypto';
 import { PARANOID_FLAG, isParanoidFlagSet } from './paranoid-flag';
 import { recordError } from '../lib/diagnostics';
+import { recordUnlockAttempt, type UnlockMethod } from '../lib/unlock-audit';
 import { pruneHistory } from '../lib/relaxed-unlock';
 import type { LocalSettings, Vault, PrfCredential } from './models';
 
@@ -338,7 +339,7 @@ async function doUnlockWithPassphrase(passphrase: string): Promise<boolean> {
   } catch { /* wrong passphrase -> AES-GCM auth failure */ }
   if (!dek) lastUnlockFailure = 'wrong-credential';
 
-  const ok = dek ? await finishUnlock(vault, dek) : false;
+  const ok = dek ? await finishUnlock(vault, dek, 'passphrase') : false;
   if (!ok) {
     // Only a wrong credential counts toward the wipe tripwire (see UnlockFailureReason).
     if (lastUnlockFailure === 'wrong-credential') await registerFailedAttempt();
@@ -362,6 +363,7 @@ async function registerFailedAttempt(): Promise<void> {
   const max = vault.maxUnlockAttempts ?? 0; // 0 => tripwire disabled
   const count = (vault.failedUnlockAttempts ?? 0) + 1;
   await db.vault.update('vault', { failedUnlockAttempts: count });
+  await recordUnlockAttempt('passphrase', false, Date.now());
   if (max > 0 && count >= max) {
     const { panicWipe } = await import('../lib/panic-wipe'); // dynamic: avoids an import cycle
     await panicWipe();
@@ -395,7 +397,7 @@ export async function unlockWithSecurityKey(): Promise<boolean> {
   for (const k of keys) {
     try {
       const dek = await unwrapDek(kek, k.dekWrappedByPrf);
-      return await finishUnlock(vault, dek);
+      return await finishUnlock(vault, dek, 'securityKey');
     } catch { /* not this credential — try the next */ }
   }
   lastUnlockFailure = 'wrong-credential';
@@ -404,7 +406,7 @@ export async function unlockWithSecurityKey(): Promise<boolean> {
 
 // Shared tail of every unlock path: verify the DEK, hydrate in-memory state,
 // resume any interrupted migration, and notify subscribers.
-async function finishUnlock(vault: Vault, dek: CryptoKey): Promise<boolean> {
+async function finishUnlock(vault: Vault, dek: CryptoKey, method: UnlockMethod = 'passphrase'): Promise<boolean> {
   lastUnlockFailure = null;
   if (!(await checkVerifier(dek, vault.verifier))) {
     lastUnlockFailure = 'wrong-credential';
@@ -454,6 +456,7 @@ async function finishUnlock(vault: Vault, dek: CryptoKey): Promise<boolean> {
   }
 
   await recordUnlockEvent().catch((err) => recordError('vault.recordUnlockEvent', err));
+  await recordUnlockAttempt(method, true, Date.now());
   resetIdleTimer();
   emit();
   return true;
@@ -540,7 +543,7 @@ export async function unlockWithRemoteKey(rukRaw: Uint8Array): Promise<boolean> 
   } catch {
     return false; // wrong RUK
   }
-  return finishUnlock(vault, dek);
+  return finishUnlock(vault, dek, 'remote');
 }
 
 /** True once remote unlock is enrolled on this device (a wrapped-by-RUK DEK exists). */

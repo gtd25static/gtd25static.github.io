@@ -29,6 +29,7 @@ import { identityFingerprint } from '../../sync/remote-unlock-crypto';
 import { panicWipe } from '../../lib/panic-wipe';
 import { exportToZip } from '../../db/export-import';
 import { recordError } from '../../lib/diagnostics';
+import { clearUnlockLog } from '../../lib/unlock-audit';
 import { checkSecretStrength } from '../../lib/password-strength';
 import { PasswordStrengthBar } from '../ui/PasswordStrengthBar';
 
@@ -319,6 +320,39 @@ function ParanoidExtrasSection() {
         checked={!!local.paranoidLockHotkeyEnabled}
         onChange={(on) => updateLocalSettings({ paranoidLockHotkeyEnabled: on })}
       />
+      <ExtraToggle
+        label="Unlock audit trail"
+        description="Keep a private log of unlocks and failed attempts on this device (never synced). After unlocking you'll see when it was last unlocked and how many wrong attempts happened since — so tampering while you were away is visible."
+        checked={!!local.paranoidUnlockLogEnabled}
+        onChange={(on) => updateLocalSettings({ paranoidUnlockLogEnabled: on })}
+      >
+        <UnlockLogView log={local.unlockLog ?? []} />
+      </ExtraToggle>
+    </div>
+  );
+}
+
+function UnlockLogView({ log }: { log: import('../../lib/unlock-audit').UnlockLogEntry[] }) {
+  const recent = [...log].reverse().slice(0, 8);
+  const methodLabel = { passphrase: 'passphrase', securityKey: 'security key', remote: 'remote' } as const;
+  return (
+    <div className="space-y-2 pl-6">
+      {recent.length === 0 ? (
+        <p className="text-[11px] text-zinc-400 dark:text-zinc-500">No unlocks recorded yet.</p>
+      ) : (
+        <ul className="max-h-40 space-y-0.5 overflow-y-auto text-[11px]">
+          {recent.map((e, i) => (
+            <li key={i} className={e.ok ? 'text-zinc-500 dark:text-zinc-400' : 'text-red-500'}>
+              {new Date(e.at).toLocaleString()} · {e.ok ? methodLabel[e.method] : 'failed attempt'}
+            </li>
+          ))}
+        </ul>
+      )}
+      {log.length > 0 && (
+        <Button size="sm" variant="secondary" onClick={async () => { await clearUnlockLog(); toast('Unlock log cleared', 'success'); }}>
+          Clear log
+        </Button>
+      )}
     </div>
   );
 }

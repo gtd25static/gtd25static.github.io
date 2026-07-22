@@ -25,6 +25,7 @@ import { ServiceWorkerProvider } from './hooks/use-service-worker';
 import { AppUpdatePrompt } from './components/banners/AppUpdatePrompt';
 import { useLocalSettings } from './hooks/use-settings';
 import { useRelaxedUnlock } from './hooks/use-relaxed-unlock';
+import { useUnlockAuditToast } from './hooks/use-unlock-audit-toast';
 import { useRelaxedUnlockStore } from './stores/relaxed-unlock';
 
 export default function App() {
@@ -126,6 +127,7 @@ function UnlockedApp() {
   useShareTarget();
   useNudges();
   useRelaxedUnlock();
+  useUnlockAuditToast();
   useAppBadge();
 
   return (
