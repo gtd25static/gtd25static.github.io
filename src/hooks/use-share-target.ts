@@ -3,12 +3,31 @@ import { toast } from '../components/ui/Toast';
 import { recordError } from '../lib/diagnostics';
 import { useAppState } from '../stores/app-state';
 import { createFileItem } from './use-shared-items';
+import { canUploadSharedBlob } from '../sync/shared-blobs';
 import { sanitize, formatCaptureResult, captureToInbox } from './use-url-capture';
 import {
   SHARE_CACHE, SHARE_META_PATH, shareFilePath, SHARE_TARGET_FLAG, SHARE_STASH_TTL_MS, type SharedPayloadMeta,
 } from '../lib/share-target';
 
 const SHARED_FOLDER_LIST_ID = '__shared__';
+
+// The consume runs at startup, often before the async initial sync has derived
+// and cached the sync key — and saving a shared FILE uploads its blob through
+// sync, so it can't run yet. Wait up to this long for sync to become ready
+// before saving files; if it never does (offline), the stash is kept for the
+// next unlocked start to retry rather than dropping the file.
+const SYNC_READY_TIMEOUT_MS = 30_000;
+const SYNC_READY_POLL_MS = 250;
+
+/** Resolve once `check()` is true, or false if `timeoutMs` elapses first. */
+async function waitUntil(check: () => Promise<boolean>, timeoutMs: number, pollMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    if (await check()) return true;
+    if (Date.now() >= deadline) return false;
+    await new Promise((r) => setTimeout(r, pollMs));
+  }
+}
 
 /** Best-effort wipe of the stashed share payload (and metadata) from Cache Storage. */
 async function clearStash(): Promise<void> {
@@ -53,6 +72,7 @@ export function useShareTarget(): void {
         cleanUrl();
         return;
       }
+      let keepStash = false;
       try {
         // Cheap existence probe first: on a normal launch with nothing stashed this
         // must not caches.open() (which CREATES the cache) only for the finally to
@@ -66,6 +86,16 @@ export function useShareTarget(): void {
         // Stale orphaned stash: discard without importing (the share is long past;
         // silently resurrecting day-old content would be surprising).
         if (typeof meta?.ts !== 'number' || Date.now() - meta.ts > SHARE_STASH_TTL_MS) return;
+
+        // Saving a file uploads its blob through sync, which may not be ready yet
+        // at startup (key still deriving). Wait for it; if it never comes up
+        // (offline), keep the stash and defer the WHOLE payload to the next start
+        // so nothing is dropped — and so a mixed files+text share isn't half-saved.
+        if ((meta.files?.length ?? 0) > 0 && !(await waitUntil(canUploadSharedBlob, SYNC_READY_TIMEOUT_MS, SYNC_READY_POLL_MS))) {
+          keepStash = true;
+          toast('Sync isn’t ready yet — your shared file will be saved next time you open the app online', 'info');
+          return;
+        }
 
         // 1) Files -> Shared Folder (reconstruct File objects from the cached blobs).
         let filesSaved = 0;
@@ -104,7 +134,10 @@ export function useShareTarget(): void {
         recordError('shareTarget.consume', err);
         toast('Could not save the shared content', 'error');
       } finally {
-        await clearStash();
+        // Keep the stash only when a file couldn't be saved because sync wasn't
+        // ready — the next unlocked start (sync online) retries it. Its plaintext
+        // lifetime stays bounded by SHARE_STASH_TTL_MS + the ACR-017 sweep.
+        if (!keepStash) await clearStash();
         if (flag) cleanUrl();
       }
     })();

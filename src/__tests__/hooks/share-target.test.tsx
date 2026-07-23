@@ -12,6 +12,9 @@ import { toast } from '../../components/ui/Toast';
 
 const createFileItem = vi.fn().mockResolvedValue({ id: 'f1' });
 const captureToInbox = vi.fn().mockResolvedValue(undefined);
+// Sync-readiness gate: files can only be saved once sync is ready. Default ready.
+const canUpload = vi.fn<() => Promise<boolean>>().mockResolvedValue(true);
+vi.mock('../../sync/shared-blobs', () => ({ canUploadSharedBlob: () => canUpload() }));
 vi.mock('../../hooks/use-shared-items', () => ({ createFileItem: (...a: unknown[]) => createFileItem(...a) }));
 // Partial mock: keep the real (pure) sanitize/formatCaptureResult, stub the DB-touching captureToInbox.
 vi.mock('../../hooks/use-url-capture', async (orig) => ({
@@ -48,6 +51,8 @@ function installFakeCaches(meta: SharedPayloadMeta | null, files: Record<string,
 beforeEach(() => {
   createFileItem.mockClear();
   captureToInbox.mockClear();
+  canUpload.mockReset();
+  canUpload.mockResolvedValue(true);
   useAppState.setState({ selectedListId: null });
 });
 afterEach(() => { delete (globalThis as unknown as { caches?: unknown }).caches; });
@@ -69,6 +74,48 @@ describe('useShareTarget (Android share → Shared Folder / Inbox)', () => {
     expect(captureToInbox).not.toHaveBeenCalled();
     await waitFor(() => expect(useAppState.getState().selectedListId).toBe('__shared__'));
     await waitFor(() => expect(window.location.search).toBe('')); // URL scrubbed
+  });
+
+  it('waits for sync to be ready, then saves the file (startup race)', async () => {
+    vi.useFakeTimers();
+    try {
+      window.history.replaceState({}, '', '/?shareTarget=1');
+      installFakeCaches(
+        { title: '', text: '', url: '', ts: Date.now(), files: [{ name: 'photo.png', type: 'image/png', size: 3 }] },
+        { [shareFilePath(0)]: { bytes: new Uint8Array([1, 2, 3]), type: 'image/png' } },
+      );
+      // Not ready on the first couple of polls (sync key still deriving), then ready.
+      canUpload.mockResolvedValueOnce(false).mockResolvedValueOnce(false).mockResolvedValue(true);
+
+      render(<Harness />);
+      await vi.advanceTimersByTimeAsync(1000); // let the poll flip to ready
+
+      expect(createFileItem).toHaveBeenCalledTimes(1);
+      expect((createFileItem.mock.calls[0][0] as File).name).toBe('photo.png');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('defers (keeps the stash) when sync never becomes ready — drops nothing', async () => {
+    vi.useFakeTimers();
+    try {
+      window.history.replaceState({}, '', '/?shareTarget=1');
+      const cache = installFakeCaches(
+        { title: '', text: '', url: '', ts: Date.now(), files: [{ name: 'photo.png', type: 'image/png', size: 3 }] },
+        { [shareFilePath(0)]: { bytes: new Uint8Array([1, 2, 3]), type: 'image/png' } },
+      );
+      canUpload.mockResolvedValue(false); // offline / sync unavailable
+
+      render(<Harness />);
+      await vi.advanceTimersByTimeAsync(31_000); // past the readiness timeout
+
+      expect(createFileItem).not.toHaveBeenCalled();
+      expect(cache.wasDeleted()).toBe(false); // stash kept so the next start retries
+      expect(vi.mocked(toast)).toHaveBeenCalledWith(expect.stringContaining('Sync isn’t ready'), 'info');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('routes a shared link to the Inbox with a clickable link field', async () => {

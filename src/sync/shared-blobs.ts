@@ -101,6 +101,16 @@ async function readBlobLocal(blobId: string): Promise<Uint8Array | null> {
 
 // --- Public API ---
 
+/**
+ * Whether uploadSharedBlob can currently succeed: sync credentials are present
+ * AND the sync key has been derived+cached. Both come up asynchronously after a
+ * cold start / unlock, so a caller running at startup (the share-target consume)
+ * must wait for this before saving a file, or the upload throws.
+ */
+export async function canUploadSharedBlob(): Promise<boolean> {
+  return (await getCredentials()) !== null && getCachedEncryptionKey() !== null;
+}
+
 /** Encrypt + upload a new blob to the blob branch, and cache its plaintext locally. */
 export async function uploadSharedBlob(blobId: string, plaintext: Uint8Array): Promise<void> {
   const creds = await getCredentials();
