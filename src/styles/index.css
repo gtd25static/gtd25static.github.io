@@ -47,11 +47,11 @@ input[type="checkbox"] {
 }
 
 /* --- Mindmap motion ---------------------------------------------------------
-   Fast, with a light overshoot (~4.5%) — a hint of bounce, not a bounce.
-   The JS twin of this curve is easeOutBackTiny() in lib/mindmap-motion.ts,
-   which drives the layout glide (node boxes + edge curves together). */
+   A smooth ease-in-out (slow start AND end) so motion reads as a glide, not a
+   snap. The JS twin is easeGlide() in lib/mindmap-motion.ts, which drives the
+   layout glide (node boxes + edge curves together). */
 :root {
-  --mm-ease-bounce: cubic-bezier(0.32, 1.4, 0.62, 1);
+  --mm-ease-glide: cubic-bezier(0.65, 0, 0.35, 1);
 }
 
 @keyframes mm-node-in {
@@ -79,17 +79,17 @@ input[type="checkbox"] {
 }
 
 /* A node arriving (expand, create) and leaving (collapse, delete). */
-.mm-node-in  { animation: mm-node-in 210ms var(--mm-ease-bounce); }
-.mm-node-out { animation: mm-node-out 160ms ease-in forwards; }
+.mm-node-in  { animation: mm-node-in 280ms var(--mm-ease-glide); }
+.mm-node-out { animation: mm-node-out 220ms ease-in forwards; }
 
 /* The node: a nudge while its inline editor is open, and a fade between
    palettes so switching preset (or previewing one) doesn't snap. */
-.mm-node-box { transition: transform 170ms var(--mm-ease-bounce); }
+.mm-node-box { transition: transform 200ms var(--mm-ease-glide); }
 .mm-node-editing { transform: scale(1.03); }
 .mm-node-shape { transition: fill 150ms ease, stroke 150ms ease; }
 
 /* The action buttons opening/closing around the node under the pointer. */
-.mm-actions { transition: opacity 130ms ease, transform 130ms var(--mm-ease-bounce); }
+.mm-actions { transition: opacity 130ms ease, transform 130ms var(--mm-ease-glide); }
 .mm-actions-closed { opacity: 0; transform: scale(0.7); pointer-events: none; }
 
 @media (prefers-reduced-motion: reduce) {

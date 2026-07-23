@@ -8,22 +8,24 @@ import type { LayoutRect, MindmapLayout } from './mindmap-layout';
 // but recomputing endpoints from interpolated boxes always is.
 
 /** Node boxes gliding to their new places after a re-layout. */
-export const LAYOUT_MS = 250;
+export const LAYOUT_MS = 300;
 /** A node appearing (expand, create). */
-export const ENTER_MS = 210;
+export const ENTER_MS = 280;
 /** A node leaving (collapse, delete) — quicker, exits shouldn't hold you up. */
-export const EXIT_MS = 160;
+export const EXIT_MS = 220;
 
 /**
- * easeOutBack with a small overshoot (~4.5%), i.e. a hint of bounce rather than
- * a bounce. Kept in sync with --mm-ease-bounce in styles/index.css.
+ * Smooth ease-in-out — Perlin's "smootherstep" (6t⁵−15t⁴+10t³), zero velocity
+ * AND acceleration at both ends. Deliberately NOT an ease-out: an ease-out is
+ * ~80% done in the first third of its duration, so a re-layout reads as an
+ * abrupt snap even at a generous duration. Spreading the motion across the whole
+ * window is what makes it read as a glide. Kept in sync with --mm-ease-glide in
+ * styles/index.css.
  */
-export function easeOutBackTiny(t: number): number {
+export function easeGlide(t: number): number {
   if (t <= 0) return 0;
   if (t >= 1) return 1;
-  const c = 1.1;
-  const u = t - 1;
-  return 1 + (c + 1) * u * u * u + c * u * u;
+  return t * t * t * (t * (t * 6 - 15) + 10);
 }
 
 export function prefersReducedMotion(): boolean {
@@ -43,8 +45,8 @@ function lerpRect(from: LayoutRect, to: LayoutRect, t: number): LayoutRect {
 }
 
 /**
- * `from` drawn `t` of the way towards `to`. `t` may exceed 1 — that is the
- * overshoot from the easing above, and it must not be clamped away.
+ * `from` drawn `t` of the way towards `to` (t in [0, 1] under easeGlide; any
+ * out-of-range t still extrapolates linearly rather than being clamped).
  *
  * A node with no `from` box just appeared (expand, create). Rather than
  * materialise at its final place, it glides out of the box it belongs under:

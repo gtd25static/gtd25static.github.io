@@ -3,7 +3,7 @@ import type { LayoutRect, MindmapLayout } from '../lib/mindmap-layout';
 import {
   EXIT_MS,
   LAYOUT_MS,
-  easeOutBackTiny,
+  easeGlide,
   lerpLayout,
   prefersReducedMotion,
 } from '../lib/mindmap-motion';
@@ -60,7 +60,7 @@ export function useAnimatedLayout(target: MindmapLayout, enabled: boolean): Anim
 
     const step = () => {
       const p = Math.min(1, (performance.now() - startedAtRef.current) / LAYOUT_MS);
-      displayedRef.current = p >= 1 ? target : lerpLayout(fromRef.current, target, easeOutBackTiny(p));
+      displayedRef.current = p >= 1 ? target : lerpLayout(fromRef.current, target, easeGlide(p));
       tick();
       if (p < 1) rafRef.current = requestAnimationFrame(step);
     };

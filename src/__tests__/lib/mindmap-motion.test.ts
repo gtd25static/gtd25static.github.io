@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { MindmapLayout } from '../../lib/mindmap-layout';
-import { easeOutBackTiny, lerpLayout } from '../../lib/mindmap-motion';
+import { easeGlide, lerpLayout } from '../../lib/mindmap-motion';
 
 function layout(boxes: Record<string, [number, number]>, edges: Array<[string, string]> = []): MindmapLayout {
   const rects = new Map(Object.entries(boxes).map(([id, [x, y]]) => [id, { x, y, w: 100, h: 30 }]));
@@ -15,22 +15,29 @@ function layout(boxes: Record<string, [number, number]>, edges: Array<[string, s
   };
 }
 
-describe('easeOutBackTiny', () => {
+describe('easeGlide', () => {
   it('is pinned at both ends', () => {
-    expect(easeOutBackTiny(0)).toBe(0);
-    expect(easeOutBackTiny(1)).toBe(1);
-    expect(easeOutBackTiny(-1)).toBe(0);
-    expect(easeOutBackTiny(2)).toBe(1);
+    expect(easeGlide(0)).toBe(0);
+    expect(easeGlide(1)).toBe(1);
+    expect(easeGlide(-1)).toBe(0);
+    expect(easeGlide(2)).toBe(1);
   });
 
-  it('overshoots, but only just — a hint of bounce, not a bounce', () => {
-    const peak = Math.max(...Array.from({ length: 99 }, (_, i) => easeOutBackTiny((i + 1) / 100)));
-    expect(peak).toBeGreaterThan(1);
-    expect(peak).toBeLessThan(1.06);
+  it('is a smooth ease-in-out: slow start, symmetric midpoint, no overshoot', () => {
+    expect(easeGlide(0.25)).toBeLessThan(0.25);    // eases in — a slow start, so motion isn't front-loaded
+    expect(easeGlide(0.5)).toBeCloseTo(0.5, 5);     // symmetric
+    expect(easeGlide(0.75)).toBeGreaterThan(0.75);  // eases out — a slow end
+    const peak = Math.max(...Array.from({ length: 99 }, (_, i) => easeGlide((i + 1) / 100)));
+    expect(peak).toBeLessThanOrEqual(1);            // never past the target (no overshoot)
   });
 
-  it('runs ahead of linear (it eases out)', () => {
-    expect(easeOutBackTiny(0.5)).toBeGreaterThan(0.5);
+  it('is monotonic (never moves backward)', () => {
+    let prev = -1;
+    for (let i = 0; i <= 100; i++) {
+      const v = easeGlide(i / 100);
+      expect(v).toBeGreaterThanOrEqual(prev);
+      prev = v;
+    }
   });
 });
 
