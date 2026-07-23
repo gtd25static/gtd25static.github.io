@@ -8,24 +8,32 @@ import type { LayoutRect, MindmapLayout } from './mindmap-layout';
 // but recomputing endpoints from interpolated boxes always is.
 
 /** Node boxes gliding to their new places after a re-layout. */
-export const LAYOUT_MS = 300;
+export const LAYOUT_MS = 360;
 /** A node appearing (expand, create). */
-export const ENTER_MS = 280;
+export const ENTER_MS = 340;
 /** A node leaving (collapse, delete) — quicker, exits shouldn't hold you up. */
-export const EXIT_MS = 220;
+export const EXIT_MS = 270;
+
+// Strength of the settle overshoot on the tail (larger = more bounce past the
+// target before it settles). 1.7 ≈ a ~5% overshoot of the move distance.
+const SETTLE = 1.7;
 
 /**
- * Smooth ease-in-out — Perlin's "smootherstep" (6t⁵−15t⁴+10t³), zero velocity
- * AND acceleration at both ends. Deliberately NOT an ease-out: an ease-out is
- * ~80% done in the first third of its duration, so a re-layout reads as an
- * abrupt snap even at a generous duration. Spreading the motion across the whole
- * window is what makes it read as a glide. Kept in sync with --mm-ease-glide in
+ * A glide with a slow start and a small settle bounce. Deliberately NOT an
+ * ease-out (those are ~80% done in the first third, which reads as an abrupt
+ * snap): the first half eases in — a slow start, no backward "wind-up" — and the
+ * second half is an easeOutBack that rises slightly PAST the target then settles
+ * back onto it, giving the motion a soft landing. Can return > 1 (the overshoot);
+ * lerpLayout must not clamp it. Kept in sync with --mm-ease-glide in
  * styles/index.css.
  */
 export function easeGlide(t: number): number {
   if (t <= 0) return 0;
   if (t >= 1) return 1;
-  return t * t * t * (t * (t * 6 - 15) + 10);
+  if (t < 0.5) return 4 * t * t * t; // ease-in, reaches 0.5 at t=0.5, f'(0)=0
+  const u = 2 * t - 1;               // remap [0.5,1] → [0,1]
+  const b = 1 + (SETTLE + 1) * (u - 1) ** 3 + SETTLE * (u - 1) ** 2; // easeOutBack, overshoots then settles to 1
+  return 0.5 + 0.5 * b;
 }
 
 export function prefersReducedMotion(): boolean {
@@ -45,8 +53,9 @@ function lerpRect(from: LayoutRect, to: LayoutRect, t: number): LayoutRect {
 }
 
 /**
- * `from` drawn `t` of the way towards `to` (t in [0, 1] under easeGlide; any
- * out-of-range t still extrapolates linearly rather than being clamped).
+ * `from` drawn `t` of the way towards `to`. `t` can exceed 1 — that is the
+ * settle overshoot from easeGlide, and it must extrapolate (a box a little past
+ * its target, on its way back), never be clamped away.
  *
  * A node with no `from` box just appeared (expand, create). Rather than
  * materialise at its final place, it glides out of the box it belongs under:

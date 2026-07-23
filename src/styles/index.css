@@ -47,11 +47,11 @@ input[type="checkbox"] {
 }
 
 /* --- Mindmap motion ---------------------------------------------------------
-   A smooth ease-in-out (slow start AND end) so motion reads as a glide, not a
-   snap. The JS twin is easeGlide() in lib/mindmap-motion.ts, which drives the
-   layout glide (node boxes + edge curves together). */
+   A glide with a slow start and a small settle bounce (the y=1.35 control point
+   carries it slightly past 1 before it lands). The JS twin is easeGlide() in
+   lib/mindmap-motion.ts, which drives the layout glide (node boxes + edges). */
 :root {
-  --mm-ease-glide: cubic-bezier(0.65, 0, 0.35, 1);
+  --mm-ease-glide: cubic-bezier(0.45, 0, 0.35, 1.35);
 }
 
 @keyframes mm-node-in {
@@ -79,12 +79,12 @@ input[type="checkbox"] {
 }
 
 /* A node arriving (expand, create) and leaving (collapse, delete). */
-.mm-node-in  { animation: mm-node-in 280ms var(--mm-ease-glide); }
-.mm-node-out { animation: mm-node-out 220ms ease-in forwards; }
+.mm-node-in  { animation: mm-node-in 340ms var(--mm-ease-glide); }
+.mm-node-out { animation: mm-node-out 270ms ease-in forwards; }
 
 /* The node: a nudge while its inline editor is open, and a fade between
    palettes so switching preset (or previewing one) doesn't snap. */
-.mm-node-box { transition: transform 200ms var(--mm-ease-glide); }
+.mm-node-box { transition: transform 230ms var(--mm-ease-glide); }
 .mm-node-editing { transform: scale(1.03); }
 .mm-node-shape { transition: fill 150ms ease, stroke 150ms ease; }
 

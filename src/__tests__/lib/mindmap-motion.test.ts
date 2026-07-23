@@ -23,21 +23,17 @@ describe('easeGlide', () => {
     expect(easeGlide(2)).toBe(1);
   });
 
-  it('is a smooth ease-in-out: slow start, symmetric midpoint, no overshoot', () => {
-    expect(easeGlide(0.25)).toBeLessThan(0.25);    // eases in — a slow start, so motion isn't front-loaded
-    expect(easeGlide(0.5)).toBeCloseTo(0.5, 5);     // symmetric
-    expect(easeGlide(0.75)).toBeGreaterThan(0.75);  // eases out — a slow end
-    const peak = Math.max(...Array.from({ length: 99 }, (_, i) => easeGlide((i + 1) / 100)));
-    expect(peak).toBeLessThanOrEqual(1);            // never past the target (no overshoot)
+  it('eases in — a slow start (not front-loaded) with no backward wind-up', () => {
+    expect(easeGlide(0.25)).toBeLessThan(0.25);
+    // never dips below 0 anywhere (no anticipation dip at the start)
+    for (let i = 0; i <= 100; i++) expect(easeGlide(i / 100)).toBeGreaterThanOrEqual(0);
   });
 
-  it('is monotonic (never moves backward)', () => {
-    let prev = -1;
-    for (let i = 0; i <= 100; i++) {
-      const v = easeGlide(i / 100);
-      expect(v).toBeGreaterThanOrEqual(prev);
-      prev = v;
-    }
+  it('settles with a small overshoot past the target, then lands exactly on it', () => {
+    const peak = Math.max(...Array.from({ length: 99 }, (_, i) => easeGlide((i + 1) / 100)));
+    expect(peak).toBeGreaterThan(1);   // overshoots — the settle bounce
+    expect(peak).toBeLessThan(1.08);   // but only a little
+    expect(easeGlide(1)).toBe(1);      // and ends exactly on the target
   });
 });
 
