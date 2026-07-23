@@ -149,6 +149,28 @@ describe('MindmapCanvas', () => {
     expect(actionButton('Delete (Del)')).toBeUndefined();
   });
 
+  it('collapsing a node pins it in place, so the diagram does not jump', async () => {
+    const user = userEvent.setup();
+    // A has three children, so collapsing it genuinely re-flows the layout —
+    // without the pin, A itself would shift up into the freed space.
+    mockUseNodes.mockReturnValue([
+      node('root', { label: 'Root' }),
+      node('A', { parentId: 'root' }),
+      node('B', { parentId: 'root', order: 1 }),
+      node('A1', { parentId: 'A' }),
+      node('A2', { parentId: 'A', order: 1 }),
+      node('A3', { parentId: 'A', order: 2 }),
+    ]);
+    render(<MindmapCanvas mapId="map-1" />);
+    await user.click(nodeEl('A'));
+    const aBefore = nodeBox('A').y;
+    const bBefore = nodeBox('B').y;
+    fireEvent.keyDown(screen.getByTestId('mindmap-canvas'), { key: ' ' });
+    // The toggled node keeps its exact position; the rest reflows around it.
+    expect(nodeBox('A').y).toBe(aBefore);
+    expect(nodeBox('B').y).not.toBe(bBefore);
+  });
+
   it('collapsing a node hides its subtree', () => {
     render(<MindmapCanvas mapId="map-1" />);
     expect(screen.getByText('Grandchild')).toBeInTheDocument();

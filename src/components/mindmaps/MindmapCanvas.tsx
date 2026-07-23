@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { MindmapNode } from '../../db/models';
 import { buildTree, descendantIds } from '../../lib/mindmap-tree';
-import { layoutMindmap, type LayoutRect, type NodeSize } from '../../lib/mindmap-layout';
+import { layoutMindmap, translateLayoutY, type LayoutRect, type NodeSize } from '../../lib/mindmap-layout';
 import { anchorPoints, nodeActionAnchors, resolveHoverTarget } from '../../lib/mindmap-hover';
 import { useAnimatedLayout } from '../../hooks/use-animated-layout';
 import {
@@ -80,7 +80,12 @@ export function MindmapCanvas({ mapId, background, smartColoring }: { mapId: str
     });
   }, []);
 
-  const targetLayout = useMemo(() => layoutMindmap(tree, sizes, collapsedSet), [tree, sizes, collapsedSet]);
+  const rawLayout = useMemo(() => layoutMindmap(tree, sizes, collapsedSet), [tree, sizes, collapsedSet]);
+  // Collapsing/expanding pins the toggled node in place (see toggleCollapsedAnchored):
+  // the whole layout is shifted so that node keeps its world y, so a collapse near
+  // the top no longer drags the map upward. The offset persists across renders.
+  const [anchorY, setAnchorY] = useState(0);
+  const targetLayout = useMemo(() => translateLayoutY(rawLayout, anchorY), [rawLayout, anchorY]);
   // Motion only starts once the map has been laid out and fitted, so opening a
   // map doesn't animate every node in from wherever it was first measured.
   const [motionReady, setMotionReady] = useState(false);
@@ -119,8 +124,17 @@ export function MindmapCanvas({ mapId, background, smartColoring }: { mapId: str
   layoutRef.current = layout;
   const treeRef = useRef(tree);
   treeRef.current = tree;
+  // Read by the anchored collapse handler without re-binding it every render.
+  const targetLayoutRef = useRef(targetLayout);
+  targetLayoutRef.current = targetLayout;
+  const sizesRef = useRef(sizes);
+  sizesRef.current = sizes;
+  const collapsedSetRef = useRef(collapsedSet);
+  collapsedSetRef.current = collapsedSet;
 
   useEffect(() => () => setSelectedId(null), [mapId, setSelectedId]);
+  // A fresh map starts unshifted; the previous map's pin offset must not carry over.
+  useEffect(() => { setAnchorY(0); }, [mapId]);
 
   const screenToWorld = useCallback((clientX: number, clientY: number) => {
     const svg = svgRef.current;
@@ -222,6 +236,19 @@ export function MindmapCanvas({ mapId, background, smartColoring }: { mapId: str
     const node = await createMindmapNode(mapId, row.parentId, undefined, style);
     if (node) startEdit(node.id);
   }, [mapId, nodesById, startEdit, smartColoring, nodes]);
+
+  // Collapse/expand a node while pinning it in place: recompute the layout the
+  // toggle will produce, then shift the whole map so this node keeps its current
+  // world position. Everything else reflows around it, so collapsing a node at
+  // the top no longer bumps the whole diagram upward.
+  const toggleCollapsedAnchored = useCallback((nodeId: string) => {
+    const before = targetLayoutRef.current.rects.get(nodeId);
+    const next = new Set(collapsedSetRef.current);
+    if (next.has(nodeId)) next.delete(nodeId); else next.add(nodeId);
+    const after = layoutMindmap(treeRef.current, sizesRef.current, next).rects.get(nodeId);
+    if (before && after) setAnchorY(before.y - after.y);
+    toggleCollapsed(mapId, nodeId);
+  }, [mapId, toggleCollapsed]);
 
   const deleteSubtree = useCallback(async (id: string) => {
     const row = nodesById.get(id);
@@ -462,7 +489,7 @@ export function MindmapCanvas({ mapId, background, smartColoring }: { mapId: str
         if (sel) { e.preventDefault(); void deleteSubtree(sel); }
         break;
       case ' ':
-        if (sel && parentIds.has(sel)) { e.preventDefault(); toggleCollapsed(mapId, sel); }
+        if (sel && parentIds.has(sel)) { e.preventDefault(); toggleCollapsedAnchored(sel); }
         break;
       case 'Escape':
         setSelectedId(null);
@@ -527,7 +554,7 @@ export function MindmapCanvas({ mapId, background, smartColoring }: { mapId: str
             layout={layout}
             parentIds={parentIds}
             collapsed={collapsedSet}
-            onToggle={(id) => toggleCollapsed(mapId, id)}
+            onToggle={toggleCollapsedAnchored}
           />
           {visibleNodes.map((n) => (
             <MindmapNodeView

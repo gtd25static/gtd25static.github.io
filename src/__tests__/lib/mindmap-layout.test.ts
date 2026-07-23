@@ -1,5 +1,5 @@
 import { buildTree } from '../../lib/mindmap-tree';
-import { layoutMindmap, edgePath, H_GAP, V_GAP, type NodeSize } from '../../lib/mindmap-layout';
+import { layoutMindmap, translateLayoutY, edgePath, H_GAP, V_GAP, type NodeSize } from '../../lib/mindmap-layout';
 import type { MindmapNode } from '../../db/models';
 
 function node(id: string, overrides: Partial<MindmapNode> = {}): MindmapNode {
@@ -148,5 +148,35 @@ describe('edgePath', () => {
   it('produces a cubic Bézier from parent edge to child edge', () => {
     const path = edgePath({ fromId: 'a', toId: 'b', x1: 100, y1: 20, x2: 148, y2: 60 });
     expect(path).toBe('M 100 20 C 124 20, 124 60, 148 60');
+  });
+});
+
+describe('translateLayoutY', () => {
+  const tree = buildTree([node('root'), node('a', { parentId: 'root' })]);
+  const base = layoutMindmap(tree, sizesFor(['root', 'a']), new Set());
+
+  it('returns the same object untouched for a zero shift', () => {
+    expect(translateLayoutY(base, 0)).toBe(base);
+  });
+
+  it('shifts every rect, edge endpoint and the vertical bounds by dy (x untouched)', () => {
+    const moved = translateLayoutY(base, 25);
+    for (const [id, r] of base.rects) {
+      expect(moved.rects.get(id)).toEqual({ ...r, y: r.y + 25 });
+    }
+    for (let i = 0; i < base.edges.length; i++) {
+      expect(moved.edges[i].y1).toBe(base.edges[i].y1 + 25);
+      expect(moved.edges[i].y2).toBe(base.edges[i].y2 + 25);
+      expect(moved.edges[i].x1).toBe(base.edges[i].x1);
+    }
+    expect(moved.bounds.minY).toBe(base.bounds.minY + 25);
+    expect(moved.bounds.maxY).toBe(base.bounds.maxY + 25);
+    expect(moved.bounds.minX).toBe(base.bounds.minX);
+  });
+
+  it('does not mutate the input layout', () => {
+    const aBefore = { ...base.rects.get('a')! };
+    translateLayoutY(base, 40);
+    expect(base.rects.get('a')).toEqual(aBefore);
   });
 });

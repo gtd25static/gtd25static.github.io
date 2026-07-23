@@ -63,7 +63,9 @@ describe('useAnimatedLayout', () => {
     rerender({ l: B });
     expect(result.current.layout.rects.get('a')!.y).toBe(0); // still where it was
 
-    runFrames(1000 + LAYOUT_MS / 2);
+    // A quarter of the way in: moved off the start but not yet at (or past, via
+    // the ease's overshoot) the target of 30.
+    runFrames(1000 + LAYOUT_MS / 4);
     const midY = result.current.layout.rects.get('a')!.y;
     expect(midY).toBeGreaterThan(0);
     expect(midY).toBeLessThan(30);

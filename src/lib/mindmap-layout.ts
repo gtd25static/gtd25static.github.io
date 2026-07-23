@@ -113,6 +113,20 @@ export function layoutMindmap(
   return { rects, edges, bounds: { minX, minY, maxX, maxY } };
 }
 
+/**
+ * The same layout shifted vertically by `dy` (world units). Used to pin a node
+ * in place across a collapse/expand so the map doesn't jump. `dy === 0` returns
+ * the input untouched (no allocation), which is the common, unshifted case.
+ */
+export function translateLayoutY(layout: MindmapLayout, dy: number): MindmapLayout {
+  if (dy === 0) return layout;
+  const rects = new Map<string, LayoutRect>();
+  for (const [id, r] of layout.rects) rects.set(id, { ...r, y: r.y + dy });
+  const edges = layout.edges.map((e) => ({ ...e, y1: e.y1 + dy, y2: e.y2 + dy }));
+  const { minX, minY, maxX, maxY } = layout.bounds;
+  return { rects, edges, bounds: { minX, minY: minY + dy, maxX, maxY: maxY + dy } };
+}
+
 /** SVG path for a curved edge: cubic Bézier easing horizontally between the endpoints. */
 export function edgePath(e: LayoutEdge): string {
   const dx = Math.max((e.x2 - e.x1) / 2, 16);

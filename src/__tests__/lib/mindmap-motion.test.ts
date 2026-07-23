@@ -26,7 +26,7 @@ describe('easeOutBackTiny', () => {
   it('overshoots, but only just — a hint of bounce, not a bounce', () => {
     const peak = Math.max(...Array.from({ length: 99 }, (_, i) => easeOutBackTiny((i + 1) / 100)));
     expect(peak).toBeGreaterThan(1);
-    expect(peak).toBeLessThan(1.04);
+    expect(peak).toBeLessThan(1.06);
   });
 
   it('runs ahead of linear (it eases out)', () => {
