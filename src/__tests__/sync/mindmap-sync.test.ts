@@ -149,7 +149,7 @@ describe('mindmap encryption', () => {
       syncVersion: SYNC_VERSION,
       taskLists: [], tasks: [], subtasks: [],
       mindmapFolders: [makeMindmapFolder({ id: 'f1', name: 'Secret folder' })],
-      mindmaps: [makeMindmap({ id: 'm1', name: 'Secret map' })],
+      mindmaps: [makeMindmap({ id: 'm1', name: 'Secret map', smartColoring: true })],
       mindmapNodes: [makeMindmapNode({ id: 'n1', mapId: 'm1', label: 'Secret label' })],
       settings: { theme: 'system' as const },
     } as unknown as SyncData;
@@ -162,10 +162,13 @@ describe('mindmap encryption', () => {
     // Structural fields stay plaintext for merge
     expect((encrypted.mindmapNodes?.[0] as unknown as Record<string, unknown>)._enc).toBeTruthy();
     expect(encrypted.mindmapNodes?.[0].mapId).toBe('m1');
+    // smartColoring is a sensitive flag → hidden in _enc, not left in plaintext
+    expect('smartColoring' in (encrypted.mindmaps?.[0] as object)).toBe(false);
 
     const decrypted = await decryptSyncData(key, encrypted);
     expect(decrypted.mindmapFolders?.[0].name).toBe('Secret folder');
     expect(decrypted.mindmaps?.[0].name).toBe('Secret map');
+    expect(decrypted.mindmaps?.[0].smartColoring).toBe(true); // restored on decrypt
     expect(decrypted.mindmapNodes?.[0].label).toBe('Secret label');
   });
 

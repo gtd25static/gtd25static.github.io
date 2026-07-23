@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { MindmapNode, MindmapNodeShape } from '../../db/models';
-import { setMindmapBackground, updateMindmapNodeStyle } from '../../hooks/use-mindmaps';
+import { setMindmapBackground, setMindmapSmartColoring, updateMindmapNodeStyle } from '../../hooks/use-mindmaps';
 import { MAX_CUSTOM_PALETTES, useMindmapUi } from '../../stores/mindmap-ui';
 import {
   PALETTES,
@@ -15,12 +15,13 @@ import {
 // all) and the canvas background. The node half — shape, five colour presets
 // previewed live on the node itself, and an advanced per-part picker — is
 // disabled until something is selected.
-export function MindmapStyleToolbar({ mapId, node, isRoot, nodes, background }: {
+export function MindmapStyleToolbar({ mapId, node, isRoot, nodes, background, smartColoring }: {
   mapId: string;
   node: MindmapNode | undefined;
   isRoot: boolean;
   nodes: MindmapNode[];
   background: string | undefined;
+  smartColoring: boolean;
 }) {
   const setPreview = useMindmapUi((s) => s.setStylePreview);
   const collapseAll = useMindmapUi((s) => s.collapseAll);
@@ -54,6 +55,18 @@ export function MindmapStyleToolbar({ mapId, node, isRoot, nodes, background }: 
 
   return (
     <div className="flex items-center gap-1 overflow-x-auto border-b border-zinc-200 px-3 py-1.5 dark:border-zinc-800">
+      <ToolButton
+        label={smartColoring
+          ? 'Smart colouring on — new branches get their own colour'
+          : 'Smart colouring off — turn on to auto-colour new branches'}
+        active={smartColoring}
+        onClick={() => void setMindmapSmartColoring(mapId, !smartColoring)}
+      >
+        <PaletteIcon />
+      </ToolButton>
+
+      <Divider />
+
       <span className="mr-1 hidden shrink-0 text-xs text-zinc-400 sm:inline">Shape</span>
       {(['rect', 'circle', 'diamond'] as MindmapNodeShape[]).map((shape) => (
         <ToolButton
@@ -235,6 +248,18 @@ const CANVAS_PRESETS: Array<{ label: string; color: string | null }> = [
 
 function Divider() {
   return <span className="mx-1 h-5 w-px shrink-0 bg-zinc-200 dark:bg-zinc-700" />;
+}
+
+function PaletteIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.93 0 1.65-.75 1.65-1.69 0-.44-.18-.83-.44-1.12-.29-.29-.44-.65-.44-1.13a1.66 1.66 0 0 1 1.67-1.66h1.96A5.6 5.6 0 0 0 22 10.8C22 5.9 17.5 2 12 2Z" />
+      <circle cx="6.5" cy="12.5" r="1.1" fill="currentColor" stroke="none" />
+      <circle cx="9.5" cy="7.5" r="1.1" fill="currentColor" stroke="none" />
+      <circle cx="14.5" cy="7.5" r="1.1" fill="currentColor" stroke="none" />
+      <circle cx="17.5" cy="11.5" r="1.1" fill="currentColor" stroke="none" />
+    </svg>
+  );
 }
 
 function GearIcon() {

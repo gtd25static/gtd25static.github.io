@@ -14,6 +14,7 @@ import {
 } from '../../hooks/use-mindmaps';
 import { toast } from '../ui/Toast';
 import { useMindmapUi } from '../../stores/mindmap-ui';
+import { smartStyleForNewChild } from '../../lib/mindmap-smart-color';
 import { MindmapNodeView } from './MindmapNodeView';
 import { MindmapEdges } from './MindmapEdges';
 import { confirmDialog } from '../ui/ConfirmDialog';
@@ -44,7 +45,7 @@ const UNDO_TOAST_MS = 8000;
 //   the open editor = commit and leave edit mode.
 // The per-node action buttons follow the mouse (see mindmap-hover.ts) and fall
 // back to the selected node, which is what touch — no hover — and the keyboard use.
-export function MindmapCanvas({ mapId, background }: { mapId: string; background?: string }) {
+export function MindmapCanvas({ mapId, background, smartColoring }: { mapId: string; background?: string; smartColoring?: boolean }) {
   const nodes = useMindmapNodes(mapId);
   const collapsedArr = useMindmapUi((s) => s.collapsed[mapId]);
   const collapsedSet = useMemo(() => new Set(collapsedArr ?? []), [collapsedArr]);
@@ -207,16 +208,20 @@ export function MindmapCanvas({ mapId, background }: { mapId: string; background
 
   const addChild = useCallback(async (parentId: string) => {
     expandNode(mapId, parentId);
-    const node = await createMindmapNode(mapId, parentId);
+    const style = smartColoring ? smartStyleForNewChild(nodesById.get(parentId), nodes) : undefined;
+    const node = await createMindmapNode(mapId, parentId, undefined, style);
     if (node) startEdit(node.id);
-  }, [mapId, expandNode, startEdit]);
+  }, [mapId, expandNode, startEdit, smartColoring, nodesById, nodes]);
 
   const addSibling = useCallback(async (nodeId: string) => {
     const row = nodesById.get(nodeId);
     if (!row?.parentId) return; // the root has no siblings
-    const node = await createMindmapNode(mapId, row.parentId);
+    // A sibling shares the new node's parent, so colour it as a new child of
+    // that parent — a sibling of a branch is itself a new branch off the root.
+    const style = smartColoring ? smartStyleForNewChild(nodesById.get(row.parentId), nodes) : undefined;
+    const node = await createMindmapNode(mapId, row.parentId, undefined, style);
     if (node) startEdit(node.id);
-  }, [mapId, nodesById, startEdit]);
+  }, [mapId, nodesById, startEdit, smartColoring, nodes]);
 
   const deleteSubtree = useCallback(async (id: string) => {
     const row = nodesById.get(id);

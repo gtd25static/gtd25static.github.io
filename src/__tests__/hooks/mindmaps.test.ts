@@ -18,6 +18,7 @@ import {
   deleteMindmapNodeSubtree,
   restoreMindmapNodeSubtree,
   updateMindmapNodeStyle,
+  setMindmapSmartColoring,
   createMindmapFromOutline,
   exportMindmapOutline,
   clampMindmapLabel,
@@ -345,5 +346,42 @@ describe('createMindmapFromOutline', () => {
     const map = await createMindmapFromOutline('Big', 'Root', wide);
     expect(map).toBeUndefined();
     expect(await db.mindmaps.count()).toBe(0);
+  });
+});
+
+describe('smart colouring', () => {
+  it('createMindmapNode bakes a branch style, stamping its fields', async () => {
+    const map = assertDefined(await createMindmap('M'));
+    const root = await rootOf(map.id);
+    const node = assertDefined(await createMindmapNode(map.id, root.id, undefined, { palette: 'sky' }));
+    expect(node.palette).toBe('sky');
+    expect(node.fieldTimestamps?.palette).toBeGreaterThan(0);
+  });
+
+  it('createMindmapNode keeps valid colours and drops invalid ones', async () => {
+    const map = assertDefined(await createMindmap('M'));
+    const root = await rootOf(map.id);
+    const node = assertDefined(await createMindmapNode(map.id, root.id, undefined, {
+      palette: 'not-a-preset',
+      colorBg: '#112233',
+      colorFg: 'red',
+      colorBorder: '#445566',
+    }));
+    expect(node.palette).toBeUndefined();      // unknown preset dropped
+    expect(node.colorBg).toBe('#112233');      // valid hex kept
+    expect(node.colorFg).toBeUndefined();      // non-hex dropped
+    expect(node.colorBorder).toBe('#445566');
+  });
+
+  it('setMindmapSmartColoring turns the mode on (stamped) and off (field removed)', async () => {
+    const map = assertDefined(await createMindmap('M'));
+    expect(await setMindmapSmartColoring(map.id, true)).toBe(true);
+    const on = assertDefined(await db.mindmaps.get(map.id));
+    expect(on.smartColoring).toBe(true);
+    expect(on.fieldTimestamps?.smartColoring).toBeGreaterThan(0);
+
+    expect(await setMindmapSmartColoring(map.id, false)).toBe(true);
+    const off = assertDefined(await db.mindmaps.get(map.id));
+    expect('smartColoring' in off).toBe(false); // off = no key, row stays clean
   });
 });

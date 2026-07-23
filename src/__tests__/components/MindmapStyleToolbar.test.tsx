@@ -6,9 +6,11 @@ import type { MindmapNode } from '../../db/models';
 
 const mockUpdateStyle = vi.fn(async () => true);
 const mockSetBackground = vi.fn(async () => true);
+const mockSetSmartColoring = vi.fn(async () => true);
 vi.mock('../../hooks/use-mindmaps', () => ({
   updateMindmapNodeStyle: (...a: unknown[]) => (mockUpdateStyle as (...x: unknown[]) => unknown)(...a),
   setMindmapBackground: (...a: unknown[]) => (mockSetBackground as (...x: unknown[]) => unknown)(...a),
+  setMindmapSmartColoring: (...a: unknown[]) => (mockSetSmartColoring as (...x: unknown[]) => unknown)(...a),
 }));
 
 import { MindmapStyleToolbar } from '../../components/mindmaps/MindmapStyleToolbar';
@@ -24,7 +26,7 @@ function node(overrides: Partial<MindmapNode> = {}): MindmapNode {
 const NODES = [node({ id: 'root', parentId: undefined }), node(), node({ id: 'n2', parentId: 'n1' })];
 
 /** Note: no default for `selected` — passing undefined must mean "nothing selected". */
-function renderBar(selected: MindmapNode | undefined, background?: string) {
+function renderBar(selected: MindmapNode | undefined, background?: string, smartColoring = false) {
   return render(
     <MindmapStyleToolbar
       mapId="map-1"
@@ -32,6 +34,7 @@ function renderBar(selected: MindmapNode | undefined, background?: string) {
       isRoot={!!selected && !selected.parentId}
       nodes={NODES}
       background={background}
+      smartColoring={smartColoring}
     />,
   );
 }
@@ -82,6 +85,31 @@ describe('MindmapStyleToolbar — node formatting', () => {
     expect(useMindmapUi.getState().stylePreview).not.toBeNull();
     unmount();
     expect(useMindmapUi.getState().stylePreview).toBeNull();
+  });
+});
+
+describe('MindmapStyleToolbar — smart colouring toggle', () => {
+  it('reflects the off state and turns it on', async () => {
+    const user = userEvent.setup();
+    renderBar(node(), undefined, false);
+    const toggle = screen.getByLabelText(/Smart colouring/);
+    expect(toggle).toHaveAttribute('aria-pressed', 'false');
+    await user.click(toggle);
+    expect(mockSetSmartColoring).toHaveBeenCalledWith('map-1', true);
+  });
+
+  it('reflects the on state and turns it off', async () => {
+    const user = userEvent.setup();
+    renderBar(node(), undefined, true);
+    const toggle = screen.getByLabelText(/Smart colouring/);
+    expect(toggle).toHaveAttribute('aria-pressed', 'true');
+    await user.click(toggle);
+    expect(mockSetSmartColoring).toHaveBeenCalledWith('map-1', false);
+  });
+
+  it('stays live as a mode even when no node is selected', () => {
+    renderBar(undefined);
+    expect(screen.getByLabelText(/Smart colouring/)).toBeEnabled();
   });
 });
 

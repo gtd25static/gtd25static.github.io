@@ -165,6 +165,8 @@ export interface Mindmap {
   folderId?: string; // absent = top level
   /** Canvas background, '#rrggbb'. Absent = the theme's surface. SENSITIVE. */
   background?: string;
+  /** "Smart colouring" mode: new branches auto-get a distinct colour. SENSITIVE. */
+  smartColoring?: boolean;
   order: number;
   createdAt: number;
   updatedAt: number;

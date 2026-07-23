@@ -12,6 +12,7 @@ import { MAX_MINDMAP_LABEL_LENGTH, MAX_MINDMAP_IMPORT_NODES } from '../lib/const
 import { buildTree } from '../lib/mindmap-tree';
 import { mapToOutline, type OutlineNode } from '../lib/mindmap-outline';
 import { isHexColor, isNodeShape, isPaletteId, type NodeStylePatch } from '../lib/mindmap-style';
+import type { BranchStyle } from '../lib/mindmap-smart-color';
 
 // --- Queries ---
 
@@ -387,6 +388,31 @@ export async function setMindmapBackground(id: string, color: string | null): Pr
   }
 }
 
+/** Turn "smart colouring" (auto-colour new branches) on or off for the map. */
+export async function setMindmapSmartColoring(id: string, enabled: boolean): Promise<boolean> {
+  try {
+    const existing = await db.mindmaps.get(id);
+    if (!existing || existing.deletedAt) return false;
+    const smartColoring = enabled ? true : undefined;
+    if ((existing.smartColoring ?? undefined) === smartColoring) return true;
+    const now = Date.now();
+    const updated: Mindmap = {
+      ...existing,
+      smartColoring,
+      updatedAt: now,
+      fieldTimestamps: stampUpdatedFields(existing.fieldTimestamps, ['smartColoring'], now),
+    };
+    // Off = no field, so the row stays clean (like background) and round-trips
+    // through JSON/sync without an empty key.
+    if (smartColoring === undefined) delete updated.smartColoring;
+    await putMindmapRows([{ table: 'mindmaps', entityType: 'mindmap', row: updated }]);
+    return true;
+  } catch (error) {
+    handleDbError(error, 'set mindmap smart colouring');
+    return false;
+  }
+}
+
 export async function renameMindmap(id: string, name: string): Promise<void> {
   try {
     const clean = clampMindmapLabel(name);
@@ -529,7 +555,7 @@ export async function restoreMindmapFolder(id: string): Promise<void> {
 
 // --- Nodes ---
 
-export async function createMindmapNode(mapId: string, parentId: string, label = 'New node'): Promise<MindmapNode | undefined> {
+export async function createMindmapNode(mapId: string, parentId: string, label = 'New node', style?: BranchStyle): Promise<MindmapNode | undefined> {
   try {
     const clean = clampMindmapLabel(label);
     if (!clean) return undefined;
@@ -545,6 +571,15 @@ export async function createMindmapNode(mapId: string, parentId: string, label =
       createdAt: now,
       updatedAt: now,
     };
+    // Smart colouring bakes a branch colour at creation. Validate defensively —
+    // these strings end up in style attributes, so only a known preset id or a
+    // '#rrggbb' colour may pass, same rule as updateMindmapNodeStyle.
+    if (style) {
+      if (isPaletteId(style.palette)) node.palette = style.palette;
+      if (isHexColor(style.colorBg)) node.colorBg = style.colorBg;
+      if (isHexColor(style.colorFg)) node.colorFg = style.colorFg;
+      if (isHexColor(style.colorBorder)) node.colorBorder = style.colorBorder;
+    }
     node.fieldTimestamps = initFieldTimestamps(node as unknown as Record<string, unknown>, now);
     await putMindmapRows([{ table: 'mindmapNodes', entityType: 'mindmapNode', row: node }]);
     return node;

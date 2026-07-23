@@ -66,8 +66,9 @@ export function MindmapEditor({ mapId }: { mapId: string }) {
         isRoot={!!selectedNode && !selectedNode.parentId}
         nodes={nodes}
         background={map.background}
+        smartColoring={!!map.smartColoring}
       />
-      <MindmapCanvas mapId={mapId} background={map.background} />
+      <MindmapCanvas mapId={mapId} background={map.background} smartColoring={!!map.smartColoring} />
     </div>
   );
 }

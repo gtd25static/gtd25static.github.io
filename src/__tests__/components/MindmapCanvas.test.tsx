@@ -100,12 +100,12 @@ describe('MindmapCanvas', () => {
     movePointerOverNode('a');
     expect(actionButton('Add child (Tab)')).toBeDefined();
     fireEvent.click(actionButton('Add child (Tab)')!.parentElement!);
-    await waitFor(() => expect(mockCreateNode).toHaveBeenCalledWith('map-1', 'a'));
+    await waitFor(() => expect(mockCreateNode).toHaveBeenCalledWith('map-1', 'a', undefined, undefined));
 
     mockCreateNode.mockClear();
     movePointerOverNode('b');
     fireEvent.click(actionButton('Add child (Tab)')!.parentElement!);
-    await waitFor(() => expect(mockCreateNode).toHaveBeenCalledWith('map-1', 'b'));
+    await waitFor(() => expect(mockCreateNode).toHaveBeenCalledWith('map-1', 'b', undefined, undefined));
   });
 
   it('keeps the actions alive while the pointer travels off the box onto a button', async () => {
@@ -121,7 +121,7 @@ describe('MindmapCanvas', () => {
     expect(actionButton('Delete (Del)')).toBeDefined();
     // …and the actions still belong to a, not to whatever is underneath
     fireEvent.click(actionButton('Add child (Tab)')!.parentElement!);
-    await waitFor(() => expect(mockCreateNode).toHaveBeenCalledWith('map-1', 'a'));
+    await waitFor(() => expect(mockCreateNode).toHaveBeenCalledWith('map-1', 'a', undefined, undefined));
   });
 
   it('leaving the canvas hides the hover actions, and touch never triggers them', () => {
@@ -245,7 +245,7 @@ describe('MindmapCanvas', () => {
     render(<MindmapCanvas mapId="map-1" />);
     await user.click(nodeEl('a'));
     fireEvent.keyDown(screen.getByTestId('mindmap-canvas'), { key: 'Tab' });
-    await waitFor(() => expect(mockCreateNode).toHaveBeenCalledWith('map-1', 'a'));
+    await waitFor(() => expect(mockCreateNode).toHaveBeenCalledWith('map-1', 'a', undefined, undefined));
   });
 
   it('Enter creates a sibling (not for the root)', async () => {
@@ -254,7 +254,7 @@ describe('MindmapCanvas', () => {
     render(<MindmapCanvas mapId="map-1" />);
     await user.click(nodeEl('a'));
     fireEvent.keyDown(screen.getByTestId('mindmap-canvas'), { key: 'Enter' });
-    await waitFor(() => expect(mockCreateNode).toHaveBeenCalledWith('map-1', 'root'));
+    await waitFor(() => expect(mockCreateNode).toHaveBeenCalledWith('map-1', 'root', undefined, undefined));
 
     mockCreateNode.mockClear();
     await user.click(nodeEl('root'));
@@ -321,7 +321,7 @@ describe('MindmapCanvas', () => {
     // b selected → has delete button (root doesn't)
     expect(actionButton('Delete (Del)')).toBeDefined();
     fireEvent.keyDown(canvas, { key: 'Tab' });
-    await waitFor(() => expect(mockCreateNode).toHaveBeenCalledWith('map-1', 'b'));
+    await waitFor(() => expect(mockCreateNode).toHaveBeenCalledWith('map-1', 'b', undefined, undefined));
   });
 
   // Motion stays off until the map has been measured and fitted — which never
