@@ -65,11 +65,23 @@ describe('lerpLayout', () => {
     }
   });
 
-  it('starts a node that has no previous box at its final place', () => {
-    const grown = layout({ root: [0, 0], a: [200, 30], b: [200, 90], c: [400, 30] }, [['a', 'c']]);
+  it('unfolds a newly-revealed node out of its on-screen parent', () => {
+    const grown = layout({ root: [0, 0], a: [200, 0], b: [200, 60], c: [400, 30] }, [['a', 'c']]);
     const mid = lerpLayout(from, grown, 0.5);
-    expect(mid.rects.get('c')).toEqual(grown.rects.get('c'));
+    // 'c' has no previous box, but its parent 'a' (at 200,0) was on screen, so it
+    // starts there and glides halfway to its target (400,30) — a subtree
+    // unfolding from its parent, not popping in at the final place.
+    const c = mid.rects.get('c')!;
+    expect(c.x).toBeCloseTo(300, 5); // (200 + 400) / 2
+    expect(c.y).toBeCloseTo(15, 5);  // (0 + 30) / 2
     // …and its brand-new edge still hangs off the interpolated parent
     expect(mid.edges[0].x1).toBe(mid.rects.get('a')!.x + 100);
+  });
+
+  it('still starts a node in place when no ancestor was on screen to unfold from', () => {
+    const before = layout({});
+    const after = layout({ root: [0, 0], a: [200, 40] }, [['root', 'a']]);
+    // Neither 'a' nor its parent existed before → nothing to grow out of.
+    expect(lerpLayout(before, after, 0.5).rects.get('a')).toEqual({ x: 200, y: 40, w: 100, h: 30 });
   });
 });

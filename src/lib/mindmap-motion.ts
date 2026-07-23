@@ -45,15 +45,36 @@ function lerpRect(from: LayoutRect, to: LayoutRect, t: number): LayoutRect {
 /**
  * `from` drawn `t` of the way towards `to`. `t` may exceed 1 — that is the
  * overshoot from the easing above, and it must not be clamped away.
- * Nodes with no `from` box (they just appeared) start at their final place;
- * their entrance is the node box's own scale-in.
+ *
+ * A node with no `from` box just appeared (expand, create). Rather than
+ * materialise at its final place, it glides out of the box it belongs under:
+ * the nearest ancestor that was already on screen (usually the node that was
+ * expanded, or the new node's parent). A revealed subtree therefore unfolds
+ * from its parent instead of popping into existence. A brand-new node whose
+ * ancestor also just appeared (no anchor to grow from) still starts in place.
  */
 export function lerpLayout(from: MindmapLayout, to: MindmapLayout, t: number): MindmapLayout {
   if (t === 1) return to;
 
+  // Parent of each node in the target, so an entering node can be traced up to
+  // the on-screen box it should unfold from.
+  const parentOf = new Map<string, string>();
+  for (const e of to.edges) parentOf.set(e.toId, e.fromId);
+  const unfoldFrom = (id: string): LayoutRect | undefined => {
+    const seen = new Set<string>();
+    let cur = parentOf.get(id);
+    while (cur && !seen.has(cur)) {
+      seen.add(cur);
+      const box = from.rects.get(cur);
+      if (box) return box;
+      cur = parentOf.get(cur);
+    }
+    return undefined;
+  };
+
   const rects = new Map<string, LayoutRect>();
   for (const [id, target] of to.rects) {
-    const start = from.rects.get(id);
+    const start = from.rects.get(id) ?? unfoldFrom(id);
     rects.set(id, start ? lerpRect(start, target, t) : target);
   }
 
