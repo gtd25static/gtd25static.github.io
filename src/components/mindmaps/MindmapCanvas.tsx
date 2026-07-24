@@ -193,16 +193,22 @@ export function MindmapCanvas({ mapId, background, smartColoring }: { mapId: str
     });
   }, []);
 
-  // Fit once the first real layout exists.
+  // Fit once the first real layout exists; motion arms one quiet frame later.
+  // On a large map the measurements land in several commits, re-firing this
+  // effect before that frame arrives — so the arming must be RE-scheduled on
+  // every wave, never just cancelled (a cancel with no reschedule leaves
+  // motionReady false forever: big maps would never animate). Settling waves
+  // keep pushing the arming back, so the map's debut still never animates.
   const didFitRef = useRef(false);
   useEffect(() => {
-    if (!didFitRef.current && layout.rects.size > 0 && sizes.size > 0) {
+    if (motionReady || layout.rects.size === 0 || sizes.size === 0) return;
+    if (!didFitRef.current) {
       didFitRef.current = true;
       zoomToFit();
-      const raf = requestAnimationFrame(() => setMotionReady(true));
-      return () => cancelAnimationFrame(raf);
     }
-  }, [layout, sizes, zoomToFit]);
+    const raf = requestAnimationFrame(() => setMotionReady(true));
+    return () => cancelAnimationFrame(raf);
+  }, [motionReady, layout, sizes, zoomToFit]);
 
   // --- Node actions ---
 

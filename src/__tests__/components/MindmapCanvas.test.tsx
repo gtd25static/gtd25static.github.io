@@ -380,6 +380,50 @@ describe('MindmapCanvas', () => {
     }
   });
 
+  // Regression: on a large map the node measurements land in SEVERAL commits,
+  // re-firing the fit effect before the motion-arming animation frame has run.
+  // The arming must survive that churn — it used to be cancelled without a
+  // reschedule, leaving motionReady false forever: no glide, no ghosts, no
+  // enter fades, on exactly the maps big enough to measure in waves.
+  it('arms motion even when measurements land in several waves (large maps)', () => {
+    let width = 120;
+    Object.defineProperty(HTMLElement.prototype, 'offsetWidth', { configurable: true, get: () => width });
+    Object.defineProperty(HTMLElement.prototype, 'offsetHeight', { configurable: true, value: 36 });
+    // Manual rAF queue: nothing fires until flushed, so the second measurement
+    // wave provably lands BEFORE the arming frame — the race, deterministically.
+    const rafQueue = new Map<number, FrameRequestCallback>();
+    let rafId = 0;
+    const rafSpy = vi.spyOn(window, 'requestAnimationFrame').mockImplementation((cb) => {
+      rafQueue.set(++rafId, cb);
+      return rafId;
+    });
+    const cafSpy = vi.spyOn(window, 'cancelAnimationFrame').mockImplementation((id) => {
+      rafQueue.delete(id);
+    });
+    const flushRaf = () => act(() => {
+      const pending = [...rafQueue.values()];
+      rafQueue.clear();
+      for (const cb of pending) cb(performance.now());
+    });
+    try {
+      render(<MindmapCanvas mapId="map-1" />);
+      // Wave 2: every node re-measures wider before any animation frame fired.
+      width = 160;
+      act(() => useMindmapUi.getState().setSelectedNodeId('a')); // any re-render
+      flushRaf(); // the (re-scheduled) arming frame → motionReady
+      flushRaf();
+      // With motion armed, collapsing leaves the hidden subtree as a ghost.
+      act(() => useMindmapUi.getState().toggleCollapsed('map-1', 'a'));
+      flushRaf(); // first glide tick renders the exit ghost
+      expect(document.querySelector('.mm-node-out')).toHaveTextContent('Grandchild');
+    } finally {
+      rafSpy.mockRestore();
+      cafSpy.mockRestore();
+      Reflect.deleteProperty(HTMLElement.prototype, 'offsetWidth');
+      Reflect.deleteProperty(HTMLElement.prototype, 'offsetHeight');
+    }
+  });
+
   it('renders markdown in labels as elements, never HTML', () => {
     mockUseNodes.mockReturnValue([
       node('root', { label: 'has **bold** and <img src=x onerror=alert(1)>' }),
