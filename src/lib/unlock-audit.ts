@@ -37,14 +37,23 @@ export async function clearUnlockLog(): Promise<void> {
   await db.localSettings.update('local', { unlockLog: [] });
 }
 
-/** Failed attempts since the most recent successful unlock (for the returning-user toast). */
-export function failedSinceLastSuccess(log: UnlockLogEntry[]): number {
-  let count = 0;
+/**
+ * The failed attempts since the most recent successful unlock, oldest first —
+ * what the returning-user alert lists so each one can be judged by its time and
+ * method (your own typo a minute ago reads very differently from 03:14 last night).
+ */
+export function failedEntriesSinceLastSuccess(log: UnlockLogEntry[]): UnlockLogEntry[] {
+  const failed: UnlockLogEntry[] = [];
   for (let i = log.length - 1; i >= 0; i--) {
     if (log[i].ok) break;
-    count++;
+    failed.push(log[i]);
   }
-  return count;
+  return failed.reverse();
+}
+
+/** Failed attempts since the most recent successful unlock (for the returning-user alert). */
+export function failedSinceLastSuccess(log: UnlockLogEntry[]): number {
+  return failedEntriesSinceLastSuccess(log).length;
 }
 
 /** The most recent successful unlock strictly before the last entry (i.e. the previous session). */

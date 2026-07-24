@@ -26,7 +26,8 @@ import { ServiceWorkerProvider } from './hooks/use-service-worker';
 import { AppUpdatePrompt } from './components/banners/AppUpdatePrompt';
 import { useLocalSettings } from './hooks/use-settings';
 import { useRelaxedUnlock } from './hooks/use-relaxed-unlock';
-import { useUnlockAuditToast } from './hooks/use-unlock-audit-toast';
+import { useUnlockAudit } from './hooks/use-unlock-audit';
+import { UnlockAuditAlert } from './components/security/UnlockAuditAlert';
 import { useRelaxedUnlockStore } from './stores/relaxed-unlock';
 
 export default function App() {
@@ -128,7 +129,7 @@ function UnlockedApp() {
   const shareTarget = useShareTarget();
   useNudges();
   useRelaxedUnlock();
-  useUnlockAuditToast();
+  const unlockAudit = useUnlockAudit();
   useAppBadge();
 
   return (
@@ -137,6 +138,8 @@ function UnlockedApp() {
         {/* Approver duties (non-Paranoid devices): accept RUK invites + show an
             attention-grabbing approval overlay for managed devices' unlock requests. */}
         <RemoteApprovalPrompt />
+        {/* Failed unlock attempts while you were away — acknowledged, not toasted. */}
+        <UnlockAuditAlert {...unlockAudit} />
         {/* Destination prompt for Android share-sheet content (Inbox vs Shared Folder). */}
         <ShareTargetPrompt {...shareTarget} />
         <AppShell />

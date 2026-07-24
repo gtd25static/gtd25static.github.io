@@ -5,6 +5,7 @@ import {
   recordUnlockAttempt,
   clearUnlockLog,
   failedSinceLastSuccess,
+  failedEntriesSinceLastSuccess,
   previousSuccess,
   type UnlockLogEntry,
 } from '../../lib/unlock-audit';
@@ -60,6 +61,26 @@ describe('failedSinceLastSuccess', () => {
     expect(failedSinceLastSuccess([ok(1), ok(2)])).toBe(0);
     expect(failedSinceLastSuccess([fail(1), fail(2)])).toBe(2); // never any success
     expect(failedSinceLastSuccess([])).toBe(0);
+  });
+});
+
+describe('failedEntriesSinceLastSuccess', () => {
+  it('returns the trailing failures themselves, oldest first', () => {
+    const log = [ok(1), fail(20), fail(30)];
+    expect(failedEntriesSinceLastSuccess(log)).toEqual([fail(20), fail(30)]);
+  });
+
+  it('keeps each attempt’s method so the alert can show how it was tried', () => {
+    const keyFail: UnlockLogEntry = { at: 40, method: 'securityKey', ok: false };
+    expect(failedEntriesSinceLastSuccess([ok(1), fail(20), keyFail])).toEqual([fail(20), keyFail]);
+  });
+
+  it('is empty when the log ends on a success, and agrees with the count helper', () => {
+    const cases: UnlockLogEntry[][] = [[ok(1), ok(2)], [], [fail(1), fail(2)], [ok(1), fail(2), fail(3)]];
+    for (const log of cases) {
+      expect(failedEntriesSinceLastSuccess(log).length).toBe(failedSinceLastSuccess(log));
+    }
+    expect(failedEntriesSinceLastSuccess([ok(1), ok(2)])).toEqual([]);
   });
 });
 
