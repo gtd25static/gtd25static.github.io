@@ -104,8 +104,9 @@ export default defineConfig({
         ],
         // POST/multipart so the OS share sheet can hand us FILES (a GET target can
         // only carry text/url). The service worker intercepts this POST, stashes the
-        // payload, and redirects into the app; files land in the Shared Folder and
-        // text/links in the Inbox. See src/sw.ts + src/hooks/use-share-target.ts.
+        // payload, and redirects into the app, which asks where to file the share:
+        // an Inbox task or the Shared Folder (a file's bytes always live in the
+        // Shared Folder). See src/sw.ts + src/hooks/use-share-target.ts.
         share_target: {
           action: '/share-target',
           method: 'POST',

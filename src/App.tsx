@@ -18,6 +18,7 @@ import { useShareTarget } from './hooks/use-share-target';
 import { useNudges, useLockedNudge } from './hooks/use-nudges';
 import { useRemoteWipeCommands } from './hooks/use-remote-unlock';
 import { RemoteApprovalPrompt } from './components/security/RemoteApprovalPrompt';
+import { ShareTargetPrompt } from './components/banners/ShareTargetPrompt';
 import { PrivacyOverlay } from './components/security/PrivacyOverlay';
 import { useBackgroundLock, DEFAULT_BACKGROUND_LOCK_SECONDS } from './hooks/use-background-lock';
 import { useAppBadge } from './hooks/use-app-badge';
@@ -124,7 +125,7 @@ function UnlockedApp() {
     localSettings.paranoidBackgroundLockSeconds ?? DEFAULT_BACKGROUND_LOCK_SECONDS,
   );
   useUrlCapture();
-  useShareTarget();
+  const shareTarget = useShareTarget();
   useNudges();
   useRelaxedUnlock();
   useUnlockAuditToast();
@@ -136,6 +137,8 @@ function UnlockedApp() {
         {/* Approver duties (non-Paranoid devices): accept RUK invites + show an
             attention-grabbing approval overlay for managed devices' unlock requests. */}
         <RemoteApprovalPrompt />
+        {/* Destination prompt for Android share-sheet content (Inbox vs Shared Folder). */}
+        <ShareTargetPrompt {...shareTarget} />
         <AppShell />
         {/* Paranoid extra (opt-in): blur veil while unlocked but unattended. */}
         {isParanoidEnabled() && localSettings.paranoidPrivacyOverlayEnabled && <PrivacyOverlay />}
