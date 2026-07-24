@@ -40,20 +40,23 @@ export function RemoteApprovalPrompt() {
             {pending.code}
           </p>
         </div>
-        <div className="flex justify-end gap-2">
+        {/* Comfortable thumb targets: this dialog is answered on a phone, often
+            in a hurry. Both actions are ≥44px tall and share the row on mobile,
+            shrinking to the usual dialog-sized buttons from md up. */}
+        <div className="flex items-stretch justify-end gap-3">
           <button
             type="button"
             onClick={deny}
             disabled={busy}
-            className="rounded-lg px-3 py-1.5 text-sm text-zinc-500 hover:bg-zinc-100 disabled:opacity-50 dark:text-zinc-400 dark:hover:bg-zinc-800"
+            className="min-h-[44px] flex-1 rounded-xl border border-zinc-200 px-4 text-base text-zinc-600 hover:bg-zinc-100 disabled:opacity-50 md:min-h-0 md:flex-none md:rounded-lg md:border-0 md:py-1.5 md:text-sm dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
           >
             Deny
           </button>
           <Button
-            size="sm"
             variant="danger"
             onClick={async () => { setBusy(true); await approve(); }}
             disabled={busy || cooldown > 0}
+            className="min-h-[44px] flex-1 px-4 text-base md:min-h-0 md:flex-none md:px-3 md:py-1.5 md:text-xs"
           >
             {busy ? 'Approving…' : cooldown > 0 ? `Approve (${cooldown})` : 'Approve unlock'}
           </Button>
