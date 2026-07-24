@@ -362,8 +362,14 @@ async function doUnlockWithPassphrase(passphrase: string): Promise<boolean> {
   }
   // Transparently upgrade a legacy PBKDF2 vault to Argon2id now that we hold the
   // passphrase (rewrapPassphrase no-ops if a resumed disable tore the vault down).
+  // Opportunistic hardening only: a failed re-wrap (WASM blocked by CSP, Argon2's
+  // 64 MiB refused, …) must never turn an already-successful unlock into an error.
   if ((vault.kdf?.algo ?? 'pbkdf2') !== DEFAULT_ARGON2.algo) {
-    await rewrapPassphrase(passphrase);
+    try {
+      await rewrapPassphrase(passphrase);
+    } catch (err) {
+      recordError('vault.kdfUpgrade', err);
+    }
   }
   return true;
 }
@@ -408,7 +414,15 @@ export async function setSecondaryPassphrase(duressPassphrase: string): Promise<
 
   const vault = await db.vault.get('vault');
   if (!vault) throw new Error('Vault not found');
-  const kek = await deriveVaultKek(trimmed, vault.passSalt, vault.kdf ?? LEGACY_KDF);
+  let kek: CryptoKey;
+  try {
+    kek = await deriveVaultKek(trimmed, vault.passSalt, vault.kdf ?? LEGACY_KDF);
+  } catch (err) {
+    // E.g. WebAssembly (Argon2id) unavailable. Record the real cause for
+    // diagnostics; surface a message the settings toast can show as-is.
+    recordError('vault.setSecondaryPassphrase', err);
+    throw new Error('Could not derive the key on this device — make sure the app is up to date and try again');
+  }
 
   // Reject a duress phrase equal to the real one: if it unwraps slot 1, it is the
   // real passphrase (we never store the real passphrase to compare directly).

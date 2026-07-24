@@ -206,6 +206,7 @@ function SecondaryPassphraseSection() {
       setPass(''); setConfirm('');
       toast('Secondary passphrase saved', 'success');
     } catch (e) {
+      recordError('settings.secondaryPassphrase', e);
       toast(e instanceof Error ? e.message : 'Could not save', 'error');
     } finally {
       setBusy(false);
@@ -218,6 +219,9 @@ function SecondaryPassphraseSection() {
     try {
       await clearSecondaryPassphrase();
       toast('Secondary passphrase removed', 'success');
+    } catch (e) {
+      recordError('settings.secondaryPassphrase', e);
+      toast(e instanceof Error ? e.message : 'Could not remove', 'error');
     } finally {
       setBusy(false);
     }

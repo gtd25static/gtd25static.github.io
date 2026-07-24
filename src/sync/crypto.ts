@@ -26,12 +26,16 @@ let cachedSalt: string | null = null;
 let idleTimer: ReturnType<typeof setTimeout> | null = null;
 const IDLE_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
 
+// Expiry drops only the KEY. The salt is public material (it ships in the
+// remote snapshot) and deliberately survives, so ensureEncryptionKey() in
+// sync-engine can re-derive on demand from the stored password without a
+// network fetch — otherwise every blob operation between the expiry and the
+// next sync fails with NO_SYNC_KEY until a restart.
 function resetIdleTimer() {
   if (idleTimer) clearTimeout(idleTimer);
   if (cachedKey) {
     idleTimer = setTimeout(() => {
       cachedKey = null;
-      cachedSalt = null;
       idleTimer = null;
     }, IDLE_TIMEOUT_MS);
   }
@@ -45,7 +49,6 @@ if (typeof document !== 'undefined') {
       if (idleTimer) clearTimeout(idleTimer);
       idleTimer = setTimeout(() => {
         cachedKey = null;
-        cachedSalt = null;
         idleTimer = null;
       }, 5 * 60 * 1000); // 5 min when hidden
     } else if (document.visibilityState === 'visible') {

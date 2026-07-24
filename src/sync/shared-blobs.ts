@@ -41,10 +41,17 @@ export class NoSyncKeyError extends Error {
   }
 }
 
-function requireSyncKey(): CryptoKey {
+async function requireSyncKey(): Promise<CryptoKey> {
   const key = getCachedEncryptionKey();
-  if (!key) throw new NoSyncKeyError();
-  return key;
+  if (key) return key;
+  // Cache expired (idle / hidden tab): re-derive from the stored password
+  // before giving up — restarting the app must never be the fix for an upload.
+  // Dynamic import: sync-engine imports this module (compaction), so a static
+  // import back would be a cycle.
+  const { ensureEncryptionKey } = await import('./sync-engine');
+  const ensured = await ensureEncryptionKey();
+  if (!ensured) throw new NoSyncKeyError();
+  return ensured;
 }
 
 interface Creds { pat: string; repo: string }
@@ -108,14 +115,17 @@ async function readBlobLocal(blobId: string): Promise<Uint8Array | null> {
  * must wait for this before saving a file, or the upload throws.
  */
 export async function canUploadSharedBlob(): Promise<boolean> {
-  return (await getCredentials()) !== null && getCachedEncryptionKey() !== null;
+  if ((await getCredentials()) === null) return false;
+  if (getCachedEncryptionKey() !== null) return true;
+  const { ensureEncryptionKey } = await import('./sync-engine');
+  return (await ensureEncryptionKey()) !== null;
 }
 
 /** Encrypt + upload a new blob to the blob branch, and cache its plaintext locally. */
 export async function uploadSharedBlob(blobId: string, plaintext: Uint8Array): Promise<void> {
   const creds = await getCredentials();
   if (!creds) throw new Error('Sync is not configured');
-  const key = requireSyncKey();
+  const key = await requireSyncKey();
   const ciphertext = await encryptBytes(key, plaintext);
   await ensureBlobBranch(creds);
   await putBinaryFile(creds.pat, creds.repo, blobPath(blobId), ciphertext, undefined, undefined, BLOB_BRANCH);
@@ -129,7 +139,7 @@ export async function getSharedBlobBytes(blobId: string): Promise<Uint8Array> {
 
   const creds = await getCredentials();
   if (!creds) throw new Error('Sync is not configured');
-  const key = requireSyncKey();
+  const key = await requireSyncKey();
   // Prefer the blob branch; fall back to the default branch for any legacy blob
   // written before blobs moved to their own branch.
   let ciphertext = await getBinaryFile(creds.pat, creds.repo, blobPath(blobId), undefined, BLOB_BRANCH);

@@ -552,6 +552,27 @@ export async function getLocalSnapshot(): Promise<SyncData> {
 }
 
 /**
+ * Re-derive the sync key on demand from the STORED password and the last-seen
+ * salt — no network fetch, no prompt. Heals the cache after its idle /
+ * hidden-tab expiry (the salt deliberately survives those; see sync/crypto.ts),
+ * so blob operations between syncs don't fail with NO_SYNC_KEY until a restart.
+ * Null when the material isn't at hand (sync unconfigured, Paranoid vault
+ * locked, or no salt seen yet this page-life — startup covers that via sync).
+ */
+export async function ensureEncryptionKey(): Promise<CryptoKey | null> {
+  const cached = getCachedEncryptionKey();
+  if (cached) return cached;
+  const salt = getCachedSalt();
+  if (!salt) return null;
+  const local = await db.localSettings.get('local');
+  const password = isParanoidFlagSet() ? getVaultSecrets()?.syncPassword : local?.encryptionPassword;
+  if (!password) return null;
+  const key = await deriveKey(password, salt);
+  cacheEncryptionKey(key, salt);
+  return key;
+}
+
+/**
  * Resolves the encryption key for a sync operation.
  * Encryption is ALWAYS required — returns CryptoKey or 'needs-password'.
  * Never returns null: sync cannot proceed without encryption.

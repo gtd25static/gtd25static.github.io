@@ -22,10 +22,13 @@ const gitLog = git('git log -25 --pretty=%h%x09%s')
 // header-only directives (frame-ancestors) are intentionally omitted as they're ignored
 // in meta. The app's only network egress is the GitHub REST API; styles are injected
 // at runtime by Tailwind, hence 'unsafe-inline' for style-src.
+// 'wasm-unsafe-eval' allows ONLY WebAssembly compilation (not JS eval) — required by
+// hash-wasm's Argon2id vault KDF; without it every argon2 path (passphrase unlock of
+// an upgraded vault, secondary-passphrase setup, duress unlock) throws in production.
 function cspPlugin(): Plugin {
   const csp = [
     "default-src 'self'",
-    "script-src 'self'",
+    "script-src 'self' 'wasm-unsafe-eval'",
     "style-src 'self' 'unsafe-inline'",
     "img-src 'self' data: blob: https:",
     "font-src 'self' data:",

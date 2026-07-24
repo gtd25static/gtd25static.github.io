@@ -21,8 +21,43 @@ export interface LoggedError {
 const MAX_ERRORS = 100;
 const MAX_MESSAGE_LEN = 2000;
 const MAX_STACK_LEN = 4000;
-const errorLog: LoggedError[] = [];
+// Persistent but not eternal: entries older than this are pruned on load/write.
+const MAX_ERROR_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+// Swept by panic-wipe's gtd25-* localStorage pass; entries are redacted (ACR-015).
+const STORAGE_KEY = 'gtd25-diagnostics-log';
 const listeners = new Set<() => void>();
+
+// The log survives reloads and app updates (it used to be memory-only, so the
+// one error you wanted to report was always gone by the time you looked).
+// localStorage is absent in workers and may throw in degraded modes — every
+// touch is guarded, falling back to memory-only behavior.
+function loadPersistedErrors(): LoggedError[] {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return [];
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    const cutoff = Date.now() - MAX_ERROR_AGE_MS;
+    return parsed
+      .filter((e): e is LoggedError =>
+        !!e && typeof e === 'object'
+        && typeof (e as LoggedError).at === 'number'
+        && typeof (e as LoggedError).context === 'string'
+        && typeof (e as LoggedError).message === 'string')
+      .filter((e) => e.at >= cutoff)
+      .slice(-MAX_ERRORS);
+  } catch {
+    return [];
+  }
+}
+
+function persistErrors(): void {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(errorLog));
+  } catch { /* quota / private mode / worker — the in-memory log still works */ }
+}
+
+const errorLog: LoggedError[] = loadPersistedErrors();
 
 function cap(s: string | undefined, max: number): string | undefined {
   if (s === undefined) return undefined;
@@ -75,6 +110,7 @@ export function recordError(context: string, err: unknown): void {
       stack: cap(stack !== undefined ? redactSecrets(stack) : undefined, MAX_STACK_LEN),
     });
     if (errorLog.length > MAX_ERRORS) errorLog.shift();
+    persistErrors(); // errors are rare — write-through keeps the log crash-proof
     for (const l of listeners) l();
   } catch { /* diagnostics must never make things worse */ }
 }
@@ -85,6 +121,7 @@ export function getErrorLog(): readonly LoggedError[] {
 
 export function clearErrorLog(): void {
   errorLog.length = 0;
+  try { localStorage.removeItem(STORAGE_KEY); } catch { /* nothing persisted */ }
   for (const l of listeners) l();
 }
 
