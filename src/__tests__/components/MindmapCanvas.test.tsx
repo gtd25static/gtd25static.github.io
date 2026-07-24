@@ -424,6 +424,28 @@ describe('MindmapCanvas', () => {
     }
   });
 
+  // Big reveals animate faster than small toggles; the canvas hands the
+  // per-transition scale to CSS so the enter fade keeps pace with the glide.
+  it('exposes the per-transition duration scale to CSS', async () => {
+    Object.defineProperty(HTMLElement.prototype, 'offsetWidth', { configurable: true, value: 120 });
+    Object.defineProperty(HTMLElement.prototype, 'offsetHeight', { configurable: true, value: 36 });
+    try {
+      render(<MindmapCanvas mapId="map-1" />);
+      const canvas = screen.getByTestId('mindmap-canvas');
+      // Two frames so the motion arming (fit → rAF) has fired before toggling.
+      await act(() => new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r()))));
+      // Collapse 'a' (ghost proves motion is armed), then re-expand it: a1
+      // re-enters, 1 of 4 nodes → scale 1 - 0.6·(1/4) = 0.85.
+      act(() => useMindmapUi.getState().toggleCollapsed('map-1', 'a'));
+      await waitFor(() => expect(document.querySelector('.mm-node-out')).toBeTruthy(), { interval: 5 });
+      act(() => useMindmapUi.getState().toggleCollapsed('map-1', 'a'));
+      expect(parseFloat(canvas.style.getPropertyValue('--mm-duration-scale'))).toBeCloseTo(0.85, 5);
+    } finally {
+      Reflect.deleteProperty(HTMLElement.prototype, 'offsetWidth');
+      Reflect.deleteProperty(HTMLElement.prototype, 'offsetHeight');
+    }
+  });
+
   it('renders markdown in labels as elements, never HTML', () => {
     mockUseNodes.mockReturnValue([
       node('root', { label: 'has **bold** and <img src=x onerror=alert(1)>' }),

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { MindmapLayout } from '../../lib/mindmap-layout';
-import { easeGlide, lerpLayout } from '../../lib/mindmap-motion';
+import { MIN_DURATION_SCALE, easeGlide, lerpLayout, motionDurationScale } from '../../lib/mindmap-motion';
 
 function layout(boxes: Record<string, [number, number]>, edges: Array<[string, string]> = []): MindmapLayout {
   const rects = new Map(Object.entries(boxes).map(([id, [x, y]]) => [id, { x, y, w: 100, h: 30 }]));
@@ -34,6 +34,31 @@ describe('easeGlide', () => {
     expect(peak).toBeGreaterThan(1);   // overshoots — the settle bounce
     expect(peak).toBeLessThan(1.08);   // but only a little
     expect(easeGlide(1)).toBe(1);      // and ends exactly on the target
+  });
+});
+
+describe('motionDurationScale', () => {
+  it('keeps full duration for a pure re-layout (nothing entering)', () => {
+    expect(motionDurationScale(0, 23)).toBe(1);
+  });
+
+  it('speeds a whole-map unfold up by at least half', () => {
+    // Expanding the root: 22 of 23 nodes enter at once.
+    expect(motionDurationScale(22, 23)).toBeLessThanOrEqual(0.5);
+    expect(motionDurationScale(22, 23)).toBeGreaterThanOrEqual(MIN_DURATION_SCALE);
+  });
+
+  it('scales small toggles only slightly', () => {
+    const scale = motionDurationScale(3, 23); // reveal a 3-node subtree
+    expect(scale).toBeGreaterThan(0.9);
+    expect(scale).toBeLessThan(1);
+  });
+
+  it('never drops below the visibility floor and shrugs off garbage input', () => {
+    expect(motionDurationScale(50, 50)).toBe(MIN_DURATION_SCALE);
+    expect(motionDurationScale(99, 10)).toBe(MIN_DURATION_SCALE); // count > total clamps
+    expect(motionDurationScale(-5, 10)).toBe(1);                  // negative clamps
+    expect(motionDurationScale(3, 0)).toBe(1);                    // empty target
   });
 });
 

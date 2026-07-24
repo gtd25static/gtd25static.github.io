@@ -89,7 +89,7 @@ export function MindmapCanvas({ mapId, background, smartColoring }: { mapId: str
   // Motion only starts once the map has been laid out and fitted, so opening a
   // map doesn't animate every node in from wherever it was first measured.
   const [motionReady, setMotionReady] = useState(false);
-  const { layout, exiting } = useAnimatedLayout(targetLayout, motionReady);
+  const { layout, exiting, durationScale } = useAnimatedLayout(targetLayout, motionReady);
 
   const [viewport, setViewport] = useState<Viewport>({ tx: 40, ty: 40, k: 1 });
   const viewportRef = useRef(viewport);
@@ -542,7 +542,9 @@ export function MindmapCanvas({ mapId, background, smartColoring }: { mapId: str
       tabIndex={0}
       onKeyDown={onKeyDown}
       className="relative flex-1 overflow-hidden outline-none"
-      style={background ? { background } : undefined}
+      // --mm-duration-scale keeps the CSS enter fade in step with the glide's
+      // per-transition speed (big reveals run faster than small toggles).
+      style={{ ...(background ? { background } : undefined), '--mm-duration-scale': durationScale } as React.CSSProperties}
       data-testid="mindmap-canvas"
     >
       <svg

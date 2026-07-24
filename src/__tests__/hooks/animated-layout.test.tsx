@@ -93,6 +93,39 @@ describe('useAnimatedLayout', () => {
     expect(result.current.layout.rects.get('a')!.y).toBeCloseTo(interrupted, 5);
   });
 
+  it('runs big reveals at a scaled-down duration, small re-layouts at full', () => {
+    const many = (yOff: number) => {
+      const boxes: Record<string, [number, number]> = { root: [0, yOff] };
+      for (let i = 0; i < 9; i++) boxes[`n${i}`] = [200, i * 40 + yOff];
+      return layout(boxes);
+    };
+    const { result, rerender } = renderHook(
+      ({ l }: { l: MindmapLayout }) => useAnimatedLayout(l, true),
+      { initialProps: { l: layout({ root: [0, 0] }) } },
+    );
+    runFrames(0);
+    expect(result.current.durationScale).toBe(1);
+
+    // Expand-all: 9 of 10 nodes enter at once → duration scales down…
+    const unfolded = many(0);
+    clock = 1000;
+    rerender({ l: unfolded });
+    expect(result.current.durationScale).toBeCloseTo(1 - 0.6 * (9 / 10), 5);
+    // …so at half of LAYOUT_MS the glide has already landed.
+    runFrames(1000 + LAYOUT_MS / 2);
+    expect(result.current.layout).toBe(unfolded);
+
+    // A pure re-layout of the same nodes runs at full duration again.
+    const moved = many(10);
+    clock = 2000;
+    rerender({ l: moved });
+    expect(result.current.durationScale).toBe(1);
+    runFrames(2000 + LAYOUT_MS / 2);
+    expect(result.current.layout).not.toBe(moved); // still mid-flight
+    runFrames(2000 + LAYOUT_MS);
+    expect(result.current.layout).toBe(moved);
+  });
+
   it('holds nodes that left at their last box, then drops them', () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     try {

@@ -5,6 +5,7 @@ import {
   LAYOUT_MS,
   easeGlide,
   lerpLayout,
+  motionDurationScale,
   prefersReducedMotion,
 } from '../lib/mindmap-motion';
 
@@ -15,6 +16,12 @@ export interface AnimatedLayout {
   layout: MindmapLayout;
   /** Nodes that just left, held at their last box while they animate out. */
   exiting: ReadonlyMap<string, LayoutRect>;
+  /**
+   * This transition's duration scale (1 = full LAYOUT_MS; smaller = faster,
+   * for big reveals). The canvas mirrors it into --mm-duration-scale so the
+   * CSS enter fade keeps pace with the glide.
+   */
+  durationScale: number;
 }
 
 /**
@@ -35,8 +42,24 @@ export function useAnimatedLayout(target: MindmapLayout, enabled: boolean): Anim
   const exitingRef = useRef(new Map<string, LayoutRect>());
   const exitTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
+  const lastTargetRef = useRef(target);
+  const scaleRef = useRef(1);
+
   const animate = enabled && !prefersReducedMotion();
   if (!animate) displayedRef.current = target; // keep the pass-through in sync for the next enable
+
+  // One scale per transition, fixed against what was on screen when the target
+  // arrived. It must NOT be recomputed per frame: entering nodes have boxes
+  // from the first glide frame, which would snap the scale back to 1 and
+  // retime the CSS fades mid-flight.
+  if (lastTargetRef.current !== target) {
+    lastTargetRef.current = target;
+    let entering = 0;
+    for (const id of target.rects.keys()) {
+      if (!displayedRef.current.rects.has(id)) entering++;
+    }
+    scaleRef.current = motionDurationScale(entering, target.rects.size);
+  }
 
   useEffect(() => {
     if (!animate) return;
@@ -58,8 +81,9 @@ export function useAnimatedLayout(target: MindmapLayout, enabled: boolean): Anim
     startedAtRef.current = performance.now();
     cancelAnimationFrame(rafRef.current);
 
+    const durationMs = LAYOUT_MS * scaleRef.current;
     const step = () => {
-      const p = Math.min(1, (performance.now() - startedAtRef.current) / LAYOUT_MS);
+      const p = Math.min(1, (performance.now() - startedAtRef.current) / durationMs);
       displayedRef.current = p >= 1 ? target : lerpLayout(fromRef.current, target, easeGlide(p));
       tick();
       if (p < 1) rafRef.current = requestAnimationFrame(step);
@@ -72,6 +96,6 @@ export function useAnimatedLayout(target: MindmapLayout, enabled: boolean): Anim
   useEffect(() => () => clearTimeout(exitTimerRef.current), []);
 
   return animate
-    ? { layout: displayedRef.current, exiting: exitingRef.current }
-    : { layout: target, exiting: NO_EXITS };
+    ? { layout: displayedRef.current, exiting: exitingRef.current, durationScale: scaleRef.current }
+    : { layout: target, exiting: NO_EXITS, durationScale: 1 };
 }

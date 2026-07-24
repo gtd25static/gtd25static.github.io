@@ -79,8 +79,10 @@ input[type="checkbox"] {
 }
 
 /* A node arriving (expand, create) and leaving (collapse, delete).
-   Durations mirror ENTER_MS/EXIT_MS in lib/mindmap-motion.ts — keep in sync. */
-.mm-node-in  { animation: mm-node-in 85ms var(--mm-ease-glide); }
+   Durations mirror ENTER_MS/EXIT_MS in lib/mindmap-motion.ts — keep in sync.
+   --mm-duration-scale (set per transition by MindmapCanvas) speeds big
+   reveals up so a whole-map unfold outpaces a three-node toggle. */
+.mm-node-in  { animation: mm-node-in calc(85ms * var(--mm-duration-scale, 1)) var(--mm-ease-glide); }
 .mm-node-out { animation: mm-node-out 70ms ease-in forwards; }
 
 /* The node: a nudge while its inline editor is open, and a fade between

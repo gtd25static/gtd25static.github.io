@@ -39,6 +39,23 @@ export function easeGlide(t: number): number {
   return 0.5 + 0.5 * b;
 }
 
+/** Floor for motionDurationScale — even a whole-map unfold stays visible. */
+export const MIN_DURATION_SCALE = 0.4;
+
+/**
+ * Duration scale for one transition: 1 for a pure re-layout, shrinking towards
+ * MIN_DURATION_SCALE as more of the target is nodes entering at once. A big
+ * reveal (expanding the root, expand-all) must not hold the user hostage for
+ * as long as a three-node toggle — at equal duration it reads as loading, not
+ * motion. Applied to the JS glide AND, via --mm-duration-scale, to the CSS
+ * enter fade; exits keep their fixed (already short) timing.
+ */
+export function motionDurationScale(enteringCount: number, targetCount: number): number {
+  if (targetCount <= 0) return 1;
+  const entering = Math.min(Math.max(enteringCount, 0), targetCount) / targetCount;
+  return Math.max(MIN_DURATION_SCALE, 1 - 0.6 * entering);
+}
+
 export function prefersReducedMotion(): boolean {
   return typeof window !== 'undefined' &&
     window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true;
