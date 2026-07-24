@@ -107,6 +107,8 @@ Business logic lives in hooks (`src/hooks/use-*.ts`), not in components or store
 
 All sync code lives in `src/sync/`. The design goal is: **multi-device sync, offline-first, end-to-end encrypted, with no server to operate**. The user's own GitHub repository is the storage tier; the GitHub Contents API is the wire protocol.
 
+> The section below describes how *this app* uses that backend. For the protocol itself — written to be reimplemented in another project or language, with the rationale behind each guard, the failure modes it prevents, and the constraints under which it is (and isn't) appropriate — see **[GITHUB_BACKEND.md](GITHUB_BACKEND.md)**.
+
 ### Files on the remote
 
 Stored at the root of the user-configured repo:
