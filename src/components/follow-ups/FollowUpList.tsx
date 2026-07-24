@@ -118,7 +118,7 @@ export function FollowUpList({ listId, listName }: Props) {
           {/* Header */}
           <div className="mb-1 flex items-center justify-between gap-2">
             <div className="flex min-w-0 items-center gap-2">
-              <h2 className="truncate text-lg font-normal text-zinc-800 dark:text-zinc-200">{listName}</h2>
+              <h2 data-redact className="truncate text-lg font-normal text-zinc-800 dark:text-zinc-200">{listName}</h2>
               {snoozed.length > 0 && (
                 <button
                   type="button"

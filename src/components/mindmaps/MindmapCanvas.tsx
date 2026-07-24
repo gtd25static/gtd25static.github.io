@@ -638,7 +638,7 @@ export function MindmapCanvas({ mapId, background, smartColoring }: { mapId: str
           {drag && (
             <g transform={`translate(${drag.x + 14},${drag.y + 14})`} className="pointer-events-none opacity-75">
               <rect width={150} height={32} rx={10} className="fill-accent-50 stroke-accent-500 dark:fill-accent-900" strokeWidth={1.5} />
-              <text x={10} y={20} className="fill-zinc-700 text-xs dark:fill-zinc-200">
+              <text data-redact x={10} y={20} className="fill-zinc-700 text-xs dark:fill-zinc-200">
                 {truncate(mdToPlainText(nodesById.get(drag.id)?.label ?? ''), 20)}
               </text>
             </g>

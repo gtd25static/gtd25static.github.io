@@ -33,7 +33,7 @@ export function BlockedBanner() {
                 <rect x="7.2" y="6" width="1.6" height="4" rx="0.8" fill="white" />
                 <circle cx="8" cy="12" r="0.9" fill="white" />
               </svg>
-              <span className="max-w-[160px] truncate text-zinc-600 dark:text-zinc-300">
+              <span data-redact className="max-w-[160px] truncate text-zinc-600 dark:text-zinc-300">
                 {item.title}
               </span>
               {item.reason === 'subtask' && (

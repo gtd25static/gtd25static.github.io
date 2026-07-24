@@ -41,7 +41,7 @@ export function MindmapEditor({ mapId }: { mapId: string }) {
             <path d="M15 18l-6-6 6-6" />
           </svg>
         </button>
-        <h1 className="min-w-0 flex-1 truncate text-base font-medium text-zinc-800 dark:text-zinc-100">
+        <h1 data-redact className="min-w-0 flex-1 truncate text-base font-medium text-zinc-800 dark:text-zinc-100">
           {map.name}
         </h1>
         <span className="shrink-0 text-xs text-zinc-400">{nodes.length} node(s)</span>

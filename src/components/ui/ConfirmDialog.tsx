@@ -75,7 +75,8 @@ export function ConfirmDialogContainer() {
         className="px-6 py-5"
         onSubmit={(e) => { e.preventDefault(); handleConfirm(); }}
       >
-        <p className="text-sm text-zinc-700 dark:text-zinc-300">{request.message}</p>
+        {/* Callers embed the item's name ("Delete “Q3 review”?"). */}
+        <p data-redact className="text-sm text-zinc-700 dark:text-zinc-300">{request.message}</p>
         {request.typeToConfirm && (
           <div className="mt-3">
             <Input

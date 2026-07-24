@@ -66,9 +66,19 @@ export function AppShell() {
     }
   }, [selectedListId, lists]);
 
+  // Redact mode is flagged on <body>, deliberately NOT on the shell div below:
+  // modals (top layer via showModal), portalled menus, toasts and the drag
+  // overlay are all painted outside this subtree, so a class here could never
+  // reach them — those were exactly the places still showing plaintext. The
+  // selector stays `.gtd-redacted [data-redact]`.
+  useEffect(() => {
+    document.body.classList.toggle('gtd-redacted', redacted);
+    return () => document.body.classList.remove('gtd-redacted');
+  }, [redacted]);
+
   return (
     <DndProvider>
-    <div className={`flex h-screen overflow-hidden bg-white dark:bg-zinc-900 ${redacted ? 'gtd-redacted' : ''}`}>
+    <div className="flex h-screen overflow-hidden bg-white dark:bg-zinc-900">
       {/* Mobile overlay */}
       {sidebarOpen && (
         <div

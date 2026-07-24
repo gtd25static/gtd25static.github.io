@@ -84,16 +84,50 @@ describe('redact mode', () => {
 // If someone drops a tag in a refactor, this names the file.
 describe('redact sweep contract', () => {
   const TAGGED = [
+    // Task/follow-up content
     'src/components/tasks/TaskCard.tsx',
     'src/components/tasks/InboxCard.tsx',
     'src/components/tasks/SearchResults.tsx',
+    'src/components/tasks/SpecialListView.tsx',
+    'src/components/tasks/TaskListView.tsx',
+    'src/components/tasks/TaskForm.tsx',
+    'src/components/tasks/InlineTaskForm.tsx',
+    'src/components/tasks/QuickCapture.tsx',
+    'src/components/tasks/MergeModal.tsx',
+    'src/components/tasks/MergeSuggestionsCard.tsx',
+    'src/components/tasks/BulkListPicker.tsx',
     'src/components/follow-ups/FollowUpCard.tsx',
+    'src/components/follow-ups/FollowUpList.tsx',
+    'src/components/follow-ups/DiscussionHistory.tsx',
     'src/components/subtasks/SubtaskItem.tsx',
+    'src/components/subtasks/SubtaskForm.tsx',
     'src/components/focus/FocusTaskCard.tsx',
-    'src/components/shared-folder/SharedItemCard.tsx',
+    'src/components/insights/InsightsView.tsx',
+    'src/components/trash/TrashModal.tsx',
+    // Always-visible chrome — the reminders strip was the reported leak
+    'src/components/banners/TopBanner.tsx',
+    'src/components/banners/FollowUpsReadyBanner.tsx',
+    'src/components/banners/BlockedBanner.tsx',
+    'src/components/banners/DueSoonBanner.tsx',
+    'src/components/banners/FocusNudgeToast.tsx',
+    'src/components/banners/ShareTargetPrompt.tsx',
     'src/components/layout/Sidebar.tsx',
+    'src/components/layout/DndProvider.tsx',
+    // Shared surfaces that render content outside any card
+    'src/components/ui/Toast.tsx',
+    'src/components/ui/ConfirmDialog.tsx',
+    'src/components/ui/ContextMenu.tsx',
+    'src/components/shared-folder/SharedItemCard.tsx',
+    'src/components/shared-folder/SharedImagePreview.tsx',
+    'src/components/shared-folder/PasteUploadDialog.tsx',
+    'src/components/shared-folder/CreateSnippetForm.tsx',
     'src/components/mindmaps/MindmapNodeView.tsx',
     'src/components/mindmaps/MindmapBrowser.tsx',
+    'src/components/mindmaps/MindmapCanvas.tsx',
+    'src/components/mindmaps/MindmapEditor.tsx',
+    'src/components/mindmaps/MindmapStyleToolbar.tsx',
+    'src/components/mindmaps/MoveToFolderModal.tsx',
+    'src/components/mindmaps/OutlineImportModal.tsx',
   ];
 
   it('every content component is tagged and the CSS rule exists', async () => {
@@ -103,6 +137,15 @@ describe('redact sweep contract', () => {
     }
     const css = readFileSync('src/styles/index.css', 'utf8');
     expect(css).toContain('.gtd-redacted [data-redact]');
-    expect(readFileSync('src/components/layout/AppShell.tsx', 'utf8')).toContain("redacted ? 'gtd-redacted'");
+  });
+
+  // The flag must live on <body>: modals open in the top layer and menus/toasts
+  // are portalled, so a class on the shell div can never reach them — that was
+  // why tagged content inside dialogs still rendered in the clear.
+  it('flags redact mode on <body>, not on the shell subtree', async () => {
+    const { readFileSync } = await import('node:fs');
+    const shell = readFileSync('src/components/layout/AppShell.tsx', 'utf8');
+    expect(shell).toContain("document.body.classList.toggle('gtd-redacted', redacted)");
+    expect(shell).not.toContain("${redacted ? 'gtd-redacted' : ''}");
   });
 });

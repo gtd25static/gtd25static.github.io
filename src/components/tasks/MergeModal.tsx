@@ -95,7 +95,7 @@ export function MergeModal({ group, listType, onClose, onMerged }: Props) {
                 className="accent-accent-600"
                 aria-label={`Keep "${t.title}"`}
               />
-              <span className="min-w-0 flex-1 truncate text-sm text-zinc-700 dark:text-zinc-200">
+              <span data-redact className="min-w-0 flex-1 truncate text-sm text-zinc-700 dark:text-zinc-200">
                 {t.title || '(untitled)'}
               </span>
               {isSurvivor && (
@@ -118,9 +118,9 @@ export function MergeModal({ group, listType, onClose, onMerged }: Props) {
       {preview && (
         <div className="mb-4 rounded-lg bg-zinc-50 p-3 text-sm dark:bg-zinc-800/50">
           <div className="mb-1 text-xs font-medium uppercase tracking-wide text-zinc-400">Result</div>
-          <div className="font-medium text-zinc-800 dark:text-zinc-100">{preview.title || '(untitled)'}</div>
+          <div data-redact className="font-medium text-zinc-800 dark:text-zinc-100">{preview.title || '(untitled)'}</div>
           {preview.description && (
-            <p className="mt-1 line-clamp-4 whitespace-pre-wrap text-zinc-600 dark:text-zinc-300">
+            <p data-redact className="mt-1 line-clamp-4 whitespace-pre-wrap text-zinc-600 dark:text-zinc-300">
               {preview.description}
             </p>
           )}

@@ -68,7 +68,7 @@ function TrashContent() {
           <span className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium ${typeBadgeColors[item.type]}`}>
             {typeLabels[item.type]}
           </span>
-          <div className="flex-1 min-w-0">
+          <div data-redact className="flex-1 min-w-0">
             <span className="text-sm text-zinc-700 dark:text-zinc-200 truncate block">{item.title}</span>
             {item.parentTitle && (
               <span className="text-xs text-zinc-400 truncate block">in {item.parentTitle}</span>

@@ -19,6 +19,7 @@ export function CreateSnippetForm({ onDone }: { onDone: () => void }) {
 
   return (
     <form
+      data-redact
       onSubmit={(e) => { e.preventDefault(); handleSave(); }}
       className="space-y-2 rounded-xl border border-zinc-200 bg-zinc-50 p-3 dark:border-zinc-700 dark:bg-zinc-800"
     >

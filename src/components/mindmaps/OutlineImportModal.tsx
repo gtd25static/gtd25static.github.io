@@ -58,6 +58,7 @@ export function OutlineImportModal({ open, onClose, folderId, onImported }: Prop
           markmap-style) — or pick a .md file.
         </p>
         <textarea
+          data-redact
           value={text}
           onChange={(e) => setText(e.target.value)}
           placeholder={'# My map\n\n- First idea\n  - Detail\n- Second idea'}

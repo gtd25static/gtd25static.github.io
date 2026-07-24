@@ -94,8 +94,11 @@ export function SharedImagePreview({ item, filename, onClose }: {
   }
 
   return (
-    <Modal open onClose={onClose} title={item.name || 'Image'}>
+    // The filename is content, and the Modal header renders outside the redact
+    // wrapper below — so it stays generic and the name is shown in the body.
+    <Modal open onClose={onClose} title="Image preview">
       <div className="space-y-4" data-redact>
+        <p className="truncate text-sm font-medium text-zinc-700 dark:text-zinc-200">{item.name}</p>
         <div className="flex min-h-40 items-center justify-center rounded-lg border border-zinc-200 bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900/60">
           {url ? (
             <img src={url} alt={item.name} className="max-h-[65vh] max-w-full rounded-lg object-contain" />

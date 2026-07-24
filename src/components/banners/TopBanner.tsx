@@ -97,7 +97,7 @@ function DueSoonSection() {
                     onClick={() => handleClick(item)}
                     className="rounded-full px-2 py-1 md:py-0.5 text-sm md:text-xs hover:bg-zinc-100 dark:hover:bg-zinc-800"
                   >
-                    <span className="max-w-[120px] truncate text-zinc-600 dark:text-zinc-300">
+                    <span data-redact className="max-w-[120px] truncate text-zinc-600 dark:text-zinc-300">
                       {item.parentTitle ? `${item.parentTitle} > ` : ''}{item.title}
                     </span>
                     {suffix && <span className={`ml-1 ${bucket.colorClass}`}>{suffix}</span>}

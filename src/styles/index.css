@@ -186,8 +186,13 @@ input[type="checkbox"] {
 }
 
 /* --- Paranoid shoulder-surfing redact mode ----------------------------------
-   While .gtd-redacted is on the shell root, everything tagged [data-redact]
-   blurs; hovering or keyboard-focusing an element reveals just that one.
+   While .gtd-redacted is on <body> (set by AppShell), everything tagged
+   [data-redact] blurs; hovering or keyboard-focusing an element reveals just
+   that one. The class sits on <body> so the rule also reaches modals in the
+   top layer, portalled menus and the drag overlay.
+   NOTE: a filter on an ancestor does NOT blur a top-layer <dialog>, so content
+   inside a modal must carry [data-redact] itself — tagging the card that opens
+   it is not enough.
    Deterrence for working in public — the DOM still holds the plaintext. */
 .gtd-redacted [data-redact] {
   filter: blur(6px);

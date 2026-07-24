@@ -16,7 +16,7 @@ export function ShareTargetPrompt({ pendingShare, resolveShare, discardShare, po
     <Modal open onClose={postponeShare} title="Save shared content">
       <div className="space-y-4">
         {hasFiles && (
-          <ul className="max-h-32 space-y-1 overflow-auto rounded-lg border border-zinc-200 bg-zinc-50 p-2.5 dark:border-zinc-700 dark:bg-zinc-800/60">
+          <ul data-redact className="max-h-32 space-y-1 overflow-auto rounded-lg border border-zinc-200 bg-zinc-50 p-2.5 dark:border-zinc-700 dark:bg-zinc-800/60">
             {files.map((f, i) => (
               <li key={i} className="truncate text-sm text-zinc-700 dark:text-zinc-200">
                 {f.name} <span className="text-xs text-zinc-400">({formatBytes(f.size)})</span>
@@ -25,7 +25,7 @@ export function ShareTargetPrompt({ pendingShare, resolveShare, discardShare, po
           </ul>
         )}
         {preview && (
-          <p className="line-clamp-3 break-words rounded-lg border border-zinc-200 bg-zinc-50 p-2.5 text-sm text-zinc-600 dark:border-zinc-700 dark:bg-zinc-800/60 dark:text-zinc-300">
+          <p data-redact className="line-clamp-3 break-words rounded-lg border border-zinc-200 bg-zinc-50 p-2.5 text-sm text-zinc-600 dark:border-zinc-700 dark:bg-zinc-800/60 dark:text-zinc-300">
             {preview}
           </p>
         )}

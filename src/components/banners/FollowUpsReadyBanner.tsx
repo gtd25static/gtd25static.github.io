@@ -28,7 +28,7 @@ export function FollowUpsReadyBanner() {
             className="flex items-center gap-1.5 rounded-full px-2.5 py-1 text-sm md:text-xs hover:bg-zinc-100 dark:hover:bg-zinc-800"
             title={item.listName}
           >
-            <span className="max-w-[160px] truncate text-zinc-600 dark:text-zinc-300">{item.title}</span>
+            <span data-redact className="max-w-[160px] truncate text-zinc-600 dark:text-zinc-300">{item.title}</span>
           </button>
         ))}
         {items.length > 5 && (

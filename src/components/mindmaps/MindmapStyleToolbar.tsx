@@ -455,7 +455,7 @@ function SavedPalettes({ palettes, onSave, onRemove }: {
           {palettes.map((p) => (
             <li key={p.id} className="flex items-center gap-2 px-2 py-1 text-xs text-zinc-600 dark:text-zinc-300">
               <span className="h-4 w-4 shrink-0 rounded border-2" style={{ background: p.bg, borderColor: p.border }} />
-              <span className="min-w-0 flex-1 truncate">{p.name}</span>
+              <span data-redact className="min-w-0 flex-1 truncate">{p.name}</span>
               <button
                 type="button"
                 aria-label={`Delete preset ${p.name}`}

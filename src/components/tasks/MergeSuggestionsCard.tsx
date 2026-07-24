@@ -35,7 +35,7 @@ export function MergeSuggestionsCard({ listId, listType }: Props) {
       <ul className="flex flex-col gap-1">
         {visible.map((g) => (
           <li key={g.signature} className="flex items-center gap-2 text-sm">
-            <span className="min-w-0 flex-1 truncate text-zinc-600 dark:text-zinc-300">
+            <span data-redact className="min-w-0 flex-1 truncate text-zinc-600 dark:text-zinc-300">
               {g.tasks.map((t) => t.title || '(untitled)').join('  ·  ')}
             </span>
             <button

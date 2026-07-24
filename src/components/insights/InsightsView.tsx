@@ -95,7 +95,7 @@ function BarRow({
   const bar = tone === 'accent' ? 'bg-accent-500' : 'bg-zinc-300 dark:bg-zinc-600';
   return (
     <div className="flex items-center gap-3 py-1">
-      <span className="w-28 shrink-0 truncate text-sm text-zinc-600 dark:text-zinc-300" title={label}>
+      <span data-redact className="w-28 shrink-0 truncate text-sm text-zinc-600 dark:text-zinc-300" title={label}>
         {label}
       </span>
       <div className="h-2 flex-1 overflow-hidden rounded-full bg-zinc-100 dark:bg-zinc-800">

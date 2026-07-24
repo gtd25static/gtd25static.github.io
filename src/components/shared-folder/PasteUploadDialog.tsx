@@ -112,7 +112,7 @@ export function PasteUploadDialog({ payload, onClose }: Props) {
                 key={i}
                 className="flex items-center justify-between rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700"
               >
-                <span className="truncate text-zinc-700 dark:text-zinc-300">{f.name || `file-${i + 1}`}</span>
+                <span data-redact className="truncate text-zinc-700 dark:text-zinc-300">{f.name || `file-${i + 1}`}</span>
                 <span className="ml-3 shrink-0 text-xs text-zinc-400">{formatBytes(f.size)}</span>
               </div>
             ))}
@@ -121,7 +121,7 @@ export function PasteUploadDialog({ payload, onClose }: Props) {
 
         {payload.kind === 'link' && (
           <>
-            <p className="break-all rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 font-mono text-xs text-zinc-700 dark:border-zinc-700 dark:bg-zinc-800/60 dark:text-zinc-300">
+            <p data-redact className="break-all rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 font-mono text-xs text-zinc-700 dark:border-zinc-700 dark:bg-zinc-800/60 dark:text-zinc-300">
               {payload.url}
             </p>
             <Input label="Title (optional)" value={name} onChange={(e) => setName(e.target.value)} placeholder={payload.url} />
@@ -130,7 +130,7 @@ export function PasteUploadDialog({ payload, onClose }: Props) {
 
         {payload.kind === 'snippet' && (
           <>
-            <pre className="max-h-48 overflow-y-auto whitespace-pre-wrap break-words rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-xs text-zinc-700 dark:border-zinc-700 dark:bg-zinc-800/60 dark:text-zinc-300">
+            <pre data-redact className="max-h-48 overflow-y-auto whitespace-pre-wrap break-words rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-xs text-zinc-700 dark:border-zinc-700 dark:bg-zinc-800/60 dark:text-zinc-300">
               {payload.text.length > SNIPPET_PREVIEW_CHARS
                 ? `${payload.text.slice(0, SNIPPET_PREVIEW_CHARS)}… (+${payload.text.length - SNIPPET_PREVIEW_CHARS} chars)`
                 : payload.text}

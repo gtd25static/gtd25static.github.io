@@ -86,7 +86,9 @@ export function TaskForm({ open, onClose, onSubmit, initial }: Props) {
 
   return (
     <Modal open={open} onClose={onClose} title={initial ? 'Edit Task' : 'New Task'}>
-      <form onSubmit={handleSubmit} className="space-y-3">
+      {/* The whole form is content (title, description, links); focusing a
+          field reveals it, so editing is unaffected. */}
+      <form data-redact onSubmit={handleSubmit} className="space-y-3">
         <div>
           <Input label="Title" value={title} onChange={(e) => setTitle(e.target.value.slice(0, MAX_TITLE_LENGTH))} autoFocus required maxLength={MAX_TITLE_LENGTH} />
           {title.length > MAX_TITLE_LENGTH * 0.9 && (

@@ -68,7 +68,7 @@ export function InlineTaskForm({ onSubmit, onCancel }: Props) {
   }
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-2 py-3">
+    <form data-redact onSubmit={handleSubmit} className="space-y-2 py-3">
       <div className="flex gap-2">
         <textarea
           placeholder="Task title"

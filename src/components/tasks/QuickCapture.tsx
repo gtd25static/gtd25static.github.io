@@ -70,7 +70,7 @@ export function QuickCapture() {
       />
       {/* Floating input */}
       <div className="fixed left-1/2 top-1/4 z-[91] w-full max-w-lg -translate-x-1/2 px-4">
-        <form onSubmit={handleSubmit} className="flex items-center gap-2 rounded-xl border border-zinc-300 bg-white p-2 shadow-2xl dark:border-zinc-600 dark:bg-zinc-800">
+        <form data-redact onSubmit={handleSubmit} className="flex items-center gap-2 rounded-xl border border-zinc-300 bg-white p-2 shadow-2xl dark:border-zinc-600 dark:bg-zinc-800">
           <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" className="shrink-0 ml-1 text-accent-500">
             <path d="M10 4v12M4 10h12" strokeLinecap="round" />
           </svg>

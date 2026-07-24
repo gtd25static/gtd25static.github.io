@@ -179,7 +179,7 @@ export function TaskListView() {
         <div className="mx-auto w-full max-w-3xl lg:max-w-4xl xl:max-w-5xl px-4 py-4">
           {/* List header */}
           <div className="mb-1 flex items-center justify-between">
-            <h2 className="text-lg font-normal text-zinc-800 dark:text-zinc-200">{selectedList.name}</h2>
+            <h2 data-redact className="text-lg font-normal text-zinc-800 dark:text-zinc-200">{selectedList.name}</h2>
             <DropdownMenu
               trigger={
                 <svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor" className="text-zinc-400">

@@ -111,6 +111,7 @@ function ListItem({ list, selected, onSelect, highlight, focused, count, allList
           </svg>
         )}
         <input
+          data-redact
           value={editName}
           onChange={(e) => setEditName(e.target.value.slice(0, MAX_LIST_NAME_LENGTH))}
           maxLength={MAX_LIST_NAME_LENGTH}
@@ -384,6 +385,7 @@ export function Sidebar() {
             ref={searchRef}
             type="text"
             data-search-input
+            data-redact
             placeholder="Search..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}

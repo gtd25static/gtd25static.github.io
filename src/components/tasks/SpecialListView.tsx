@@ -50,9 +50,9 @@ function SpecialItemRow({ item }: { item: SpecialItem }) {
   return (
     <div className="group flex items-center gap-2 rounded-lg px-3 py-3 md:py-2 hover:bg-zinc-50 dark:hover:bg-zinc-800/50">
       <button onClick={navigateToSource} className="flex-1 min-w-0 text-left">
-        <span className="text-sm text-zinc-800 dark:text-zinc-200">{item.title}</span>
+        <span data-redact className="text-sm text-zinc-800 dark:text-zinc-200">{item.title}</span>
         {item.parentTitle && (
-          <span className="ml-1.5 text-xs text-zinc-400 dark:text-zinc-500">
+          <span data-redact className="ml-1.5 text-xs text-zinc-400 dark:text-zinc-500">
             in {item.parentTitle}
           </span>
         )}

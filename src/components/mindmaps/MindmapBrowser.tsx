@@ -124,6 +124,7 @@ export function MindmapBrowser() {
               <span key={f.id} className="flex min-w-0 items-center gap-1">
                 <span className="text-zinc-300 dark:text-zinc-600">›</span>
                 <button
+                  data-redact
                   onClick={() => setCurrentFolderId(f.id)}
                   className={`truncate rounded px-1 py-0.5 ${i === breadcrumb.length - 1 ? 'font-medium text-zinc-800 dark:text-zinc-100' : 'text-zinc-500 hover:text-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-200'}`}
                 >
@@ -286,6 +287,7 @@ function NameModal({ dialog, onClose, currentFolderId, onOpenMap }: {
         className="space-y-4"
       >
         <Input
+          data-redact
           autoFocus
           value={name}
           onChange={(e) => setName(e.target.value)}

@@ -109,7 +109,8 @@ export function ToastContainer() {
             }}
             className={`flex items-center gap-3 rounded-lg px-4 py-2.5 text-sm font-medium text-white shadow-lg ${colors[t.type]}`}
           >
-            {t.message}
+            {/* Toast copy embeds list/task names ("Moved to «Work»"). */}
+            <span data-redact>{t.message}</span>
             {t.onUndo && (
               <button
                 onClick={() => {

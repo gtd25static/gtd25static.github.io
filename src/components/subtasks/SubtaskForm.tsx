@@ -36,7 +36,7 @@ export function SubtaskForm({ onSubmit, onCancel, initial }: Props) {
   }
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-2">
+    <form data-redact onSubmit={handleSubmit} className="space-y-2">
       <div className="flex gap-2">
         <textarea
           placeholder="Subtask title"

@@ -28,7 +28,7 @@ export function BulkListPicker({ lists, onSelect, onClose }: Props) {
           onClick={() => onSelect(list.id)}
           className="w-full px-3 py-1.5 text-left text-sm text-zinc-700 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-700"
         >
-          {list.name}
+          <span data-redact>{list.name}</span>
         </button>
       ))}
       {lists.length === 0 && (

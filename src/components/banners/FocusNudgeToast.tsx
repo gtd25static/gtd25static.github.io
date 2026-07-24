@@ -61,11 +61,11 @@ export function FocusNudgeToast() {
         <div className="mb-3 inline-flex rounded-full bg-accent-50 px-2.5 py-1 text-xs font-medium text-accent-700 dark:bg-accent-950 dark:text-accent-300">
           {labelFor(nudge.kind)}
         </div>
-        <h2 id="focus-nudge-title" className="text-xl font-semibold text-zinc-900 dark:text-zinc-100">
+        <h2 data-redact id="focus-nudge-title" className="text-xl font-semibold text-zinc-900 dark:text-zinc-100">
           {displayTitle}
         </h2>
         {nudge.subtaskTitle && (
-          <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
+          <p data-redact className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
             in {nudge.taskTitle}
           </p>
         )}

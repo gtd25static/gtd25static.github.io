@@ -121,7 +121,7 @@ export function DndProvider({ children }: { children: ReactNode }) {
       <DragOverlay dropAnimation={null}>
         {activeDrag ? (
           <div className="rounded-lg border border-accent-500/50 bg-white px-3 py-2 shadow-xl dark:bg-zinc-800 dark:border-accent-400/50 max-w-xs">
-            <span className="text-sm text-zinc-800 dark:text-zinc-200 line-clamp-1">
+            <span data-redact className="text-sm text-zinc-800 dark:text-zinc-200 line-clamp-1">
               {activeDrag.data.title ?? activeDrag.id}
             </span>
           </div>

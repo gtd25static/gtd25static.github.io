@@ -137,6 +137,7 @@ export function DiscussionHistory({ task, open, onClose }: Props) {
                 {editingId === entry.id ? (
                   <div className="mt-1.5">
                     <textarea
+                      data-redact
                       value={editText}
                       onChange={(e) => setEditText(e.target.value)}
                       onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); saveEdit(entry.id); } }}
@@ -160,7 +161,7 @@ export function DiscussionHistory({ task, open, onClose }: Props) {
                     </div>
                   </div>
                 ) : entry.note ? (
-                  <p className="mt-0.5 whitespace-pre-wrap break-words text-sm text-zinc-700 dark:text-zinc-300">
+                  <p data-redact className="mt-0.5 whitespace-pre-wrap break-words text-sm text-zinc-700 dark:text-zinc-300">
                     {entry.note}
                   </p>
                 ) : (
@@ -174,6 +175,7 @@ export function DiscussionHistory({ task, open, onClose }: Props) {
         <div className="rounded-lg border border-dashed border-zinc-300 bg-white p-3 dark:border-zinc-600 dark:bg-zinc-900/40">
           <div className="mb-1 text-xs font-medium text-zinc-500 dark:text-zinc-400">Add an entry</div>
           <textarea
+            data-redact
             value={newNote}
             onChange={(e) => setNewNote(e.target.value)}
             onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); if (newNote.trim() || newDate) addEntry(); } }}

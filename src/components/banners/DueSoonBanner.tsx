@@ -43,7 +43,7 @@ export function DueSoonBanner() {
               className="flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs hover:bg-zinc-100 dark:hover:bg-zinc-800"
             >
               <span className={`font-medium ${dueDateColor(item.dueDate)}`}>{label}</span>
-              <span className="max-w-[120px] truncate text-zinc-500 dark:text-zinc-300">
+              <span data-redact className="max-w-[120px] truncate text-zinc-500 dark:text-zinc-300">
                 {item.parentTitle ? `${item.parentTitle} > ` : ''}{item.title}
               </span>
             </button>

@@ -68,7 +68,8 @@ export function ContextMenu({ position, items, onClose }: Props) {
               }
             }}
           >
-            {item.label}
+            {/* "Send to list" submenus are built from list names. */}
+            <span data-redact>{item.label}</span>
             {item.children && (
               <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" className="opacity-50">
                 <path d="M6 3l5 5-5 5z" />
@@ -126,7 +127,7 @@ function Submenu({
             onClose();
           }}
         >
-          {item.label}
+          <span data-redact>{item.label}</span>
         </button>
       ))}
     </div>
