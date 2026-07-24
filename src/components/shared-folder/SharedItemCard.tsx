@@ -5,6 +5,7 @@ import { getSharedBlobBytes } from '../../sync/shared-blobs';
 import { extractHostname, sanitizeUrl } from '../../lib/link-utils';
 import { toast } from '../ui/Toast';
 import { confirmDialog } from '../ui/ConfirmDialog';
+import { SharedImagePreview } from './SharedImagePreview';
 
 // Common MIME → extension fallbacks, used only when the stored name lacks one
 // (e.g. snippets named "notes", or a file dropped without an extension).
@@ -60,6 +61,10 @@ function TypeIcon({ type }: { type: SharedItem['type'] }) {
 
 export function SharedItemCard({ item }: { item: SharedItem }) {
   const [busy, setBusy] = useState(false);
+  const [previewOpen, setPreviewOpen] = useState(false);
+  // Images preview in an overlay on click (Copy/Download from there); every
+  // other file type keeps the direct download.
+  const isImage = item.type === 'file' && !!item.mimeType?.startsWith('image/');
 
   async function download() {
     if (!item.blobId) return;
@@ -111,10 +116,10 @@ export function SharedItemCard({ item }: { item: SharedItem }) {
           </a>
         ) : (
           <button
-            onClick={download}
+            onClick={() => { if (isImage) setPreviewOpen(true); else void download(); }}
             disabled={busy}
             className="block max-w-full truncate text-left text-sm font-medium text-zinc-800 hover:underline disabled:opacity-50 dark:text-zinc-100"
-            title={`Download ${downloadName(item)}`}
+            title={isImage ? `Preview ${item.name}` : `Download ${downloadName(item)}`}
           >
             {item.name}
           </button>
@@ -156,6 +161,9 @@ export function SharedItemCard({ item }: { item: SharedItem }) {
           <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" className="opacity-25" />
           <path d="M12 2a10 10 0 0110 10" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
         </svg>
+      )}
+      {previewOpen && (
+        <SharedImagePreview item={item} filename={downloadName(item)} onClose={() => setPreviewOpen(false)} />
       )}
     </div>
   );
