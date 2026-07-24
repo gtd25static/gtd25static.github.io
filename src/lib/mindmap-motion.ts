@@ -7,12 +7,15 @@ import type { LayoutRect, MindmapLayout } from './mindmap-layout';
 // is what lets the edges follow: a path's `d` is not reliably transitionable,
 // but recomputing endpoints from interpolated boxes always is.
 
+// Durations are deliberately short (user-tuned): the earlier 360/340/270ms
+// tuning was compensating for a bug that hid the animations entirely — once
+// visible, it read as sluggish. Keep the three in step if retuning.
 /** Node boxes gliding to their new places after a re-layout. */
-export const LAYOUT_MS = 360;
+export const LAYOUT_MS = 90;
 /** A node appearing (expand, create). */
-export const ENTER_MS = 340;
+export const ENTER_MS = 85;
 /** A node leaving (collapse, delete) — quicker, exits shouldn't hold you up. */
-export const EXIT_MS = 270;
+export const EXIT_MS = 70;
 
 // Strength of the settle overshoot on the tail (larger = more bounce past the
 // target before it settles). 1.7 ≈ a ~5% overshoot of the move distance.

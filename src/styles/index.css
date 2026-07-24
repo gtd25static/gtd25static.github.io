@@ -78,13 +78,14 @@ input[type="checkbox"] {
   transform-origin: center;
 }
 
-/* A node arriving (expand, create) and leaving (collapse, delete). */
-.mm-node-in  { animation: mm-node-in 340ms var(--mm-ease-glide); }
-.mm-node-out { animation: mm-node-out 270ms ease-in forwards; }
+/* A node arriving (expand, create) and leaving (collapse, delete).
+   Durations mirror ENTER_MS/EXIT_MS in lib/mindmap-motion.ts — keep in sync. */
+.mm-node-in  { animation: mm-node-in 85ms var(--mm-ease-glide); }
+.mm-node-out { animation: mm-node-out 70ms ease-in forwards; }
 
 /* The node: a nudge while its inline editor is open, and a fade between
    palettes so switching preset (or previewing one) doesn't snap. */
-.mm-node-box { transition: transform 230ms var(--mm-ease-glide); }
+.mm-node-box { transition: transform 60ms var(--mm-ease-glide); }
 .mm-node-editing { transform: scale(1.03); }
 .mm-node-shape { transition: fill 150ms ease, stroke 150ms ease; }
 
