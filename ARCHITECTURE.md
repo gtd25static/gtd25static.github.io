@@ -219,6 +219,8 @@ Vitest with jsdom and `fake-indexeddb`. Setup: `vitest.config.ts`, `src/__tests_
 - The git commit hash is embedded into the bundle for in-app version display.
 - `vite-plugin-pwa` configures the service worker and manifest. Workbox precaches built assets and serves `index.html` as the SPA fallback. The app is installable, and a Web Share Target maps to the `/capture` route.
 
+> For the update flow — new-version detection, the prompt, `SKIP_WAITING` activation, the visible commit hash, and the service-worker caching pitfalls each guard exists to prevent — see **[PWA_UPDATE_PROTOCOL.md](PWA_UPDATE_PROTOCOL.md)**, written to be reused by other PWAs.
+
 ## Security Posture
 
 - E2EE on every sensitive field before it leaves the device (AES-GCM, 256-bit key from PBKDF2-600k).
