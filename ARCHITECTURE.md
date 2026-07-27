@@ -229,6 +229,12 @@ Vitest with jsdom and `fake-indexeddb`. Setup: `vitest.config.ts`, `src/__tests_
 
 > For the update flow — new-version detection, the prompt, `SKIP_WAITING` activation, the visible commit hash, and the service-worker caching pitfalls each guard exists to prevent — see **[PWA_UPDATE_PROTOCOL.md](PWA_UPDATE_PROTOCOL.md)**, written to be reused by other PWAs.
 
+### Reliability guards worth knowing about
+
+- **Nothing adopts the remote over local data implicitly.** The "snapshot but no changelog" bootstrap refuses when this device has data (it used to clear the tables and the pending changelog), and every destructive path — adopt-remote, restore, import — takes a device-local safety copy first (`src/db/backup.ts`, `Settings → Backups`). Those copies include mindmaps and, on a Paranoid device, are encrypted with the vault's at-rest key rather than skipped.
+- **Merge order is only as good as the clock.** Every field merge is LWW on the writing device's `Date.now()`, so `src/lib/clock-skew.ts` compares the `Date` header of each GitHub response against the local clock and reports drift past 5 minutes. Timestamps are never rewritten — that would break convergence between devices that disagree.
+- **A schema upgrade in another tab is announced.** Dexie closes this tab's connection so the upgrade isn't blocked; `onDatabaseSupersededByOtherTab` turns that into a reload prompt instead of silently failing queries.
+
 ## Security Posture
 
 - E2EE on every sensitive field before it leaves the device (AES-GCM, 256-bit key from PBKDF2-600k).

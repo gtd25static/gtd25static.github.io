@@ -7,7 +7,8 @@ vi.mock('../../sync/github-api', () => ({ getFile: vi.fn(), putFile: vi.fn() }))
 
 import { db } from '../../db';
 import { resetDb } from '../helpers/db-helpers';
-import { createLocalBackup } from '../../db/backup';
+import { createLocalBackup, readLocalBackup } from '../../db/backup';
+import { enableParanoid, __resetVaultStateForTests } from '../../db/vault';
 import { maybeCreateBackups, __resetForTesting } from '../../sync/remote-backups';
 import { getFile, putFile } from '../../sync/github-api';
 import type { Task } from '../../db/models';
@@ -31,6 +32,7 @@ async function aesKey(): Promise<CryptoKey> {
 
 beforeEach(async () => {
   await resetDb();
+  __resetVaultStateForTests();
   localStorage.clear();
   vi.clearAllMocks();
   __resetForTesting();
@@ -39,20 +41,54 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
+  __resetVaultStateForTests();
   localStorage.clear();
   vi.restoreAllMocks();
 });
 
-describe('paranoid devices create no backups', () => {
+describe('paranoid backups', () => {
   it('creates a local backup when paranoid is OFF', async () => {
     await createLocalBackup();
     expect(localBackupKeys().length).toBe(1);
   });
 
-  it('creates NO local backup when paranoid is ON', async () => {
+  it('creates NO local backup while paranoid is ON but LOCKED', async () => {
+    // Rows would come back still encrypted — storing them would be nonsense,
+    // and re-encrypting them doubly so.
     localStorage.setItem(PARANOID_FLAG, '1');
     await createLocalBackup();
     expect(localBackupKeys().length).toBe(0);
+  });
+
+  it('creates an ENCRYPTED local backup when paranoid is ON and unlocked', async () => {
+    // The old behaviour skipped the backup entirely, leaving the configuration
+    // that most needs a safety net without one.
+    const marker = 'SENSITIVE-TASK-MARKER';
+    const now = Date.now();
+    await db.tasks.add({ id: 't2', listId: 'l1', title: marker, status: 'todo', order: 2, createdAt: now, updatedAt: now } as Task);
+    await enableParanoid('paranoid backup passphrase');
+
+    await createLocalBackup();
+    const [key] = localBackupKeys();
+    expect(key).toBeDefined();
+
+    const raw = localStorage.getItem(key)!;
+    expect(raw).not.toContain(marker);      // no content in the clear…
+    expect(raw).not.toContain('"tasks"');   // …not even the structure
+    expect(JSON.parse(raw).encrypted).toEqual(expect.any(String));
+
+    // …and it still restores while the vault is unlocked.
+    const data = await readLocalBackup(key);
+    expect(data.tasks.map((t) => t.title)).toContain(marker);
+  });
+
+  it('refuses to decrypt a paranoid backup once locked', async () => {
+    await enableParanoid('paranoid backup passphrase');
+    await createLocalBackup();
+    const [key] = localBackupKeys();
+    __resetVaultStateForTests(); // as if the vault had locked
+
+    await expect(readLocalBackup(key)).rejects.toThrow('Unlock the vault');
   });
 
   it('makes no remote backup network calls when paranoid is ON', async () => {

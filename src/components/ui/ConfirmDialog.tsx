@@ -12,6 +12,11 @@ interface ConfirmRequest {
 
 let showConfirmFn: ((req: Omit<ConfirmRequest, 'resolve'>) => Promise<boolean>) | null = null;
 
+/** Whether a dialog host is mounted — false on the lock screen (AppShell only). */
+export function canConfirm(): boolean {
+  return showConfirmFn !== null;
+}
+
 export function confirmDialog(
   message: string,
   options?: { confirmLabel?: string; danger?: boolean; typeToConfirm?: string },

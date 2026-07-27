@@ -33,6 +33,8 @@ import {
   getCachedSalt,
   clearEncryptionKey,
 } from './crypto';
+import { getClockSkewMs, isClockSkewed, formatSkew } from '../lib/clock-skew';
+import { createLocalBackup } from '../db/backup';
 
 export const SNAPSHOT_FILE = 'gtd25-snapshot.json';
 export const CHANGELOG_FILE = 'gtd25-changelog.json';
@@ -187,6 +189,22 @@ function safeParseJson<T>(raw: string, label: string): { ok: true; value: T } | 
 
 function recordSyncMessage(context: string, message: string): void {
   recordError(`sync.${context}`, new Error(message));
+}
+
+// A wrong device clock silently reorders every merge (see lib/clock-skew).
+// Told once per session: it is a device setting, not something a retry fixes.
+let skewWarned = false;
+function warnIfClockSkewed(): void {
+  if (skewWarned || !isClockSkewed()) return;
+  skewWarned = true;
+  const skew = getClockSkewMs() ?? 0;
+  toast(
+    `This device's clock is ${skew > 0 ? 'ahead' : 'behind'} by ${formatSkew(Math.abs(skew))}. ` +
+    'Fix the date & time — edits merge by timestamp, so other devices\' changes can be lost.',
+    'error',
+    undefined,
+    12_000,
+  );
 }
 
 let syncStartedAt: number | null = null;
@@ -703,14 +721,18 @@ const SYNC_LOCK_NAME = 'gtd25-sync';
 
 export async function syncNow(manual = false, pushLimit?: number): Promise<number> {
   const locks = typeof navigator !== 'undefined' ? navigator.locks : undefined;
-  if (!locks) return runSync(manual, pushLimit);
-  return locks.request(
-    SYNC_LOCK_NAME,
-    { ifAvailable: true },
-    // null = another tab is mid-sync. Skip, same as a busy in-tab lock: our
-    // changes are in the shared changelog, so that tab pushes them for us.
-    async (lock) => (lock ? runSync(manual, pushLimit) : -1),
-  );
+  const result = locks
+    ? await locks.request(
+        SYNC_LOCK_NAME,
+        { ifAvailable: true },
+        // null = another tab is mid-sync. Skip, same as a busy in-tab lock: our
+        // changes are in the shared changelog, so that tab pushes them for us.
+        async (lock) => (lock ? runSync(manual, pushLimit) : -1),
+      )
+    : await runSync(manual, pushLimit);
+  // Any response we just made carried the server's clock; act on what it said.
+  warnIfClockSkewed();
+  return result;
 }
 
 async function runSync(manual = false, pushLimit?: number): Promise<number> {
@@ -827,8 +849,31 @@ async function runSync(manual = false, pushLimit?: number): Promise<number> {
       return 0;
     }
 
-    // If snapshot exists but we have no local data, bootstrap from remote
+    // Snapshot but no changelog: adopt the remote wholesale — ONLY when there is
+    // nothing here to lose. This branch clears the local tables and drops the
+    // pending changelog, so taking it with local data present (a deleted or
+    // never-created gtd25-changelog.json, a repo restored from a snapshot, an
+    // interrupted first setup) silently destroyed unpushed work. Refuse instead:
+    // both sides keep everything and the user resolves it deliberately with
+    // "Pull from remote" or a normal push.
     if (remoteSnapshotFile && !remoteChangelogFile) {
+      const local = await getLocalSnapshot();
+      const hasLocalData = local.taskLists.length > 0 || local.tasks.length > 0 ||
+        local.subtasks.length > 0 || (local.mindmaps?.length ?? 0) > 0 ||
+        (local.sharedItems?.length ?? 0) > 0;
+      if (hasLocalData) {
+        recordSyncMessage(
+          'missingChangelog',
+          'Remote has a snapshot but no changelog; refusing to replace local data',
+        );
+        reportError('Remote is incomplete', {
+          category: 'corrupt-remote',
+          message: 'The remote has a snapshot but no changelog. Nothing was changed — ' +
+            'push from this device, or use "Pull from remote" if the remote is the copy you want.',
+        });
+        if (manual) toast('Remote is missing its changelog — nothing was changed', 'error');
+        return -1;
+      }
       // Snapshot exists but no changelog — apply snapshot then create empty changelog
       const snapshotParsed = safeParseJson<SyncData>(remoteSnapshotFile.data, 'remote snapshot (bootstrap)');
       if (!snapshotParsed.ok) {
@@ -1565,6 +1610,10 @@ export async function forcePull() {
   const signal = acquireSyncLock();
   if (!signal) return;
 
+  // Everything below replaces local state wholesale. Take a device-local safety
+  // copy first so a mis-click is recoverable (Settings → Backups).
+  await createLocalBackup();
+
   try {
     const creds = await getCredentials();
     if (!creds) return;
@@ -1756,6 +1805,10 @@ export async function importData(data: ImportData) {
   const signal = acquireSyncLock();
   if (!signal) return;
 
+  // Everything below replaces local state wholesale. Take a device-local safety
+  // copy first so a mis-click is recoverable (Settings → Backups).
+  await createLocalBackup();
+
   try {
     // FK validation: skip orphaned records
     const validListIds = new Set(data.taskLists.map((l) => l.id));
@@ -1890,6 +1943,10 @@ export function __resetForTesting() {
 export async function restoreFromBackup(tier: BackupTier) {
   const signal = acquireSyncLock();
   if (!signal) return;
+
+  // Everything below replaces local state wholesale. Take a device-local safety
+  // copy first so a mis-click is recoverable (Settings → Backups).
+  await createLocalBackup();
 
   try {
     const creds = await getCredentials();

@@ -16,8 +16,14 @@ function otherTab() {
   };
 }
 
-/** BroadcastChannel delivery is asynchronous. */
-const settle = () => new Promise((r) => setTimeout(r, 0));
+/** BroadcastChannel delivery is asynchronous, and a loaded event loop can take
+ *  more than a tick — poll rather than assume one. */
+async function settle(until?: () => boolean): Promise<void> {
+  const deadline = Date.now() + 2_000;
+  do {
+    await new Promise((r) => setTimeout(r, 5));
+  } while (until && !until() && Date.now() < deadline);
+}
 
 afterEach(() => {
   __resetTabChannelForTests();
@@ -27,7 +33,7 @@ describe('tab-channel', () => {
   it('delivers a signal to another tab', async () => {
     const other = otherTab().listen();
     signalOtherTabs({ type: 'lock' });
-    await settle();
+    await settle(() => other.received.length > 0);
     expect(other.received).toEqual([{ type: 'lock' }]);
     other.close();
   });
@@ -53,7 +59,7 @@ describe('tab-channel', () => {
     other.post({ type: 'lock', dek: 'x' }); // extra fields are not trusted, only the type
     other.post('lock');
     other.post(null);
-    await settle();
+    await settle(() => seen.length >= 3);
 
     expect(seen).toEqual([{ type: 'lock' }, { type: 'wipe' }, { type: 'lock', dek: 'x' }]);
     off();

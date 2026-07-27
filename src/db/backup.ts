@@ -1,80 +1,154 @@
 import { db } from './index';
 import { isParanoidFlagSet } from './paranoid-flag';
+import { getActiveAtRestKey } from './vault-middleware';
+import { encryptBlob, decryptBlob } from '../sync/crypto';
+import { recordError } from '../lib/diagnostics';
 import type { ImportData } from './export-import';
+
+// Device-local safety copies: the last line of defence against the app's OWN
+// destructive paths (adopt-remote, restore, import), not against disk loss —
+// that is what the remote backups are for.
+//
+// Taken at boot and immediately before anything that replaces local state, so a
+// wrong button stays recoverable. On a Paranoid device the copy is encrypted
+// with the same at-rest key as the database rows: the old behaviour was to skip
+// the backup entirely, which honoured "no plaintext on disk" but left the one
+// configuration that most needs a safety net without any.
 
 const BACKUP_KEY_PREFIX = 'gtd25-local-backup-';
 const MAX_BACKUPS = 2;
 
-export async function createLocalBackup(): Promise<void> {
-  // Paranoid devices leave no plaintext backup snapshots on disk.
-  if (isParanoidFlagSet()) return;
-  try {
-    const [taskLists, tasks, subtasks] = await Promise.all([
-      db.taskLists.toArray(),
-      db.tasks.toArray(),
-      db.subtasks.toArray(),
-    ]);
+/**
+ * What we snapshot. Shared-folder items are excluded on purpose: their bytes
+ * live in a separate blob store and ImportData has no field to restore them
+ * through, so copying the metadata alone would promise a recovery we can't make.
+ */
+type BackupPayload = Pick<ImportData, 'taskLists' | 'tasks' | 'subtasks' | 'mindmapFolders' | 'mindmaps' | 'mindmapNodes'>;
 
-    // Don't create backup if there's no data
-    if (taskLists.length === 0 && tasks.length === 0 && subtasks.length === 0) return;
+interface StoredBackup extends Partial<BackupPayload> {
+  timestamp: number;
+  /** Paranoid devices: AES-GCM ciphertext of the JSON payload, and nothing else. */
+  encrypted?: string;
+}
 
-    const backup = {
-      timestamp: Date.now(),
-      taskLists,
-      tasks,
-      subtasks,
-    };
-
-    const key = `${BACKUP_KEY_PREFIX}${Date.now()}`;
-    localStorage.setItem(key, JSON.stringify(backup));
-    pruneOldBackups();
-  } catch {
-    // localStorage full or other error — non-critical, continue without backup
-    console.warn('Failed to create local backup');
-  }
+function listBackupKeys(): string[] {
+  return Object.keys(localStorage).filter((k) => k.startsWith(BACKUP_KEY_PREFIX)).sort().reverse();
 }
 
 function pruneOldBackups() {
-  const keys = Object.keys(localStorage)
-    .filter((k) => k.startsWith(BACKUP_KEY_PREFIX))
-    .sort()
-    .reverse();
-
-  for (const key of keys.slice(MAX_BACKUPS)) {
+  for (const key of listBackupKeys().slice(MAX_BACKUPS)) {
     localStorage.removeItem(key);
   }
 }
 
-export function getLocalBackups(): Array<{ key: string; timestamp: number }> {
-  return Object.keys(localStorage)
-    .filter((k) => k.startsWith(BACKUP_KEY_PREFIX))
-    .sort()
-    .reverse()
-    .map((key) => {
-      const ts = parseInt(key.replace(BACKUP_KEY_PREFIX, ''), 10);
-      return { key, timestamp: ts };
-    });
+async function readPayload(): Promise<BackupPayload> {
+  const [taskLists, tasks, subtasks, mindmapFolders, mindmaps, mindmapNodes] = await Promise.all([
+    db.taskLists.toArray(),
+    db.tasks.toArray(),
+    db.subtasks.toArray(),
+    db.mindmapFolders.toArray(),
+    db.mindmaps.toArray(),
+    db.mindmapNodes.toArray(),
+  ]);
+  return { taskLists, tasks, subtasks, mindmapFolders, mindmaps, mindmapNodes };
 }
 
 /**
- * Read + validate a boot-time safety backup. Returns ImportData for the sync
- * engine's importData() — restoring must go through it (NOT direct table
- * writes) so FK validation, change entries, and sync propagation apply.
- * Throws a descriptive error on a corrupt or malformed backup.
+ * Store the copy, making room if localStorage is full. A failure here used to be
+ * a `console.warn` nobody reads — leaving the user believing they had a safety
+ * net that was never written.
  */
-export function readLocalBackup(key: string): ImportData {
+function writeWithRoom(key: string, serialized: string): void {
+  try {
+    localStorage.setItem(key, serialized);
+  } catch (err) {
+    // Full: drop every older copy and try once more keeping only this one.
+    for (const existing of listBackupKeys()) {
+      if (existing !== key) localStorage.removeItem(existing);
+    }
+    try {
+      localStorage.setItem(key, serialized);
+    } catch {
+      recordError('backup.localStorageFull', err);
+      return;
+    }
+  }
+  pruneOldBackups();
+}
+
+export async function createLocalBackup(): Promise<void> {
+  try {
+    const key = getActiveAtRestKey();
+    // Paranoid + locked: rows come back still encrypted, so this would store
+    // double-wrapped nonsense. Nothing to report — the boot-time call simply
+    // runs before unlock, and every destructive path is behind the lock anyway.
+    if (isParanoidFlagSet() && !key) return;
+
+    const payload = await readPayload();
+    const isEmpty = payload.taskLists.length === 0 && payload.tasks.length === 0 &&
+      payload.subtasks.length === 0 && (payload.mindmaps?.length ?? 0) === 0;
+    if (isEmpty) return;
+
+    const timestamp = Date.now();
+    const backup: StoredBackup = key
+      ? { timestamp, encrypted: await encryptBlob(key, JSON.stringify(payload)) }
+      : { timestamp, ...payload };
+
+    writeWithRoom(`${BACKUP_KEY_PREFIX}${timestamp}`, JSON.stringify(backup));
+  } catch (err) {
+    // A backup failure must never block the operation it was protecting.
+    recordError('backup.create', err);
+  }
+}
+
+export function getLocalBackups(): Array<{ key: string; timestamp: number }> {
+  return listBackupKeys().map((key) => ({
+    key,
+    timestamp: parseInt(key.replace(BACKUP_KEY_PREFIX, ''), 10),
+  }));
+}
+
+/**
+ * Read + validate a safety backup, decrypting it on a Paranoid device. Returns
+ * ImportData for the sync engine's importData() — restoring must go through it
+ * (NOT direct table writes) so FK validation, change entries, and sync
+ * propagation apply. Throws a descriptive error on a corrupt or malformed backup.
+ */
+export async function readLocalBackup(key: string): Promise<ImportData> {
   const raw = localStorage.getItem(key);
   if (!raw) throw new Error('Backup not found');
 
-  let backup: unknown;
+  let stored: StoredBackup;
   try {
-    backup = JSON.parse(raw);
+    stored = JSON.parse(raw) as StoredBackup;
   } catch {
     throw new Error('Backup is corrupted (not valid JSON)');
   }
-  const b = backup as Partial<ImportData>;
-  if (!Array.isArray(b.taskLists) || !Array.isArray(b.tasks) || !Array.isArray(b.subtasks)) {
+
+  let body: Partial<BackupPayload> = stored;
+  if (stored.encrypted) {
+    const atRestKey = getActiveAtRestKey();
+    if (!atRestKey) throw new Error('Unlock the vault to restore this backup');
+    try {
+      body = JSON.parse(await decryptBlob(atRestKey, stored.encrypted)) as Partial<BackupPayload>;
+    } catch {
+      throw new Error('Backup could not be decrypted (wrong key or corrupted)');
+    }
+  }
+
+  if (!Array.isArray(body.taskLists) || !Array.isArray(body.tasks) || !Array.isArray(body.subtasks)) {
     throw new Error('Backup structure is invalid');
   }
-  return { taskLists: b.taskLists, tasks: b.tasks, subtasks: b.subtasks };
+  // Mindmap fields are absent in pre-2026-07-27 backups; leaving them undefined
+  // is what tells importData to preserve this device's maps rather than wipe them.
+  return {
+    taskLists: body.taskLists,
+    tasks: body.tasks,
+    subtasks: body.subtasks,
+    ...(Array.isArray(body.mindmaps) ? {
+      mindmapFolders: body.mindmapFolders ?? [],
+      mindmaps: body.mindmaps,
+      mindmapNodes: body.mindmapNodes ?? [],
+    } : {}),
+  };
 }

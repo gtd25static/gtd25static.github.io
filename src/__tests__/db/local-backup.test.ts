@@ -2,7 +2,7 @@ import { db } from '../../db';
 import { resetDb } from '../helpers/db-helpers';
 import { createLocalBackup, readLocalBackup } from '../../db/backup';
 import { parseImportZip, zipImportData } from '../../db/export-import';
-import type { Task, TaskList } from '../../db/models';
+import type { Task, TaskList, Mindmap, MindmapNode } from '../../db/models';
 
 // The test localStorage polyfill doesn't enumerate keys via Object.keys;
 // use the index API (same as the paranoid-no-backups test).
@@ -32,25 +32,36 @@ describe('readLocalBackup', () => {
     const [key] = localBackupKeys();
     expect(key).toBeDefined();
 
-    const data = readLocalBackup(key);
+    const data = await readLocalBackup(key);
     expect(data.tasks).toHaveLength(1);
     expect(data.tasks[0].id).toBe('t1');
     expect(Array.isArray(data.taskLists)).toBe(true);
     expect(Array.isArray(data.subtasks)).toBe(true);
   });
 
-  it('throws when the backup key does not exist', () => {
-    expect(() => readLocalBackup('gtd25-local-backup-0')).toThrow('Backup not found');
+  it('carries mindmaps, so restoring here brings the maps back too', async () => {
+    const now = Date.now();
+    await db.mindmaps.add({ id: 'm1', name: 'Plan', order: 0, createdAt: now, updatedAt: now } as Mindmap);
+    await db.mindmapNodes.add({ id: 'n1', mapId: 'm1', label: 'Root', order: 0, createdAt: now, updatedAt: now } as MindmapNode);
+    await createLocalBackup();
+
+    const data = await readLocalBackup(localBackupKeys()[0]);
+    expect(data.mindmaps?.map((m) => m.id)).toEqual(['m1']);
+    expect(data.mindmapNodes?.map((n) => n.id)).toEqual(['n1']);
   });
 
-  it('throws a descriptive error on corrupt JSON', () => {
+  it('throws when the backup key does not exist', async () => {
+    await expect(readLocalBackup('gtd25-local-backup-0')).rejects.toThrow('Backup not found');
+  });
+
+  it('throws a descriptive error on corrupt JSON', async () => {
     localStorage.setItem('gtd25-local-backup-1', '{"taskLists": [trunc');
-    expect(() => readLocalBackup('gtd25-local-backup-1')).toThrow('corrupted');
+    await expect(readLocalBackup('gtd25-local-backup-1')).rejects.toThrow('corrupted');
   });
 
-  it('throws on a structurally invalid backup instead of handing it to a restore', () => {
+  it('throws on a structurally invalid backup instead of handing it to a restore', async () => {
     localStorage.setItem('gtd25-local-backup-1', JSON.stringify({ taskLists: null, tasks: [], subtasks: [] }));
-    expect(() => readLocalBackup('gtd25-local-backup-1')).toThrow('invalid');
+    await expect(readLocalBackup('gtd25-local-backup-1')).rejects.toThrow('invalid');
   });
 });
 
@@ -62,7 +73,10 @@ describe('downloading a safety backup', () => {
     await createLocalBackup();
     const [key] = localBackupKeys();
 
-    const blob = await zipImportData(readLocalBackup(key), now);
+    // The download path strips mindmaps on purpose (see BackupsSettings): a zip
+    // carrying `mindmaps: []` would wipe the maps of the device importing it.
+    const { mindmapFolders: _f, mindmaps: _m, mindmapNodes: _n, ...portable } = await readLocalBackup(key);
+    const blob = await zipImportData(portable, now);
     // JSZip in Node can't read a native File/Blob — hand it the bytes
     // (same shim as export-import.test.ts)
     const bytes = new Uint8Array(await blob.arrayBuffer()) as unknown as File;

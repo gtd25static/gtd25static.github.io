@@ -1,4 +1,5 @@
 import { isParanoidFlagSet } from '../db/paranoid-flag';
+import { recordServerDate } from '../lib/clock-skew';
 
 export class RateLimitError extends Error {
   resetAtMs: number;
@@ -47,6 +48,10 @@ async function apiFetch(
       ...options?.headers,
     },
   });
+
+  // Every response carries the server's clock — free skew detection for the
+  // LWW merge, which is only as trustworthy as the writing device's Date.now().
+  recordServerDate(resp.headers.get('Date'));
 
   // Detect rate limiting on 403
   if (resp.status === 403) {

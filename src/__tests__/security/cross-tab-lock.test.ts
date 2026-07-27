@@ -10,7 +10,12 @@ import { __resetTabChannelForTests } from '../../lib/tab-channel';
 
 const PASSPHRASE = 'cross tab passphrase';
 const CHANNEL_NAME = 'gtd25-tabs';
-const settle = () => new Promise((r) => setTimeout(r, 0));
+async function settle(until?: () => boolean): Promise<void> {
+  const deadline = Date.now() + 2_000;
+  do {
+    await new Promise((r) => setTimeout(r, 5));
+  } while (until && !until() && Date.now() < deadline);
+}
 
 /** A second tab of the app, seen from this one. */
 function otherTab() {
@@ -47,7 +52,7 @@ describe('cross-tab vault lock', () => {
     expect(isUnlocked()).toBe(true);
 
     otherTab().post({ type: 'lock' });
-    await settle();
+    await settle(() => !isUnlocked());
 
     expect(isUnlocked()).toBe(false);
     expect(getDEK()).toBeNull();
@@ -59,7 +64,7 @@ describe('cross-tab vault lock', () => {
     await enableParanoid(PASSPHRASE);
 
     otherTab().post({ type: 'wipe' });
-    await settle();
+    await settle(() => !isUnlocked());
 
     expect(isUnlocked()).toBe(false);
     stop();
@@ -70,7 +75,7 @@ describe('cross-tab vault lock', () => {
     await enableParanoid(PASSPHRASE);
 
     lock();
-    await settle();
+    await settle(() => other.heard.length > 0);
 
     expect(other.heard).toEqual([{ type: 'lock' }]);
     other.close();
@@ -105,7 +110,7 @@ describe('cross-tab vault lock', () => {
 
     other.post({ type: 'lock' });
     other.post({ type: 'lock' });
-    await settle();
+    await settle(() => !isUnlocked());
 
     expect(isUnlocked()).toBe(false);
     stop();

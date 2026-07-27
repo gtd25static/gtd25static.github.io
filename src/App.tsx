@@ -2,7 +2,7 @@ import { useEffect } from 'react';
 import { AppShell } from './components/layout/AppShell';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { LockScreen } from './components/security/LockScreen';
-import { ensureDefaults } from './db';
+import { ensureDefaults, onDatabaseSupersededByOtherTab } from './db';
 import { useKeyboard } from './hooks/use-keyboard';
 import { useTheme } from './components/settings/ThemeSettings';
 import { useVault } from './hooks/use-vault';
@@ -29,6 +29,7 @@ import { useRelaxedUnlock } from './hooks/use-relaxed-unlock';
 import { useUnlockAudit } from './hooks/use-unlock-audit';
 import { UnlockAuditAlert } from './components/security/UnlockAuditAlert';
 import { useRelaxedUnlockStore } from './stores/relaxed-unlock';
+import { confirmDialog, canConfirm } from './components/ui/ConfirmDialog';
 
 export default function App() {
   // Theme is localStorage-only (no DB), safe to apply even while the vault is
@@ -43,6 +44,24 @@ export default function App() {
   usePomodoroClock();
   useLockedNudge();
   useRemoteWipeCommands();
+
+  // Another tab upgraded (or deleted) the database, so this tab's connection was
+  // closed under it and every query from here on would fail. Nothing recovers
+  // without a reload, so say so plainly instead of quietly breaking.
+  useEffect(() => onDatabaseSupersededByOtherTab(() => {
+    // The dialog host lives in AppShell, so on the lock screen there is nobody to
+    // ask — and nothing to lose either. Reload straight away.
+    if (!canConfirm()) {
+      window.location.reload();
+      return;
+    }
+    void confirmDialog(
+      'This app was updated in another tab, so this one can no longer reach its data. Reload to continue.',
+      { confirmLabel: 'Reload' },
+    ).then((reload) => {
+      if (reload) window.location.reload();
+    });
+  }), []);
 
   return (
     <ErrorBoundary>

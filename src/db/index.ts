@@ -77,6 +77,27 @@ export const db = new Gtd25DB();
 // inert while Paranoid Mode is off.
 db.use(vaultMiddleware);
 
+// --- Another connection wants this database's schema (or the database gone) ---
+//
+// Deploy a build with a new `version(N)` and the first tab to reload upgrades the
+// schema. Dexie's built-in handler then closes THIS tab's connection so the
+// upgrade isn't blocked — but with auto-open still enabled, so the next query
+// re-opens declaring the version this (older) tab's code knows, which IndexedDB
+// rejects. The old tab is left with failing live queries and a console warning
+// nobody sees. Now it says so and offers the only real fix: reload.
+let databaseClosedHandler: (() => void) | null = null;
+
+/** Called when another connection upgrades or deletes the database under us. */
+export function onDatabaseSupersededByOtherTab(handler: () => void): () => void {
+  databaseClosedHandler = handler;
+  return () => { databaseClosedHandler = null; };
+}
+
+db.on('versionchange', () => {
+  // Dexie's own handler closes the connection; we only have to surface it.
+  databaseClosedHandler?.();
+});
+
 export async function cleanOrphans() {
   const now = Date.now();
   let orphanedSubtasks = 0;

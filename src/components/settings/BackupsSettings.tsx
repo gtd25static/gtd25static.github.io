@@ -65,8 +65,9 @@ export function BackupsSettings() {
     }
   }
 
-  // Boot-time safety backups (localStorage; not created under Paranoid).
-  const localBackups = paranoid ? [] : getLocalBackups();
+  // Safety backups: taken at boot and before every destructive operation. On a
+  // Paranoid device they exist too, encrypted with the vault's at-rest key.
+  const localBackups = getLocalBackups();
 
   async function handleRestoreLocal(backup: { key: string; timestamp: number }) {
     if (!await confirmDialog(
@@ -76,7 +77,7 @@ export function BackupsSettings() {
 
     setRestoringLocalKey(backup.key);
     try {
-      await importData(readLocalBackup(backup.key));
+      await importData(await readLocalBackup(backup.key));
     } catch (err) {
       recordError('backups.restoreLocal', err);
       toast(err instanceof Error ? err.message : 'Restore failed', 'error');
@@ -89,7 +90,13 @@ export function BackupsSettings() {
   // packages it in the standard backup zip so another device can import it.
   async function handleDownloadLocal(backup: { key: string; timestamp: number }) {
     try {
-      const blob = await zipImportData(readLocalBackup(backup.key), backup.timestamp);
+      // Mindmaps are deliberately dropped from the DOWNLOADED zip (they are kept
+      // in the backup itself, for restoring here): importing a zip that carries
+      // `mindmaps: []` would wipe the maps of whichever device you import it on,
+      // while omitting the field tells the importer to leave them alone.
+      const { mindmapFolders: _f, mindmaps: _m, mindmapNodes: _n, ...portable } =
+        await readLocalBackup(backup.key);
+      const blob = await zipImportData(portable, backup.timestamp);
       const stamp = new Date(backup.timestamp).toISOString().slice(0, 16).replace(/[:T]/g, '-');
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
