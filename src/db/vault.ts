@@ -24,6 +24,7 @@ import { recordUnlockAttempt, type UnlockMethod } from '../lib/unlock-audit';
 import { pruneHistory } from '../lib/relaxed-unlock';
 import { checkSecretStrength } from '../lib/password-strength';
 import { reinitVaultWithPlaceholders } from './vault-reinit';
+import { onTabSignal, signalOtherTabs } from '../lib/tab-channel';
 import type { LocalSettings, Vault, PrfCredential } from './models';
 
 // Synchronous mirror of "a security-key credential is enrolled", so the lock
@@ -208,12 +209,31 @@ export async function setVaultSecrets(patch: VaultSecrets): Promise<void> {
   });
 }
 
-export function lock(): void {
+/** Drop the keys held by THIS tab. */
+function lockThisTab(): void {
   currentDek = null;
   currentSecrets = null;
   if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
   clearEncryptionKey(); // drop the sync key too
   emit();
+}
+
+export function lock(): void {
+  lockThisTab();
+  // Locking is app-wide: the idle timer, the hotkey and lock-when-hidden all run
+  // per tab, so without this a forgotten second tab would stay unlocked and
+  // readable while you thought you had locked up. Only the lock travels — an
+  // unlock never does; see lib/tab-channel.
+  signalOtherTabs({ type: 'lock' });
+}
+
+/**
+ * Follow lock/wipe signals from the app's other tabs. Called once at startup.
+ * Handled here rather than at module scope so importing the vault never opens a
+ * channel on its own. Returns an unsubscribe.
+ */
+export function startCrossTabLock(): () => void {
+  return onTabSignal(() => lockThisTab()); // both signals mean: drop the keys here
 }
 
 // --- Enable / disable / unlock ---

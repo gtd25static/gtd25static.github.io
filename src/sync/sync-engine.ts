@@ -690,7 +690,30 @@ async function pruneRemoteBackups(pat: string, repo: string) {
   }
 }
 
+/**
+ * One sync at a time across the WHOLE app, not just this tab. Two tabs share one
+ * IndexedDB, so both read the same pending changelog and would push the same
+ * entries twice — the remote survives it (entries are id-keyed and applying them
+ * is idempotent) but it burns API calls and can trip the 409 retry. Web Locks are
+ * released by the browser when a tab crashes or closes, so a wedged tab can't
+ * hold sync hostage; where they are unavailable this falls back to the per-tab
+ * lock inside runSync, i.e. exactly the old behaviour.
+ */
+const SYNC_LOCK_NAME = 'gtd25-sync';
+
 export async function syncNow(manual = false, pushLimit?: number): Promise<number> {
+  const locks = typeof navigator !== 'undefined' ? navigator.locks : undefined;
+  if (!locks) return runSync(manual, pushLimit);
+  return locks.request(
+    SYNC_LOCK_NAME,
+    { ifAvailable: true },
+    // null = another tab is mid-sync. Skip, same as a busy in-tab lock: our
+    // changes are in the shared changelog, so that tab pushes them for us.
+    async (lock) => (lock ? runSync(manual, pushLimit) : -1),
+  );
+}
+
+async function runSync(manual = false, pushLimit?: number): Promise<number> {
   const signal = acquireSyncLock();
   if (!signal) return -1;
 

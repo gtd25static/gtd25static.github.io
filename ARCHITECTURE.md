@@ -103,6 +103,8 @@ Two layers, with a deliberate split:
 - **Zustand (`src/stores/app-state.ts`)** — pure UI state: selected list, expanded task ids, modal toggles, bulk-selection set, focus targets. Synchronous, not persisted. (`src/stores/mindmap-ui.ts` is the one exception: per-map collapse state, mirrored to the `gtd25-mindmap-ui` localStorage key — device-local by design, never synced.)
 - **Dexie (IndexedDB)** — every persistent entity, plus the change log and settings. Components read via `dexie-react-hooks` (`useLiveQuery`) so the UI auto-updates on writes.
 
+**Multiple tabs of the app share one IndexedDB**, so there is no divergent local state to reconcile: every write path re-reads the row before spreading over it, and `fieldTimestamps` are stamped per field, so a second tab's edit lands on top of the first instead of clobbering it. Dexie's `liveQuery` broadcasts invalidations across tabs, so the other tab's UI refreshes on its own. Two things do *not* come for free and are wired explicitly in `src/lib/tab-channel.ts` (a same-origin `BroadcastChannel` carrying `lock`/`wipe` signals only — never keys, and never an unlock) and in `syncNow` (a `navigator.locks` Web Lock named `gtd25-sync`, `ifAvailable`): locking one tab locks them all, and only one tab pushes to GitHub at a time.
+
 Business logic lives in hooks (`src/hooks/use-*.ts`), not in components or stores. A component calls `useTasks().createTask(...)`, the hook writes to Dexie, the live query re-fires, the UI re-renders, and the sync engine eventually pushes the change.
 
 ---

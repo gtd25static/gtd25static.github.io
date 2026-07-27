@@ -14,6 +14,7 @@
 
 import { db } from '../db';
 import { lock } from '../db/vault';
+import { signalOtherTabs } from './tab-channel';
 
 // Deliberately survives clearWebStorage (see skip below): it is the retry
 // breadcrumb for a wipe whose IndexedDB deletion could not be confirmed.
@@ -89,6 +90,12 @@ export async function panicWipe(opts: { reload?: boolean } = {}): Promise<void> 
   const { reload = true } = opts;
 
   try { lock(); } catch { /* vault may not be active */ }
+  // Other tabs: drop your keys and reload. Two reasons — they must not keep
+  // showing (or writing) data this device is erasing, and an open connection in
+  // another tab is exactly what blocks the IndexedDB deletion below. No waiting
+  // for them: a panic wipe starts now, and the WIPE_PENDING_KEY retry converges
+  // if the deletion is still blocked.
+  signalOtherTabs({ type: 'wipe' });
   try { localStorage.setItem(WIPE_PENDING_KEY, String(Date.now())); } catch { /* no storage — proceed */ }
 
   const idbOutcome = await deleteIndexedDb();
