@@ -61,6 +61,15 @@ describe('formatCaptureResult', () => {
     });
   });
 
+  it('ignores a url param that is not http(s), rather than storing it as a link', () => {
+    expect(formatCaptureResult('Page', 'javascript:alert(1)', '')).toEqual({ title: 'Page' });
+    // …and still finds a real link in the text alongside it.
+    expect(formatCaptureResult('', 'data:text/html,x', 'see https://example.com')).toEqual({
+      title: 'see',
+      link: 'https://example.com',
+    });
+  });
+
   it('prefers url param over embedded URL in text', () => {
     expect(
       formatCaptureResult('Page', 'https://main.com', 'text https://other.com'),

@@ -39,6 +39,20 @@ describe('useUrlCapture — share-target URL scrubbing (ACR-004)', () => {
     await waitFor(() => expect(createTask).toHaveBeenCalledTimes(1));
   });
 
+  it('captures a protocol-handler launch and scrubs it just as fast', async () => {
+    const payload = 'web+gtd25:capture?title=Secret%20page&url=https%3A%2F%2Fx.com';
+    window.history.replaceState({}, '', `/?protocol=${encodeURIComponent(payload)}`);
+
+    render(<Harness />);
+
+    expect(window.location.search).toBe(''); // the captured page must not linger
+    await waitFor(() => expect(createTask).toHaveBeenCalledTimes(1));
+    expect(createTask.mock.calls[0][1]).toMatchObject({
+      title: 'Secret page',
+      link: 'https://x.com',
+    });
+  });
+
   it('scrubs the URL even when all params are empty', async () => {
     window.history.replaceState({}, '', '/capture?title=&text=&url=');
     render(<Harness />);

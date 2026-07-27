@@ -107,18 +107,27 @@ export default defineConfig({
         // app. Both matter now that the manifest claims link handling below.
         id: '/',
         scope: '/',
-        // Links to this origin belong in the app window, not a browser tab —
-        // in particular the "Capture to GTD25" bookmarklet, which opens
-        // /?capture&title=…&url=… (see src/hooks/use-url-capture.ts). This is
-        // the declarative half; the browser side is not uniform: Chrome does
-        // not ship `handle_links` yet and gates desktop capture behind the
-        // app's own "Open supported links" setting, while an Android WebAPK
-        // registers intent filters for the scope when it is installed.
+        // Links to this origin belong in the app window, not a browser tab.
+        // Chrome does not implement `handle_links` (it captures in-scope links
+        // by default since 139 on desktop, opt-out per app); this is declared
+        // for browsers that do, and it costs nothing where it is ignored.
         // Deliberately NO `launch_handler`: the Android share target is a POST
         // the service worker intercepts, and a `focus-existing`/`navigate-existing`
         // client mode could change whether that POST is delivered at all. Not
         // worth risking a working share flow for a nicer capture window.
         handle_links: 'preferred',
+        // …but link capturing alone cannot serve the capture bookmarklet.
+        // Chrome only captures navigations that create a new frame WITHOUT an
+        // auxiliary browsing context, and `window.open` is exactly an auxiliary
+        // context — so the bookmarklet always landed in a browser tab (verified
+        // on Chrome desktop / Win11, 2026-07-27). A protocol handler is the
+        // deterministic route: `web+gtd25:` links launch the installed app,
+        // whatever opened them. `%s` arrives percent-encoded and is parsed by
+        // parseProtocolCapture (src/hooks/use-url-capture.ts), which sanitises
+        // it exactly like the ?capture query it replaces.
+        protocol_handlers: [
+          { protocol: 'web+gtd25', url: '/?protocol=%s' },
+        ],
         icons: [
           { src: 'pwa-192.png', sizes: '192x192', type: 'image/png' },
           { src: 'pwa-512.png', sizes: '512x512', type: 'image/png' },

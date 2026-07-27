@@ -14,6 +14,13 @@ describe('PWA manifest', () => {
     expect(config).toContain("handle_links: 'preferred'");
   });
 
+  it('registers the capture protocol the desktop bookmarklet launches', () => {
+    // Chrome will not capture window.open into an installed app, so this scheme
+    // is the only reliable route from a bookmarklet to the app window.
+    expect(config).toContain("protocol: 'web+gtd25'");
+    expect(config).toContain("url: '/?protocol=%s'");
+  });
+
   it('still declares the POST share target Android shares arrive through', () => {
     expect(config).toContain('share_target:');
     expect(config).toContain("action: '/share-target'");
