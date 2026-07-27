@@ -100,6 +100,25 @@ export default defineConfig({
         background_color: '#0f172a',
         display: 'standalone',
         start_url: '/',
+        // Explicit app identity + scope. `id` spells out what was already the
+        // default (the start_url), so declaring it can't re-identify an app that
+        // is already installed; `scope` is the whole origin — this is a
+        // user-site at the domain root, so every one of its URLs belongs to the
+        // app. Both matter now that the manifest claims link handling below.
+        id: '/',
+        scope: '/',
+        // Links to this origin belong in the app window, not a browser tab —
+        // in particular the "Capture to GTD25" bookmarklet, which opens
+        // /?capture&title=…&url=… (see src/hooks/use-url-capture.ts). This is
+        // the declarative half; the browser side is not uniform: Chrome does
+        // not ship `handle_links` yet and gates desktop capture behind the
+        // app's own "Open supported links" setting, while an Android WebAPK
+        // registers intent filters for the scope when it is installed.
+        // Deliberately NO `launch_handler`: the Android share target is a POST
+        // the service worker intercepts, and a `focus-existing`/`navigate-existing`
+        // client mode could change whether that POST is delivered at all. Not
+        // worth risking a working share flow for a nicer capture window.
+        handle_links: 'preferred',
         icons: [
           { src: 'pwa-192.png', sizes: '192x192', type: 'image/png' },
           { src: 'pwa-512.png', sizes: '512x512', type: 'image/png' },

@@ -218,6 +218,7 @@ Vitest with jsdom and `fake-indexeddb`. Setup: `vitest.config.ts`, `src/__tests_
 - `.github/workflows/deploy.yml` runs on push to `main` and publishes `dist/` to GitHub Pages.
 - The git commit hash is embedded into the bundle for in-app version display.
 - `vite-plugin-pwa` configures the service worker and manifest. Workbox precaches built assets and serves `index.html` as the SPA fallback. The app is installable, and a Web Share Target maps to the `/capture` route.
+- The manifest also declares `id`/`scope` (the whole origin — this is a user-site at the domain root) and `handle_links: 'preferred'`, so an installed app takes its own links instead of leaving them to a browser tab; the "Capture to GTD25" bookmarklet opens `/?capture&title=…&url=…`, which is in scope. There is deliberately **no** `launch_handler`: the share target is a POST the service worker intercepts, and a non-default client mode could change whether that POST is delivered. Browser support for link handling is uneven (a per-app setting on desktop Chrome; WebAPK intent filters on Android), so the manifest is only the declarative half.
 
 > For the update flow — new-version detection, the prompt, `SKIP_WAITING` activation, the visible commit hash, and the service-worker caching pitfalls each guard exists to prevent — see **[PWA_UPDATE_PROTOCOL.md](PWA_UPDATE_PROTOCOL.md)**, written to be reused by other PWAs.
 

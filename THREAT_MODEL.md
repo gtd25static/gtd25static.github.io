@@ -865,7 +865,14 @@ syncPassword and prune old backups if the earlier plaintext exposure matters.
   the user. Residual: the plaintext-until-unlock window on a locked Paranoid device
   remains. Mitigation: shares are user-initiated; unlock promptly, or don't share
   into a locked Paranoid device. (The bookmarklet capture still uses a GET
-  `?capture` URL, which is scrubbed at the earliest point — ACR-004.)
+  `?capture` URL, which is scrubbed at the earliest point — ACR-004. Since
+  2026-07-27 the manifest declares `handle_links: 'preferred'` over the whole
+  origin, so where an installed browser honours it that URL opens the **app
+  window** instead of a tab. No new capability — any site could already navigate
+  to `?capture`, and the same sanitising code runs either way — but note the
+  surfacing side effect: a link from elsewhere can bring the app window forward,
+  which on an unlocked device puts content on screen. A locked Paranoid device
+  still shows only the lock screen.)
 - **Metadata is never protected.** Structure, timing, due dates, status, sizes,
   and device/activity patterns leak everywhere.
 - **Git history + a logging TLS proxy are append-only from the defender's view.**

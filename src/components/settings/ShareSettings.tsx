@@ -36,6 +36,12 @@ export function ShareSettings() {
             Drag this button to your bookmark bar. Click it on any page to capture
             the page title and URL to your inbox.
           </p>
+          <p className="mt-1">
+            With the app installed it lands in the app window instead of a browser tab.
+            If it still opens a tab, the browser hasn’t handed this app its links yet:
+            on desktop that’s a per-app “open supported links” setting, on Android it
+            comes with installing to the home screen.
+          </p>
           <a
             ref={bookmarkletRef}
             href="#"
