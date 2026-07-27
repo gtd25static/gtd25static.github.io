@@ -93,10 +93,14 @@ describe('useAnimatedLayout', () => {
     expect(result.current.layout.rects.get('a')!.y).toBeCloseTo(interrupted, 5);
   });
 
-  it('runs big reveals at a scaled-down duration, small re-layouts at full', () => {
-    const many = (yOff: number) => {
-      const boxes: Record<string, [number, number]> = { root: [0, yOff] };
-      for (let i = 0; i < 9; i++) boxes[`n${i}`] = [200, i * 40 + yOff];
+  // The whole point of dropping the old per-transition duration scale: opening a
+  // small branch deep in a big map used to take nearly twice as long as opening
+  // the root, because the scale only sped up transitions where most of the map
+  // was entering at once.
+  it('takes the same time for a big reveal as for a small toggle', () => {
+    const many = (count: number) => {
+      const boxes: Record<string, [number, number]> = { root: [0, 0] };
+      for (let i = 0; i < count; i++) boxes[`n${i}`] = [200, i * 40];
       return layout(boxes);
     };
     const { result, rerender } = renderHook(
@@ -104,26 +108,24 @@ describe('useAnimatedLayout', () => {
       { initialProps: { l: layout({ root: [0, 0] }) } },
     );
     runFrames(0);
-    expect(result.current.durationScale).toBe(1);
 
-    // Expand-all: 9 of 10 nodes enter at once → duration scales down…
-    const unfolded = many(0);
+    // Expand-all: 9 of 10 nodes enter at once.
+    const unfolded = many(9);
     clock = 1000;
     rerender({ l: unfolded });
-    expect(result.current.durationScale).toBeCloseTo(1 - 0.6 * (9 / 10), 5);
-    // …so at half of LAYOUT_MS the glide has already landed.
     runFrames(1000 + LAYOUT_MS / 2);
+    expect(result.current.layout).not.toBe(unfolded); // still mid-flight at half
+    runFrames(1000 + LAYOUT_MS);
     expect(result.current.layout).toBe(unfolded);
 
-    // A pure re-layout of the same nodes runs at full duration again.
-    const moved = many(10);
+    // One more node joining a crowded map: identical timing, not slower.
+    const oneMore = many(10);
     clock = 2000;
-    rerender({ l: moved });
-    expect(result.current.durationScale).toBe(1);
+    rerender({ l: oneMore });
     runFrames(2000 + LAYOUT_MS / 2);
-    expect(result.current.layout).not.toBe(moved); // still mid-flight
+    expect(result.current.layout).not.toBe(oneMore);
     runFrames(2000 + LAYOUT_MS);
-    expect(result.current.layout).toBe(moved);
+    expect(result.current.layout).toBe(oneMore);
   });
 
   it('holds nodes that left at their last box, then drops them', () => {

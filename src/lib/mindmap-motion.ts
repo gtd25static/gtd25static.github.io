@@ -7,15 +7,20 @@ import type { LayoutRect, MindmapLayout } from './mindmap-layout';
 // is what lets the edges follow: a path's `d` is not reliably transitionable,
 // but recomputing endpoints from interpolated boxes always is.
 
-// Durations are deliberately short (user-tuned): the earlier 360/340/270ms
-// tuning was compensating for a bug that hid the animations entirely — once
-// visible, it read as sluggish. Keep the three in step if retuning.
+// Durations are deliberately short (user-tuned twice): the original 360/340/270
+// was compensating for a bug that hid the animations entirely, and the 90/85/70
+// that replaced it still read as sluggish on anything but a whole-map unfold.
+// These are the SAME for every transition — a five-node expand deep in the tree
+// must feel exactly like expanding the root, which is what an adaptive
+// per-transition scale (removed 2026-07-27) failed to deliver: it sped up big
+// reveals only, so the small toggles you do all day stayed the slow ones.
+// Keep the three in step if retuning, and mirror them in styles/index.css.
 /** Node boxes gliding to their new places after a re-layout. */
-export const LAYOUT_MS = 90;
+export const LAYOUT_MS = 45;
 /** A node appearing (expand, create). */
-export const ENTER_MS = 85;
+export const ENTER_MS = 42;
 /** A node leaving (collapse, delete) — quicker, exits shouldn't hold you up. */
-export const EXIT_MS = 70;
+export const EXIT_MS = 35;
 
 // Strength of the settle overshoot on the tail (larger = more bounce past the
 // target before it settles). 1.7 ≈ a ~5% overshoot of the move distance.
@@ -37,23 +42,6 @@ export function easeGlide(t: number): number {
   const u = 2 * t - 1;               // remap [0.5,1] → [0,1]
   const b = 1 + (SETTLE + 1) * (u - 1) ** 3 + SETTLE * (u - 1) ** 2; // easeOutBack, overshoots then settles to 1
   return 0.5 + 0.5 * b;
-}
-
-/** Floor for motionDurationScale — even a whole-map unfold stays visible. */
-export const MIN_DURATION_SCALE = 0.4;
-
-/**
- * Duration scale for one transition: 1 for a pure re-layout, shrinking towards
- * MIN_DURATION_SCALE as more of the target is nodes entering at once. A big
- * reveal (expanding the root, expand-all) must not hold the user hostage for
- * as long as a three-node toggle — at equal duration it reads as loading, not
- * motion. Applied to the JS glide AND, via --mm-duration-scale, to the CSS
- * enter fade; exits keep their fixed (already short) timing.
- */
-export function motionDurationScale(enteringCount: number, targetCount: number): number {
-  if (targetCount <= 0) return 1;
-  const entering = Math.min(Math.max(enteringCount, 0), targetCount) / targetCount;
-  return Math.max(MIN_DURATION_SCALE, 1 - 0.6 * entering);
 }
 
 export function prefersReducedMotion(): boolean {
