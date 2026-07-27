@@ -24,9 +24,13 @@ import {
   clampMindmapLabel,
 } from '../../hooks/use-mindmaps';
 import { restoreFromTrash, permanentlyDelete } from '../../hooks/use-trash';
+import { useMindmapUi } from '../../stores/mindmap-ui';
 
 beforeEach(async () => {
   await resetDb();
+  // Smart colouring is sticky across maps and lives in a module-level store —
+  // reset it so map creation doesn't depend on what an earlier test toggled.
+  useMindmapUi.getState().setSmartColoringDefault(false);
 });
 
 async function rootOf(mapId: string) {
@@ -383,5 +387,36 @@ describe('smart colouring', () => {
     expect(await setMindmapSmartColoring(map.id, false)).toBe(true);
     const off = assertDefined(await db.mindmaps.get(map.id));
     expect('smartColoring' in off).toBe(false); // off = no key, row stays clean
+  });
+
+  it('smart colouring sticks to the NEXT map created, never to existing ones', async () => {
+    const before = assertDefined(await createMindmap('Before'));
+    expect(before.smartColoring).toBeUndefined();
+
+    await setMindmapSmartColoring(before.id, true);
+    const after = assertDefined(await createMindmap('After'));
+    expect(after.smartColoring).toBe(true);
+    expect(after.fieldTimestamps?.smartColoring).toBeGreaterThan(0); // stamped like any field
+    expect((await db.mindmaps.get(after.id))?.smartColoring).toBe(true);
+
+    // A map that already existed when the toggle flipped keeps whatever it had.
+    const untouched = assertDefined(await createMindmap('Untouched'));
+    await setMindmapSmartColoring(after.id, false);
+    expect((await db.mindmaps.get(untouched.id))?.smartColoring).toBe(true);
+  });
+
+  it('the sticky default reaches imported maps, and off is sticky too', async () => {
+    const seed = assertDefined(await createMindmap('Seed'));
+    await setMindmapSmartColoring(seed.id, true);
+    const imported = assertDefined(
+      await createMindmapFromOutline('Imported', 'Root', [{ label: 'a', children: [] }]),
+    );
+    expect(imported.smartColoring).toBe(true);
+
+    await setMindmapSmartColoring(seed.id, false);
+    const plain = assertDefined(await createMindmap('Plain'));
+    expect('smartColoring' in plain).toBe(false);
+    const plainImport = assertDefined(await createMindmapFromOutline('I2', 'Root', []));
+    expect('smartColoring' in plainImport).toBe(false);
   });
 });

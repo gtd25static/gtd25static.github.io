@@ -13,6 +13,7 @@ import { buildTree } from '../lib/mindmap-tree';
 import { mapToOutline, type OutlineNode } from '../lib/mindmap-outline';
 import { isHexColor, isNodeShape, isPaletteId, type NodeStylePatch } from '../lib/mindmap-style';
 import type { BranchStyle } from '../lib/mindmap-smart-color';
+import { useMindmapUi } from '../stores/mindmap-ui';
 
 // --- Queries ---
 
@@ -331,6 +332,15 @@ export async function deleteMindmapFolder(id: string): Promise<void> {
 // --- Maps ---
 
 /** Create a map plus its root node (root label = map name) in one transaction. */
+/**
+ * Smart colouring is sticky across maps: whatever the toolbar toggle was last
+ * set to seeds the next map you create (existing maps never change). Spread into
+ * the row so "off" leaves no key at all, exactly like setMindmapSmartColoring.
+ */
+function smartColoringSeed(): { smartColoring?: true } {
+  return useMindmapUi.getState().smartColoringDefault ? { smartColoring: true } : {};
+}
+
 export async function createMindmap(name: string, folderId?: string): Promise<Mindmap | undefined> {
   try {
     const clean = clampMindmapLabel(name);
@@ -340,6 +350,7 @@ export async function createMindmap(name: string, folderId?: string): Promise<Mi
       id: newId(),
       name: clean,
       ...(folderId ? { folderId } : {}),
+      ...smartColoringSeed(),
       order: await nextMapOrder(folderId),
       createdAt: now,
       updatedAt: now,
@@ -393,6 +404,8 @@ export async function setMindmapSmartColoring(id: string, enabled: boolean): Pro
   try {
     const existing = await db.mindmaps.get(id);
     if (!existing || existing.deletedAt) return false;
+    // The choice sticks for maps created from here on (device-local, not synced).
+    useMindmapUi.getState().setSmartColoringDefault(enabled);
     const smartColoring = enabled ? true : undefined;
     if ((existing.smartColoring ?? undefined) === smartColoring) return true;
     const now = Date.now();
@@ -822,6 +835,7 @@ export async function createMindmapFromOutline(
       id: newId(),
       name: cleanName,
       ...(folderId ? { folderId } : {}),
+      ...smartColoringSeed(),
       order: await nextMapOrder(folderId),
       createdAt: now,
       updatedAt: now,

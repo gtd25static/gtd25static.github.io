@@ -57,8 +57,8 @@ export function MindmapStyleToolbar({ mapId, node, isRoot, nodes, background, sm
     <div className="flex items-center gap-1 overflow-x-auto border-b border-zinc-200 px-3 py-1.5 dark:border-zinc-800">
       <ToolButton
         label={smartColoring
-          ? 'Smart colouring on — new branches get their own colour'
-          : 'Smart colouring off — turn on to auto-colour new branches'}
+          ? 'Smart colouring on — new branches get their own colour. New maps will start with it on.'
+          : 'Smart colouring off — turn on to auto-colour new branches. New maps will start with it off.'}
         active={smartColoring}
         onClick={() => void setMindmapSmartColoring(mapId, !smartColoring)}
       >
