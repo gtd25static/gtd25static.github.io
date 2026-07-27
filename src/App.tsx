@@ -144,7 +144,9 @@ function UnlockedApp() {
         <ShareTargetPrompt {...shareTarget} />
         <AppShell />
         {/* Paranoid extra (opt-in): blur veil while unlocked but unattended. */}
-        {isParanoidEnabled() && localSettings.paranoidPrivacyOverlayEnabled && <PrivacyOverlay />}
+        {isParanoidEnabled() && localSettings.paranoidPrivacyOverlayEnabled && (
+          <PrivacyOverlay immediate={!!localSettings.paranoidPrivacyOverlayImmediate} />
+        )}
       </SpecialListProvider>
     </SyncProvider>
   );

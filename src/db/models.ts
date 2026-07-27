@@ -269,7 +269,8 @@ export interface LocalSettings {
   paranoidSystemLockGraceEnabled?: boolean; // device-local: defer app-lock after screen lock
   paranoidSystemLockGraceMinutes?: number;  // device-local grace duration (min) when grace enabled; default DEFAULT_SYSTEM_LOCK_GRACE_MINUTES
   // Paranoid extras — all opt-in (default off), all device-local, active only while Paranoid is on.
-  paranoidPrivacyOverlayEnabled?: boolean;  // blur veil when backgrounded / half-way to auto-lock
+  paranoidPrivacyOverlayEnabled?: boolean;  // blur veil after half the time left to auto-lock, in the background
+  paranoidPrivacyOverlayImmediate?: boolean; // ...or the instant it backgrounds (blanks task-switcher previews)
   paranoidBackgroundLockEnabled?: boolean;  // lock the vault after the tab has been hidden N seconds
   paranoidBackgroundLockSeconds?: number;   // 0 = the instant it hides; clamped 0-300, default 30
   paranoidLockHotkeyEnabled?: boolean;      // Ctrl/Cmd+Shift+L locks the vault instantly

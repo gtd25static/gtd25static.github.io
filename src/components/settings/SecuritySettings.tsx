@@ -356,10 +356,17 @@ function ParanoidExtrasSection() {
       </div>
       <ExtraToggle
         label="Privacy screen"
-        description="Blur the whole app when it goes to the background or sits untouched for half the auto-lock time. Any movement or key brings it back. Hides the screen from onlookers — the real protection is still the auto-lock."
+        description="Blur the whole app once it has been in the background — hidden, or just not the focused window — for half the time still left before the auto-lock. Any movement or key brings it back. Hides the screen from onlookers; the real protection is still the auto-lock."
         checked={!!local.paranoidPrivacyOverlayEnabled}
         onChange={(on) => updateLocalSettings({ paranoidPrivacyOverlayEnabled: on })}
-      />
+      >
+        <SubToggle
+          label="Blur the moment it goes to the background"
+          description="Skip the wait, whatever time is left before the auto-lock. Turn this on if you want the phone's app-switcher preview blanked: that snapshot is taken the instant you leave, so a delayed veil never reaches it."
+          checked={!!local.paranoidPrivacyOverlayImmediate}
+          onChange={(on) => updateLocalSettings({ paranoidPrivacyOverlayImmediate: on })}
+        />
+      </ExtraToggle>
       <ExtraToggle
         label="Lock when hidden"
         description="Lock the vault once this tab has been in the background for the delay below (0 = immediately). Catches tab switches, which the system idle lock doesn't see. Background timers are throttled, so read it as “at least” that many seconds."
@@ -480,6 +487,29 @@ function BackgroundLockDelay({ seconds }: { seconds: number }) {
         Save
       </Button>
     </div>
+  );
+}
+
+/** A checkbox nested under an ExtraToggle, shown only while the parent is on. */
+function SubToggle({ label, description, checked, onChange }: {
+  label: string;
+  description: string;
+  checked: boolean;
+  onChange: (on: boolean) => void | Promise<void>;
+}) {
+  return (
+    <label className="flex items-start gap-2 pl-6 text-xs text-zinc-600 dark:text-zinc-300">
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={(e) => void onChange(e.currentTarget.checked)}
+        className="mt-0.5 rounded accent-accent-600"
+      />
+      <span>
+        {label}
+        <span className="block text-[11px] text-zinc-400 dark:text-zinc-500">{description}</span>
+      </span>
+    </label>
   );
 }
 

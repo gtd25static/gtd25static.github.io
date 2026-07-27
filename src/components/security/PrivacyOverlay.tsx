@@ -1,58 +1,94 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { getVaultIdleState, touchVaultActivity } from '../../db/vault';
 
-// How often the foreground poll checks progress towards the idle lock. A poll
-// (vs. a timer armed per-activity) needs no hook into every touchVaultActivity
-// call site and self-corrects after background-tab timer throttling.
+// How often the countdown is checked. A poll (vs. a timer armed per-activity)
+// needs no hook into every touchVaultActivity call site and self-corrects after
+// background-tab timer throttling.
 const POLL_MS = 2_000;
-// The veil raises once this fraction of the idle window has passed untouched.
-const SHOW_AT_FRACTION = 0.5;
+/** How much of the time still left before the auto-lock the veil waits out. */
+const VEIL_AFTER_REMAINING_FRACTION = 0.5;
 
-// Privacy veil for Paranoid Mode (opt-in): while the vault is unlocked, blur
-// the whole app when the tab goes to the background or when more than half of
-// the idle window has elapsed without interaction — so an unattended-but-open
-// screen shows nothing readable during the run-up to the auto-lock.
+// Privacy veil for Paranoid Mode (opt-in): while the vault is unlocked, blur the
+// whole app once it has been in the background (tab hidden, or window unfocused)
+// for HALF the time that was still left before the auto-lock. A screen you walk
+// away from stops being readable well before it locks, while an app you are
+// merely looking at, or glanced away from for a moment, is never veiled.
+//
+// With `immediate` (the opt-in sub-setting) the veil raises on the way out
+// instead. That is the only way to blank the task-switcher preview: mobile
+// snapshots the app at the moment of backgrounding, long before any countdown
+// could expire.
 //
 // Deterrence, not cryptography: the content is still in the DOM behind CSS.
 // The auto-lock (which actually drops the DEK) is untouched underneath.
 //
 // Dismissing counts as vault activity (touchVaultActivity): a wake gesture is
-// real interaction, and without re-arming, elapsed time would still exceed the
-// threshold and the veil would re-raise on the next poll. pointermove is
-// listened to ONLY while the veil is up — it never becomes a general activity
-// source, so ACR-002 (only real interaction defers the lock) keeps its shape.
-export function PrivacyOverlay() {
+// real interaction. pointermove is listened to ONLY while the veil is up, so it
+// never becomes a general activity source and ACR-002 (only real interaction
+// defers the lock) keeps its shape. Waking an unfocused-but-visible window that
+// way restarts the countdown from that fresh activity — otherwise one stray
+// mouse move would disable the veil until the window was focused again.
+export function PrivacyOverlay({ immediate = false }: { immediate?: boolean }) {
   const [veiled, setVeiled] = useState(false);
   const [remainingMs, setRemainingMs] = useState<number | null>(null);
   const veiledRef = useRef(veiled);
   veiledRef.current = veiled;
+  const immediateRef = useRef(immediate);
+  immediateRef.current = immediate;
+  /** When to raise the veil, or null when we are not counting down. */
+  const veilAtRef = useRef<number | null>(null);
+  const backgroundRef = useRef(false);
 
-  // Raise: background immediately, foreground on the half-way poll.
+  const armCountdown = useCallback(() => {
+    const { lastActivityAt, timeoutMs } = getVaultIdleState();
+    const remaining = Math.max(0, lastActivityAt + timeoutMs - Date.now());
+    veilAtRef.current = Date.now() + remaining * VEIL_AFTER_REMAINING_FRACTION;
+  }, []);
+
+  const enterBackground = useCallback(() => {
+    backgroundRef.current = true;
+    if (veiledRef.current || veilAtRef.current !== null) return; // already veiled/counting
+    if (immediateRef.current) setVeiled(true);
+    else armCountdown();
+  }, [armCountdown]);
+
+  // Raise: only from the background, and only once the countdown has run out.
   useEffect(() => {
-    const onHidden = () => {
-      if (document.visibilityState === 'hidden') setVeiled(true);
+    const returnToForeground = () => {
+      backgroundRef.current = false;
+      veilAtRef.current = null;
     };
-    const onBlur = () => setVeiled(true);
+    const onVisibility = () => {
+      if (document.visibilityState === 'hidden') enterBackground();
+      else returnToForeground();
+    };
     const poll = setInterval(() => {
-      if (veiledRef.current) return;
-      const { lastActivityAt, timeoutMs } = getVaultIdleState();
-      if (Date.now() - lastActivityAt > timeoutMs * SHOW_AT_FRACTION) setVeiled(true);
+      if (veiledRef.current || veilAtRef.current === null) return;
+      if (Date.now() >= veilAtRef.current) setVeiled(true);
     }, POLL_MS);
-    document.addEventListener('visibilitychange', onHidden);
-    window.addEventListener('blur', onBlur);
+    document.addEventListener('visibilitychange', onVisibility);
+    window.addEventListener('blur', enterBackground);
+    window.addEventListener('focus', returnToForeground);
     return () => {
       clearInterval(poll);
-      document.removeEventListener('visibilitychange', onHidden);
-      window.removeEventListener('blur', onBlur);
+      document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('blur', enterBackground);
+      window.removeEventListener('focus', returnToForeground);
     };
-  }, []);
+  }, [enterBackground]);
 
   // Dismiss on any deliberate return: movement, press, key, focus, tab visible.
   useEffect(() => {
     if (!veiled) return;
     const dismiss = () => {
       touchVaultActivity();
+      veiledRef.current = false;
+      veilAtRef.current = null;
       setVeiled(false);
+      // Still away? Count down again from the activity just recorded. Not in
+      // immediate mode: there the veil belongs to the next backgrounding, and
+      // re-raising it here would make it impossible to dismiss.
+      if (backgroundRef.current && !immediateRef.current) armCountdown();
     };
     const onVisible = () => {
       if (document.visibilityState === 'visible') dismiss();
@@ -69,7 +105,7 @@ export function PrivacyOverlay() {
       window.removeEventListener('focus', dismiss);
       document.removeEventListener('visibilitychange', onVisible);
     };
-  }, [veiled]);
+  }, [veiled, armCountdown]);
 
   // Countdown to the real auto-lock while the veil is up.
   useEffect(() => {
