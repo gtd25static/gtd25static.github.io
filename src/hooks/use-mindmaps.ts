@@ -12,6 +12,7 @@ import { MAX_MINDMAP_LABEL_LENGTH, MAX_MINDMAP_IMPORT_NODES } from '../lib/const
 import { buildTree } from '../lib/mindmap-tree';
 import { mapToOutline, type OutlineNode } from '../lib/mindmap-outline';
 import { isHexColor, isNodeShape, isPaletteId, type NodeStylePatch } from '../lib/mindmap-style';
+import { linkifyLabel } from '../lib/mindmap-links';
 import type { BranchStyle } from '../lib/mindmap-smart-color';
 import { useMindmapUi } from '../stores/mindmap-ui';
 
@@ -570,7 +571,7 @@ export async function restoreMindmapFolder(id: string): Promise<void> {
 
 export async function createMindmapNode(mapId: string, parentId: string, label = 'New node', style?: BranchStyle): Promise<MindmapNode | undefined> {
   try {
-    const clean = clampMindmapLabel(label);
+    const clean = clampMindmapLabel(linkifyLabel(label));
     if (!clean) return undefined;
     const parent = await db.mindmapNodes.get(parentId);
     if (!parent || parent.deletedAt || parent.mapId !== mapId) return undefined;
@@ -604,7 +605,9 @@ export async function createMindmapNode(mapId: string, parentId: string, label =
 
 export async function updateMindmapNodeLabel(id: string, label: string): Promise<boolean> {
   try {
-    const clean = clampMindmapLabel(label);
+    // Bare URLs become links here, on the way in — so a typed or pasted URL is
+    // stored as [domain/page](url) and every reader of the row sees the same.
+    const clean = clampMindmapLabel(linkifyLabel(label));
     if (!clean) return false;
     const existing = await db.mindmapNodes.get(id);
     if (!existing) return false;
@@ -844,7 +847,7 @@ export async function createMindmapFromOutline(
 
     const nodes: MindmapNode[] = [];
     const makeNode = (label: string, parentId: string | undefined, order: number): MindmapNode => {
-      const clean = clampMindmapLabel(label) ?? '…';
+      const clean = clampMindmapLabel(linkifyLabel(label)) ?? '…';
       const node: MindmapNode = {
         id: newId(),
         mapId: map.id,

@@ -389,6 +389,28 @@ describe('smart colouring', () => {
     expect('smartColoring' in off).toBe(false); // off = no key, row stays clean
   });
 
+  it('stores a pasted URL as a link with a short label', async () => {
+    const map = assertDefined(await createMindmap('M'));
+    const root = await rootOf(map.id);
+    const node = assertDefined(
+      await createMindmapNode(map.id, root.id, 'read https://www.example.com/blog/2026/how-sleep-works'),
+    );
+    expect(node.label).toBe('read [example.com/how-sleep-works](https://www.example.com/blog/2026/how-sleep-works)');
+
+    await updateMindmapNodeLabel(node.id, 'https://example.com/a/b/c');
+    const updated = assertDefined(await db.mindmapNodes.get(node.id));
+    expect(updated.label).toBe('[example.com/c](https://example.com/a/b/c)');
+  });
+
+  it('linkifies URLs in an imported outline too', async () => {
+    const map = assertDefined(
+      await createMindmapFromOutline('Imported', 'Root', [{ label: 'src https://example.com/x/y', children: [] }]),
+    );
+    const nodes = await db.mindmapNodes.where('mapId').equals(map.id).toArray();
+    const child = assertDefined(nodes.find((n) => n.parentId));
+    expect(child.label).toBe('src [example.com/y](https://example.com/x/y)');
+  });
+
   it('smart colouring sticks to the NEXT map created, never to existing ones', async () => {
     const before = assertDefined(await createMindmap('Before'));
     expect(before.smartColoring).toBeUndefined();

@@ -82,7 +82,11 @@ All persistent entities live in IndexedDB via Dexie. Definitions: `src/db/models
   Layout is computed, never stored (strict left-to-right auto-layout in
   `src/lib/mindmap-layout.ts`; tree building + anomaly absorption in
   `src/lib/mindmap-tree.ts`; markdown-outline interchange in
-  `src/lib/mindmap-outline.ts`; per-node shape/colour formatting in
+  `src/lib/mindmap-outline.ts`; bare URLs rewritten to markdown links with a
+  `domain/last-segment` label (≤80 chars) on the way in — typed, pasted or
+  imported — in `src/lib/mindmap-links.ts`, purely local: page titles are NOT
+  fetched, which would need `connect-src` opened to the whole web and would
+  leak a reader's IP to every host a label mentions; per-node shape/colour formatting in
   `src/lib/mindmap-style.ts` (presets stored as ids that resolve to CSS
   variables, so they follow the theme; custom colours validated to `#rrggbb`
   on write *and* on render); PNG/SVG export rebuilt from the layout in
