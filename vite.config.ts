@@ -121,12 +121,12 @@ export default defineConfig({
         // auxiliary browsing context, and `window.open` is exactly an auxiliary
         // context — so the bookmarklet always landed in a browser tab (verified
         // on Chrome desktop / Win11, 2026-07-27). A protocol handler is the
-        // deterministic route: `web+gtd25:` links launch the installed app,
+        // deterministic route: `web+gtd:` links launch the installed app,
         // whatever opened them. `%s` arrives percent-encoded and is parsed by
         // parseProtocolCapture (src/hooks/use-url-capture.ts), which sanitises
         // it exactly like the ?capture query it replaces.
         protocol_handlers: [
-          { protocol: 'web+gtd25', url: '/?protocol=%s' },
+          { protocol: 'web+gtd', url: '/?protocol=%s' },
         ],
         icons: [
           { src: 'pwa-192.png', sizes: '192x192', type: 'image/png' },

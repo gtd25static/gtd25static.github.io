@@ -40,7 +40,7 @@ describe('useUrlCapture — share-target URL scrubbing (ACR-004)', () => {
   });
 
   it('captures a protocol-handler launch and scrubs it just as fast', async () => {
-    const payload = 'web+gtd25:capture?title=Secret%20page&url=https%3A%2F%2Fx.com';
+    const payload = 'web+gtd:capture?title=Secret%20page&url=https%3A%2F%2Fx.com';
     window.history.replaceState({}, '', `/?protocol=${encodeURIComponent(payload)}`);
 
     render(<Harness />);

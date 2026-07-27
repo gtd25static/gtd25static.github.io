@@ -1,12 +1,21 @@
 import { CAPTURE_PROTOCOL, parseProtocolCapture } from '../../hooks/use-url-capture';
 import { MAX_TITLE_LENGTH } from '../../lib/constants';
 
-// The payload of a `web+gtd25:` launch, as it reaches the app: Chrome
+// The payload of a `web+gtd:` launch, as it reaches the app: Chrome
 // percent-encodes the whole protocol URL into ?protocol=…, and URLSearchParams
 // has already undone that one layer by the time this parser sees it.
 function launched(title: string, url: string): string {
   return `${CAPTURE_PROTOCOL}capture?title=${encodeURIComponent(title)}&url=${encodeURIComponent(url)}`;
 }
+
+describe('CAPTURE_PROTOCOL', () => {
+  it('is a scheme the HTML spec actually allows to be registered', () => {
+    // "web+" followed by one or more ASCII LOWER ALPHAS — no digits. The first
+    // version of this was `web+gtd25:`, which Chrome refused to register at all
+    // ("the scheme does not have a registered handler") with no build-time error.
+    expect(CAPTURE_PROTOCOL).toMatch(/^web\+[a-z]+:$/);
+  });
+});
 
 describe('parseProtocolCapture', () => {
   it('reads the title and URL of the captured page', () => {

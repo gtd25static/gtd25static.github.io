@@ -26,12 +26,18 @@ export interface CaptureResult {
  * Custom scheme registered by the manifest's protocol_handlers. Chrome only
  * captures in-scope links from real link clicks — never from `window.open`,
  * which is what a bookmarklet does — so an https URL cannot reliably reach the
- * installed app. A `web+gtd25:` URL always launches it.
+ * installed app. A `web+gtd:` URL always launches it.
+ *
+ * Letters only after `web+`. HTML's registerProtocolHandler (which the manifest
+ * member defers to) takes "web+" followed by one or more ASCII LOWER ALPHAS, so
+ * the first attempt at this — `web+gtd25`, matching the app's name — was
+ * silently rejected: "the scheme does not have a registered handler". Keep the
+ * regex guard in the tests if you rename it.
  */
-export const CAPTURE_PROTOCOL = 'web+gtd25:';
+export const CAPTURE_PROTOCOL = 'web+gtd:';
 
 /**
- * Read a `web+gtd25:capture?title=…&url=…` payload. Chrome hands it to us
+ * Read a `web+gtd:capture?title=…&url=…` payload. Chrome hands it to us
  * percent-encoded in `?protocol=`, so by the time URLSearchParams has decoded
  * the outer layer this is the raw protocol URL. Parsed by hand rather than with
  * `new URL()`: only the query matters, and a hostile page can put anything in
@@ -84,7 +90,7 @@ export function formatCaptureResult(title: string, url: string, text: string): C
  * Triggers on:
  *   - /capture?title=...&url=...&text=... (Web Share Target on Android)
  *   - /?capture&title=...&url=... (bookmarklet, browser tab)
- *   - /?protocol=web%2Bgtd25%3Acapture%3F... (bookmarklet, installed app —
+ *   - /?protocol=web%2Bgtd%3Acapture%3F... (bookmarklet, installed app —
  *     Chrome's protocol handler launch; see parseProtocolCapture)
  */
 export function useUrlCapture() {
