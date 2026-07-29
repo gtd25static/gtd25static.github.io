@@ -40,6 +40,28 @@ export interface SharedPayloadMeta {
 }
 
 /**
+ * Is a fresh (unexpired) share payload waiting in the stash?
+ *
+ * Reads the stash's TIMESTAMP ONLY — never its title/text/url/filenames — so it
+ * is safe to call while the vault is locked, where the lock screen uses it to say
+ * "a share is waiting" without rendering any shared content (ACR-017).
+ */
+export async function hasFreshShareStash(): Promise<boolean> {
+  try {
+    // has() first: open() would CREATE the cache on a device that never received
+    // a share, leaving an empty shell behind.
+    if (typeof caches === 'undefined' || !(await caches.has(SHARE_CACHE))) return false;
+    const cache = await caches.open(SHARE_CACHE);
+    const metaRes = await cache.match(SHARE_META_PATH);
+    if (!metaRes) return false;
+    const meta = (await metaRes.json()) as SharedPayloadMeta;
+    return typeof meta?.ts === 'number' && Date.now() - meta.ts <= SHARE_STASH_TTL_MS;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Pick which shared files fit the stash caps, preserving share order. Returns the
  * files to stash and how many were skipped (surfaced to the user after consume).
  */

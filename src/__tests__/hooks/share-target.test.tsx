@@ -2,8 +2,9 @@
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import '../setup-component';
 import { vi, beforeEach, afterEach, describe, it, expect } from 'vitest';
+import { useState } from 'react';
 import {
-  SHARE_META_PATH, shareFilePath, SHARE_STASH_TTL_MS,
+  SHARE_META_PATH, shareFilePath, SHARE_STASH_TTL_MS, hasFreshShareStash,
   MAX_SHARE_FILES, MAX_SHARE_FILE_BYTES, MAX_SHARE_TOTAL_BYTES, selectFilesToStash,
   type SharedPayloadMeta,
 } from '../../lib/share-target';
@@ -317,6 +318,53 @@ describe('useShareTarget (Android share → destination prompt)', () => {
     await new Promise((r) => setTimeout(r, 20));
     expect(window.location.search).toBe('?capture&title=x'); // untouched without the shareTarget flag
     expect(cache.wasDeleted()).toBe(false);
+  });
+
+  // Paranoid Mode: the SW stashes the share whatever the vault state, and the hook
+  // lives in UnlockedApp — so a share received while locked must survive untouched
+  // until unlock (passphrase, security key or remote unlock, all the same mount)
+  // and only then raise the destination prompt.
+  it('holds a share that arrived while the vault was locked, then prompts on unlock', async () => {
+    window.history.replaceState({}, '', '/?shareTarget=1');
+    const cache = installFakeCaches(fileMeta(), fileBlobs);
+
+    function Gate() {
+      const [locked, setLocked] = useState(true);
+      return (
+        <>
+          <button onClick={() => setLocked(false)}>unlock</button>
+          {locked ? <div data-testid="lock-screen" /> : <Harness />}
+        </>
+      );
+    }
+    render(<Gate />);
+
+    // Locked: nothing consumes, saves or purges the stash — and the URL flag is
+    // left alone, so the redirect is still there for the post-unlock mount.
+    await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+    expect(screen.queryByTestId('pending-files')).toBeNull();
+    expect(createFileItem).not.toHaveBeenCalled();
+    expect(cache.wasDeleted()).toBe(false);
+    expect(window.location.search).toBe('?shareTarget=1');
+
+    fireEvent.click(screen.getByText('unlock'));
+
+    // Unlocked: the dialog resumes with the payload shared before the lock.
+    await waitFor(() => expect(screen.getByTestId('pending-files').textContent).toBe('photo.png'));
+    fireEvent.click(screen.getByText('to-folder'));
+    await waitFor(() => expect(createFileItem).toHaveBeenCalledTimes(1));
+    expect((createFileItem.mock.calls[0][0] as File).name).toBe('photo.png');
+  });
+
+  it('keeps a share held across a locked session that never unlocks (still fresh next start)', async () => {
+    window.history.replaceState({}, '', '/?shareTarget=1');
+    const cache = installFakeCaches(fileMeta(), fileBlobs);
+
+    const { unmount } = render(<div data-testid="lock-screen" />); // locked start: hook never mounts
+    unmount();
+
+    expect(cache.wasDeleted()).toBe(false);
+    expect(await hasFreshShareStash()).toBe(true);
   });
 
   it('tells the user when the SW skipped oversized files (ACR-018)', async () => {

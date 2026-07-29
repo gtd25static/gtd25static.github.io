@@ -7,6 +7,7 @@ import { useVault } from '../../hooks/use-vault';
 import { useLockScreenRemote } from '../../hooks/use-remote-unlock';
 import { useServiceWorker } from '../../hooks/use-service-worker';
 import { panicWipe } from '../../lib/panic-wipe';
+import { hasFreshShareStash, SHARE_STASH_TTL_MS } from '../../lib/share-target';
 import { PomodoroBar } from '../pomodoro/PomodoroBar';
 
 // Full-screen gate shown when Paranoid Mode is enabled but the vault is locked.
@@ -34,6 +35,21 @@ export function LockScreen() {
   // cleared/tampered localStorage cache can't hide the hardware-key unlock path and
   // push the user toward typing the passphrase on an untrusted device (ACR-012).
   useEffect(() => { void refreshSecurityKeyFlag(); }, []);
+
+  // A share received while locked is held by the service worker (Cache Storage,
+  // outside the vault) and filed only after unlock — say so, otherwise sharing into
+  // a locked app looks like it silently failed. Presence only: the notice reads the
+  // stash's timestamp, never its content, so nothing shared leaks onto the lock
+  // screen. Re-checked on re-show, for a share that lands while this screen is up.
+  const [shareWaiting, setShareWaiting] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    const check = () => void hasFreshShareStash().then((waiting) => { if (!cancelled) setShareWaiting(waiting); });
+    check();
+    const onVisible = () => { if (document.visibilityState === 'visible') check(); };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => { cancelled = true; document.removeEventListener('visibilitychange', onVisible); };
+  }, []);
 
   function handleCheckUpdate() {
     if (checkingUpdate) return;
@@ -106,6 +122,14 @@ export function LockScreen() {
           <span aria-hidden className="text-xl">🔒</span>
           <h1 className="text-lg font-medium text-zinc-800 dark:text-zinc-100">Vault locked</h1>
         </div>
+
+        {shareWaiting && (
+          <p className="mb-4 rounded-lg border border-zinc-200 bg-zinc-50 p-2.5 text-xs text-zinc-600 dark:border-zinc-700 dark:bg-zinc-800/60 dark:text-zinc-300">
+            📥 Shared content is waiting. It is held on this device outside the vault — so not yet
+            encrypted — for up to {Math.round(SHARE_STASH_TTL_MS / 3_600_000)} hours, and you will be
+            asked where to file it as soon as you unlock.
+          </p>
+        )}
 
         {hasSecurityKey && (
           <div className="mb-4">

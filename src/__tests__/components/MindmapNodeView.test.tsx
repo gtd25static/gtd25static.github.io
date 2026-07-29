@@ -25,6 +25,20 @@ function renderNode(props: Partial<React.ComponentProps<typeof MindmapNodeView>>
   return container.querySelector('g.mm-node-box') as SVGGElement;
 }
 
+describe('MindmapNodeView label clamping', () => {
+  const labelBox = (props: Partial<React.ComponentProps<typeof MindmapNodeView>>) =>
+    renderNode(props).querySelector('foreignObject > div > div') as HTMLDivElement;
+
+  it('clamps a long label to 4 lines at rest', () => {
+    expect(labelBox({ node: node({ label: 'word '.repeat(120) }) }).className).toContain('line-clamp-4');
+  });
+
+  it('drops the clamp while selected or editing, so the whole label is readable', () => {
+    expect(labelBox({ selected: true }).className).not.toContain('line-clamp');
+    expect(labelBox({ editing: true }).className).not.toContain('line-clamp');
+  });
+});
+
 describe('MindmapNodeView animation classes', () => {
   it('always carries mm-node-box (the transform-box: fill-box carrier)', () => {
     expect(renderNode()).toBeTruthy();

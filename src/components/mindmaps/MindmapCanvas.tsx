@@ -544,6 +544,8 @@ export function MindmapCanvas({ mapId, background, smartColoring }: { mapId: str
       className="relative flex-1 overflow-hidden outline-none"
       style={background ? { background } : undefined}
       data-testid="mindmap-canvas"
+      // Horizontal drags here pan the map; they must not also open the sidebar.
+      data-no-sidebar-swipe
     >
       <svg
         ref={svgRef}

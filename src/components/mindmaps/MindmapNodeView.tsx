@@ -40,7 +40,7 @@ interface Props {
 // in a foreignObject centred on top of it. The label measures itself
 // (width: max-content, capped per shape) and the canvas lays out from
 // shapeSize() of that — so a circle takes its label's diagonal and a diamond
-// grows both ways. Long labels clamp to 3 lines unless selected/editing.
+// grows both ways. Long labels clamp to 4 lines unless selected/editing.
 export const MindmapNodeView = memo(function MindmapNodeView({
   node, rect, selected, hovered, editing, isRoot, isDragSource, isDropTarget,
   animateIn, leaving, stylePreview, onMeasure, onPointerDown, onCommitEdit, onCancelEdit,
@@ -159,7 +159,7 @@ export const MindmapNodeView = memo(function MindmapNodeView({
         >
           <div
             ref={boxRef}
-            className={`select-none px-1 text-sm leading-snug ${clamped ? 'line-clamp-3' : ''}`}
+            className={`select-none px-1 text-sm leading-snug ${clamped ? 'line-clamp-4' : ''}`}
             style={{ width: 'max-content', maxWidth: textMaxWidth }}
           >
             {editing ? (
