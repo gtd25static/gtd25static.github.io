@@ -2,13 +2,17 @@
 //
 // Security shape, deliberately narrow: the channel carries SIGNALS ONLY — never
 // a key, a passphrase or any content — and every signal it can carry only ever
-// REDUCES access (lock, wipe). There is no "unlock" message and there must never
-// be one: propagating an unlock would mean shipping the DEK between contexts,
+// REDUCES access (lock, wipe, reload). There is no "unlock" message and there must
+// never be one: propagating an unlock would mean shipping the DEK between contexts,
 // and a same-origin script could then talk its way into a vault it never had.
 // A dropped or ignored message degrades to the old per-tab behaviour, so nothing
 // depends on delivery.
+//
+// `reload` = lock, then reload the tab: the vault was re-keyed underneath it (a
+// secondary-passphrase unlock in another tab), so nothing it still holds in memory
+// may outlive that.
 
-export type TabSignal = { type: 'lock' } | { type: 'wipe' };
+export type TabSignal = { type: 'lock' } | { type: 'wipe' } | { type: 'reload' };
 
 const CHANNEL_NAME = 'gtd25-tabs';
 
@@ -42,7 +46,7 @@ export function onTabSignal(handler: (signal: TabSignal) => void): () => void {
   const listener = (event: MessageEvent) => {
     // Anything else on this channel is not ours: validate before acting.
     const data = event.data as Partial<TabSignal> | null;
-    if (data && (data.type === 'lock' || data.type === 'wipe')) handler(data as TabSignal);
+    if (data && (data.type === 'lock' || data.type === 'wipe' || data.type === 'reload')) handler(data as TabSignal);
   };
   ch.addEventListener('message', listener);
   return () => ch.removeEventListener('message', listener);

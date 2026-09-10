@@ -18,8 +18,10 @@ import type { DiscussionEntry, TaskLink } from '../db/models';
 // keeping them makes the decoy resolvable and consistent.
 export const STRUCTURAL_KEEP: Record<string, string[]> = {
   // A shared item stays the same KIND (link/file/snippet) pointing at its now-
-  // dummy blob; only its human-readable name/url are decoyed.
-  sharedItem: ['type', 'size', 'blobId', 'mimeType'],
+  // dummy blob. Its name/url are decoyed, and its size/type are rewritten to
+  // describe that dummy blob: a "5 MB PNG" that opens as a few words of text
+  // would give the swap away.
+  sharedItem: ['type', 'blobId'],
   // Canvas/node colours and shapes are cosmetic, not content.
   mindmap: ['background'],
   mindmapNode: ['shape', 'palette', 'colorBg', 'colorFg', 'colorBorder'],
@@ -94,6 +96,13 @@ export function placeholderRow(entityType: string, row: Row): Row {
         break;
       case 'discussionLog':
         out[field] = Array.isArray(out[field]) ? placeholderDiscussion(id, out[field] as DiscussionEntry[]) : out[field];
+        break;
+      case 'size':
+        // Only a blob-backed item has bytes to describe; a link's size stays as is.
+        if (row.blobId) out[field] = placeholderBlobBytes(String(row.blobId)).length;
+        break;
+      case 'mimeType':
+        out[field] = 'text/plain'; // what the dummy blob actually is
         break;
       default:
         // title / name / label / linkTitle and any future text field → short lorem

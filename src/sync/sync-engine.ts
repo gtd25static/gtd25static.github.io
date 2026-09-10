@@ -4,7 +4,7 @@ import type { ImportData } from '../db/export-import';
 import { getFile, getFileConditional, putFile, deleteFile, RateLimitError } from './github-api';
 import { jitterInterval } from './poll-jitter';
 import { cleanupSoftDeletes, archiveOldCompleted } from './conflict-resolution';
-import { applyRemoteEntries, getPendingEntries, clearPendingEntries, clearEntriesByIds, pendingEntryCount } from './change-log';
+import { applyRemoteEntries as applyRemoteEntriesToDb, getPendingEntries, clearPendingEntries, clearEntriesByIds, pendingEntryCount } from './change-log';
 import { mergeEntity, stampUpdatedFields } from './field-timestamps';
 import { toast } from '../components/ui/Toast';
 import { SYNC_VERSION, isCompatibleVersion, needsMigration } from './version';
@@ -45,8 +45,18 @@ const MAX_RETRIES = 3;
 const MAX_REMOTE_BACKUPS = 2;
 const SYNC_TIMEOUT_MS = 45_000;
 
+// Every local write of fetched data first checks that the operation that fetched
+// it is still alive: endSyncSession() (the vault locking) aborts it, and what it
+// already holds must then never reach the disk. Shadowing the import keeps each
+// call site as it was and makes the check impossible to forget at a new one.
+async function applyRemoteEntries(entries: ChangeEntry[]): Promise<void> {
+  syncAbort?.signal.throwIfAborted();
+  return applyRemoteEntriesToDb(entries);
+}
+
 // --- Snapshot reconciliation (catches compaction gaps) ---
 async function reconcileFromSnapshot(snapshot: SyncData) {
+  syncAbort?.signal.throwIfAborted();
   // Helper: reconcile a collection using field-level merge. Crypto for Paranoid
   // at-rest storage is done before the write transaction so Safari cannot
   // auto-close the transaction during a crypto.subtle await.
@@ -128,6 +138,7 @@ async function reconcileFromSnapshot(snapshot: SyncData) {
 }
 
 async function replaceLocalEntitiesFromSnapshot(snapshot: Pick<SyncData, 'taskLists' | 'tasks' | 'subtasks' | 'sharedItems' | 'mindmapFolders' | 'mindmaps' | 'mindmapNodes'>): Promise<void> {
+  syncAbort?.signal.throwIfAborted(); // see applyRemoteEntries above
   // Bootstrap / force-pull / ZIP import / backup-restore can all carry pre-v5
   // data with the removed 'working' status — normalize before writing locally.
   const prepared = await prepareSyncDataForAtRest({
@@ -334,6 +345,23 @@ function acquireSyncLock(): AbortSignal | null {
 function releaseSyncLock() {
   syncStartedAt = null;
   syncAbort = null;
+}
+
+/**
+ * End this tab's sync session — called when a Paranoid vault locks. Aborts the
+ * operation in flight, which stops at its next request or local write, so nothing
+ * it already fetched lands on disk afterwards (unencrypted while locked, or inside
+ * whichever vault is unlocked next); and drops the credentials and remote state
+ * cached for flushOnHide. The sync lock is released by that operation's finally.
+ */
+export function endSyncSession(): void {
+  syncAbort?.abort();
+  cachedCreds = null;
+  cachedChangelogSha = undefined;
+  cachedRemoteEntries = [];
+  cachedChangelogTimestamp = 0;
+  probeChangelogEtag = null;
+  probeSnapshotEtag = null;
 }
 
 // --- Dirty flag ---

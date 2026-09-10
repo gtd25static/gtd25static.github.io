@@ -12,9 +12,20 @@ export interface MergeSuggestionGroup {
 }
 
 /**
- * Near-duplicate groups within a single list. Compares live, actionable entries
- * only — excludes deleted, completed tasks, and resolved (archived) follow-ups.
- * Per-list by construction; never crosses lists.
+ * Whether a task may take part in merge suggestions: live, actionable entries only
+ * (not deleted, completed, or a resolved follow-up), and never a row the vault
+ * could not decrypt — every quarantined row reads "⚠︎ unreadable", so they look
+ * like duplicates of each other, and merging would destroy a row that is still
+ * recoverable by re-syncing.
+ */
+export function isMergeCandidate(task: Task, listType: ListType): boolean {
+  if (task.deletedAt || (task as { _decryptError?: boolean })._decryptError) return false;
+  return listType === 'follow-ups' ? !task.archived : task.status !== 'done';
+}
+
+/**
+ * Near-duplicate groups within a single list, among merge candidates (see
+ * isMergeCandidate). Per-list by construction; never crosses lists.
  */
 export function useMergeSuggestions(
   listId: string | null,
@@ -24,10 +35,7 @@ export function useMergeSuggestions(
     async () => {
       if (!listId) return [];
       const all = await db.tasks.where('listId').equals(listId).sortBy('order');
-      return all.filter((t) => {
-        if (t.deletedAt) return false;
-        return listType === 'follow-ups' ? !t.archived : t.status !== 'done';
-      });
+      return all.filter((t) => isMergeCandidate(t, listType));
     },
     [listId, listType],
     [],

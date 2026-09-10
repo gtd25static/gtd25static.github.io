@@ -5,6 +5,7 @@ import { db } from '../../db';
 import { deriveKey, generateSalt, checkVerifier, cacheEncryptionKey } from '../../sync/crypto';
 import { getFile } from '../../sync/github-api';
 import { onEncryptionPasswordNeeded, offEncryptionPasswordNeeded, syncNow } from '../../sync/sync-engine';
+import { getSyncPat, rememberSyncPassword } from '../../sync/sync-credentials';
 import { checkSecretStrength } from '../../lib/password-strength';
 import { PasswordStrengthBar } from '../ui/PasswordStrengthBar';
 
@@ -76,7 +77,7 @@ export function EncryptionPasswordModal() {
         cacheEncryptionKey(key, newSalt);
 
         // Save password
-        await db.localSettings.update('local', { encryptionPassword: password });
+        await rememberSyncPassword(password); // the vault on a Paranoid device, never plaintext
 
         // Close modal and retry sync
         setSalt(null);
@@ -90,12 +91,13 @@ export function EncryptionPasswordModal() {
 
         // Verify against remote
         const local = await db.localSettings.get('local');
-        if (!local?.githubPat || !local?.githubRepo) {
+        const pat = await getSyncPat(); // a Paranoid device keeps it in the vault
+        if (!pat || !local?.githubRepo) {
           setError('Sync not configured');
           return;
         }
 
-        const file = await getFile(local.githubPat, local.githubRepo, 'gtd25-snapshot.json');
+        const file = await getFile(pat, local.githubRepo, 'gtd25-snapshot.json');
         if (!file) {
           setError('Could not fetch remote data');
           return;
@@ -120,7 +122,7 @@ export function EncryptionPasswordModal() {
 
         // Save password if requested
         if (rememberPassword) {
-          await db.localSettings.update('local', { encryptionPassword: password });
+          await rememberSyncPassword(password); // the vault on a Paranoid device, never plaintext
         }
 
         // Close modal and retry sync

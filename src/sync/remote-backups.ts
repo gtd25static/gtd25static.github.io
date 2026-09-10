@@ -69,6 +69,10 @@ export async function maybeCreateBackups(
 
   // Random jitter: spread out devices to avoid thundering herd
   await new Promise((r) => setTimeout(r, Math.random() * 30_000));
+  // Checked again: Paranoid Mode may have been enabled during the wait — or the
+  // vault locked, or re-keyed by the secondary passphrase — and what gets read and
+  // pushed below is whatever this device holds by now.
+  if (isParanoidFlagSet()) return;
 
   // Fetch existing backup files in parallel for SHA + remote freshness check
   const remoteResults = await Promise.allSettled(

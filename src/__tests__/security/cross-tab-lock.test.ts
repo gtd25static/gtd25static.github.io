@@ -70,6 +70,17 @@ describe('cross-tab vault lock', () => {
     stop();
   });
 
+  it('locks this tab when another tab asks it to reload (its vault changed underneath)', async () => {
+    const stop = startCrossTabLock();
+    await enableParanoid(PASSPHRASE);
+
+    otherTab().post({ type: 'reload' });
+    await settle(() => !isUnlocked());
+
+    expect(isUnlocked()).toBe(false);
+    stop();
+  });
+
   it('tells the other tabs when this one locks', async () => {
     const other = otherTab().listen();
     await enableParanoid(PASSPHRASE);

@@ -4,6 +4,10 @@ import { generateDek, wrapDek, generateGarbageSlot } from './vault-crypto';
 import { createVerifier, encryptBlob } from '../sync/crypto';
 import { encryptRow, type Row } from './vault-middleware';
 import { placeholderRow, placeholderBlobBytes } from '../lib/placeholder-content';
+import { purgeLocalBackups } from './backup';
+import { SHARE_CACHE } from '../lib/share-target';
+import { clearErrorLog } from '../lib/diagnostics';
+import { newId } from '../lib/id';
 
 // Duress unlock: entering the duress passphrase looks like a normal unlock but
 // atomically replaces ALL real content with decoy lorem (structure preserved)
@@ -21,7 +25,18 @@ import { placeholderRow, placeholderBlobBytes } from '../lib/placeholder-content
 //    verifier, secrets, PRF security keys, the remote-unlock wrap, the changelog
 //    (old `_enc` snapshots), sync bookkeeping and the shared-blob cache.
 //  - Sync credentials are dropped, so the decoy can't be pushed over the real
-//    data on the backend and the adversary gets no live sync to lean on.
+//    data on the backend and the adversary gets no live sync to lean on — and so
+//    is what ties this device to the real repo (repo name, device id, the
+//    remote-unlock identity) and what only a synced device would have.
+//  - What lives OUTSIDE IndexedDB is destroyed right after the commit: the
+//    device-local safety backups (encrypted under the old DEK — unreadable, but
+//    listed with their dates in Settings and failing to restore, which would
+//    expose the swap), a share stashed while locked (PLAINTEXT, and offered by
+//    the share prompt on the next unlocked start), the diagnostics log (sync
+//    activity, remote file names), sync bookkeeping in localStorage, and the
+//    app's notifications (nudges quote real task titles). None of it can join the
+//    Dexie transaction; a tab killed in between leaves it behind on an already
+//    re-keyed device — never a half-swapped vault.
 //
 // Residual (documented, not hidden): IndexedDB does not securely erase
 // overwritten pages, so a forensic image taken AFTER this runs may still contain
@@ -39,6 +54,16 @@ const CONTENT_TABLES: Array<{ name: string; entityType: string; table: () => imp
   { name: 'mindmapNodes', entityType: 'mindmapNode', table: () => db.mindmapNodes as unknown as import('dexie').Table<unknown, string> },
 ];
 
+// localStorage keys that only exist once sync has run on this device (owned by
+// sync-engine and remote-backups; pinned by the reliability test).
+const SYNC_HISTORY_KEYS = [
+  'gtd25-legacy-checked',
+  'gtd25-sync-dirty',
+  'gtd25-backup-hourly-at',
+  'gtd25-backup-daily-at',
+  'gtd25-backup-weekly-at',
+];
+
 /**
  * Re-key the vault to decoy content. `realDek` was just unwrapped from slot 2;
  * `duressKek` is the KEK derived from the duress passphrase during that unlock
@@ -50,9 +75,16 @@ const CONTENT_TABLES: Array<{ name: string; entityType: string; table: () => imp
  */
 export async function reinitVaultWithPlaceholders(vault: Vault, realDek: CryptoKey, duressKek: CryptoKey): Promise<CryptoKey> {
   // 1. Read + decrypt every content row (real DEK is the active middleware key).
+  //    A row still carrying `_enc` was read WITHOUT the key: its decoy would keep
+  //    that ciphertext (encryptRow passes `_enc` rows through) and land in the new
+  //    vault unreadable — so refuse before anything is written. A quarantined row
+  //    (`_decryptError`) is different: its real content is already unreadable, so
+  //    it gets a decoy like any other, minus the corruption flag.
   const plainByTable = new Map<string, Row[]>();
   for (const t of CONTENT_TABLES) {
-    plainByTable.set(t.name, (await t.table().toArray()) as Row[]);
+    const rows = (await t.table().toArray()) as Row[];
+    if (rows.some((r) => r._enc !== undefined)) throw new Error(`${t.name} read without the vault key`);
+    plainByTable.set(t.name, rows.map(({ _decryptError: _corrupt, ...row }) => row));
   }
   const blobs = await db.sharedBlobs.toArray();
 
@@ -107,15 +139,39 @@ export async function reinitVaultWithPlaceholders(vault: Vault, realDek: CryptoK
       await db.changeLog.clear();     // old `_enc` snapshots under the real DEK
       await db.syncMeta.clear();      // remote SHAs / pull cursors of the real repo
       await db.vault.put(newVault);
-      // Cover story: sync was never set up here. Drop any plaintext creds too.
+      // Cover story: sync was never set up here. Drop any plaintext creds too, and
+      // what ties this device to the real repo: its name, the device id every real
+      // change was stamped with, the remote-unlock identity published in the repo's
+      // device registry. The unlock log keeps only passphrase entries — a security
+      // key or remote unlock can't have happened on a vault that has neither.
+      const local = await db.localSettings.get('local');
       await db.localSettings.update('local', {
         githubPat: undefined,
         encryptionPassword: undefined,
+        githubRepo: undefined,
         syncEnabled: false,
+        changelogPruned: undefined,
         remoteApproverFor: undefined,
+        deviceId: newId(),
+        deviceIdentity: undefined,
+        unlockLog: local?.unlockLog?.filter((e) => e.method === 'passphrase'),
       });
     },
   );
+
+  // 5. Outside IndexedDB (see the header) — only once the swap has committed.
+  purgeLocalBackups();
+  for (const key of SYNC_HISTORY_KEYS) {
+    try { localStorage.removeItem(key); } catch { /* storage unavailable */ }
+  }
+  clearErrorLog();
+  try {
+    if (typeof caches !== 'undefined') await caches.delete(SHARE_CACHE);
+  } catch { /* no Cache Storage in this context: nothing was stashed */ }
+  try {
+    const registration = await navigator.serviceWorker?.getRegistration();
+    for (const notification of (await registration?.getNotifications()) ?? []) notification.close();
+  } catch { /* no service worker or notifications in this context */ }
 
   void realDek; // consumed only as the read key before this call; not persisted
   return newDek;

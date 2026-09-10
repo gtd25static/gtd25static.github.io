@@ -32,13 +32,27 @@ interface StoredBackup extends Partial<BackupPayload> {
 }
 
 function listBackupKeys(): string[] {
-  return Object.keys(localStorage).filter((k) => k.startsWith(BACKUP_KEY_PREFIX)).sort().reverse();
+  // The Storage index API rather than Object.keys, which only happens to list the
+  // stored keys in browsers (not in every Storage implementation, e.g. the tests').
+  const keys: string[] = [];
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i);
+    if (key?.startsWith(BACKUP_KEY_PREFIX)) keys.push(key);
+  }
+  return keys.sort().reverse();
 }
 
 function pruneOldBackups() {
   for (const key of listBackupKeys().slice(MAX_BACKUPS)) {
     localStorage.removeItem(key);
   }
+}
+
+/** Delete every safety backup on this device (Paranoid enable, secondary unlock). */
+export function purgeLocalBackups(): void {
+  try {
+    for (const key of listBackupKeys()) localStorage.removeItem(key);
+  } catch { /* storage unavailable: nothing we could remove */ }
 }
 
 async function readPayload(): Promise<BackupPayload> {

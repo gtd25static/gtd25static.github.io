@@ -18,14 +18,18 @@
 //     changeSpec, so encrypting `values` on add/put is sufficient.
 //
 // The key is provided lazily via setVaultKeyProvider(). When it returns null
-// (Paranoid Mode off, or vault locked) the middleware is a transparent
-// pass-through — zero behavior change. setMigrationBypass(true) forces
-// pass-through even while a key is set; the disable migration uses it to write
-// plaintext back to disk.
+// with Paranoid Mode off, the middleware is a transparent pass-through — zero
+// behavior change. With Paranoid Mode on and no key (the vault is locked), reads
+// still pass through (rows stay ciphertext) but a write that would store
+// plaintext content is REFUSED: whatever was still running when the vault locked
+// must fail rather than put real content on disk unencrypted.
+// setMigrationBypass(true) forces pass-through even while a key is set; the
+// disable migration uses it to write plaintext back to disk.
 
 import Dexie, { type Middleware, type DBCore, type DBCoreTable } from 'dexie';
 import { encryptEntity, decryptEntity } from '../sync/crypto';
 import { recordError } from '../lib/diagnostics';
+import { isParanoidFlagSet } from './paranoid-flag';
 
 // Dexie table name -> entity type understood by SENSITIVE_FIELDS in crypto.ts.
 const ENTITY_TYPE_BY_TABLE: Record<string, string> = {
@@ -281,6 +285,14 @@ export const vaultMiddleware: Middleware<DBCore> = {
                 const values = await Promise.all(rows.map((v) => encryptRow(tableName, key, v)));
                 return downTable.mutate({ ...req, values: values as typeof req.values });
               })());
+            }
+            // Locked Paranoid device: never let plaintext content through (see the
+            // header). Deletes and rows already carrying `_enc` pass — the boot-time
+            // cleanups do exactly that while locked — and so does the migration bypass.
+            if (!key && !migrationBypass && isParanoidFlagSet()
+              && (req.type === 'add' || req.type === 'put')
+              && (req.values as Row[]).some((v) => needsEncryption(tableName, v))) {
+              throw new Error(`The vault is locked: refusing to write unencrypted ${tableName}`);
             }
             return downTable.mutate(req);
           },

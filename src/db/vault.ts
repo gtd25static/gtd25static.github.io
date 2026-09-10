@@ -24,6 +24,7 @@ import { recordUnlockAttempt, type UnlockMethod } from '../lib/unlock-audit';
 import { pruneHistory } from '../lib/relaxed-unlock';
 import { checkSecretStrength } from '../lib/password-strength';
 import { reinitVaultWithPlaceholders } from './vault-reinit';
+import { purgeLocalBackups } from './backup';
 import { onTabSignal, signalOtherTabs } from '../lib/tab-channel';
 import type { LocalSettings, Vault, PrfCredential } from './models';
 
@@ -209,8 +210,16 @@ export async function setVaultSecrets(patch: VaultSecrets): Promise<void> {
   });
 }
 
+// True only while a secondary unlock re-keys the vault (see applySecondaryUnlock).
+// The re-init reads the real content through currentDek, so a lock landing in that
+// window — another tab's idle lock or hotkey — would null the key halfway through
+// the read. This tab is still at its lock screen with nothing a lock could take
+// away, so such a signal is not for it.
+let rekeying = false;
+
 /** Drop the keys held by THIS tab. */
 function lockThisTab(): void {
+  if (rekeying) return;
   currentDek = null;
   currentSecrets = null;
   if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
@@ -401,10 +410,20 @@ async function doUnlockWithPassphrase(passphrase: string): Promise<boolean> {
 // back to a normal 'wrong credential', because the re-key is atomic (rolled back
 // on error) and the real passphrase still works afterwards.
 async function applySecondaryUnlock(vault: Vault, realDek: CryptoKey, secondaryKek: CryptoKey): Promise<boolean> {
+  // Another tab may be open and unlocked with the real key: it would keep showing
+  // the real content and write rows under a key about to stop existing. Lock it
+  // first. (A normal unlock sends nothing — only this path makes their key stale.)
+  signalOtherTabs({ type: 'lock' });
+  rekeying = true;
   try {
     currentDek = realDek; // make the real DEK the middleware read-key for the re-key
     const newDek = await reinitVaultWithPlaceholders(vault, realDek, secondaryKek);
     currentDek = null;
+    rekeying = false; // from here on, locks behave as during any other unlock
+    // The other tabs locked before the re-key, but their memory still holds what
+    // they showed and fetched under the real key. Reload them now that the swap is
+    // on disk, so they come back up knowing only the placeholder vault.
+    signalOtherTabs({ type: 'reload' });
     setKeyFlag(false); // PRF security keys were dropped in the re-key
     const rekeyed = await db.vault.get('vault');
     if (!rekeyed) { lastUnlockFailure = 'corrupt-vault'; return false; }
@@ -412,9 +431,13 @@ async function applySecondaryUnlock(vault: Vault, realDek: CryptoKey, secondaryK
   } catch (err) {
     // Roll back any in-memory key; the transaction already rolled back on disk.
     currentDek = null;
-    recordError('vault.secondaryUnlock', err);
+    // A neutral label: the diagnostics log is readable from Settings, and this
+    // failure must read like any other unlock problem.
+    recordError('vault.unlock', err);
     lastUnlockFailure = 'wrong-credential';
     return false;
+  } finally {
+    rekeying = false;
   }
 }
 
@@ -434,6 +457,12 @@ export async function setSecondaryPassphrase(duressPassphrase: string): Promise<
 
   const vault = await db.vault.get('vault');
   if (!vault) throw new Error('Vault not found');
+  // Slot 2 is wrapped under this vault's salt + KDF. A legacy PBKDF2 vault moves to
+  // Argon2id (with a new salt) the next time the main passphrase unlocks it, which
+  // would leave slot 2 unopenable — failing as a wrong passphrase exactly when used.
+  if ((vault.kdf?.algo ?? 'pbkdf2') !== DEFAULT_ARGON2.algo) {
+    throw new Error('Lock and unlock once with your main passphrase first, then set the secondary passphrase');
+  }
   let kek: CryptoKey;
   try {
     kek = await deriveVaultKek(trimmed, vault.passSalt, vault.kdf ?? LEGACY_KDF);
@@ -672,14 +701,24 @@ export async function clearRemoteUnlock(): Promise<void> {
   await db.vault.update('vault', { dekWrappedByRuk: undefined, rukWrappedByDek: undefined, remoteUnlock: undefined });
 }
 
-/** Re-wrap the DEK under a (possibly new) passphrase with the current KDF. */
+/**
+ * Re-wrap the DEK under a (possibly new) passphrase. The salt and KDF stay as they
+ * are: slot 2 (the secondary passphrase) is wrapped under a KEK derived from them
+ * and can't be re-wrapped without that passphrase, so a fresh salt here silently
+ * turned it into a wrong passphrase. Only a legacy PBKDF2 vault moves to a new salt
+ * and the current Argon2id params — setSecondaryPassphrase refuses those vaults, so
+ * no slot 2 depends on what changes.
+ */
 async function rewrapPassphrase(passphrase: string): Promise<void> {
   if (!currentDek) return;
-  if (!(await db.vault.get('vault'))) return;
-  const passSalt = generateSalt();
-  const kek = await deriveVaultKek(passphrase, passSalt, kdfParams);
+  const vault = await db.vault.get('vault');
+  if (!vault) return;
+  const upgrading = (vault.kdf?.algo ?? 'pbkdf2') !== DEFAULT_ARGON2.algo;
+  const passSalt = upgrading ? generateSalt() : vault.passSalt;
+  const kdf = upgrading ? kdfParams : (vault.kdf ?? kdfParams);
+  const kek = await deriveVaultKek(passphrase, passSalt, kdf);
   const dekWrappedByPass = await wrapDek(kek, currentDek);
-  await db.vault.update('vault', { passSalt, dekWrappedByPass, kdf: kdfParams });
+  await db.vault.update('vault', { passSalt, dekWrappedByPass, kdf });
 }
 
 /** Re-wrap the DEK under a new passphrase. Requires the vault to be unlocked. */
@@ -722,14 +761,6 @@ export async function configureMaxUnlockAttempts(n: number): Promise<void> {
     await db.vault.update('vault', { maxUnlockAttempts: max });
   }
   await patchLocalSettings({ paranoidMaxUnlockAttempts: max });
-}
-
-function purgeLocalBackups(): void {
-  try {
-    for (const k of Object.keys(localStorage)) {
-      if (k.startsWith('gtd25-local-backup-')) localStorage.removeItem(k);
-    }
-  } catch { /* ignore */ }
 }
 
 // Test-only: reset in-memory state without touching persistence.

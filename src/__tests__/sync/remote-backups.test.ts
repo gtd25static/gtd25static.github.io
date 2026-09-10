@@ -279,3 +279,24 @@ describe('listRemoteBackups', () => {
     expect(backups).toEqual([]);
   });
 });
+
+describe('maybeCreateBackups — Paranoid Mode', () => {
+  afterEach(() => {
+    localStorage.removeItem('gtd25-paranoid');
+  });
+
+  it('a device that turns Paranoid during the jitter writes nothing', async () => {
+    // The flag used to be checked only before the jitter, so a backup still waiting
+    // when Paranoid Mode was enabled — or the vault locked, or was re-keyed by the
+    // secondary passphrase — went on to read and push whatever the device held then.
+    mockGetFile.mockResolvedValue(null);
+    mockPutFile.mockResolvedValue('sha');
+
+    const pending = maybeCreateBackups('pat', 'repo', mockEncKey());
+    localStorage.setItem('gtd25-paranoid', '1'); // lands while the jitter timer is pending
+    await pending;
+
+    expect(mockGetFile).not.toHaveBeenCalled();
+    expect(mockPutFile).not.toHaveBeenCalled();
+  });
+});

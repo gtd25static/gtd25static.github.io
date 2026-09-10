@@ -55,13 +55,14 @@ describe('tab-channel', () => {
 
     other.post({ type: 'lock' });
     other.post({ type: 'wipe' });
+    other.post({ type: 'reload' });
     other.post({ type: 'unlock' });     // there is no such signal, by design
     other.post({ type: 'lock', dek: 'x' }); // extra fields are not trusted, only the type
     other.post('lock');
     other.post(null);
-    await settle(() => seen.length >= 3);
+    await settle(() => seen.length >= 4);
 
-    expect(seen).toEqual([{ type: 'lock' }, { type: 'wipe' }, { type: 'lock', dek: 'x' }]);
+    expect(seen).toEqual([{ type: 'lock' }, { type: 'wipe' }, { type: 'reload' }, { type: 'lock', dek: 'x' }]);
     off();
     other.close();
   });
