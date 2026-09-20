@@ -28,7 +28,10 @@ export function endOfDayMs(now: number): number {
 }
 
 export function taskListIds(lists: TaskList[]): Set<string> {
-  return new Set(lists.filter((l) => !l.deletedAt && l.type === 'tasks').map((l) => l.id));
+  // Archived lists are excluded everywhere attention is computed (Focus, the
+  // due-soon banner, the app badge, nudges): archiving a list means it stops
+  // asking for attention on its own.
+  return new Set(lists.filter((l) => !l.deletedAt && !l.archivedAt && l.type === 'tasks').map((l) => l.id));
 }
 
 export function isLiveTask(task: Task, allowedListIds?: Set<string>): boolean {

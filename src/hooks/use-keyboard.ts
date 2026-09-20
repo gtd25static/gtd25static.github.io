@@ -43,7 +43,7 @@ export function useKeyboard() {
 
   // Sidebar items
   const lists = useLiveQuery(
-    () => db.taskLists.orderBy('order').toArray().then((all) => all.filter((l) => !l.deletedAt)),
+    () => db.taskLists.orderBy('order').toArray().then((all) => all.filter((l) => !l.deletedAt && !l.archivedAt)),
     [],
   );
 

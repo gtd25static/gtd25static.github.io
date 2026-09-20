@@ -17,7 +17,7 @@ interface Props {
 
 export function InboxCard({ task, index }: Props) {
   const lists = useTaskLists();
-  const targetLists = lists.filter((l) => !isInboxList(l));
+  const targetLists = lists.filter((l) => !isInboxList(l) && !l.archivedAt);
   const cardRef = useRef<HTMLDivElement>(null);
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null);
 

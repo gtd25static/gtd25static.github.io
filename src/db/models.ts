@@ -28,6 +28,12 @@ export interface TaskList {
   createdAt: number;
   updatedAt: number;
   deletedAt?: number;
+  // When the list was archived (absent = active). Archived lists move to the
+  // collapsed section at the end of the sidebar, stop feeding Focus/nudges/
+  // banners/counters, and are soft-deleted into the Trash once they are older
+  // than ARCHIVED_LIST_RETENTION_MS. Plaintext metadata (a timestamp, like
+  // deletedAt) — NOT in SENSITIVE_FIELDS.taskList.
+  archivedAt?: number;
   fieldTimestamps?: Record<string, number>;
 }
 

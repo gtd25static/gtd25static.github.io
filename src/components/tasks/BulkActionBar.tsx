@@ -23,7 +23,7 @@ export function BulkActionBar({ activeTaskIds, currentListId }: Props) {
   const [showListPicker, setShowListPicker] = useState(false);
 
   const count = selectedTaskIds.size;
-  const otherLists = lists.filter((l) => l.id !== currentListId);
+  const otherLists = lists.filter((l) => l.id !== currentListId && !l.archivedAt);
 
   async function handleDelete() {
     const ids = [...selectedTaskIds];

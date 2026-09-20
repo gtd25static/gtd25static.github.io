@@ -2,7 +2,7 @@ import Dexie, { type Table } from 'dexie';
 import type { TaskList, Task, Subtask, SyncMeta, LocalSettings, ChangeEntry, PomodoroSound, SoundPreset, PomodoroSettings, Vault, SharedItem, SharedBlob, MindmapFolder, Mindmap, MindmapNode } from './models';
 import { newId } from '../lib/id';
 import { createLocalBackup } from './backup';
-import { purgeOldTrashItems } from './purge';
+import { purgeOldTrashItems, expireArchivedLists } from './purge';
 import { ensureDeviceId, recordChangeBatchInTx, pruneChangelogIfSyncDisabled } from '../sync/change-log';
 import { stampUpdatedFields } from '../sync/field-timestamps';
 import { SYNC_VERSION } from '../sync/version';
@@ -342,6 +342,10 @@ export async function ensureDefaults() {
 
   // Clean orphaned records
   await cleanOrphans();
+
+  // Lists archived over 12 months ago move to the Trash, then the 30-day purge
+  // below (next startup at the earliest) hard-deletes them.
+  await expireArchivedLists();
 
   // Purge soft-deleted items older than 30 days at startup
   await purgeOldTrashItems();

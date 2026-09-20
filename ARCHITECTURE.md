@@ -68,6 +68,12 @@ src/
 All persistent entities live in IndexedDB via Dexie. Definitions: `src/db/models.ts`.
 
 - **TaskList** — container; `type: 'tasks' | 'follow-ups'`, ordering, soft-delete fields, `fieldTimestamps`.
+  `archivedAt` marks an archived list: it moves to the collapsed section at the
+  end of the sidebar, drops out of Focus / nudges / banners / the Attention
+  counter / move-to-list targets (it stays searchable and keeps counting in
+  Insights), and 12 months later `expireArchivedLists` (startup, from
+  `ensureDefaults`) soft-deletes it into the Trash, where the usual 30-day
+  purge finishes the job.
 - **Task** — title, description, links, `status: 'todo'|'done'|'blocked'|'working'`, due date, star, completion timestamps, follow-up ping fields, recurrence config, archived flag, `fieldTimestamps`.
 - **Subtask** — same shape as Task but linked to a parent `taskId`. Nesting beyond one level is disallowed.
 - **ChangeEntry** — append-only sync log: `{ id, deviceId, timestamp, entityType, entityId, operation: 'upsert'|'delete', data, v }`.

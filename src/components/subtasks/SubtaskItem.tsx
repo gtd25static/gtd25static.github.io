@@ -182,7 +182,7 @@ export function SubtaskItem({ subtask }: Props) {
   );
 
   function buildContextMenuItems(): MenuItem[] {
-    const targetLists = lists.filter((l) => l.type === 'tasks');
+    const targetLists = lists.filter((l) => l.type === 'tasks' && !l.archivedAt);
     const items: MenuItem[] = [];
     if (targetLists.length > 0) {
       items.push({

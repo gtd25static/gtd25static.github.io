@@ -380,7 +380,7 @@ export function TaskCard({ task, index, dragHandleProps }: Props) {
   );
 
   function buildContextMenuItems(): MenuItem[] {
-    const otherLists = lists.filter((l) => l.id !== task.listId && l.type === 'tasks');
+    const otherLists = lists.filter((l) => l.id !== task.listId && l.type === 'tasks' && !l.archivedAt);
     const items: MenuItem[] = [
       { label: task.starred ? 'Unstar' : 'Star', onClick: () => updateTask(task.id, { starred: !task.starred }) },
     ];

@@ -97,7 +97,7 @@ export function FollowUpCard({ task, index, dragHandleProps }: Props) {
   }, []);
 
   function buildContextMenuItems(): MenuItem[] {
-    const otherLists = lists.filter((l) => l.id !== task.listId && l.type === 'follow-ups');
+    const otherLists = lists.filter((l) => l.id !== task.listId && l.type === 'follow-ups' && !l.archivedAt);
     const items: MenuItem[] = [
       { label: task.starred ? 'Unstar' : 'Star', onClick: () => updateTask(task.id, { starred: !task.starred }) },
       { label: task.hasWarning ? 'Clear warning' : 'Warn', onClick: () => toggleWarning('task', task.id) },

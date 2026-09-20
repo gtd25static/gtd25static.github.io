@@ -22,7 +22,7 @@ export async function hasPendingWorkLocked(now: number): Promise<boolean> {
     db.taskLists.toArray(),
     db.tasks.where('dueDate').belowOrEqual(cutoff).toArray(),
   ]);
-  const allowed = new Set(lists.filter((l) => !l.deletedAt).map((l) => l.id));
+  const allowed = new Set(lists.filter((l) => !l.deletedAt && !l.archivedAt).map((l) => l.id));
   return dueTasks.some(
     (t) => !t.deletedAt && t.status !== 'done' && t.status !== 'blocked' && allowed.has(t.listId),
   );

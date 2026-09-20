@@ -1,4 +1,5 @@
 import { db } from './index';
+import { ARCHIVED_LIST_RETENTION_MS } from '../lib/constants';
 
 const THIRTY_DAYS = 30 * 24 * 60 * 60 * 1000;
 
@@ -47,4 +48,26 @@ export async function purgeOldTrashItems() {
     const { useMindmapUi } = await import('../stores/mindmap-ui');
     useMindmapUi.getState().pruneMaps(liveMapIds);
   } catch { /* store unavailable (e.g. bare node env) — cosmetic cleanup only */ }
+}
+
+/**
+ * Soft-delete lists archived longer than ARCHIVED_LIST_RETENTION_MS (12 months).
+ * They land in the Trash like a manual delete — cascading to their tasks and
+ * subtasks, recorded in the changelog so the deletion syncs — and the 30-day
+ * purge above finishes the job. Runs at startup, from ensureDefaults().
+ *
+ * deleteTaskList is imported lazily: it lives in the hooks layer, which imports
+ * this module's own db (same reason the shared-blob import above is dynamic).
+ */
+export async function expireArchivedLists(now: number = Date.now()) {
+  const cutoff = now - ARCHIVED_LIST_RETENTION_MS;
+  const expired = await db.taskLists
+    .filter((l) => !l.deletedAt && !!l.archivedAt && l.archivedAt < cutoff)
+    .toArray();
+  if (expired.length === 0) return;
+
+  const { deleteTaskList } = await import('../hooks/use-task-lists');
+  for (const list of expired) {
+    await deleteTaskList(list.id);
+  }
 }

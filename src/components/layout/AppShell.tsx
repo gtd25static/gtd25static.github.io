@@ -39,7 +39,8 @@ export function AppShell() {
   // Auto-select first list on initial load
   useEffect(() => {
     if (!selectedListId && lists.length > 0) {
-      selectList(lists[0].id);
+      const first = lists.find((l) => !l.archivedAt) ?? lists[0];
+      selectList(first.id);
     }
   }, [selectedListId, lists]);
 

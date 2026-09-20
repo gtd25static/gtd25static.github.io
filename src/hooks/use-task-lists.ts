@@ -4,7 +4,7 @@ import type { TaskList, ListType } from '../db/models';
 import { newId } from '../lib/id';
 import { recordChangeInTx, recordChangeBatchInTx, ensureDeviceId } from '../sync/change-log';
 import { scheduleSyncDebounced } from '../sync/sync-engine';
-import { INBOX_LIST_NAME } from '../lib/constants';
+import { INBOX_LIST_NAME, ARCHIVED_LIST_RETENTION_MS } from '../lib/constants';
 import { handleDbError } from '../lib/db-error';
 import { initFieldTimestamps, stampUpdatedFields } from '../sync/field-timestamps';
 
@@ -57,6 +57,49 @@ export async function updateTaskList(id: string, updates: Partial<Pick<TaskList,
   }
 }
 
+/**
+ * Archive / unarchive a list. Archived lists live in the collapsed section at
+ * the end of the sidebar and stop feeding Focus, nudges, banners and counters;
+ * `expireArchivedLists` moves them to the Trash 12 months later.
+ */
+export async function archiveTaskList(id: string) {
+  await setArchivedAt(id, Date.now(), 'archive task list');
+}
+
+export async function unarchiveTaskList(id: string) {
+  await setArchivedAt(id, undefined, 'unarchive task list');
+}
+
+async function setArchivedAt(id: string, archivedAt: number | undefined, errorContext: string) {
+  try {
+    await ensureDeviceId();
+    await db.transaction('rw', [db.taskLists, db.changeLog], async () => {
+      const existing = await db.taskLists.get(id);
+      if (!existing) return;
+      const now = Date.now();
+      const fieldTimestamps = stampUpdatedFields(existing.fieldTimestamps, ['archivedAt'], now);
+      await db.taskLists.update(id, { archivedAt, updatedAt: now, fieldTimestamps });
+      const updated = await db.taskLists.get(id);
+      if (updated) {
+        await recordChangeInTx('taskList', id, 'upsert', updated as unknown as Record<string, unknown>);
+      }
+    });
+    scheduleSyncDebounced();
+  } catch (error) {
+    handleDbError(error, errorContext);
+  }
+}
+
+/**
+ * The `archivedAt` a list should carry after being restored from the Trash.
+ * An already-expired one gets a fresh 12 months, otherwise the next startup's
+ * `expireArchivedLists` would delete it again on the spot.
+ */
+export function archivedAtAfterRestore(archivedAt: number | undefined, now: number): number | undefined {
+  if (archivedAt === undefined) return undefined;
+  return archivedAt < now - ARCHIVED_LIST_RETENTION_MS ? now : archivedAt;
+}
+
 export async function deleteTaskList(id: string) {
   try {
     const now = Date.now();
@@ -98,8 +141,10 @@ export async function restoreTaskList(id: string) {
     await ensureDeviceId();
     await db.transaction('rw', [db.taskLists, db.tasks, db.subtasks, db.changeLog], async () => {
       const existingList = await db.taskLists.get(id);
-      const listFT = stampUpdatedFields(existingList?.fieldTimestamps, ['deletedAt'], now);
-      await db.taskLists.update(id, { deletedAt: undefined, updatedAt: now, fieldTimestamps: listFT });
+      const archivedAt = archivedAtAfterRestore(existingList?.archivedAt, now);
+      const changed = archivedAt === existingList?.archivedAt ? ['deletedAt'] : ['deletedAt', 'archivedAt'];
+      const listFT = stampUpdatedFields(existingList?.fieldTimestamps, changed, now);
+      await db.taskLists.update(id, { deletedAt: undefined, archivedAt, updatedAt: now, fieldTimestamps: listFT });
       const tasks = await db.tasks.where('listId').equals(id).toArray();
       for (const task of tasks) {
         const taskFT = stampUpdatedFields(task.fieldTimestamps, ['deletedAt'], now);
@@ -160,7 +205,7 @@ export async function reorderTaskLists(orderedIds: string[]) {
 
 export async function getOrCreateInbox(): Promise<string> {
   const all = await db.taskLists.toArray();
-  const inbox = all.find((l) => !l.deletedAt && l.name === INBOX_LIST_NAME && l.type === 'tasks');
+  const inbox = all.find((l) => !l.deletedAt && !l.archivedAt && l.name === INBOX_LIST_NAME && l.type === 'tasks');
   if (inbox) return inbox.id;
   const list = await createTaskList(INBOX_LIST_NAME, 'tasks');
   return list.id;

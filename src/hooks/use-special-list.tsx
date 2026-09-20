@@ -130,6 +130,17 @@ function useSpecialList() {
       });
     }
 
+    // Archived lists stop asking for attention (same rule as Focus and nudges);
+    // their rows are dropped here rather than in each loop above.
+    const archivedListIds = new Set(
+      (await db.taskLists.toArray()).filter((l) => l.archivedAt).map((l) => l.id),
+    );
+    if (archivedListIds.size > 0) {
+      const kept = items.filter((i) => !archivedListIds.has(i.listId));
+      items.length = 0;
+      items.push(...kept);
+    }
+
     // Sort: warnings by warningAt asc, blocked by blockedAt asc, recurring by nextOccurrence asc
     const typeOrder = { warning: 0, blocked: 1, recurring: 2 };
     items.sort((a, b) => {

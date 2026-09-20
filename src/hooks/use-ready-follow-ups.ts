@@ -18,7 +18,7 @@ export interface ReadyFollowUpItem {
 export function useReadyFollowUps(): ReadyFollowUpItem[] {
   const items = useLiveQuery(async () => {
     const lists = await db.taskLists.toArray();
-    const followUpLists = lists.filter((l) => l.type === 'follow-ups' && !l.deletedAt);
+    const followUpLists = lists.filter((l) => l.type === 'follow-ups' && !l.deletedAt && !l.archivedAt);
     if (followUpLists.length === 0) return [];
     const nameById = new Map(followUpLists.map((l) => [l.id, l.name]));
 

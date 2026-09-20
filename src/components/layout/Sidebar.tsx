@@ -11,7 +11,7 @@ import {
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { useTaskLists, createTaskList, updateTaskList, deleteTaskList, restoreTaskList, reorderTaskLists } from '../../hooks/use-task-lists';
+import { useTaskLists, createTaskList, updateTaskList, deleteTaskList, restoreTaskList, reorderTaskLists, archiveTaskList, unarchiveTaskList } from '../../hooks/use-task-lists';
 import { toast } from '../ui/Toast';
 import { confirmDialog } from '../ui/ConfirmDialog';
 import { useShallow } from 'zustand/react/shallow';
@@ -60,7 +60,7 @@ function HighlightedName({ name, highlight }: { name: string; highlight: string 
 }
 
 function ListItem({ list, selected, onSelect, highlight, focused, count, allLists }: {
-  list: { id: string; name: string; type: ListType };
+  list: { id: string; name: string; type: ListType; archivedAt?: number };
   selected: boolean;
   onSelect: () => void;
   highlight?: string;
@@ -68,6 +68,7 @@ function ListItem({ list, selected, onSelect, highlight, focused, count, allList
   count: number;
   allLists?: { id: string; name: string; type: ListType }[];
 }) {
+  const archived = !!list.archivedAt;
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState('');
   const [dropHighlight, setDropHighlight] = useState(false);
@@ -209,6 +210,15 @@ function ListItem({ list, selected, onSelect, highlight, focused, count, allList
           }
           items={[
             { label: 'Rename', onClick: () => { setEditingId(list.id); setEditName(list.name); } },
+            archived
+              ? { label: 'Unarchive', onClick: () => {
+                    unarchiveTaskList(list.id);
+                    toast('List unarchived', 'info', () => archiveTaskList(list.id));
+                  } }
+              : { label: 'Archive', onClick: () => {
+                    archiveTaskList(list.id);
+                    toast('List archived', 'info', () => unarchiveTaskList(list.id));
+                  } },
             { label: 'Delete', onClick: async () => {
                   if (!await confirmDialog('Delete this list and all its tasks?', { confirmLabel: 'Delete' })) return;
                   deleteTaskList(list.id);
@@ -222,7 +232,7 @@ function ListItem({ list, selected, onSelect, highlight, focused, count, allList
 }
 
 function SortableListItem({ list, selected, onSelect, highlight, focused, count, allLists }: {
-  list: { id: string; name: string; type: ListType };
+  list: { id: string; name: string; type: ListType; archivedAt?: number };
   selected: boolean;
   onSelect: () => void;
   highlight?: string;
@@ -254,12 +264,25 @@ function SortableListItem({ list, selected, onSelect, highlight, focused, count,
   );
 }
 
+// Whether the archived section is expanded. Device-local (never synced, holds
+// no content) and default-collapsed — the whole point is to stay out of the way.
+const ARCHIVED_EXPANDED_KEY = 'gtd25-archived-expanded';
+
+function readArchivedExpanded(): boolean {
+  try {
+    return localStorage.getItem(ARCHIVED_EXPANDED_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
 export function Sidebar() {
   const lists = useTaskLists();
   const { selectedListId, selectList, setSidebarOpen, setSettingsOpen, setTrashOpen, searchQuery, setSearchQuery } = useAppState(useShallow(s => ({ selectedListId: s.selectedListId, selectList: s.selectList, setSidebarOpen: s.setSidebarOpen, setSettingsOpen: s.setSettingsOpen, setTrashOpen: s.setTrashOpen, searchQuery: s.searchQuery, setSearchQuery: s.setSearchQuery })));
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState('');
   const [newType, setNewType] = useState<ListType>('tasks');
+  const [archivedExpanded, setArchivedExpanded] = useState(readArchivedExpanded);
   const searchRef = useRef<HTMLInputElement>(null);
 
   const { focusedItemId, focusZone } = useAppState(useShallow(s => ({ focusedItemId: s.focusedItemId, focusZone: s.focusZone })));
@@ -278,9 +301,17 @@ export function Sidebar() {
     : lists;
 
   const inboxList = filteredLists.find((l) => isInboxList(l));
-  const taskLists = filteredLists.filter((l) => l.type === 'tasks' && !isInboxList(l));
-  const followUpLists = filteredLists.filter((l) => l.type === 'follow-ups');
+  const activeLists = filteredLists.filter((l) => !l.archivedAt);
+  const taskLists = activeLists.filter((l) => l.type === 'tasks' && !isInboxList(l));
+  const followUpLists = activeLists.filter((l) => l.type === 'follow-ups');
+  // Both types share one section at the end, newest archive first.
+  const archivedLists = filteredLists
+    .filter((l) => l.archivedAt)
+    .sort((a, b) => (b.archivedAt ?? 0) - (a.archivedAt ?? 0));
   const inboxCount = inboxList ? (taskCounts.get(inboxList.id) ?? 0) : 0;
+  // A search that matches an archived list opens the section, otherwise the
+  // match would be hidden behind a collapsed header.
+  const showArchived = archivedExpanded || (!!searchQuery && archivedLists.length > 0);
 
   // Handle sidebar list reorder via shared DndContext
   useDndMonitor({
@@ -683,6 +714,48 @@ export function Sidebar() {
                 />
               ))}
             </SortableContext>
+          </div>
+        )}
+
+        {/* Archived lists — both types, collapsed by default, auto-deleted after 12 months */}
+        {archivedLists.length > 0 && (
+          <div className="mb-1">
+            <button
+              onClick={() => {
+                const next = !archivedExpanded;
+                setArchivedExpanded(next);
+                try { localStorage.setItem(ARCHIVED_EXPANDED_KEY, next ? '1' : '0'); } catch { /* private mode — collapse state is cosmetic */ }
+              }}
+              aria-expanded={showArchived}
+              className="flex w-full items-center gap-2 px-3 py-2 mt-1 border-t border-zinc-200 text-xs font-medium uppercase tracking-wide text-zinc-500 hover:text-zinc-700 dark:border-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-200"
+            >
+              <svg
+                width="12" height="12" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2"
+                className={`transition-transform ${showArchived ? 'rotate-90' : ''}`}
+              >
+                <path d="M7 4l6 6-6 6" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+              <span>Archived</span>
+              <span className="ml-auto font-normal normal-case text-zinc-400">{archivedLists.length}</span>
+            </button>
+            {showArchived && (
+              <>
+                <p className="px-3 pb-1 text-[11px] leading-snug text-zinc-400 dark:text-zinc-500">
+                  Deleted automatically 12 months after archiving.
+                </p>
+                {archivedLists.map((list) => (
+                  <ListItem
+                    key={list.id}
+                    list={list}
+                    selected={selectedListId === list.id}
+                    onSelect={() => { selectList(list.id); setSidebarOpen(false); }}
+                    highlight={searchQuery}
+                    count={taskCounts.get(list.id) ?? 0}
+                    allLists={lists}
+                  />
+                ))}
+              </>
+            )}
           </div>
         )}
       </nav>

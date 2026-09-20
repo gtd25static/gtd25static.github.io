@@ -6,6 +6,7 @@ import { recordChangeInTx, recordChangeBatchInTx, ensureDeviceId } from '../sync
 import { scheduleSyncDebounced } from '../sync/sync-engine';
 import { handleDbError } from '../lib/db-error';
 import { stampUpdatedFields } from '../sync/field-timestamps';
+import { archivedAtAfterRestore } from './use-task-lists';
 
 export interface TrashItem {
   id: string;
@@ -160,8 +161,10 @@ export async function restoreFromTrash(item: TrashItem) {
       case 'list': {
         await db.transaction('rw', [db.taskLists, db.tasks, db.subtasks, db.changeLog], async () => {
           const existingList = await db.taskLists.get(item.id);
-          const listFT = stampUpdatedFields(existingList?.fieldTimestamps, ['deletedAt'], now);
-          await db.taskLists.update(item.id, { deletedAt: undefined, updatedAt: now, fieldTimestamps: listFT });
+          const archivedAt = archivedAtAfterRestore(existingList?.archivedAt, now);
+          const changed = archivedAt === existingList?.archivedAt ? ['deletedAt'] : ['deletedAt', 'archivedAt'];
+          const listFT = stampUpdatedFields(existingList?.fieldTimestamps, changed, now);
+          await db.taskLists.update(item.id, { deletedAt: undefined, archivedAt, updatedAt: now, fieldTimestamps: listFT });
           const tasks = await db.tasks.where('listId').equals(item.id).toArray();
           for (const t of tasks) {
             const tFT = stampUpdatedFields(t.fieldTimestamps, ['deletedAt'], now);
