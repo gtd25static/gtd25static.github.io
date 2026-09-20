@@ -30,7 +30,10 @@ function cspPlugin(): Plugin {
     "default-src 'self'",
     "script-src 'self' 'wasm-unsafe-eval'",
     "style-src 'self' 'unsafe-inline'",
-    "img-src 'self' data: blob: https:",
+    // No remote images anywhere in the app: the only <img> sources are blob: URLs
+    // (shared-folder previews) and the bundled favicon. A blanket `https:` here
+    // would leave an injected script a beacon to any host it likes.
+    "img-src 'self' data: blob:",
     "font-src 'self' data:",
     "connect-src 'self' https://api.github.com",
     "worker-src 'self' blob:",

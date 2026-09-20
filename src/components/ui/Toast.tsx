@@ -94,6 +94,7 @@ export function ToastContainer() {
       `}</style>
       <div
         ref={toasterRef}
+        data-toaster
         role="status"
         aria-live="polite"
         popover={SUPPORTS_POPOVER ? 'manual' : undefined}

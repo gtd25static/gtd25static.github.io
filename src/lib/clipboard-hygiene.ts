@@ -15,6 +15,10 @@ import { recordError } from './diagnostics';
 //    permission, which we never prompt for. If it's already granted we check and
 //    skip the wipe when the user has since copied something else; otherwise we
 //    clear unconditionally (Bitwarden-style) once the delay is up.
+//  - If the tab is closed before the delay elapses, nothing runs: the pending
+//    clear is a timer in this page. We try once on `pagehide`, which covers a
+//    backgrounded/frozen page, but a real close usually kills us first — the
+//    clipboard then keeps the content until the OS or another copy replaces it.
 
 export const DEFAULT_CLIPBOARD_CLEAR_SECONDS = 60;
 
@@ -38,6 +42,11 @@ async function readSettings(): Promise<ClearSettings> {
 // A rolling token: only the most recent copy's scheduled clear should run, so a
 // second copy resets the countdown rather than wiping the fresh content early.
 let clearToken = 0;
+// The copied text is held HERE rather than captured in the timer closure, so a
+// lock can drop it. Otherwise the last thing you copied — a mindmap outline, a
+// diagnostics blob — stayed pinned in the heap for up to the full 5-minute delay
+// after the DEK was gone. Losing it only makes the pending clear unconditional.
+let pendingExpected: string | null = null;
 
 /**
  * Copy text, then (Paranoid + toggle on) schedule the auto-clear. Returns the
@@ -61,11 +70,29 @@ async function scheduleClear(expected: string | null): Promise<void> {
   const { enabled, seconds } = await readSettings();
   if (!enabled) return;
   const token = ++clearToken;
-  setTimeout(() => { void runClear(token, expected); }, seconds * 1000);
+  pendingExpected = expected;
+  setTimeout(() => { void runClear(token); }, seconds * 1000);
 }
 
-async function runClear(token: number, expected: string | null): Promise<void> {
+/**
+ * Drop the retained copy of the clipboard text (called on lock). The scheduled
+ * clear still fires — it just can no longer compare, so it clears regardless,
+ * which is the safe direction.
+ */
+export function forgetPendingClipboardText(): void {
+  pendingExpected = null;
+}
+
+/** Best-effort clear when the page is going away with a clear still pending. */
+export function flushPendingClipboardClear(): void {
+  if (clearToken === 0) return;
+  pendingExpected = null;
+  void navigator.clipboard?.writeText('').catch(() => {});
+}
+
+async function runClear(token: number): Promise<void> {
   if (token !== clearToken) return; // a newer copy superseded this one
+  const expected = pendingExpected;
   try {
     // If we can read without prompting AND we know what we wrote, only clear
     // when the clipboard still holds it — don't stomp on the user's later copy.
@@ -109,4 +136,10 @@ async function hasReadPermission(): Promise<boolean> {
 /** Reset the rolling token between tests. */
 export function __resetClipboardHygieneForTests(): void {
   clearToken = 0;
+  pendingExpected = null;
+}
+
+/** Test-only view of whether the copied text is still retained. */
+export function __pendingClipboardTextForTests(): string | null {
+  return pendingExpected;
 }

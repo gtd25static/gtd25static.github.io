@@ -6,6 +6,7 @@ import { extractHostname, sanitizeUrl } from '../../lib/link-utils';
 import { toast } from '../ui/Toast';
 import { confirmDialog } from '../ui/ConfirmDialog';
 import { SharedImagePreview } from './SharedImagePreview';
+import { createSessionObjectUrl } from '../../lib/session-object-urls';
 
 // Common MIME → extension fallbacks, used only when the stored name lacks one
 // (e.g. snippets named "notes", or a file dropped without an extension).
@@ -74,7 +75,9 @@ export function SharedItemCard({ item }: { item: SharedItem }) {
       // Copy into a fresh ArrayBuffer so the Blob owns a clean, correctly-sized buffer.
       const buf = bytes.slice().buffer;
       const blob = new Blob([buf], { type: item.mimeType || 'application/octet-stream' });
-      const url = URL.createObjectURL(blob);
+      // Tracked so a lock revokes it: the minute-long grace below kept decrypted
+      // file bytes resolvable at a same-origin blob: URL after the DEK was gone.
+      const url = createSessionObjectUrl(blob, 60_000);
       // The download attribute is what gives the saved file its real name+extension
       // (a blob: URL alone would save as a random UUID with no extension).
       const a = document.createElement('a');
@@ -83,8 +86,6 @@ export function SharedItemCard({ item }: { item: SharedItem }) {
       document.body.appendChild(a);
       a.click();
       a.remove();
-      // Revoke after a tick so the download has grabbed it.
-      setTimeout(() => URL.revokeObjectURL(url), 60_000);
     } catch (err) {
       const msg = err instanceof Error && err.message === 'NO_SYNC_KEY'
         ? 'Unlock the vault / set up sync to open this item.'

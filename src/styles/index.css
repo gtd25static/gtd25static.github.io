@@ -205,3 +205,11 @@ input[type="checkbox"] {
 @media (prefers-reduced-motion: reduce) {
   .gtd-redacted [data-redact] { transition: none; }
 }
+
+/* Privacy veil: the toaster is promoted to the browser's top layer (popover), so
+   no z-index puts the veil above it. Hide it outright while the veil is up —
+   `visibility` keeps the popover's own state untouched, so pending toasts simply
+   reappear when the veil lifts. */
+.gtd-veiled [data-toaster] {
+  visibility: hidden;
+}

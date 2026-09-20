@@ -62,6 +62,34 @@ export async function hasFreshShareStash(): Promise<boolean> {
 }
 
 /**
+ * Delete the stash once it is past its TTL, wherever we are.
+ *
+ * The 24h bound (ACR-017) used to be enforced only by the sweep in
+ * use-share-target, which mounts UNLOCKED — so on a Paranoid device that was
+ * never unlocked again, the plaintext bytes stayed in Cache Storage forever, and
+ * after 24h the lock screen stopped even mentioning them. This needs no vault
+ * key (it reads a timestamp and deletes), so the lock screen runs it too.
+ * Returns true when something was purged.
+ */
+export async function purgeExpiredShareStash(): Promise<boolean> {
+  try {
+    if (typeof caches === 'undefined' || !(await caches.has(SHARE_CACHE))) return false;
+    const cache = await caches.open(SHARE_CACHE);
+    const metaRes = await cache.match(SHARE_META_PATH);
+    // No meta at all means a partial/abandoned stash — also worth dropping.
+    const expired = !metaRes || await (async () => {
+      const meta = (await metaRes.json()) as SharedPayloadMeta;
+      return typeof meta?.ts !== 'number' || Date.now() - meta.ts > SHARE_STASH_TTL_MS;
+    })();
+    if (!expired) return false;
+    await caches.delete(SHARE_CACHE);
+    return true;
+  } catch {
+    return false; // storage unavailable — the unlocked sweep still gets another go
+  }
+}
+
+/**
  * Pick which shared files fit the stash caps, preserving share order. Returns the
  * files to stash and how many were skipped (surfaced to the user after consume).
  */

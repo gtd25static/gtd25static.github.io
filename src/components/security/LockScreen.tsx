@@ -7,7 +7,7 @@ import { useVault } from '../../hooks/use-vault';
 import { useLockScreenRemote } from '../../hooks/use-remote-unlock';
 import { useServiceWorker } from '../../hooks/use-service-worker';
 import { panicWipe } from '../../lib/panic-wipe';
-import { hasFreshShareStash, SHARE_STASH_TTL_MS } from '../../lib/share-target';
+import { hasFreshShareStash, purgeExpiredShareStash, SHARE_STASH_TTL_MS } from '../../lib/share-target';
 import { PomodoroBar } from '../pomodoro/PomodoroBar';
 
 // Full-screen gate shown when Paranoid Mode is enabled but the vault is locked.
@@ -44,7 +44,11 @@ export function LockScreen() {
   const [shareWaiting, setShareWaiting] = useState(false);
   useEffect(() => {
     let cancelled = false;
-    const check = () => void hasFreshShareStash().then((waiting) => { if (!cancelled) setShareWaiting(waiting); });
+    // Purge first: the 24h TTL is otherwise enforced only by the unlocked sweep,
+    // so a device left locked kept the plaintext share indefinitely.
+    const check = () => void purgeExpiredShareStash()
+      .then(() => hasFreshShareStash())
+      .then((waiting) => { if (!cancelled) setShareWaiting(waiting); });
     check();
     const onVisible = () => { if (document.visibilityState === 'visible') check(); };
     document.addEventListener('visibilitychange', onVisible);

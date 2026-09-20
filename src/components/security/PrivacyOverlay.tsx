@@ -33,6 +33,15 @@ export function PrivacyOverlay({ immediate = false }: { immediate?: boolean }) {
   const [remainingMs, setRemainingMs] = useState<number | null>(null);
   const veiledRef = useRef(veiled);
   veiledRef.current = veiled;
+
+  // Flag the veil on <body> so CSS can hide surfaces React can't cover. The
+  // toaster lives in the browser's TOP LAYER (popover), which no z-index reaches,
+  // so a toast fired just before backgrounding — several of them name a list or a
+  // task — stayed fully legible over the "full-app blur".
+  useEffect(() => {
+    document.body.classList.toggle('gtd-veiled', veiled);
+    return () => { document.body.classList.remove('gtd-veiled'); };
+  }, [veiled]);
   const immediateRef = useRef(immediate);
   immediateRef.current = immediate;
   /** When to raise the veil, or null when we are not counting down. */

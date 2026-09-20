@@ -135,7 +135,9 @@ function quarantineRow(table: string, row: Row): Row {
   const out: Row = {};
   for (const [k, v] of Object.entries(row)) if (k !== '_enc') out[k] = v;
   if (table === 'tasks' || table === 'subtasks') out.title = UNREADABLE;
-  else if (table === 'taskLists' || table === 'sharedItems') out.name = UNREADABLE;
+  else if (table === 'taskLists' || table === 'sharedItems'
+    || table === 'mindmaps' || table === 'mindmapFolders') out.name = UNREADABLE;
+  else if (table === 'mindmapNodes') out.label = UNREADABLE;
   out._decryptError = true;
   return out;
 }
