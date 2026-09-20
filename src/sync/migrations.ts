@@ -59,6 +59,16 @@ const migrations: RemoteMigration[] = [
     toVersion: 6,
     migrate: (data) => ({ ...data, syncVersion: 6 }),
   },
+  {
+    // v7 moves `fieldTimestamps` inside each record's encrypted blob (it named
+    // the encrypted fields and when each changed). Nothing to rewrite here: a
+    // v6 snapshot carries it as a plaintext top-level field, `decryptEntity`
+    // leaves that copy in place when the blob has none, and the next write of
+    // each record moves it inside. Records converge lazily, no data touched.
+    fromVersion: 6,
+    toVersion: 7,
+    migrate: (data) => ({ ...data, syncVersion: 7 }),
+  },
 ];
 
 export function runRemoteMigrations(data: SyncData, from: number, to: number): SyncData {

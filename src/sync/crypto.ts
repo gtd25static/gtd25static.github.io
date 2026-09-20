@@ -4,20 +4,30 @@ import type { SyncData, ChangeEntry } from '../db/models';
 const PBKDF2_ITERATIONS = 600_000;
 const VERIFIER_PLAINTEXT = 'gtd25-encryption-check';
 
+// `fieldTimestamps` is on every list (SYNC_VERSION 7). Its KEYS are the field
+// names of the record, including the encrypted ones, and its values are when each
+// one last changed — so leaving it in the clear told a backend reader, and a disk
+// image of a LOCKED Paranoid device, which encrypted fields exist per record and
+// when each was edited. Concretely it exposed the discussionLog's last append
+// (which the doc claimed was hidden) and distinguished a shared-folder link (key
+// `url`) from a file (keys `blobId`+`mimeType`) without decrypting anything.
+// Safe to move inside the blob because every merge runs AFTER decryption.
+const FIELD_TIMESTAMPS = 'fieldTimestamps';
+
 export const SENSITIVE_FIELDS: Record<string, string[]> = {
-  taskList: ['name'],
-  task: ['title', 'description', 'link', 'linkTitle', 'links', 'discussionLog'],
-  subtask: ['title', 'link', 'linkTitle', 'links'],
+  taskList: ['name', FIELD_TIMESTAMPS],
+  task: ['title', 'description', 'link', 'linkTitle', 'links', 'discussionLog', FIELD_TIMESTAMPS],
+  subtask: ['title', 'link', 'linkTitle', 'links', FIELD_TIMESTAMPS],
   // Shared Folder: everything except opaque id/order/timestamps is encrypted —
   // no filename, type, size, URL or blob-ref leaks. Same exposure level as tasks.
-  sharedItem: ['type', 'name', 'size', 'url', 'blobId', 'mimeType'],
+  sharedItem: ['type', 'name', 'size', 'url', 'blobId', 'mimeType', FIELD_TIMESTAMPS],
   // Mindmaps: names/labels are content; structural refs (parentId/folderId/mapId)
   // stay plaintext so structure merges without decrypting (like Task.listId).
-  mindmapFolder: ['name'],
-  mindmap: ['name', 'background', 'smartColoring'],
+  mindmapFolder: ['name', FIELD_TIMESTAMPS],
+  mindmap: ['name', 'background', 'smartColoring', FIELD_TIMESTAMPS],
   // Formatting rides along encrypted: a palette is content ("red = blocked"),
   // and it costs nothing to hide it. Structure (parentId/order) stays plaintext.
-  mindmapNode: ['label', 'shape', 'palette', 'colorBg', 'colorFg', 'colorBorder'],
+  mindmapNode: ['label', 'shape', 'palette', 'colorBg', 'colorFg', 'colorBorder', FIELD_TIMESTAMPS],
 };
 
 // --- Key cache ---

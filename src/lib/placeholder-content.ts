@@ -13,6 +13,14 @@ import type { DiscussionEntry, TaskLink } from '../db/models';
 // with a reason — so a sensitive field added later cannot silently leak real
 // content through the duress path.
 
+// Kept on EVERY entity: `fieldTimestamps` is merge bookkeeping, not content —
+// a map of field name to when it last changed. It became a sensitive field in
+// SYNC_VERSION 7 (its keys named the encrypted fields on the wire), but decoying
+// it would put lorem where the merge expects numbers and break sync on the decoy
+// vault. Keeping it also keeps the decoy consistent with the structure an
+// adversary may already have seen.
+export const STRUCTURAL_KEEP_ALL = ['fieldTimestamps'];
+
 // Sensitive fields deliberately NOT replaced, because they carry no free-text
 // personal content — only low-entropy enums / opaque refs / cosmetics — and
 // keeping them makes the decoy resolvable and consistent.
@@ -75,7 +83,7 @@ type Row = Record<string, unknown>;
 export function placeholderRow(entityType: string, row: Row): Row {
   const fields = SENSITIVE_FIELDS[entityType];
   if (!fields) return { ...row };
-  const keep = new Set(STRUCTURAL_KEEP[entityType] ?? []);
+  const keep = new Set([...STRUCTURAL_KEEP_ALL, ...(STRUCTURAL_KEEP[entityType] ?? [])]);
   const id = String(row.id ?? '');
   const out: Row = { ...row };
 
@@ -120,6 +128,6 @@ export function placeholderBlobBytes(id: string): Uint8Array {
 /** The content fields the decoy replaces for an entity type (for the contract test). */
 export function placeholderReplacedFields(entityType: string): string[] {
   const fields = SENSITIVE_FIELDS[entityType] ?? [];
-  const keep = new Set(STRUCTURAL_KEEP[entityType] ?? []);
+  const keep = new Set([...STRUCTURAL_KEEP_ALL, ...(STRUCTURAL_KEEP[entityType] ?? [])]);
   return fields.filter((f) => !keep.has(f));
 }

@@ -183,13 +183,15 @@ describe('mindmap encryption', () => {
   });
 });
 
-describe('version gate + migrations (v6)', () => {
-  it('SYNC_VERSION is 6 and a v6 remote is incompatible with an older gate value', () => {
-    expect(SYNC_VERSION).toBe(6);
-    // Current client accepts v6 and older; a hypothetical v7 remote is blocked.
+describe('version gate + migrations', () => {
+  it('SYNC_VERSION is 7; older remotes are accepted, a newer one is blocked', () => {
+    expect(SYNC_VERSION).toBe(7);
+    // Current client accepts v7 and older; a hypothetical v8 remote is blocked,
+    // which is what stops an un-updated device from writing over newer data.
+    expect(isCompatibleVersion(7)).toBe(true);
     expect(isCompatibleVersion(6)).toBe(true);
     expect(isCompatibleVersion(5)).toBe(true);
-    expect(isCompatibleVersion(7)).toBe(false);
+    expect(isCompatibleVersion(8)).toBe(false);
   });
 
   it('remote migration 5→6 is additive (no data change beyond the stamp)', () => {
