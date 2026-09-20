@@ -9,11 +9,13 @@ import {
   useSharedStorage,
   createLinkItem,
   createFileItem,
+  deleteAllSharedItems,
 } from '../../hooks/use-shared-items';
 import { isValidUrl, extractUrl } from '../../lib/link-utils';
 import { classifyClipboard, type PastePayload } from '../../lib/clipboard-capture';
 import { useVault } from '../../hooks/use-vault';
 import { toast } from '../ui/Toast';
+import { confirmDialog } from '../ui/ConfirmDialog';
 
 export function SharedFolderView() {
   const items = useSharedItems();
@@ -22,6 +24,7 @@ export function SharedFolderView() {
   const [creatingSnippet, setCreatingSnippet] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const [pastePayload, setPastePayload] = useState<PastePayload | null>(null);
+  const [emptying, setEmptying] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Add multiple files sequentially so the quota check sees each prior add.
@@ -51,6 +54,25 @@ export function SharedFolderView() {
     document.addEventListener('paste', onPaste);
     return () => document.removeEventListener('paste', onPaste);
   }, [locked]);
+
+  // Empty the whole folder. There is no undo for shared items, so the confirm
+  // spells out the count and that it's final.
+  async function handleDeleteAll() {
+    const count = items.length;
+    if (count === 0) return;
+    const ok = await confirmDialog(
+      `Delete all ${count} item${count === 1 ? '' : 's'} from the shared folder? This cannot be undone.`,
+      { confirmLabel: 'Delete all', danger: true },
+    );
+    if (!ok) return;
+    setEmptying(true);
+    try {
+      const deleted = await deleteAllSharedItems();
+      toast(`Deleted ${deleted} item${deleted === 1 ? '' : 's'} from the shared folder.`, 'success');
+    } finally {
+      setEmptying(false);
+    }
+  }
 
   function onDrop(e: React.DragEvent) {
     e.preventDefault();
@@ -109,6 +131,17 @@ export function SharedFolderView() {
           Paste link
         </Button>
         <span className="text-xs text-zinc-400">…or paste / drag &amp; drop anywhere</span>
+        {items.length > 0 && (
+          <Button
+            size="sm"
+            variant="secondary"
+            className="ml-auto text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-900/20"
+            onClick={handleDeleteAll}
+            disabled={emptying}
+          >
+            {emptying ? 'Deleting…' : 'Delete all'}
+          </Button>
+        )}
         <input
           ref={fileInputRef}
           type="file"

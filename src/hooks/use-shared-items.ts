@@ -222,3 +222,21 @@ export async function deleteSharedItem(id: string): Promise<void> {
     handleDbError(error, 'delete shared item');
   }
 }
+
+/**
+ * Soft-delete every item currently in the folder. Deliberately loops over
+ * deleteSharedItem rather than doing one bulk write, so tombstones, change-log
+ * entries and blob cleanup behave exactly as for a single delete (a folder is
+ * capped at 30MB, so the item count stays small). Returns how many were deleted;
+ * a per-item failure is reported by deleteSharedItem and doesn't stop the rest.
+ */
+export async function deleteAllSharedItems(): Promise<number> {
+  try {
+    const live = (await db.sharedItems.toArray()).filter((i) => !i.deletedAt);
+    for (const item of live) await deleteSharedItem(item.id);
+    return live.length;
+  } catch (error) {
+    handleDbError(error, 'empty shared folder');
+    return 0;
+  }
+}

@@ -4,6 +4,7 @@ import {
   createLinkItem,
   createSnippetItem,
   deleteSharedItem,
+  deleteAllSharedItems,
 } from '../../hooks/use-shared-items';
 import { makeSharedItem } from '../helpers/sync-helpers';
 import { MAX_SHARED_FOLDER_BYTES } from '../../lib/constants';
@@ -69,5 +70,34 @@ describe('deleteSharedItem', () => {
     // A delete tombstone change is recorded for sync.
     const changes = (await db.changeLog.toArray()).filter((c) => c.entityType === 'sharedItem');
     expect(changes.some((c) => c.entityId === item!.id)).toBe(true);
+  });
+});
+
+describe('deleteAllSharedItems', () => {
+  it('soft-deletes every live item and records a tombstone for each', async () => {
+    const a = await createLinkItem('https://a.example.com', 'A');
+    const b = await createLinkItem('https://b.example.com', 'B');
+    const c = await createLinkItem('https://c.example.com', 'C');
+
+    const deleted = await deleteAllSharedItems();
+    expect(deleted).toBe(3);
+
+    const rows = await db.sharedItems.toArray();
+    expect(rows.length).toBe(3); // tombstones stay for sync
+    expect(rows.every((i) => (i.deletedAt ?? 0) > 0)).toBe(true);
+
+    const changes = (await db.changeLog.toArray()).filter((c2) => c2.entityType === 'sharedItem');
+    for (const id of [a!.id, b!.id, c!.id]) {
+      expect(changes.filter((c2) => c2.entityId === id).length).toBe(2); // create + delete
+    }
+  });
+
+  it('leaves already-deleted items alone and reports 0 on an empty folder', async () => {
+    const keep = await createLinkItem('https://keep.example.com', 'Keep');
+    await deleteSharedItem(keep!.id);
+    const stampedAt = (await db.sharedItems.get(keep!.id))!.deletedAt;
+
+    expect(await deleteAllSharedItems()).toBe(0);
+    expect((await db.sharedItems.get(keep!.id))!.deletedAt).toBe(stampedAt);
   });
 });
