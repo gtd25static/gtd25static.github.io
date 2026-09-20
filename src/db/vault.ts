@@ -595,9 +595,28 @@ async function finishUnlock(vault: Vault, dek: CryptoKey, method: UnlockMethod =
   }
 
   // Backfill a uniform garbage slot 2 for vaults enabled before duress existed,
-  // so its presence never signals whether duress is configured.
+  // so its presence never signals whether duress is configured. A silent failure
+  // here degrades that deniability, so it is recorded (the next unlock retries).
   if (!vault.wrappedDek2) {
-    await db.vault.update('vault', { wrappedDek2: await generateGarbageSlot() }).catch(() => {});
+    await db.vault.update('vault', { wrappedDek2: await generateGarbageSlot() })
+      .catch((err) => recordError('vault.slot2Backfill', err));
+  }
+  // The tripwire reads `maxUnlockAttempts ?? 0`, i.e. DISABLED — but a vault
+  // enabled before the field existed never got a value written, while Settings
+  // renders the local mirror `?? DEFAULT_MAX_ATTEMPTS` and shows it armed. Make
+  // the vault match what the UI has been promising. An explicit 0 the user chose
+  // is a real value and is left alone; the notice flag lets Settings say once
+  // that the wipe is now armed on this device.
+  if (vault.maxUnlockAttempts === undefined) {
+    try {
+      await db.vault.update('vault', { maxUnlockAttempts: DEFAULT_MAX_ATTEMPTS });
+      await patchLocalSettings({
+        paranoidMaxUnlockAttempts: DEFAULT_MAX_ATTEMPTS,
+        paranoidAttemptWipeArmedNotice: true,
+      });
+    } catch (err) {
+      recordError('vault.armAttemptWipe', err);
+    }
   }
   await recordUnlockEvent().catch((err) => recordError('vault.recordUnlockEvent', err));
   await recordUnlockAttempt(method, true, Date.now());
@@ -760,7 +779,8 @@ export async function configureMaxUnlockAttempts(n: number): Promise<void> {
   if (await db.vault.get('vault')) {
     await db.vault.update('vault', { maxUnlockAttempts: max });
   }
-  await patchLocalSettings({ paranoidMaxUnlockAttempts: max });
+  // An explicit choice supersedes the "we armed it for you" notice.
+  await patchLocalSettings({ paranoidMaxUnlockAttempts: max, paranoidAttemptWipeArmedNotice: undefined });
 }
 
 // Test-only: reset in-memory state without touching persistence.

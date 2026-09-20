@@ -246,7 +246,7 @@ function SecondaryPassphraseSection() {
   );
 }
 
-function SystemIdleToggle({ enabled, graceEnabled, graceMinutes }: { enabled: boolean; graceEnabled: boolean; graceMinutes: number }) {
+function SystemIdleToggle({ enabled, unavailable, graceEnabled, graceMinutes }: { enabled: boolean; unavailable: boolean; graceEnabled: boolean; graceMinutes: number }) {
   const supported = isSystemIdleSupported();
   const [busy, setBusy] = useState(false);
   const [grace, setGrace] = useState(String(graceMinutes));
@@ -291,6 +291,14 @@ function SystemIdleToggle({ enabled, graceEnabled, graceMinutes }: { enabled: bo
           <Button size="sm" variant="secondary" onClick={toggle} disabled={busy}>
             {enabled ? 'Disable system idle lock' : 'Enable system idle lock'}
           </Button>
+          {enabled && unavailable && (
+            <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:bg-amber-900/20 dark:text-amber-300">
+              Switched on, but the detector could not be started on this device — the permission
+              was revoked, or a policy blocks it. <strong>Stepping away does not lock GTD25 right
+              now</strong>; only the in-app auto-lock above applies. Turn it off and on again to
+              re-request the permission.
+            </p>
+          )}
           {enabled && (
             <div className="space-y-2 rounded-md bg-zinc-50 p-2 dark:bg-zinc-800/40">
               <label className="flex items-start gap-2 text-xs text-zinc-600 dark:text-zinc-300">
@@ -576,7 +584,7 @@ function RelaxedUnlockToggle() {
   );
 }
 
-function ManageForm({ idleMinutes, maxAttempts, systemIdleOn, systemLockGraceOn, systemLockGraceMinutes, hasSecurityKey }: { idleMinutes: number; maxAttempts: number; systemIdleOn: boolean; systemLockGraceOn: boolean; systemLockGraceMinutes: number; hasSecurityKey: boolean }) {
+function ManageForm({ idleMinutes, maxAttempts, attemptWipeJustArmed, systemIdleOn, systemIdleUnavailable, systemLockGraceOn, systemLockGraceMinutes, hasSecurityKey }: { idleMinutes: number; maxAttempts: number; attemptWipeJustArmed: boolean; systemIdleOn: boolean; systemIdleUnavailable: boolean; systemLockGraceOn: boolean; systemLockGraceMinutes: number; hasSecurityKey: boolean }) {
   const [idle, setIdle] = useState(String(idleMinutes));
   const [attempts, setAttempts] = useState(String(maxAttempts));
   const [newPass, setNewPass] = useState('');
@@ -707,6 +715,21 @@ function ManageForm({ idleMinutes, maxAttempts, systemIdleOn, systemLockGraceOn,
           <Input label="Wipe after N failed unlock attempts (0 = off)" type="number" min={0} max={50} value={attempts} onChange={(e) => setAttempts(e.target.value)} />
           <Button size="sm" variant="secondary" onClick={handleSaveAttempts}>Save</Button>
         </div>
+        {attemptWipeJustArmed && (
+          <div className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:bg-amber-900/20 dark:text-amber-300">
+            <p>
+              This vault predates the setting, so the failed-attempt wipe was never actually armed —
+              it is now set to {maxAttempts}, the value this screen has been showing all along. Set
+              it to 0 above if you would rather it stayed off.
+            </p>
+            <button
+              className="mt-1 font-medium underline"
+              onClick={() => void updateLocalSettings({ paranoidAttemptWipeArmedNotice: undefined })}
+            >
+              Got it
+            </button>
+          </div>
+        )}
         <p className="text-xs text-zinc-400 dark:text-zinc-500">
           Erases local data after too many wrong passphrases at the lock screen. Protects against
           someone guessing at the keyboard; it cannot stop an offline attack on a copied disk.
@@ -722,7 +745,7 @@ function ManageForm({ idleMinutes, maxAttempts, systemIdleOn, systemLockGraceOn,
 
       <SecondaryPassphraseSection />
 
-      <SystemIdleToggle enabled={systemIdleOn} graceEnabled={systemLockGraceOn} graceMinutes={systemLockGraceMinutes} />
+      <SystemIdleToggle enabled={systemIdleOn} unavailable={systemIdleUnavailable} graceEnabled={systemLockGraceOn} graceMinutes={systemLockGraceMinutes} />
 
       <RelaxedUnlockToggle />
 
@@ -1087,7 +1110,9 @@ export function SecuritySettings() {
     <ManageForm
       idleMinutes={local.paranoidIdleTimeoutMinutes ?? DEFAULT_IDLE_MINUTES}
       maxAttempts={local.paranoidMaxUnlockAttempts ?? DEFAULT_MAX_ATTEMPTS}
+      attemptWipeJustArmed={!!local.paranoidAttemptWipeArmedNotice}
       systemIdleOn={!!local.paranoidSystemIdleLock}
+      systemIdleUnavailable={!!local.paranoidSystemIdleUnavailable}
       systemLockGraceOn={!!local.paranoidSystemLockGraceEnabled}
       systemLockGraceMinutes={local.paranoidSystemLockGraceMinutes ?? DEFAULT_SYSTEM_LOCK_GRACE_MINUTES}
       hasSecurityKey={hasSecurityKey}

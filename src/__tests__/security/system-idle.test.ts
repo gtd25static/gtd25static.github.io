@@ -188,3 +188,34 @@ describe('screen-lock grace config', () => {
     expect(onLock).toHaveBeenCalledTimes(1);
   });
 });
+
+// A silent no-op start is the worst outcome for this control: the user believes
+// stepping away locks the vault while nothing is watching. It must be reported.
+describe('startSystemIdleLock — failures are not silent', () => {
+  it('reports when the detector cannot be started', async () => {
+    const onUnavailable = vi.fn();
+    vi.stubGlobal('IdleDetector', class {
+      userState = null;
+      screenState = null;
+      addEventListener() {}
+      start(): Promise<void> { return Promise.reject(new Error('NotAllowedError')); }
+      static requestPermission() { return Promise.resolve('granted'); }
+    });
+
+    const stop = await startSystemIdleLock(60_000, () => {}, { onUnavailable });
+
+    expect(onUnavailable).toHaveBeenCalledWith('error', expect.any(Error));
+    expect(typeof stop).toBe('function');
+    vi.unstubAllGlobals();
+  });
+
+  it('reports when the API is missing entirely', async () => {
+    const onUnavailable = vi.fn();
+    vi.stubGlobal('IdleDetector', undefined);
+
+    await startSystemIdleLock(60_000, () => {}, { onUnavailable });
+
+    expect(onUnavailable).toHaveBeenCalledWith('unsupported');
+    vi.unstubAllGlobals();
+  });
+});

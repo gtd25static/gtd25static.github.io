@@ -6,6 +6,7 @@ import {
   enableParanoid, unlockWithPassphrase, lock, configureMaxUnlockAttempts,
   isParanoidEnabled, isUnlocked, getLastUnlockFailure, __resetVaultStateForTests,
 } from '../../db/vault';
+import { DEFAULT_MAX_ATTEMPTS } from '../../db/vault';
 import type { Task } from '../../db/models';
 
 const PASS = 'attempt wipe passphrase';
@@ -111,5 +112,46 @@ describe('failed-attempt wipe', () => {
     expect(await db.tasks.count()).toBe(0);
     expect(isParanoidEnabled()).toBe(false); // paranoid flag wiped from localStorage
     expect(isUnlocked()).toBe(false);
+  });
+});
+
+// The tripwire reads `vault.maxUnlockAttempts ?? 0` — DISABLED — but a vault
+// enabled before the field existed never got a value written, while Settings has
+// always rendered the local mirror `?? DEFAULT_MAX_ATTEMPTS` and shown it armed.
+// The unlock now reconciles the vault to what the UI promised.
+describe('attempt-wipe self-heal on a vault that predates the setting', () => {
+  it('arms the default on unlock and flags the notice', async () => {
+    await enableParanoid(PASS);
+    // Simulate a legacy vault: the field was never written.
+    await db.vault.update('vault', { maxUnlockAttempts: undefined });
+    await db.localSettings.update('local', { paranoidMaxUnlockAttempts: undefined });
+    lock();
+
+    expect(await unlockWithPassphrase(PASS)).toBe(true);
+
+    expect((await db.vault.get('vault'))?.maxUnlockAttempts).toBe(DEFAULT_MAX_ATTEMPTS);
+    const local = await db.localSettings.get('local');
+    expect(local?.paranoidMaxUnlockAttempts).toBe(DEFAULT_MAX_ATTEMPTS);
+    expect(local?.paranoidAttemptWipeArmedNotice).toBe(true);
+  });
+
+  it('leaves an explicit 0 alone — the user turned it off on purpose', async () => {
+    await enableParanoid(PASS);
+    await configureMaxUnlockAttempts(0);
+    lock();
+
+    expect(await unlockWithPassphrase(PASS)).toBe(true);
+
+    expect((await db.vault.get('vault'))?.maxUnlockAttempts).toBe(0);
+    expect((await db.localSettings.get('local'))?.paranoidAttemptWipeArmedNotice).toBeUndefined();
+  });
+
+  it('does not re-flag the notice on a vault that already has a value', async () => {
+    await enableParanoid(PASS); // enableParanoid writes the default
+    lock();
+
+    expect(await unlockWithPassphrase(PASS)).toBe(true);
+
+    expect((await db.localSettings.get('local'))?.paranoidAttemptWipeArmedNotice).toBeUndefined();
   });
 });

@@ -7,6 +7,8 @@
 // by enterprise policy. Everywhere it's unavailable this is a no-op and the app
 // falls back to the in-app idle timer.
 
+import { recordError } from './diagnostics';
+
 interface IdleDetectorLike {
   userState: 'active' | 'idle' | null;
   screenState: 'locked' | 'unlocked' | null;
@@ -23,6 +25,10 @@ export interface SystemIdleLockOptions {
   // can vary the grace live without rebuilding the detector (which would reset OS
   // idle detection).
   screenLockGraceMs?: number | (() => number);
+  // Called when the detector could not be started (permission revoked, blocked by
+  // enterprise policy, start() rejected). Without it the failure is invisible: the
+  // toggle keeps reading "on" while stepping away no longer locks anything.
+  onUnavailable?: (reason: 'unsupported' | 'error', err?: unknown) => void;
 }
 
 /** Default screen-lock grace, in minutes, when the grace is enabled but unset. */
@@ -70,7 +76,10 @@ export async function startSystemIdleLock(
   options: SystemIdleLockOptions = {},
 ): Promise<() => void> {
   const Ctor = getCtor();
-  if (!Ctor) return () => {};
+  if (!Ctor) {
+    options.onUnavailable?.('unsupported');
+    return () => {};
+  }
   try {
     const controller = new AbortController();
     const detector = new Ctor();
@@ -109,7 +118,11 @@ export async function startSystemIdleLock(
       clearScreenLockTimer();
       controller.abort();
     };
-  } catch {
+  } catch (err) {
+    // A silent no-op here means the user believes stepping away locks the vault
+    // when it does not — the one failure in this file that must be visible.
+    recordError('systemIdle.start', err);
+    options.onUnavailable?.('error', err);
     return () => {};
   }
 }

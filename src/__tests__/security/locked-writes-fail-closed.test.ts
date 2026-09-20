@@ -4,6 +4,7 @@ import { db } from '../../db';
 import { resetDb } from '../helpers/db-helpers';
 import { setMigrationBypass } from '../../db/vault-middleware';
 import { enableParanoid, lock, __resetVaultStateForTests } from '../../db/vault';
+import { cacheBlobLocal } from '../../sync/shared-blobs';
 import type { ChangeEntry, Task, TaskList } from '../../db/models';
 
 // On a Paranoid device the at-rest middleware encrypts with the vault key — and
@@ -84,5 +85,41 @@ describe('writes while the vault is locked', () => {
   it('control: without Paranoid Mode, plaintext writes are untouched', async () => {
     await db.tasks.put(task('REAL_TITLE'));
     expect((await db.tasks.get('t1'))?.title).toBe('REAL_TITLE');
+  });
+});
+
+// `sharedBlobs` is binary, so it is not a middleware-handled table and gets no
+// throw from the guard above. Upload/download hold the sync key across network
+// I/O and cache afterwards, so a lock landing inside that await used to write
+// file bytes to disk in plaintext on a Paranoid device — the same hole that was
+// closed for entity rows on 2026-09-10, still open for binary.
+describe('shared-folder blob cache while the vault is locked', () => {
+  const bytes = new TextEncoder().encode('REAL_FILE_BYTES');
+
+  it('does not cache file bytes in plaintext when the lock lands mid-download', async () => {
+    await enableParanoid(PASS);
+    lock();
+
+    await cacheBlobLocal('b1', bytes);
+
+    const row = await db.sharedBlobs.get('b1');
+    expect(row).toBeUndefined(); // skipped entirely rather than stored in the clear
+  });
+
+  it('control: unlocked, the same bytes are cached DEK-encrypted', async () => {
+    await enableParanoid(PASS);
+
+    await cacheBlobLocal('b2', bytes);
+
+    const row = await db.sharedBlobs.get('b2');
+    expect(row).toBeDefined();
+    expect(new TextDecoder().decode(row!.data)).not.toContain('REAL_FILE_BYTES');
+  });
+
+  it('control: without Paranoid Mode, bytes are cached as-is', async () => {
+    await cacheBlobLocal('b3', bytes);
+
+    const row = await db.sharedBlobs.get('b3');
+    expect(new TextDecoder().decode(row!.data)).toBe('REAL_FILE_BYTES');
   });
 });

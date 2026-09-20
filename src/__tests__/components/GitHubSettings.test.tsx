@@ -13,6 +13,10 @@ const h = vi.hoisted(() => ({
   updateLocalSettings: vi.fn(),
   toast: vi.fn(),
   local: {} as Record<string, unknown>,
+  vault: { enabled: false, unlocked: false },
+  secrets: undefined as { githubPat?: string; syncPassword?: string } | undefined,
+  setVaultSecrets: vi.fn(async () => undefined),
+  isRemoteUnlockEnrolled: vi.fn(async () => false),
 }));
 
 vi.mock('../../hooks/use-settings', () => ({
@@ -20,11 +24,12 @@ vi.mock('../../hooks/use-settings', () => ({
   updateLocalSettings: h.updateLocalSettings,
 }));
 vi.mock('../../hooks/use-vault', () => ({
-  useVault: () => ({ enabled: false, unlocked: false }),
+  useVault: () => h.vault,
 }));
 vi.mock('../../db/vault', () => ({
-  getVaultSecrets: () => undefined,
-  setVaultSecrets: vi.fn(),
+  getVaultSecrets: () => h.secrets,
+  setVaultSecrets: h.setVaultSecrets,
+  isRemoteUnlockEnrolled: h.isRemoteUnlockEnrolled,
 }));
 vi.mock('../../sync/github-api', () => ({ testConnection: vi.fn() }));
 vi.mock('../../sync/sync-engine', () => ({
@@ -43,6 +48,8 @@ describe('GitHubSettings — sync password strength gate (ACR-014)', () => {
   beforeEach(() => {
     h.updateLocalSettings.mockClear();
     h.toast.mockClear();
+    h.vault = { enabled: false, unlocked: false };
+    h.secrets = undefined;
     h.local = {
       githubPat: 'ghp_token',
       githubRepo: 'owner/repo',
@@ -91,5 +98,49 @@ describe('GitHubSettings — sync password strength gate (ACR-014)', () => {
     await user.clear(field);
     await user.type(field, 'something new');
     expect(screen.getByRole('progressbar')).toBeInTheDocument();
+  });
+});
+
+// Remote unlock/wipe deliberately keeps the PAT in plaintext localSettings: it is
+// the only backend access a LOCKED device has. Saving sync settings used to clear
+// that field unconditionally on a Paranoid device, which silently stopped the
+// remote-wipe watcher and removed "request unlock" from the lock screen — while
+// Settings kept reporting "Enabled", because enrolment lives in the vault row.
+describe('GitHubSettings — Paranoid keeps the remote-unlock mailbox PAT', () => {
+  beforeEach(() => {
+    h.updateLocalSettings.mockClear();
+    h.toast.mockClear();
+    h.setVaultSecrets.mockClear();
+    h.isRemoteUnlockEnrolled.mockClear();
+    h.vault = { enabled: true, unlocked: true };
+    h.secrets = { githubPat: 'ghp_token', syncPassword: 'alpha rhino cactus velvet' };
+    h.local = { githubRepo: 'owner/repo', syncEnabled: true };
+  });
+
+  async function save(user: ReturnType<typeof userEvent.setup>) {
+    render(<GitHubSettings />);
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+  }
+
+  it('keeps the plaintext PAT when remote unlock is enrolled', async () => {
+    h.isRemoteUnlockEnrolled.mockResolvedValue(true);
+    await save(userEvent.setup());
+
+    expect(h.updateLocalSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ githubPat: 'ghp_token' }),
+    );
+    // The secret still goes into the vault as well — this is a copy, not a move.
+    expect(h.setVaultSecrets).toHaveBeenCalledWith(
+      expect.objectContaining({ githubPat: 'ghp_token' }),
+    );
+  });
+
+  it('clears it when remote unlock is NOT enrolled', async () => {
+    h.isRemoteUnlockEnrolled.mockResolvedValue(false);
+    await save(userEvent.setup());
+
+    expect(h.updateLocalSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ githubPat: undefined, encryptionPassword: undefined }),
+    );
   });
 });

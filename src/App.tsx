@@ -24,7 +24,7 @@ import { useBackgroundLock, DEFAULT_BACKGROUND_LOCK_SECONDS } from './hooks/use-
 import { useAppBadge } from './hooks/use-app-badge';
 import { ServiceWorkerProvider } from './hooks/use-service-worker';
 import { AppUpdatePrompt } from './components/banners/AppUpdatePrompt';
-import { useLocalSettings } from './hooks/use-settings';
+import { useLocalSettings, updateLocalSettings } from './hooks/use-settings';
 import { useRelaxedUnlock } from './hooks/use-relaxed-unlock';
 import { useUnlockAudit } from './hooks/use-unlock-audit';
 import { UnlockAuditAlert } from './components/security/UnlockAuditAlert';
@@ -127,7 +127,16 @@ function UnlockedApp() {
         baseGraceMs === 0 || !relaxed
           ? baseGraceMs
           : useRelaxedUnlockStore.getState().effectiveGraceMs || baseGraceMs;
-      const s = await startSystemIdleLock(thresholdMs, () => lock(), { screenLockGraceMs });
+      let unavailable = false;
+      const s = await startSystemIdleLock(thresholdMs, () => lock(), {
+        screenLockGraceMs,
+        onUnavailable: () => { unavailable = true; },
+      });
+      // Persist the outcome so Settings can tell the truth about this toggle
+      // instead of rendering a protection the device is not actually providing.
+      if (!!localSettings.paranoidSystemIdleUnavailable !== unavailable) {
+        void updateLocalSettings({ paranoidSystemIdleUnavailable: unavailable || undefined });
+      }
       if (cancelled) s(); else stop = s;
     })();
     return () => { cancelled = true; stop(); };
@@ -137,6 +146,7 @@ function UnlockedApp() {
     localSettings.paranoidSystemLockGraceEnabled,
     localSettings.paranoidSystemLockGraceMinutes,
     localSettings.relaxedUnlockEnabled,
+    localSettings.paranoidSystemIdleUnavailable,
   ]);
 
   useKeyboard();

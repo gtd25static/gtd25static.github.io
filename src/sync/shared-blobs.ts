@@ -24,6 +24,7 @@ import {
 } from './github-api';
 import { encryptBytes, decryptBytes, getCachedEncryptionKey } from './crypto';
 import { getActiveAtRestKey } from '../db/vault-middleware';
+import { isParanoidFlagSet } from '../db/paranoid-flag';
 
 const BLOB_DIR = 'gtd25-shared';
 export const BLOB_BRANCH = 'gtd25-blobs';
@@ -95,6 +96,14 @@ async function ensureBlobBranch(creds: Creds): Promise<void> {
 
 export async function cacheBlobLocal(blobId: string, plaintext: Uint8Array): Promise<void> {
   const dek = getActiveAtRestKey();
+  // Fail closed like the at-rest middleware does for entity rows. `sharedBlobs`
+  // is binary, so it isn't a middleware-handled table and gets no throw from it:
+  // this is the equivalent check. Upload/download hold the sync key across
+  // network I/O, so a lock landing in that await (idle, hotkey, lock-when-hidden
+  // when the phone backgrounds the app mid-download) would otherwise write the
+  // bytes here in plaintext. Skipping only loses the cache — the caller already
+  // has its plaintext in memory, and the next unlock re-downloads.
+  if (!dek && isParanoidFlagSet()) return;
   const data = dek ? await encryptBytes(dek, plaintext) : plaintext;
   await db.sharedBlobs.put({ id: blobId, data, cachedAt: Date.now() });
 }
@@ -103,6 +112,11 @@ async function readBlobLocal(blobId: string): Promise<Uint8Array | null> {
   const row = await db.sharedBlobs.get(blobId);
   if (!row) return null;
   const dek = getActiveAtRestKey();
+  // Locked on a Paranoid device the cache holds ciphertext (the enable migration
+  // clears it, so there is no plaintext left over from before). Without the DEK
+  // the bytes are unreadable, not plaintext — report a miss rather than hand
+  // ciphertext back as if it were the file.
+  if (!dek && isParanoidFlagSet()) return null;
   return dek ? decryptBytes(dek, row.data) : row.data;
 }
 

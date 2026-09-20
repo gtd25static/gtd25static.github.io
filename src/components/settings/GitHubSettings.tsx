@@ -7,7 +7,7 @@ import { testConnection } from '../../sync/github-api';
 import { syncNow, forcePush, forcePull } from '../../sync/sync-engine';
 import { deriveKey, cacheEncryptionKey, generateSalt } from '../../sync/crypto';
 import { useVault } from '../../hooks/use-vault';
-import { getVaultSecrets, setVaultSecrets } from '../../db/vault';
+import { getVaultSecrets, setVaultSecrets, isRemoteUnlockEnrolled } from '../../db/vault';
 import { recordError } from '../../lib/diagnostics';
 import { checkSecretStrength } from '../../lib/password-strength';
 import { PasswordStrengthBar } from '../ui/PasswordStrengthBar';
@@ -76,10 +76,16 @@ export function GitHubSettings() {
       // Secrets go into the vault; localSettings keeps only the non-secret repo,
       // and the plaintext credential fields stay cleared.
       await setVaultSecrets({ githubPat: pat.trim() || undefined, syncPassword: encPassword.trim() || undefined });
+      // Remote unlock/wipe deliberately keeps a plaintext copy of the PAT here:
+      // it is the only way a LOCKED device can reach its mailbox. Clearing it on
+      // every save silently killed the remote wipe (the watcher stops polling)
+      // and the lock screen's "request unlock", while Settings still read
+      // "Enabled" — the enrolment lives in the vault row, not in this field.
+      const mailboxPat = (await isRemoteUnlockEnrolled()) ? pat.trim() || undefined : undefined;
       await updateLocalSettings({
         githubRepo: repo.trim() || undefined,
         syncEnabled: willEnableSync,
-        githubPat: undefined,
+        githubPat: mailboxPat,
         encryptionPassword: undefined,
       });
     } else {

@@ -265,7 +265,14 @@ export interface LocalSettings {
   paranoidEnabled?: boolean;
   paranoidIdleTimeoutMinutes?: number;
   paranoidMaxUnlockAttempts?: number;   // device-local mirror of Vault.maxUnlockAttempts
+  // Set once when an unlock armed the attempt wipe on a vault that predates the
+  // setting (the UI had been showing it armed while the vault had it disabled).
+  // Settings clears it after telling the user.
+  paranoidAttemptWipeArmedNotice?: boolean;
   paranoidSystemIdleLock?: boolean;     // lock on system-wide idle / screen lock (IdleDetector)
+  // Set when the detector could not actually be started, so Settings stops
+  // showing the toggle as protection the device is not providing.
+  paranoidSystemIdleUnavailable?: boolean;
   paranoidSystemLockGraceEnabled?: boolean; // device-local: defer app-lock after screen lock
   paranoidSystemLockGraceMinutes?: number;  // device-local grace duration (min) when grace enabled; default DEFAULT_SYSTEM_LOCK_GRACE_MINUTES
   // Paranoid extras — all opt-in (default off), all device-local, active only while Paranoid is on.
