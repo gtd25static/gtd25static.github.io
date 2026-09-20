@@ -131,12 +131,14 @@ export function SharedItemCard({ item }: { item: SharedItem }) {
         </div>
       </div>
 
-      <div className="flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+      {/* Actions: phones have no hover, so they stay visible there (44px tap
+          targets); on md+ they keep the reveal-on-hover treatment. */}
+      <div className="flex shrink-0 items-center gap-1 md:opacity-0 md:transition-opacity md:group-hover:opacity-100">
         {item.type !== 'link' && (
           <button
             onClick={download}
             disabled={busy}
-            className="rounded-full p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 disabled:opacity-50 dark:hover:bg-zinc-700"
+            className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-full text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 disabled:opacity-50 md:min-h-0 md:min-w-0 md:p-1.5 dark:hover:bg-zinc-700"
             aria-label="Download"
             title="Download"
           >
@@ -147,7 +149,7 @@ export function SharedItemCard({ item }: { item: SharedItem }) {
         )}
         <button
           onClick={handleDelete}
-          className="rounded-full p-1.5 text-zinc-400 hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-900/20"
+          className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-full text-zinc-400 hover:bg-red-50 hover:text-red-600 md:min-h-0 md:min-w-0 md:p-1.5 dark:hover:bg-red-900/20"
           aria-label="Delete"
           title="Delete"
         >
