@@ -7,6 +7,7 @@ import { recordError } from '../lib/diagnostics';
 import { toast } from '../components/ui/Toast';
 import {
   getMailboxPat, getRepo, requestRemoteUnlock, pollRemoteUnlock, pollRemoteCommands, cancelRemoteUnlock,
+  expirePendingUnlock, hasPendingUnlock,
   pollApproverInbox, listApprovedDevices, readPendingApproval, approveRemoteUnlock, publishOwnRegistryEntry,
 } from '../sync/remote-unlock';
 
@@ -95,6 +96,20 @@ export function useLockScreenRemote() {
       window.removeEventListener('online', run);
     };
   }, [enrolled, code, tick]);
+
+  // The lock screen unmounting means the vault opened some other way (passphrase,
+  // security key) — or the tab is going. The polling stops with it, so nothing
+  // would ever enforce the request's TTL again: the ephemeral session key K would
+  // sit in the module for the rest of the page's life, across later locks, and the
+  // ceremony files would stay in the repo. Tear the request down here instead.
+  // Unmount-only on purpose: the polling effect above re-runs whenever `code`
+  // changes, and cancelling there would kill the request as it is created.
+  useEffect(() => () => {
+    if (!hasPendingUnlock()) return;
+    const c = ctx.current;
+    cancelRemoteUnlock(); // zero K first; the remote cleanup is best-effort
+    if (c) void expirePendingUnlock(c.pat, c.repo, c.deviceId).catch((err) => recordError('remoteUnlock.abandon', err));
+  }, []);
 
   const request = useCallback(async () => {
     const c = ctx.current;
@@ -292,7 +307,20 @@ export function useRemoteApprovals(): { pending: ApprovalRequest | null; approve
     try {
       const local = await db.localSettings.get('local');
       if (local?.githubPat && local.githubRepo) await approveRemoteUnlock(local.githubPat, local.githubRepo, p.deviceId, p.requestDigest);
-    } catch { /* requester can retry */ } finally {
+    } catch (err) {
+      // Two of the throws here are the ACR-001 defence firing: the request was
+      // swapped after the code was shown, or its signature does not verify.
+      // Swallowing them made an active substitution attack look exactly like a
+      // normal approval to the one human in the loop.
+      recordError('remoteUnlock.approve', err);
+      const msg = err instanceof Error ? err.message : '';
+      toast(
+        /changed since it was shown|signature is invalid/.test(msg)
+          ? `Approval aborted — ${msg}. Ask the other device to start a new request.`
+          : 'Could not send the approval — the other device can request again.',
+        'error',
+      );
+    } finally {
       dismiss(null);
     }
   }, [dismiss]);

@@ -780,7 +780,7 @@ function pendingUnlockExpired(): boolean {
  * AND any late approval response — its session key is gone, so the response is
  * undecryptable; deleting it just keeps the repo clean of dead ceremony files.
  */
-async function expirePendingUnlock(pat: string, repo: string, deviceId: string): Promise<void> {
+export async function expirePendingUnlock(pat: string, repo: string, deviceId: string): Promise<void> {
   cancelRemoteUnlock(); // zeroes k and clears pendingUnlock
   await deleteRemoteFileIfExists(pat, repo, unlockReqPath(deviceId));
   await deleteRemoteFileIfExists(pat, repo, unlockRespPath(deviceId));
@@ -788,6 +788,11 @@ async function expirePendingUnlock(pat: string, repo: string, deviceId: string):
 
 export function cancelRemoteUnlock(): void {
   if (pendingUnlock) { pendingUnlock.k.fill(0); pendingUnlock = null; }
+}
+
+/** Whether a ceremony is in flight — lets a caller skip the teardown's network I/O. */
+export function hasPendingUnlock(): boolean {
+  return pendingUnlock !== null;
 }
 
 /**

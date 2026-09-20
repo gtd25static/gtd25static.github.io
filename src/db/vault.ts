@@ -492,17 +492,23 @@ export async function clearSecondaryPassphrase(): Promise<void> {
   await db.vault.update('vault', { wrappedDek2: await generateGarbageSlot() });
 }
 
-// Count a failed passphrase unlock; trip the panic wipe at the configured limit.
-// The counter lives in the vault row so a reload cannot reset it. Re-reads the
-// LATEST persisted vault (not a possibly-stale snapshot) so the increment is
-// monotonic under serialized attempts (ACR-009).
-async function registerFailedAttempt(): Promise<void> {
+// Count a failed unlock; trip the panic wipe at the configured limit. The counter
+// lives in the vault row so a reload cannot reset it. Re-reads the LATEST
+// persisted vault (not a possibly-stale snapshot) so the increment is monotonic
+// under serialized attempts (ACR-009).
+//
+// `countsTowardWipe` is false for the remote path on purpose: a remote attempt is
+// driven by whoever can write the repo, so counting it would hand a PAT holder a
+// way to wipe the device from a distance. It is still logged — the audit trail is
+// the point, and a failure there is exactly what you want to see afterwards.
+async function registerFailedAttempt(method: UnlockMethod = 'passphrase', countsTowardWipe = true): Promise<void> {
+  await recordUnlockAttempt(method, false, Date.now());
+  if (!countsTowardWipe) return;
   const vault = await db.vault.get('vault');
   if (!vault) return;
   const max = vault.maxUnlockAttempts ?? 0; // 0 => tripwire disabled
   const count = (vault.failedUnlockAttempts ?? 0) + 1;
   await db.vault.update('vault', { failedUnlockAttempts: count });
-  await recordUnlockAttempt('passphrase', false, Date.now());
   if (max > 0 && count >= max) {
     const { panicWipe } = await import('../lib/panic-wipe'); // dynamic: avoids an import cycle
     await panicWipe();
@@ -539,7 +545,12 @@ export async function unlockWithSecurityKey(): Promise<boolean> {
       return await finishUnlock(vault, dek, 'securityKey');
     } catch { /* not this credential — try the next */ }
   }
+  // An authenticator answered but reconstructed no enrolled wrap: someone
+  // presented a key that is not enrolled. That is a failed attempt like any
+  // other — it used to leave no audit entry and not advance the tripwire, so the
+  // log was only ever tamper-evident for the passphrase.
   lastUnlockFailure = 'wrong-credential';
+  await registerFailedAttempt('securityKey');
   return false; // PRF output didn't reconstruct any enrolled KEK
 }
 
@@ -704,6 +715,7 @@ export async function unlockWithRemoteKey(rukRaw: Uint8Array): Promise<boolean> 
   try {
     dek = await unwrapDek(kek, vault.dekWrappedByRuk);
   } catch {
+    await registerFailedAttempt('remote', false); // logged, but never wipes (see above)
     return false; // wrong RUK
   }
   return finishUnlock(vault, dek, 'remote');
