@@ -8,6 +8,7 @@ import { purgeLocalBackups } from './backup';
 import { SHARE_CACHE } from '../lib/share-target';
 import { clearErrorLog } from '../lib/diagnostics';
 import { newId } from '../lib/id';
+import { DEFAULT_MAX_ATTEMPTS } from '../lib/constants';
 
 // Duress unlock: entering the duress passphrase looks like a normal unlock but
 // atomically replaces ALL real content with decoy lorem (structure preserved)
@@ -114,7 +115,10 @@ export async function reinitVaultWithPlaceholders(vault: Vault, realDek: CryptoK
     verifier: await createVerifier(newDek),
     secrets: await encryptBlob(newDek, JSON.stringify({})),
     idleTimeoutMinutes: vault.idleTimeoutMinutes,
-    maxUnlockAttempts: vault.maxUnlockAttempts,
+    // Default rather than undefined: a decoy vault that inherits "never
+    // configured" gets armed on its next unlock, and the one-time "this vault
+    // predates the setting" banner would appear right after a duress unlock.
+    maxUnlockAttempts: vault.maxUnlockAttempts ?? DEFAULT_MAX_ATTEMPTS,
     failedUnlockAttempts: 0,
     migrationState: 'done',
     // securityKeys / dekWrappedByPrf / dekWrappedByRuk / remoteUnlock all omitted:

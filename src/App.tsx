@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { AppShell } from './components/layout/AppShell';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { LockScreen } from './components/security/LockScreen';
@@ -81,6 +81,9 @@ export default function App() {
 // mounts (or Paranoid Mode is off entirely).
 function UnlockedApp() {
   const localSettings = useLocalSettings();
+  // Mirrors localSettings.paranoidSystemIdleUnavailable without making the
+  // detector effect depend on a value that same effect writes.
+  const systemIdleUnavailableRef = useRef(!!localSettings.paranoidSystemIdleUnavailable);
 
   useEffect(() => {
     ensureDefaults();
@@ -132,12 +135,18 @@ function UnlockedApp() {
         screenLockGraceMs,
         onUnavailable: () => { unavailable = true; },
       });
+      if (cancelled) { s(); return; }
+      stop = s;
       // Persist the outcome so Settings can tell the truth about this toggle
       // instead of rendering a protection the device is not actually providing.
-      if (!!localSettings.paranoidSystemIdleUnavailable !== unavailable) {
-        void updateLocalSettings({ paranoidSystemIdleUnavailable: unavailable || undefined });
+      // Read through a ref, not the settings snapshot: making this effect depend
+      // on what it writes would re-run it — aborting and rebuilding the detector,
+      // which resets the OS idle accumulation — every time the value flipped.
+      if (systemIdleUnavailableRef.current !== unavailable) {
+        systemIdleUnavailableRef.current = unavailable;
+        void updateLocalSettings({ paranoidSystemIdleUnavailable: unavailable || undefined })
+          .catch((err) => recordError('systemIdle.persistAvailability', err));
       }
-      if (cancelled) s(); else stop = s;
     })();
     return () => { cancelled = true; stop(); };
   }, [
@@ -146,7 +155,6 @@ function UnlockedApp() {
     localSettings.paranoidSystemLockGraceEnabled,
     localSettings.paranoidSystemLockGraceMinutes,
     localSettings.relaxedUnlockEnabled,
-    localSettings.paranoidSystemIdleUnavailable,
   ]);
 
   useKeyboard();

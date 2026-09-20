@@ -832,7 +832,7 @@ function RemoteUnlockSection() {
     const ok = await confirmDialog(
       last
         ? `Remove “${target.name}”? It is the only approver, so remote unlock and remote wipe are turned off entirely.`
-        : `Remove “${target.name}”? A new key is generated and handed to the devices that stay, so this one can no longer unlock. It can still open a disk image taken before now — a copied key cannot be taken back.`,
+        : `Remove “${target.name}”? A new key is generated and handed to the devices that stay — they each need to open GTD25 once to pick it up. This one can no longer unlock afterwards, though it can still open a disk image taken before now: a copied key cannot be taken back.`,
       { confirmLabel: 'Remove', danger: true },
     );
     if (!ok) return;
@@ -844,8 +844,9 @@ function RemoteUnlockSection() {
       await reload();
     } catch (e) {
       recordError('remoteUnlock.removeApprover', e);
-      // Nothing was rotated if this threw, so the previous set-up still works.
-      toast(e instanceof Error ? e.message : 'Could not remove that device — nothing was changed', 'error');
+      // removeApprover words its own failures precisely: whether anything was
+      // handed out before it stopped decides what the user has to do next.
+      toast(e instanceof Error ? e.message : 'Could not remove that device', 'error');
     } finally { setBusy(false); }
   }
 

@@ -267,6 +267,29 @@ export function offVersionIncompatible(cb: VersionCallback) {
   versionIncompatibleListeners.delete(cb);
 }
 
+/**
+ * Refuse a destructive whole-snapshot write when the remote was produced by a
+ * NEWER app version. The READ paths have always refused this; the three write
+ * paths did not — and "Force push" is exactly what a user reaches for when their
+ * un-updated device starts saying "update required". Without this, that click
+ * replaces the newer snapshot with this device's older-format data and deletes
+ * the changelog, destroying every edit the updated devices made since. Returns
+ * true when the caller must abort.
+ */
+function refuseWriteOverNewerRemote(existingData: string | undefined, where: string): boolean {
+  if (!existingData) return false;
+  const parsed = safeParseJson<SyncData>(existingData, `existing snapshot (${where} version guard)`);
+  // Unreadable remote is a different failure with its own handling; this guard
+  // only ever speaks about a version it could actually read.
+  if (!parsed.ok || isCompatibleVersion(parsed.value.syncVersion)) return false;
+  recordSyncMessage(`${where}.versionIncompatible`,
+    `Remote sync version ${parsed.value.syncVersion ?? 'unknown'} requires a newer app version`);
+  notifyVersionIncompatible();
+  reportError('Update required', { category: 'update-required', message: 'Remote data requires a newer app version' });
+  toast('Refused: the remote data was written by a newer version of the app. Update this device first.', 'error');
+  return true;
+}
+
 function notifyVersionIncompatible() {
   for (const cb of versionIncompatibleListeners) cb();
 }
@@ -1387,6 +1410,16 @@ async function compactSnapshot(pat: string, repo: string, encKey: CryptoKey) {
     if (snapshotFile) {
       const parsed = safeParseJson<SyncData>(snapshotFile.data, 'snapshot (compaction)');
       if (!parsed.ok) return; // Abort compaction on corrupted snapshot
+      // Compaction runs BEFORE the pull's version check, and it rewrites the
+      // whole snapshot under this device's rules and clears the changelog. On a
+      // remote written by a newer app version that is an uncontrolled downgrade
+      // (and then a rewrite war with the updated devices), so it stops here and
+      // lets the pull report "update required" as usual.
+      if (!isCompatibleVersion(parsed.value.syncVersion)) {
+        recordSyncMessage('compaction.versionIncompatible',
+          `Remote sync version ${parsed.value.syncVersion ?? 'unknown'} requires a newer app version`);
+        return;
+      }
       snapshot = parsed.value;
       savedSalt = snapshot.encryptionSalt;
       savedVerifier = snapshot.encryptionVerifier;
@@ -1548,6 +1581,8 @@ export async function forcePush() {
 
     // Check existing remote for encryption state
     const existing = await getFile(creds.pat, creds.repo, SNAPSHOT_FILE, signal);
+
+    if (refuseWriteOverNewerRemote(existing?.data, 'forcePush')) return;
 
     // Backup current remote snapshot before overwriting
     if (existing) {
@@ -1914,6 +1949,7 @@ export async function importData(data: ImportData) {
       snapshot = await encryptSyncData(encKey, snapshot);
 
       const existing = await getFile(creds.pat, creds.repo, SNAPSHOT_FILE, signal);
+      if (refuseWriteOverNewerRemote(existing?.data, 'importData')) return;
       await putFile(creds.pat, creds.repo, SNAPSHOT_FILE, JSON.stringify(snapshot), existing?.sha, signal);
 
       // Delete changelog so other devices bootstrap from the imported snapshot
@@ -2048,6 +2084,7 @@ export async function restoreFromBackup(tier: BackupTier) {
     snapshot = await encryptSyncData(encKey, snapshot);
 
     const existing = await getFile(creds.pat, creds.repo, SNAPSHOT_FILE, signal);
+    if (refuseWriteOverNewerRemote(existing?.data, 'restoreFromBackup')) return;
     await putFile(creds.pat, creds.repo, SNAPSHOT_FILE, JSON.stringify(snapshot), existing?.sha, signal);
 
     // Delete changelog so other devices bootstrap from the restored snapshot

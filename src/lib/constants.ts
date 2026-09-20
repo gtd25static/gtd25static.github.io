@@ -8,6 +8,11 @@ export const SORT_DUE_SOON_DAYS = 7;
 export const SOFT_DELETE_CLEANUP_DAYS = 30;
 export const DEFAULT_SYNC_INTERVAL_MS = 300_000;
 
+// Failed passphrase attempts before the panic wipe trips. 0 disables it.
+// Lives here, not in db/vault, so vault-reinit can read it without
+// importing the stateful vault module (an import cycle).
+export const DEFAULT_MAX_ATTEMPTS = 10;
+
 // Input length limits
 export const MAX_TITLE_LENGTH = 500;
 export const MAX_DESCRIPTION_LENGTH = 5000;

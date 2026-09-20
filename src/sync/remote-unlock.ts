@@ -329,6 +329,7 @@ export async function removeApprover(ctx: EnrollContext, targetDeviceId: string)
 
   const identity = await ensureDeviceIdentity();
   const ruk = crypto.getRandomValues(new Uint8Array(32));
+  let delivered = 0;
   try {
     for (const a of staying) {
       const rukEcies = await eciesEncryptTo(a.ecdhPub, ruk);
@@ -337,9 +338,19 @@ export async function removeApprover(ctx: EnrollContext, targetDeviceId: string)
       await postApproverInvite(pat, repo, a.deviceId, {
         fromDeviceId: deviceId, fromName: deviceName, fromEcdsaPub: identity.ecdsaPub, rukEcies, ts, sig,
       });
+      delivered++;
     }
     // Every remaining approver has the new key — now make it the one that opens.
     await wrapDekWithRuk(ruk);
+  } catch (err) {
+    // Be exact about the state we are leaving behind. Anyone already handed the
+    // new key will pick it up and stop being able to unlock until this runs
+    // again (retrying is safe: a fresh RUK with a newer timestamp wins). Saying
+    // "nothing was changed" here would be a lie.
+    recordError('remoteUnlock.removeApprover.partial', err);
+    throw new Error(delivered === 0
+      ? 'Could not reach the trusted devices — nothing was changed, remote unlock still works as before.'
+      : `Interrupted after handing the new key to ${delivered} of ${staying.length} device(s). Remote unlock is not usable until you run this again — the vault itself is unaffected, and retrying is safe.`);
   } finally {
     ruk.fill(0);
   }
@@ -429,9 +440,23 @@ export async function pollApproverInbox(pat: string, repo: string, deviceId: str
     // Only a NEWER invite is taken, so replaying an old one cannot push us back
     // to a stale key; the signature check below still gates who may re-key us.
     const held = existing[invite.fromDeviceId];
-    if (held && !(typeof invite.ts === 'number' && invite.ts > (held.acceptedTs ?? 0))) {
-      consumedInviteIds.add(invite.fromDeviceId);
-      continue;
+    if (held) {
+      const fresher = typeof invite.ts === 'number' && invite.ts > (held.acceptedTs ?? 0);
+      if (!fresher) {
+        // Ordinary case: the already-consumed invite still sitting in the
+        // mailbox — drop it. But if it is a genuine RE-ISSUE whose ts is not
+        // ahead (the protected device's clock went backwards: NTP, a manual
+        // change, a phone booting with a bogus clock), eating it would discard
+        // the re-key permanently and every later rotation would fail the same
+        // way. Leave those in place and say so, so it is recoverable.
+        if (held.acceptedTs === undefined || typeof invite.ts !== 'number' || invite.ts === held.acceptedTs) {
+          consumedInviteIds.add(invite.fromDeviceId);
+        } else {
+          recordError('remoteUnlock.staleInvite',
+            new Error(`Invite from ${invite.fromDeviceId} is older than the key held (clock went backwards?) — kept for retry`));
+        }
+        continue;
+      }
     }
     // The sender must be a registry-authenticated device, and the invite must carry a
     // valid signature from that device's identity key over THIS recipient's id. We use

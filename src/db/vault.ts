@@ -24,6 +24,7 @@ import { recordUnlockAttempt, type UnlockMethod } from '../lib/unlock-audit';
 import { pruneHistory } from '../lib/relaxed-unlock';
 import { checkSecretStrength } from '../lib/password-strength';
 import { reinitVaultWithPlaceholders } from './vault-reinit';
+import { DEFAULT_MAX_ATTEMPTS } from '../lib/constants';
 import { purgeLocalBackups } from './backup';
 import { onTabSignal, signalOtherTabs } from '../lib/tab-channel';
 import type { LocalSettings, Vault, PrfCredential } from './models';
@@ -32,7 +33,7 @@ import type { LocalSettings, Vault, PrfCredential } from './models';
 // screen and settings can render the affordance without awaiting IndexedDB.
 const KEY_FLAG = 'gtd25-paranoid-key';
 export const DEFAULT_IDLE_MINUTES = 15;
-export const DEFAULT_MAX_ATTEMPTS = 10;
+export { DEFAULT_MAX_ATTEMPTS };   // re-exported: the value lives in lib/constants
 
 export interface VaultSecrets {
   githubPat?: string;
@@ -545,12 +546,15 @@ export async function unlockWithSecurityKey(): Promise<boolean> {
       return await finishUnlock(vault, dek, 'securityKey');
     } catch { /* not this credential — try the next */ }
   }
-  // An authenticator answered but reconstructed no enrolled wrap: someone
-  // presented a key that is not enrolled. That is a failed attempt like any
-  // other — it used to leave no audit entry and not advance the tripwire, so the
-  // log was only ever tamper-evident for the passphrase.
+  // An authenticator answered but reconstructed no enrolled wrap. Logged, so the
+  // audit trail is tamper-evident for this method too — but NOT counted toward
+  // the wipe, for the same reason as the remote path: we cannot tell "someone
+  // presented a key that is not enrolled" from "an enrolled credential returned
+  // a different PRF output", which is what a reset authenticator or a synced
+  // passkey evaluated on another device does. Counting it would let a flaky key
+  // destroy the database in ten presses of a button that invites retrying.
   lastUnlockFailure = 'wrong-credential';
-  await registerFailedAttempt('securityKey');
+  await registerFailedAttempt('securityKey', false);
   return false; // PRF output didn't reconstruct any enrolled KEK
 }
 
@@ -620,11 +624,13 @@ async function finishUnlock(vault: Vault, dek: CryptoKey, method: UnlockMethod =
   // that the wipe is now armed on this device.
   if (vault.maxUnlockAttempts === undefined) {
     try {
-      await db.vault.update('vault', { maxUnlockAttempts: DEFAULT_MAX_ATTEMPTS });
+      // Notice FIRST, then arm. The other order can half-apply into the worst
+      // outcome: a destructive tripwire silently switched on with no banner.
       await patchLocalSettings({
         paranoidMaxUnlockAttempts: DEFAULT_MAX_ATTEMPTS,
         paranoidAttemptWipeArmedNotice: true,
       });
+      await db.vault.update('vault', { maxUnlockAttempts: DEFAULT_MAX_ATTEMPTS });
     } catch (err) {
       recordError('vault.armAttemptWipe', err);
     }

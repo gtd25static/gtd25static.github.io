@@ -17,6 +17,7 @@ import {
   writeClipboardItemWithHygiene,
   clampClipboardClearSeconds,
   DEFAULT_CLIPBOARD_CLEAR_SECONDS,
+  flushPendingClipboardClear,
   __resetClipboardHygieneForTests,
 } from '../../lib/clipboard-hygiene';
 
@@ -145,5 +146,55 @@ describe('clampClipboardClearSeconds', () => {
     expect(clampClipboardClearSeconds(5)).toBe(10);
     expect(clampClipboardClearSeconds(9999)).toBe(300);
     expect(clampClipboardClearSeconds('nope')).toBe(DEFAULT_CLIPBOARD_CLEAR_SECONDS);
+  });
+});
+
+// The pagehide flush exists so a pending clear is not simply lost when the tab
+// goes away. Guarding it on the rolling token was wrong: that counter only ever
+// increments, so after the FIRST copy it stayed non-zero for the life of the
+// page and every later pagehide wiped the clipboard — including content the
+// user had copied from another app entirely.
+describe('flushPendingClipboardClear', () => {
+  it('does nothing before anything has been copied', () => {
+    flushPendingClipboardClear();
+    expect(writeText).not.toHaveBeenCalled();
+  });
+
+  it('clears when a scheduled clear is still owed', async () => {
+    setLocal({ paranoidClipboardClearEnabled: true, paranoidClipboardClearSeconds: 60 });
+    await writeTextWithHygiene('secret');
+    await vi.advanceTimersByTimeAsync(0); // let scheduleClear settle
+    writeText.mockClear();
+
+    flushPendingClipboardClear();
+
+    expect(writeText).toHaveBeenCalledWith('');
+  });
+
+  it('does NOT wipe the clipboard on a later pagehide once the clear already ran', async () => {
+    setLocal({ paranoidClipboardClearEnabled: true, paranoidClipboardClearSeconds: 60 });
+    await writeTextWithHygiene('secret');
+    await vi.advanceTimersByTimeAsync(60_000 + 10); // the scheduled clear fires
+    writeText.mockClear();
+
+    // The user copies something of their own elsewhere, then backgrounds the app.
+    clipboardText = 'their own IBAN';
+    flushPendingClipboardClear();
+    flushPendingClipboardClear();
+
+    expect(writeText).not.toHaveBeenCalled();
+    expect(clipboardText).toBe('their own IBAN');
+  });
+
+  it('only fires once per pending clear', async () => {
+    setLocal({ paranoidClipboardClearEnabled: true, paranoidClipboardClearSeconds: 60 });
+    await writeTextWithHygiene('secret');
+    await vi.advanceTimersByTimeAsync(0);
+    writeText.mockClear();
+
+    flushPendingClipboardClear();
+    flushPendingClipboardClear();
+
+    expect(writeText).toHaveBeenCalledTimes(1);
   });
 });

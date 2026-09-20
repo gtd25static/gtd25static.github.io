@@ -47,6 +47,11 @@ let clearToken = 0;
 // diagnostics blob — stayed pinned in the heap for up to the full 5-minute delay
 // after the DEK was gone. Losing it only makes the pending clear unconditional.
 let pendingExpected: string | null = null;
+// Whether a scheduled clear is still owed. `clearToken` cannot answer that: it
+// only ever increments, so after the first copy it is non-zero for the life of
+// the page, and a guard written against it fires on EVERY later pagehide —
+// wiping a clipboard the app never owned.
+let clearPending = false;
 
 /**
  * Copy text, then (Paranoid + toggle on) schedule the auto-clear. Returns the
@@ -71,6 +76,7 @@ async function scheduleClear(expected: string | null): Promise<void> {
   if (!enabled) return;
   const token = ++clearToken;
   pendingExpected = expected;
+  clearPending = true;
   setTimeout(() => { void runClear(token); }, seconds * 1000);
 }
 
@@ -83,9 +89,10 @@ export function forgetPendingClipboardText(): void {
   pendingExpected = null;
 }
 
-/** Best-effort clear when the page is going away with a clear still pending. */
+/** Best-effort clear when the page is going away with a clear still owed. */
 export function flushPendingClipboardClear(): void {
-  if (clearToken === 0) return;
+  if (!clearPending) return;
+  clearPending = false;
   pendingExpected = null;
   void navigator.clipboard?.writeText('').catch(() => {});
 }
@@ -93,6 +100,7 @@ export function flushPendingClipboardClear(): void {
 async function runClear(token: number): Promise<void> {
   if (token !== clearToken) return; // a newer copy superseded this one
   const expected = pendingExpected;
+  clearPending = false;             // this scheduled clear is now being settled
   try {
     // If we can read without prompting AND we know what we wrote, only clear
     // when the clipboard still holds it — don't stomp on the user's later copy.
@@ -137,6 +145,7 @@ async function hasReadPermission(): Promise<boolean> {
 export function __resetClipboardHygieneForTests(): void {
   clearToken = 0;
   pendingExpected = null;
+  clearPending = false;
 }
 
 /** Test-only view of whether the copied text is still retained. */

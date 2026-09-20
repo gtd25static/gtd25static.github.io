@@ -43,12 +43,15 @@ afterEach(() => {
 });
 
 describe('object URLs holding decrypted bytes', () => {
-  it('revokes them on lock instead of waiting out the TTL', () => {
+  it('revokes them on lock instead of waiting out the TTL', async () => {
+    // Goes through the real lock, not a direct call, so this also pins that
+    // forget-on-lock is actually wired to the revoker.
+    await enableParanoid(PASS);
     const stop = startForgettingSessionOnLock();
     const url = createSessionObjectUrl(new Blob(['x']), 60_000);
     expect(__openSessionObjectUrlCount()).toBe(1);
 
-    revokeSessionObjectUrls();
+    lock();
 
     expect(revoked).toContain(url);
     expect(__openSessionObjectUrlCount()).toBe(0);
