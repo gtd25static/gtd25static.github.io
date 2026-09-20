@@ -292,6 +292,66 @@ export async function addApprovers(ctx: EnrollContext, approverDeviceIds: string
   return toAdd;
 }
 
+/**
+ * Remove ONE approver and rotate the RUK, so the removed device's copy no longer
+ * opens this vault. Requires the vault unlocked (the re-wrap needs the DEK).
+ *
+ * Ordering is deliberate: deliver the new RUK to everyone who stays FIRST, and
+ * only re-wrap once every delivery succeeded. The other way round, a delivery
+ * failure would leave the device wrapped under a key none of the remaining
+ * approvers hold — remote unlock dead, silently. This way a failure aborts with
+ * the old RUK still valid for everyone, and the operation is idempotent, so
+ * running it again converges.
+ *
+ * Honest about the limit: rotation protects THIS disk from here on. A disk image
+ * taken before the removal is still openable with the old RUK the removed
+ * approver already copied — a key cannot be un-copied.
+ *
+ * Removing the last approver tears the whole thing down instead of leaving a
+ * wrap nobody can open.
+ */
+export async function removeApprover(ctx: EnrollContext, targetDeviceId: string): Promise<{ remaining: number }> {
+  const { pat, repo, deviceId, deviceName } = ctx;
+  const vault = await db.vault.get('vault');
+  const approvers = vault?.remoteUnlock?.approvers ?? [];
+  if (!approvers.some((a) => a.deviceId === targetDeviceId)) {
+    throw new Error('That device is not one of this vault’s approvers');
+  }
+  const staying = approvers.filter((a) => a.deviceId !== targetDeviceId);
+
+  if (staying.length === 0) {
+    // Nothing left to hold a rotated RUK; a lone wrap would just be dead weight.
+    await removeApproverInvite(pat, repo, targetDeviceId, deviceId)
+      .catch((err) => recordError('remoteUnlock.removeApprover.invite', err));
+    await disableRemoteUnlock();
+    return { remaining: 0 };
+  }
+
+  const identity = await ensureDeviceIdentity();
+  const ruk = crypto.getRandomValues(new Uint8Array(32));
+  try {
+    for (const a of staying) {
+      const rukEcies = await eciesEncryptTo(a.ecdhPub, ruk);
+      const ts = Date.now();
+      const sig = await signPayload(identity.ecdsaPriv, inviteBytes(a.deviceId, { fromDeviceId: deviceId, ts, rukEcies }));
+      await postApproverInvite(pat, repo, a.deviceId, {
+        fromDeviceId: deviceId, fromName: deviceName, fromEcdsaPub: identity.ecdsaPub, rukEcies, ts, sig,
+      });
+    }
+    // Every remaining approver has the new key — now make it the one that opens.
+    await wrapDekWithRuk(ruk);
+  } finally {
+    ruk.fill(0);
+  }
+
+  // Best-effort: the rotation above is what actually revokes them; a leftover
+  // invite only carries a RUK that no longer opens anything.
+  await removeApproverInvite(pat, repo, targetDeviceId, deviceId)
+    .catch((err) => recordError('remoteUnlock.removeApprover.invite', err));
+  await db.vault.update('vault', { remoteUnlock: { approvers: staying } });
+  return { remaining: staying.length };
+}
+
 /** Tear down remote unlock on this (paranoid) device and re-lock the PAT away. */
 export async function disableRemoteUnlock(): Promise<void> {
   await clearRemoteUnlock();
@@ -362,7 +422,14 @@ export async function pollApproverInbox(pat: string, repo: string, deviceId: str
   let accepted = 0;
   for (const invite of Object.values(inbox)) {
     if (!invite?.fromDeviceId) continue;
-    if (existing[invite.fromDeviceId]) {
+    // An invite from a device we already hold a key for is normally just the
+    // consumed one still sitting in the mailbox — EXCEPT when that device
+    // rotated its RUK (it removed one of its approvers), in which case this is a
+    // re-issue and ignoring it would leave us holding a key that opens nothing.
+    // Only a NEWER invite is taken, so replaying an old one cannot push us back
+    // to a stale key; the signature check below still gates who may re-key us.
+    const held = existing[invite.fromDeviceId];
+    if (held && !(typeof invite.ts === 'number' && invite.ts > (held.acceptedTs ?? 0))) {
       consumedInviteIds.add(invite.fromDeviceId);
       continue;
     }
@@ -376,15 +443,24 @@ export async function pollApproverInbox(pat: string, repo: string, deviceId: str
     if (!sigOk) continue;
     try {
       const ruk = await eciesDecrypt(identity.ecdhPriv, invite.rukEcies);
-      toAdd[invite.fromDeviceId] = { ruk: b64encode(ruk), ecdsaPub: trusted.ecdsaPub, name: trusted.name };
+      toAdd[invite.fromDeviceId] = { ruk: b64encode(ruk), ecdsaPub: trusted.ecdsaPub, name: trusted.name, acceptedTs: invite.ts };
       ruk.fill(0);
       consumedInviteIds.add(invite.fromDeviceId);
-      accepted++;
+      // A rotation refreshes a bond we already have; only a first-time invite is
+      // a NEW enrollment, which is what the return value (and its "N devices
+      // added" toast) means.
+      if (!held) accepted++;
     } catch { /* not for us / corrupt */ }
   }
-  if (accepted) {
+  if (Object.keys(toAdd).length > 0) {
     await mutateRemoteApproverFor((cur) => {
-      for (const [id, entry] of Object.entries(toAdd)) if (!cur[id]) cur[id] = entry;
+      for (const [id, entry] of Object.entries(toAdd)) {
+        // Spread over the existing entry: a rotation replaces the key material,
+        // it must not drop this device's wipe-lifecycle bookkeeping for it.
+        if (!cur[id] || (entry.acceptedTs ?? 0) > (cur[id].acceptedTs ?? 0)) {
+          cur[id] = { ...cur[id], ...entry };
+        }
+      }
       return cur;
     });
   }

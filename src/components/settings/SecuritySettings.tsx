@@ -21,7 +21,7 @@ import {
 import { isWebAuthnSupported } from '../../sync/webauthn-prf';
 import {
   isRemoteUnlockEnrolled, listEnrolledApprovers, listApproverCandidates, buildEnrollContext,
-  enableRemoteUnlock, addApprovers, disableRemoteUnlock, setDeviceName, getDeviceName,
+  enableRemoteUnlock, addApprovers, removeApprover, disableRemoteUnlock, setDeviceName, getDeviceName,
   publishOwnRegistryEntry, listApprovedDevices, sendRemoteWipe, pollApproverInbox,
   refreshManagedDeviceWipeStatuses, purgeManagedDevice, forgetManagedDeviceAfterWipeCommand,
   type RegistryEntry, type ManagedDevice,
@@ -827,6 +827,28 @@ function RemoteUnlockSection() {
     } finally { setBusy(false); }
   }
 
+  async function remove(target: { deviceId: string; name: string }) {
+    const last = approvers.length === 1;
+    const ok = await confirmDialog(
+      last
+        ? `Remove “${target.name}”? It is the only approver, so remote unlock and remote wipe are turned off entirely.`
+        : `Remove “${target.name}”? A new key is generated and handed to the devices that stay, so this one can no longer unlock. It can still open a disk image taken before now — a copied key cannot be taken back.`,
+      { confirmLabel: 'Remove', danger: true },
+    );
+    if (!ok) return;
+    setBusy(true);
+    try {
+      const ctx = await buildEnrollContext();
+      const { remaining } = await removeApprover(ctx, target.deviceId);
+      toast(remaining === 0 ? 'Remote unlock turned off' : `“${target.name}” removed and the key rotated`, 'success');
+      await reload();
+    } catch (e) {
+      recordError('remoteUnlock.removeApprover', e);
+      // Nothing was rotated if this threw, so the previous set-up still works.
+      toast(e instanceof Error ? e.message : 'Could not remove that device — nothing was changed', 'error');
+    } finally { setBusy(false); }
+  }
+
   async function disable() {
     const ok = await confirmDialog('Turn off remote unlock? Trusted devices will no longer be able to unlock or wipe this device.', { confirmLabel: 'Turn off', danger: true });
     if (!ok) return;
@@ -888,8 +910,25 @@ function RemoteUnlockSection() {
       {enrolled ? (
         <>
           <p className="text-xs text-emerald-600 dark:text-emerald-400">
-            Enabled — approver{approvers.length === 1 ? '' : 's'}: {approvers.map((a) => a.name).join(', ') || '(pending pickup)'}
+            Enabled — approver{approvers.length === 1 ? '' : 's'}:
           </p>
+          <ul className="space-y-1">
+            {approvers.length === 0 && (
+              <li className="text-xs text-zinc-400 dark:text-zinc-500">(pending pickup)</li>
+            )}
+            {approvers.map((a) => (
+              <li key={a.deviceId} className="flex items-center justify-between gap-2 rounded-md bg-zinc-50 px-2 py-1.5 text-xs dark:bg-zinc-800/40">
+                <span className="truncate font-medium text-zinc-700 dark:text-zinc-200">{a.name}</span>
+                <button
+                  className="shrink-0 font-medium text-red-600 hover:underline disabled:opacity-50 dark:text-red-400"
+                  onClick={() => void remove(a)}
+                  disabled={busy}
+                >
+                  Remove
+                </button>
+              </li>
+            ))}
+          </ul>
           {picker ?? (
             <div className="flex gap-2">
               <Button size="sm" variant="secondary" onClick={loadCandidates} disabled={busy}>{busy ? 'Loading…' : 'Add another device'}</Button>

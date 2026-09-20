@@ -304,6 +304,12 @@ export interface LocalSettings {
     name: string;
     lastWipeCommand?: { nonce: string; sentAt: number };
     lastWipeAck?: { commandNonce: string; wipedAt: number; verifiedAt: number };
+    // Timestamp of the invite this RUK came from. A re-issued invite (the
+    // protected device rotated its key after removing another approver) is only
+    // accepted when it is NEWER, so a replayed old invite cannot push this
+    // device back to a stale key. Absent on entries stored before rotation
+    // existed, which read as 0 and accept the first re-issue.
+    acceptedTs?: number;
   }>;
 }
 

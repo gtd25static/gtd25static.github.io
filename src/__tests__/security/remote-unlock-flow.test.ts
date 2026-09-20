@@ -900,3 +900,104 @@ describe('remote unlock: requester-side expiry (ACR-006)', () => {
     }
   });
 });
+
+// Removing an approver did not exist: the only options were "add" and "turn the
+// whole thing off", while the threat model claimed "revocation re-keys RUK so a
+// removed approver's copy opens nothing".
+describe('remote unlock: removing one approver', () => {
+  const rukBytes = (b64: string) => Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+
+  it('rotates the key so the removed device opens nothing, and the one that stays still unlocks', async () => {
+    await enrollTwoApprovers();
+    const staleRuk = rukBytes(phone2Local.remoteApproverFor![LAP]!.ruk);
+    const wrapBefore = (await db.vault.get('vault'))?.dekWrappedByRuk;
+
+    await actAsLaptop();
+    const { remaining } = await ru.removeApprover(
+      { pat: PAT, repo: REPO, deviceId: LAP, deviceName: 'Work Laptop', macKey }, PHONE2);
+
+    expect(remaining).toBe(1);
+    expect((await db.vault.get('vault'))?.remoteUnlock?.approvers.map((a) => a.deviceId)).toEqual([PHONE]);
+    expect((await db.vault.get('vault'))?.dekWrappedByRuk).not.toBe(wrapBefore);
+
+    // The removed device's copy is now dead against this vault.
+    vault.lock();
+    expect(await vault.unlockWithRemoteKey(staleRuk)).toBe(false);
+
+    // The approver that stayed picks up the rotated key and can still unlock.
+    // A rotation refreshes an existing bond, so it is not a NEW enrollment (0).
+    await actAsPhone();
+    expect(await ru.pollApproverInbox(PAT, REPO, PHONE, macKey)).toBe(0);
+    phoneLocal = await snapshotLocal(); // keep the rotated RUK across actAs* swaps
+    await actAsLaptop();
+    await ru.requestRemoteUnlock(PAT, REPO, LAP);
+    await actAsPhone();
+    const req = await ru.readPendingApproval(PAT, REPO, LAP);
+    await ru.approveRemoteUnlock(PAT, REPO, LAP, req!.requestDigest);
+    await actAsLaptop();
+    expect((await ru.pollRemoteUnlock(PAT, REPO, LAP)).status).toBe('unlocked');
+  });
+
+  it('will not let a replayed OLD invite push an approver back to a stale key', async () => {
+    await enrollTwoApprovers();
+    // Keep the invite that carried the PRE-rotation key.
+    await actAsLaptop();
+    await ru.enableRemoteUnlock({ pat: PAT, repo: REPO, deviceId: LAP, deviceName: 'Work Laptop', macKey }, [PHONE, PHONE2]);
+    const staleInbox = { ...files[ru.approverInboxPath(PHONE)] };
+
+    await ru.removeApprover({ pat: PAT, repo: REPO, deviceId: LAP, deviceName: 'Work Laptop', macKey }, PHONE2);
+    await actAsPhone();
+    await ru.pollApproverInbox(PAT, REPO, PHONE, macKey);
+    const rotated = (await db.localSettings.get('local'))?.remoteApproverFor?.[LAP]?.ruk;
+    expect(rotated).toBeTruthy();
+
+    // A backend writer puts the old, validly-signed invite back.
+    files[ru.approverInboxPath(PHONE)] = staleInbox;
+    await ru.pollApproverInbox(PAT, REPO, PHONE, macKey);
+
+    expect((await db.localSettings.get('local'))?.remoteApproverFor?.[LAP]?.ruk).toBe(rotated);
+  });
+
+  it('clears the removed device’s mailbox invite', async () => {
+    await enrollTwoApprovers();
+    await actAsLaptop();
+
+    await ru.removeApprover({ pat: PAT, repo: REPO, deviceId: LAP, deviceName: 'Work Laptop', macKey }, PHONE2);
+
+    const inbox = files[ru.approverInboxPath(PHONE2)];
+    expect(inbox ? JSON.parse(inbox.data)[LAP] : undefined).toBeUndefined();
+  });
+
+  it('removing the LAST approver turns remote unlock off rather than leaving a dead wrap', async () => {
+    await enrollPair();
+    await actAsLaptop();
+
+    const { remaining } = await ru.removeApprover(
+      { pat: PAT, repo: REPO, deviceId: LAP, deviceName: 'Work Laptop', macKey }, PHONE);
+
+    expect(remaining).toBe(0);
+    const v = await db.vault.get('vault');
+    expect(v?.dekWrappedByRuk).toBeUndefined();
+    expect(v?.remoteUnlock).toBeUndefined();
+    // The mailbox PAT goes back to vault-only once nothing needs it while locked.
+    expect((await db.localSettings.get('local'))?.githubPat).toBeUndefined();
+  });
+
+  it('a failed re-delivery changes nothing — the old key still works', async () => {
+    await enrollTwoApprovers();
+    const oldWrap = (await db.vault.get('vault'))?.dekWrappedByRuk;
+    const goodRuk = rukBytes(phoneLocal.remoteApproverFor![LAP]!.ruk);
+    failPutPaths.add(ru.approverInboxPath(PHONE)); // the device that STAYS is unreachable
+
+    await actAsLaptop();
+    await expect(ru.removeApprover(
+      { pat: PAT, repo: REPO, deviceId: LAP, deviceName: 'Work Laptop', macKey }, PHONE2)).rejects.toThrow();
+
+    // Nothing rotated, nothing dropped: remote unlock is exactly as it was.
+    const v = await db.vault.get('vault');
+    expect(v?.dekWrappedByRuk).toBe(oldWrap);
+    expect(v?.remoteUnlock?.approvers.map((a) => a.deviceId).sort()).toEqual([PHONE, PHONE2]);
+    vault.lock();
+    expect(await vault.unlockWithRemoteKey(goodRuk)).toBe(true);
+  });
+});
