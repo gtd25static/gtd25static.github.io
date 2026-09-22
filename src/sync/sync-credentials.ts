@@ -17,3 +17,9 @@ export async function rememberSyncPassword(password: string): Promise<void> {
   if (isParanoidFlagSet()) await setVaultSecrets({ syncPassword: password });
   else await db.localSettings.update('local', { encryptionPassword: password });
 }
+
+/** Drop the stored sync password (the next sync asks for it). Paranoid: needs the vault unlocked. */
+export async function forgetSyncPassword(): Promise<void> {
+  if (isParanoidFlagSet()) await setVaultSecrets({ syncPassword: undefined });
+  else await db.localSettings.update('local', { encryptionPassword: undefined });
+}

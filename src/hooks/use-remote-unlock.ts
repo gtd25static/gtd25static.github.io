@@ -3,6 +3,7 @@ import { db } from '../db';
 import { isRemoteUnlockEnrolled } from '../db/vault';
 import { isParanoidFlagSet } from '../db/paranoid-flag';
 import { jitterInterval } from '../sync/poll-jitter';
+import { getCachedSalt } from '../sync/crypto';
 import { recordError } from '../lib/diagnostics';
 import { toast } from '../components/ui/Toast';
 import {
@@ -210,7 +211,9 @@ export function useRemoteApprovals(): { pending: ApprovalRequest | null; approve
   const [pending, setPending] = useState<ApprovalRequest | null>(null);
   const seen = useRef<Set<string>>(new Set());
   const busy = useRef(false);
-  const published = useRef(false);
+  // The salt this device's registry entry was last published under: a sync-password
+  // change re-MACs the registry, and an entry under the old key reads as forged.
+  const publishedForSalt = useRef<string | null>(null);
   const current = useRef<ApprovalRequest | null>(null); // mirror of `pending` for callbacks
   const deferredToast = useRef<string | null>(null);     // shown on next focus
 
@@ -249,7 +252,8 @@ export function useRemoteApprovals(): { pending: ApprovalRequest | null; approve
         return;
       }
 
-      if (!published.current) published.current = await publishOwnRegistryEntry();
+      const salt = getCachedSalt();
+      if (salt && publishedForSalt.current !== salt && await publishOwnRegistryEntry()) publishedForSalt.current = salt;
       await pollApproverInbox(pat, repo, myId);
       const managed = await listApprovedDevices();
       for (const m of managed) {

@@ -768,7 +768,7 @@ async function pruneRemoteBackups(pat: string, repo: string) {
  * hold sync hostage; where they are unavailable this falls back to the per-tab
  * lock inside runSync, i.e. exactly the old behaviour.
  */
-const SYNC_LOCK_NAME = 'gtd25-sync';
+export const SYNC_LOCK_NAME = 'gtd25-sync';
 
 export async function syncNow(manual = false, pushLimit?: number): Promise<number> {
   const locks = typeof navigator !== 'undefined' ? navigator.locks : undefined;
@@ -1569,23 +1569,31 @@ async function compactSnapshot(pat: string, repo: string, encKey: CryptoKey) {
   }
 }
 
-export async function forcePush() {
+/**
+ * Overwrite the remote with this device's data under the current key. Returns
+ * the encrypted snapshot it wrote, or null when it did not write (no
+ * credentials, a refusal, a failure). `backupExisting` (default on) first copies
+ * the remote snapshot to the migration backup file; a key rotation turns it off,
+ * since that copy would be old-key ciphertext.
+ */
+export async function forcePush(options: { backupExisting?: boolean } = {}): Promise<SyncData | null> {
+  const { backupExisting = true } = options;
   const signal = acquireSyncLock();
-  if (!signal) return;
+  if (!signal) return null;
 
   try {
     const creds = await getCredentials();
-    if (!creds) return;
+    if (!creds) return null;
 
     reportProgress('connecting', 'Connecting...', 0.1);
 
     // Check existing remote for encryption state
     const existing = await getFile(creds.pat, creds.repo, SNAPSHOT_FILE, signal);
 
-    if (refuseWriteOverNewerRemote(existing?.data, 'forcePush')) return;
+    if (refuseWriteOverNewerRemote(existing?.data, 'forcePush')) return null;
 
     // Backup current remote snapshot before overwriting
-    if (existing) {
+    if (existing && backupExisting) {
       const existingParsed = safeParseJson<SyncData>(existing.data, 'existing snapshot (force push backup)');
       if (existingParsed.ok) {
         await backupRemoteSnapshot(creds.pat, creds.repo, existing.data, existingParsed.value.syncVersion ?? SYNC_VERSION);
@@ -1604,7 +1612,7 @@ export async function forcePush() {
         existingSalt = p.ok ? p.value.encryptionSalt : undefined;
       }
       const encResult = await resolveEncryptionKey(existingSalt);
-      if (encResult === 'needs-password') return;
+      if (encResult === 'needs-password') return null;
       encKey = encResult;
     }
 
@@ -1623,7 +1631,7 @@ export async function forcePush() {
       if (remoteCount > 0) {
         reportProgress('error', 'Force push refused', 0);
         toast('Force push refused: local data is empty but remote has data. Pull first.', 'error');
-        return;
+        return null;
       }
     }
 
@@ -1658,12 +1666,14 @@ export async function forcePush() {
     reportProgress('done', 'Sync complete', 1.0);
     notifySyncSuccess();
     toast('Force push complete', 'success');
+    return localData;
   } catch (err) {
-    if (err instanceof DOMException && err.name === 'AbortError') return;
+    if (err instanceof DOMException && err.name === 'AbortError') return null;
     console.error('Force push failed:', err);
     recordError('sync.forcePush', err);
     reportError('Force push failed', classifySyncError(err));
     toast('Force push failed', 'error');
+    return null;
   } finally {
     releaseSyncLock();
   }

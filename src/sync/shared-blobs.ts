@@ -28,7 +28,7 @@ import { isParanoidFlagSet } from '../db/paranoid-flag';
 
 const BLOB_DIR = 'gtd25-shared';
 export const BLOB_BRANCH = 'gtd25-blobs';
-const KEEP_PATH = `${BLOB_DIR}/.gtd25-keep`;
+export const KEEP_PATH = `${BLOB_DIR}/.gtd25-keep`;
 export const blobPath = (blobId: string) => `${BLOB_DIR}/${blobId}`;
 
 const basename = (path: string) => path.slice(path.lastIndexOf('/') + 1);
@@ -73,7 +73,7 @@ let blobBranchEnsured = false;
 
 // Create the orphan `gtd25-blobs` branch on first use (a single root commit with a
 // `.gtd25-keep` placeholder so the branch always has a tree). Idempotent.
-async function ensureBlobBranch(creds: Creds): Promise<void> {
+export async function ensureBlobBranch(creds: Creds): Promise<void> {
   if (blobBranchEnsured) return;
   const head = await getRef(creds.pat, creds.repo, BLOB_BRANCH);
   if (head) { blobBranchEnsured = true; return; }

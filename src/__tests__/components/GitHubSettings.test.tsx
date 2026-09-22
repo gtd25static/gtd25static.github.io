@@ -41,6 +41,12 @@ vi.mock('../../sync/crypto', () => ({
   deriveKey: vi.fn(async () => ({})),
   cacheEncryptionKey: vi.fn(),
   generateSalt: vi.fn(() => 'salt'),
+  hasEncryptionKey: vi.fn(() => false),
+}));
+vi.mock('../../sync/key-rotation', () => ({
+  rotateSyncKey: vi.fn(),
+  hasUnfinishedRotation: vi.fn(async () => false),
+  discardUnfinishedRotation: vi.fn(),
 }));
 vi.mock('../../components/ui/Toast', () => ({ toast: h.toast }));
 

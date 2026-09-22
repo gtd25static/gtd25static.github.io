@@ -133,6 +133,24 @@ export async function maybeCreateBackups(
   );
 }
 
+/**
+ * Rewrite all three tiers from an already-encrypted snapshot, now. A key
+ * rotation calls this: the tiers hold the last snapshot each was taken from,
+ * under whatever key was current then, and would otherwise keep old-key
+ * ciphertext at the tip for up to a week. Not gated by the Paranoid flag — a
+ * rotation is one explicit burst of writes the user asked for.
+ */
+export async function overwriteAllBackups(pat: string, repo: string, encrypted: SyncData): Promise<void> {
+  const backedUpAt = Date.now();
+  const backupData: SyncData & { backedUpAt: number } = { ...encrypted, syncVersion: SYNC_VERSION, backedUpAt };
+  const content = JSON.stringify(backupData);
+  for (const tier of Object.keys(BACKUP_FILES) as BackupTier[]) {
+    const existing = await getFile(pat, repo, BACKUP_FILES[tier]);
+    await putFile(pat, repo, BACKUP_FILES[tier], content, existing?.sha);
+    localStorage.setItem(getLocalTimestampKey(tier), String(backedUpAt));
+  }
+}
+
 export function __resetForTesting() {
   lastBackupCheckAt = 0;
 }

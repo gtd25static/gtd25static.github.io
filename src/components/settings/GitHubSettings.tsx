@@ -1,20 +1,48 @@
 import { useState, useEffect } from 'react';
+import { useLiveQuery } from 'dexie-react-hooks';
 import { useLocalSettings, updateLocalSettings } from '../../hooks/use-settings';
 import { Input } from '../ui/Input';
 import { Button } from '../ui/Button';
 import { toast } from '../ui/Toast';
+import { confirmDialog } from '../ui/ConfirmDialog';
 import { testConnection } from '../../sync/github-api';
 import { syncNow, forcePush, forcePull } from '../../sync/sync-engine';
-import { deriveKey, cacheEncryptionKey, generateSalt } from '../../sync/crypto';
+import { deriveKey, cacheEncryptionKey, generateSalt, hasEncryptionKey } from '../../sync/crypto';
+import {
+  rotateSyncKey, hasUnfinishedRotation, discardUnfinishedRotation, type RotationProgress, type RotationResult,
+} from '../../sync/key-rotation';
 import { useVault } from '../../hooks/use-vault';
 import { getVaultSecrets, setVaultSecrets, isRemoteUnlockEnrolled } from '../../db/vault';
 import { recordError } from '../../lib/diagnostics';
 import { checkSecretStrength } from '../../lib/password-strength';
 import { PasswordStrengthBar } from '../ui/PasswordStrengthBar';
 
+// What the rotation is doing right now, for the line under the Save button.
+function rotationLabel({ phase, done, total }: RotationProgress): string {
+  switch (phase) {
+    case 'syncing': return 'Syncing…';
+    case 'files': return total ? `Re-encrypting shared files ${Math.min(done ?? 0, total - 1) + 1}/${total}…` : 'Re-encrypting shared files…';
+    case 'snapshot': return 'Rewriting the snapshot…';
+    case 'backups': return 'Rewriting backups…';
+    case 'registry': return 'Updating the device registry…';
+    case 'history': return 'Compacting history…';
+  }
+}
+
+function rotationDoneMessage(result: RotationResult): string {
+  const parts = ['Sync password changed. Enter it on your other devices.'];
+  if (result.blobsUnreadable > 0) {
+    parts.push(`${result.blobsUnreadable} shared file${result.blobsUnreadable === 1 ? '' : 's'} could not be re-encrypted and stay unreadable.`);
+  }
+  if (!result.historySquashed) parts.push('History will be compacted on a later sync.');
+  return parts.join(' ');
+}
+
 export function GitHubSettings() {
   const local = useLocalSettings();
   const { enabled: paranoid, unlocked } = useVault();
+  const [rotation, setRotation] = useState<RotationProgress | null>(null);
+  const unfinishedRotation = useLiveQuery(() => hasUnfinishedRotation(), [], false);
   const [pat, setPat] = useState('');
   const [repo, setRepo] = useState('');
   const [encPassword, setEncPassword] = useState('');
@@ -45,25 +73,36 @@ export function GitHubSettings() {
   }, [paranoid, unlocked, local.githubPat, local.githubRepo, local.encryptionPassword, initialized]);
 
   async function handleSave() {
-    const passwordChanged = encPassword.trim() !== currentSyncPassword;
+    const newPassword = encPassword.trim();
+    const passwordChanged = newPassword !== currentSyncPassword;
+    const wasSyncEnabled = local.syncEnabled;
+    const willEnableSync = !!(pat.trim() && repo.trim());
+    // On a device that already syncs, a new password means re-encrypting the
+    // whole repository under it (sync/key-rotation.ts) — run after the other
+    // fields are saved, and only when this device can read the remote (a cached
+    // key). An unfinished rotation is completed by saving its password again.
+    const rotating = wasSyncEnabled && willEnableSync && !!newPassword && hasEncryptionKey()
+      && (passwordChanged || !!unfinishedRotation);
 
     // Require confirmation when setting/changing password
-    if (passwordChanged && encPassword.trim()) {
+    if (passwordChanged && newPassword) {
       // Same ACR-014 gate as EncryptionPasswordModal — this entry point must not
       // be a strength-check bypass.
-      const strength = checkSecretStrength(encPassword.trim(), 'sync');
+      const strength = checkSecretStrength(newPassword, 'sync');
       if (!strength.ok) { toast(strength.reason!, 'error'); return; }
       if (encPassword !== encPasswordConfirm) {
         toast('Passwords do not match', 'error');
         return;
       }
-      const salt = generateSalt();
-      const key = await deriveKey(encPassword.trim(), salt);
-      cacheEncryptionKey(key, salt);
+      if (!wasSyncEnabled) {
+        // First-time setup: the first sync publishes this salt with the snapshot.
+        const salt = generateSalt();
+        const key = await deriveKey(newPassword, salt);
+        cacheEncryptionKey(key, salt);
+      }
     }
-
-    const wasSyncEnabled = local.syncEnabled;
-    const willEnableSync = !!(pat.trim() && repo.trim());
+    // A rotation stores the new password itself, at the point the remote speaks it.
+    const passwordToStore = rotating ? currentSyncPassword || undefined : newPassword || undefined;
 
     // Warn if enabling sync after changelog was pruned
     if (!wasSyncEnabled && willEnableSync && local.changelogPruned) {
@@ -75,7 +114,7 @@ export function GitHubSettings() {
       if (!unlocked) { toast('Unlock the vault to change sync credentials', 'error'); return; }
       // Secrets go into the vault; localSettings keeps only the non-secret repo,
       // and the plaintext credential fields stay cleared.
-      await setVaultSecrets({ githubPat: pat.trim() || undefined, syncPassword: encPassword.trim() || undefined });
+      await setVaultSecrets({ githubPat: pat.trim() || undefined, syncPassword: passwordToStore });
       // Remote unlock/wipe deliberately keeps a plaintext copy of the PAT here:
       // it is the only way a LOCKED device can reach its mailbox. Clearing it on
       // every save silently killed the remote wipe (the watcher stops polling)
@@ -93,18 +132,40 @@ export function GitHubSettings() {
         githubPat: pat.trim() || undefined,
         githubRepo: repo.trim() || undefined,
         syncEnabled: willEnableSync,
-        encryptionPassword: encPassword.trim() || undefined,
+        encryptionPassword: passwordToStore,
       });
     }
     toast('Sync settings saved', 'success');
+    if (!rotating) return;
 
-    // Password change requires re-encrypting all remote data with new key.
-    // Force push overwrites remote with local data encrypted using the new key.
-    // Only do this when sync was already enabled (genuine password change),
-    // NOT on initial setup — otherwise we'd overwrite remote data with an empty local DB.
-    if (wasSyncEnabled && passwordChanged && encPassword.trim() && pat.trim() && repo.trim()) {
-      forcePush();
+    const ok = await confirmDialog(
+      unfinishedRotation
+        ? 'Complete the unfinished password change? Enter the same new password you chose then. Everything in the repository is re-encrypted with it, and the old password stops working everywhere.'
+        : 'Change the sync password? Everything in the repository — the snapshot, every shared file and the backups — is re-encrypted with the new password, and the old one stops working everywhere. Make sure your other devices are online and have synced first: changes they have not pushed yet would be lost. They will ask for the new password on their next sync.',
+      { confirmLabel: 'Change password', danger: true },
+    );
+    if (!ok) { setEncPassword(currentSyncPassword); setEncPasswordConfirm(''); return; }
+    setRotation({ phase: 'syncing' });
+    try {
+      const result = await rotateSyncKey(newPassword, setRotation);
+      toast(rotationDoneMessage(result), 'success');
+      setEncPasswordConfirm('');
+    } catch (e) {
+      recordError('sync.rotateKey', e);
+      toast(e instanceof Error ? e.message : 'Could not change the sync password', 'error');
+    } finally {
+      setRotation(null);
     }
+  }
+
+  async function handleDiscardRotation() {
+    const ok = await confirmDialog(
+      'Forget the unfinished password change? The next password change starts from scratch; a shared file already re-encrypted under the forgotten password stays unreadable.',
+      { confirmLabel: 'Forget it', danger: true },
+    );
+    if (!ok) return;
+    await discardUnfinishedRotation();
+    toast('Unfinished password change forgotten', 'info');
   }
 
   async function handleTest() {
@@ -164,17 +225,27 @@ export function GitHubSettings() {
           </div>
         )}
         <p className="mt-1 text-xs text-zinc-400 dark:text-zinc-500">
-          All synced data is encrypted. All devices must use the same password.
+          All synced data is encrypted. All devices must use the same password. Changing it here
+          re-encrypts everything in the repository, so sync your other devices first.
         </p>
       </div>
+      {unfinishedRotation && (
+        <div className="rounded-md border border-amber-300 bg-amber-50 p-2 text-xs text-amber-800 dark:border-amber-700 dark:bg-amber-900/30 dark:text-amber-200">
+          A sync password change did not finish. Enter the new password you chose and Save to complete it.
+          <button type="button" className="ml-2 underline" onClick={handleDiscardRotation}>Forget it</button>
+        </div>
+      )}
+      {rotation && (
+        <p role="status" className="text-xs text-zinc-500 dark:text-zinc-400">{rotationLabel(rotation)}</p>
+      )}
       <div className="flex flex-wrap gap-2">
-        <Button size="sm" onClick={handleSave}>Save</Button>
-        <Button size="sm" variant="secondary" onClick={handleTest} disabled={testing}>
+        <Button size="sm" onClick={handleSave} disabled={!!rotation}>Save</Button>
+        <Button size="sm" variant="secondary" onClick={handleTest} disabled={testing || !!rotation}>
           {testing ? 'Testing...' : 'Test Connection'}
         </Button>
-        <Button size="sm" variant="secondary" onClick={() => syncNow(true)}>Sync Now</Button>
-        <Button size="sm" variant="ghost" onClick={() => forcePush()}>Force Push</Button>
-        <Button size="sm" variant="ghost" onClick={() => forcePull()}>Force Pull</Button>
+        <Button size="sm" variant="secondary" onClick={() => syncNow(true)} disabled={!!rotation}>Sync Now</Button>
+        <Button size="sm" variant="ghost" onClick={() => forcePush()} disabled={!!rotation}>Force Push</Button>
+        <Button size="sm" variant="ghost" onClick={() => forcePull()} disabled={!!rotation}>Force Pull</Button>
       </div>
     </div>
   );

@@ -234,6 +234,10 @@ export interface SyncMeta {
   lastBlobCompactionAt?: number;
   // Periodic squash of the sync repo's default branch to bound git history growth.
   lastMainSquashAt?: number;
+  // A sync-password change in progress (see sync/key-rotation.ts): the new salt
+  // and a verifier of the new key, pinned so a retry rotates to the same key and
+  // refuses a different password. Cleared when the rotation completes.
+  keyRotation?: { newSalt: string; newVerifier: string; startedAt: number };
 }
 
 /**

@@ -6,6 +6,8 @@ import { deriveKey, generateSalt, checkVerifier, cacheEncryptionKey } from '../.
 import { getFile } from '../../sync/github-api';
 import { onEncryptionPasswordNeeded, offEncryptionPasswordNeeded, syncNow } from '../../sync/sync-engine';
 import { getSyncPat, rememberSyncPassword } from '../../sync/sync-credentials';
+import { publishOwnRegistryEntry } from '../../sync/remote-unlock';
+import { recordError } from '../../lib/diagnostics';
 import { checkSecretStrength } from '../../lib/password-strength';
 import { PasswordStrengthBar } from '../ui/PasswordStrengthBar';
 
@@ -124,6 +126,10 @@ export function EncryptionPasswordModal() {
         if (rememberPassword) {
           await rememberSyncPassword(password); // the vault on a Paranoid device, never plaintext
         }
+        // Every other device comes through here after a sync-password change, and
+        // its registry entry (MAC'd under the old password) reads as forged until
+        // it is published again — Paranoid devices never republish on their own.
+        void publishOwnRegistryEntry().catch((err) => recordError('remoteUnlock.republish', err));
 
         // Close modal and retry sync
         setSalt(null);
