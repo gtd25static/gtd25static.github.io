@@ -672,7 +672,10 @@ export function Sidebar() {
         </button>
       </div>
 
-      <nav className="flex-1 overflow-y-auto px-2 pt-1 scrollbar-thin">
+      {/* The only scrolling part of the sidebar: a 1px rule above and below marks
+          where lists scroll under the fixed sections, a shade stronger than the
+          rules between its own sections. */}
+      <nav className="flex-1 overflow-y-auto px-2 pt-1 scrollbar-thin border-y border-zinc-300 dark:border-zinc-600">
         {/* Task lists section */}
         {taskLists.length > 0 && (
           <div className="mb-1">
@@ -762,8 +765,8 @@ export function Sidebar() {
         )}
       </nav>
 
-      {/* Bottom actions */}
-      <div className="border-t border-zinc-200 px-2 py-2 dark:border-zinc-800">
+      {/* Bottom actions (the nav's bottom rule separates them) */}
+      <div className="px-2 py-2">
         {paranoidEnabled && localSettings.paranoidRedactModeEnabled && (
           <button
             onClick={() => setRedacted(!redacted)}
