@@ -487,6 +487,39 @@ export async function setSecondaryPassphrase(duressPassphrase: string): Promise<
   await db.vault.update('vault', { wrappedDek2: await wrapDek(kek, currentDek) });
 }
 
+export type PassphraseCheck = 'main' | 'secondary' | 'none';
+
+/**
+ * Which slot a passphrase would open at the lock screen — slot 1 first, then the
+ * duress slot, same derivation, no trimming — WITHOUT unlocking with it: lets the
+ * user confirm the duress passphrase works without triggering its re-key. Pure
+ * read: no write, no unlock-log entry, no failed-attempt count, no tab signal.
+ * It needs the passphrase itself, so it keeps the "no way to query whether duress
+ * is set" property: a wrong guess reads 'none' whether or not slot 2 is in use.
+ * Requires the vault unlocked, and refuses to answer if it locked mid-check (so
+ * the answer can never surface on the lock screen).
+ */
+export async function checkPassphrase(candidate: string): Promise<PassphraseCheck> {
+  if (!currentDek) throw new Error('Unlock the vault first');
+  if (!candidate) return 'none'; // the lock screen ignores an empty field too
+  const vault = await db.vault.get('vault');
+  if (!vault) throw new Error('Vault not found');
+  let kek: CryptoKey;
+  try {
+    kek = await deriveVaultKek(candidate, vault.passSalt, vault.kdf ?? LEGACY_KDF);
+  } catch (err) {
+    recordError('vault.checkPassphrase', err);
+    throw new Error('Could not derive the key on this device — make sure the app is up to date and try again');
+  }
+  const opens = (wrapped: string | undefined) =>
+    wrapped ? unwrapDek(kek, wrapped).then(() => true, () => false) : Promise.resolve(false);
+  let result: PassphraseCheck = 'none';
+  if (await opens(vault.dekWrappedByPass)) result = 'main';
+  else if (await opens(vault.wrappedDek2)) result = 'secondary';
+  if (!currentDek) throw new Error('Unlock the vault first');
+  return result;
+}
+
 /** Remove any duress passphrase by re-randomising slot 2. Requires unlock. */
 export async function clearSecondaryPassphrase(): Promise<void> {
   if (!currentDek) throw new Error('Unlock the vault first');

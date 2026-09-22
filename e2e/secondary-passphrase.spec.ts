@@ -4,13 +4,15 @@
 // replaces every piece of real content on this device with placeholders (same
 // ids/structure), re-keys the vault so only the secondary works afterwards, drops
 // the sync credentials, and leaves no trace of the real content anywhere.
+import { readdirSync, readFileSync } from 'node:fs';
+import path from 'node:path';
 import type { Page } from '@playwright/test';
 import { test, expect } from './fixtures';
 import {
   MAIN_PASSPHRASE, SECONDARY_PASSPHRASE, ROTATED_PASSPHRASE, SYNC_PASSWORD,
   appShell, changePassphrase, closeSettings, configureSync, contentRowIds, createList, createTask,
   dialogTitled, dumpDeviceStorage, enableParanoid, findMarkers, hasShareStash, lock, lockHeading,
-  openApp, openList, readSyncSettings, seenText, setSecondaryPassphrase, stashShareLikeTheServiceWorker,
+  openApp, openList, openSettings, readSyncSettings, seenText, setSecondaryPassphrase, stashShareLikeTheServiceWorker,
   taskCards, unlock, visibleText, watchForText,
 } from './helpers';
 
@@ -279,4 +281,72 @@ test('G: locking in the middle of a sync interrupts it cleanly, and the next unl
   await expect.poll(() => github.readText('gtd25-changelog.json')?.includes(pendingId!) ?? false, {
     message: 'the edit made before locking reaches the remote', timeout: 30_000,
   }).toBe(true);
+});
+
+// --- Checking a passphrase from Settings (confirms it without using it) ---
+
+const WRONG_PASSPHRASE = 'nothing like either passphrase here';
+
+/** Type a passphrase into Settings → Security → "Check" and return the answer shown. */
+async function checkInSettings(page: Page, passphrase: string): Promise<string> {
+  const dialog = await openSettings(page, 'Security');
+  const section = dialog.getByRole('heading', { name: 'Secondary passphrase', exact: true }).locator('..');
+  await section.getByLabel('Passphrase to check', { exact: true }).fill(passphrase);
+  await section.getByRole('button', { name: 'Check', exact: true }).click();
+  const answer = page.getByText(/^(This is the secondary passphrase|This is your main passphrase|This passphrase doesn't open this vault)/);
+  await expect(answer.last()).toBeVisible({ timeout: 90_000 });
+  const text = (await answer.last().innerText()).trim();
+  await expect(section.getByLabel('Passphrase to check', { exact: true }), 'the typed passphrase is cleared').toHaveValue('');
+  return text;
+}
+
+/** The raw on-disk IndexedDB of the app (ciphertext and all), for a byte-level before/after comparison. */
+async function rawAppDatabase(page: Page): Promise<unknown> {
+  return (JSON.parse(await dumpDeviceStorage(page)) as { indexedDb: Record<string, unknown> }).indexedDb.gtd25;
+}
+
+test('H: checking passphrases in Settings changes nothing, and both still work afterwards', async ({ page }) => {
+  await paranoidDeviceWithSecondary(page);
+  const realIds = await contentRowIds(page);
+  const diskBefore = await rawAppDatabase(page);
+  expect(diskBefore, 'the dump sees the vault and the content').toMatchObject({ vault: expect.anything(), tasks: expect.anything() });
+
+  expect(await checkInSettings(page, SECONDARY_PASSPHRASE)).toMatch(/^This is the secondary passphrase/);
+  expect(await checkInSettings(page, MAIN_PASSPHRASE)).toBe('This is your main passphrase.');
+  expect(await checkInSettings(page, WRONG_PASSPHRASE)).toBe("This passphrase doesn't open this vault.");
+
+  expect(await rawAppDatabase(page), 'nothing on disk changed').toEqual(diskBefore);
+  await expect(appShell(page), 'still unlocked').toBeVisible();
+  await closeSettings(page);
+  await openList(page, REAL_LIST);
+  for (const title of REAL_TASKS) await expect(taskCards(page).filter({ hasText: title })).toBeVisible();
+
+  // The main passphrase still opens the real content…
+  await lock(page, 'button');
+  expect(await unlock(page, MAIN_PASSPHRASE), 'the main passphrase still unlocks').toBe(true);
+  await closeSettings(page);
+  await openList(page, REAL_LIST);
+  for (const title of REAL_TASKS) await expect(taskCards(page).filter({ hasText: title })).toBeVisible();
+
+  // …and the secondary one, checked above, still does its job at the lock screen.
+  await lock(page, 'hotkey');
+  expect(await unlock(page, SECONDARY_PASSPHRASE), 'the checked secondary passphrase still unlocks').toBe(true);
+  await expectDecoyWorkspace(page, realIds);
+});
+
+test('H (control): with no secondary passphrase set, checking one reads like any wrong passphrase', async ({ page }) => {
+  await seedRealContent(page);
+  await enableParanoid(page, MAIN_PASSPHRASE);
+  expect(await checkInSettings(page, SECONDARY_PASSPHRASE)).toBe("This passphrase doesn't open this vault.");
+  expect(await checkInSettings(page, MAIN_PASSPHRASE)).toBe('This is your main passphrase.');
+});
+
+test('I: the shipped bundle names none of this', async ({ page }) => {
+  await openApp(page); // the webServer has just built dist/
+  const dir = path.join(process.cwd(), 'dist');
+  const files = readdirSync(dir, { recursive: true, encoding: 'utf8' })
+    .filter((file) => /\.(js|html|css|json|webmanifest)$/.test(file));
+  expect(files.some((file) => file.endsWith('.js')), 'dist has scripts').toBe(true);
+  const hits = files.filter((file) => /duress|decoy/i.test(readFileSync(path.join(dir, file), 'utf8')));
+  expect(hits, 'telltale words in the shipped bundle').toEqual([]);
 });

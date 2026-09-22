@@ -16,7 +16,7 @@ import {
   enableParanoid, disableParanoid, changePassphrase, configureIdleTimeout,
   configureMaxUnlockAttempts, verifyAtRestIntegrity, lock, addSecurityKey, removeSecurityKey,
   listSecurityKeys, DEFAULT_IDLE_MINUTES, DEFAULT_MAX_ATTEMPTS,
-  setSecondaryPassphrase, clearSecondaryPassphrase,
+  setSecondaryPassphrase, clearSecondaryPassphrase, checkPassphrase, isUnlocked,
 } from '../../db/vault';
 import { isWebAuthnSupported } from '../../sync/webauthn-prf';
 import {
@@ -192,10 +192,12 @@ function SecurityKeySection({ hasSecurityKey }: { hasSecurityKey: boolean }) {
 // workspace and, once first used, re-keys this device to keep only that
 // workspace (other devices are untouched). Deliberately understated in the UI
 // and code — see THREAT_MODEL "Coerced unlock". The control is identical whether
-// or not one is configured (there is no way, by design, to tell).
+// or not one is configured (there is no way, by design, to tell: "Check" answers
+// only for a passphrase you type, and never uses it).
 function SecondaryPassphraseSection() {
   const [pass, setPass] = useState('');
   const [confirm, setConfirm] = useState('');
+  const [candidate, setCandidate] = useState('');
   const [busy, setBusy] = useState(false);
 
   async function save() {
@@ -227,6 +229,23 @@ function SecondaryPassphraseSection() {
     }
   }
 
+  async function check(event: React.FormEvent) {
+    event.preventDefault();
+    setBusy(true);
+    try {
+      const result = await checkPassphrase(candidate);
+      if (result === 'secondary') toast('This is the secondary passphrase — it would open the separate workspace. Nothing was changed.', 'success');
+      else if (result === 'main') toast('This is your main passphrase.', 'info');
+      else toast("This passphrase doesn't open this vault.", 'error');
+    } catch (e) {
+      // Locked mid-check: the lock screen is up, so say nothing there.
+      if (isUnlocked()) toast(e instanceof Error ? e.message : 'Could not check', 'error');
+    } finally {
+      setCandidate('');
+      setBusy(false);
+    }
+  }
+
   return (
     <div className="space-y-2 border-t border-zinc-200 pt-3 dark:border-zinc-700">
       <h4 className="text-sm font-medium">Secondary passphrase</h4>
@@ -242,6 +261,13 @@ function SecondaryPassphraseSection() {
         <Button size="sm" variant="secondary" onClick={save} disabled={busy || !pass.trim()}>Save</Button>
         <Button size="sm" variant="secondary" onClick={remove} disabled={busy}>Remove</Button>
       </div>
+      <form onSubmit={check} className="space-y-2 pt-2">
+        <p className="text-xs text-zinc-400 dark:text-zinc-500">
+          Check a passphrase without unlocking with it: tells you which one it is. Nothing on this device changes.
+        </p>
+        <Input label="Passphrase to check" type="password" autoComplete="off" value={candidate} onChange={(e) => setCandidate(e.target.value)} disabled={busy} />
+        <Button type="submit" size="sm" variant="secondary" disabled={busy || !candidate}>Check</Button>
+      </form>
     </div>
   );
 }
