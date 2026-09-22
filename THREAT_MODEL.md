@@ -1286,7 +1286,14 @@ syncPassword and prune old backups if the earlier plaintext exposure matters.
   locked build can be refreshed without wiping. It can check public update
   metadata, ask a waiting service worker to activate, and reload; it does **not**
   access the DEK, decrypted content, syncPassword, or PAT. Same-commit service
-  worker refresh signals are suppressed to avoid update-banner loops. If an update
+  worker refresh signals are suppressed to avoid update-banner loops. **A
+  user-initiated check reports what it actually found (2026-09-22):** it waits
+  for the browser's update job instead of a fixed timer, says so when nothing is
+  registered to install updates or when the check did not complete, and compares
+  the deployed commit against the running one, so a worker that is stuck — or
+  whose script the network is rewriting — can no longer report the device as
+  current. It mattered: **being able to tell whether you are running the build
+  you think you are** is the first thing every other guarantee here rests on. If an update
   is detected while a Paranoid vault is **unlocked**, applying it is deferred until
   the vault is already locked; the app does **not** persist or carry the DEK across
   reloads to preserve the unlocked state. To make the lock/reload explicit, the app

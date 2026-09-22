@@ -26,6 +26,22 @@ export function changelogFor(info: VersionInfo, current: string): Array<{ h: str
   return info.message ? [{ h: info.commit, s: info.message }] : [];
 }
 
+/**
+ * The build the server is serving right now. version.json is deliberately kept
+ * out of the precache, so this reads past the service worker: it describes what
+ * a pending update contains, and — when its commit disagrees with the running
+ * one — that the worker never picked the new build up. Null when unreachable.
+ */
+export async function fetchDeployedVersion(): Promise<VersionInfo | null> {
+  try {
+    const response = await fetch(`${import.meta.env.BASE_URL}version.json?t=${Date.now()}`, { cache: 'no-store' });
+    if (!response.ok) return null;
+    return parseVersionInfo(await response.json());
+  } catch {
+    return null;
+  }
+}
+
 /** Validate/normalize an untrusted version.json payload; null if unusable. */
 export function parseVersionInfo(j: unknown): VersionInfo | null {
   if (!j || typeof j !== 'object') return null;

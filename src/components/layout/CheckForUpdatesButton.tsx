@@ -1,11 +1,32 @@
-import { useState, useRef, useEffect } from 'react';
-import { useServiceWorker } from '../../hooks/use-service-worker';
+import { useState } from 'react';
+import { useServiceWorker, type UpdateCheckResult } from '../../hooks/use-service-worker';
 import { toast } from '../ui/Toast';
 
-// How long to wait for the service worker to surface a waiting build before we
-// reassure the user they're current. A found build flips `needRefresh` and the
-// always-mounted AppUpdatePrompt shows the update dialog instead.
-const DETECT_WINDOW_MS = 4000;
+const FORCE_UPDATE_HINT = 'Settings → Diagnostics → “Force update & reload”.';
+
+// What to say about each outcome. A found build says nothing here: it flips
+// needRefresh, and the always-mounted AppUpdatePrompt shows the update dialog.
+//
+// This used to be a 4-second timer over a fire-and-forget check: whatever went
+// wrong — no registration at all, a request the network never answered — the
+// button waited it out and then claimed the device was on the latest version.
+function report(result: UpdateCheckResult): void {
+  switch (result) {
+    case 'update-found':
+      return;
+    case 'up-to-date':
+      toast('You’re on the latest version', 'success');
+      return;
+    case 'stale-worker':
+      toast(`A newer version is deployed, but this device did not pick it up. ${FORCE_UPDATE_HINT}`, 'error');
+      return;
+    case 'no-worker':
+      toast(`This device can’t check for updates: nothing is registered to install them. ${FORCE_UPDATE_HINT}`, 'error');
+      return;
+    case 'failed':
+      toast('Could not check for updates. You may be offline, or the network is blocking it.', 'error');
+  }
+}
 
 interface Props {
   /** Called when a check starts — e.g. to close the sidebar on mobile. */
@@ -14,26 +35,23 @@ interface Props {
 
 /** Sidebar action that triggers an immediate, user-initiated update check. */
 export function CheckForUpdatesButton({ onActivate }: Props) {
-  const { needRefresh, forceCheck } = useServiceWorker();
+  const { forceCheck } = useServiceWorker();
   const [checking, setChecking] = useState(false);
-  // Read the latest needRefresh inside the post-check timeout without staleness.
-  const needRefreshRef = useRef(needRefresh);
-  useEffect(() => { needRefreshRef.current = needRefresh; }, [needRefresh]);
 
-  function handleClick() {
+  async function handleClick() {
     if (checking) return;
     setChecking(true);
     onActivate?.();
-    forceCheck(); // if a new build exists, AppUpdatePrompt shows the update dialog
-    setTimeout(() => {
+    try {
+      report(await forceCheck());
+    } finally {
       setChecking(false);
-      if (!needRefreshRef.current) toast('You’re on the latest version', 'success');
-    }, DETECT_WINDOW_MS);
+    }
   }
 
   return (
     <button
-      onClick={handleClick}
+      onClick={() => void handleClick()}
       disabled={checking}
       className="flex w-full items-center gap-3 rounded-full px-3 py-3.5 md:py-2 text-sm text-zinc-600 hover:bg-zinc-100 disabled:opacity-60 dark:text-zinc-400 dark:hover:bg-zinc-800"
     >

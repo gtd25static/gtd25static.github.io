@@ -3,7 +3,7 @@ import { onVersionIncompatible, offVersionIncompatible, onSyncSuccess, offSyncSu
 import { useServiceWorker } from '../../hooks/use-service-worker';
 import { useVault } from '../../hooks/use-vault';
 import { GIT_COMMIT } from '../../lib/constants';
-import { changelogFor, parseVersionInfo, type VersionInfo } from '../../lib/changelog';
+import { changelogFor, fetchDeployedVersion, type VersionInfo } from '../../lib/changelog';
 import { Button } from '../ui/Button';
 
 const PARANOID_UPDATE_NOTICE_KEY = 'gtd25-paranoid-update-notice';
@@ -79,10 +79,8 @@ export function AppUpdatePrompt() {
     setVersionChecked(false);
     if (!needRefresh && !syncIncompat) return;
     let active = true;
-    fetch(`${import.meta.env.BASE_URL}version.json?t=${Date.now()}`, { cache: 'no-store' })
-      .then((r) => (r.ok ? r.json() : null))
-      .then((j: unknown) => { const v = parseVersionInfo(j); if (active && v) setInfo(v); })
-      .catch(() => { /* changelog is optional */ })
+    fetchDeployedVersion()
+      .then((v) => { if (active && v) setInfo(v); }) // the changelog is optional
       .finally(() => { if (active) setVersionChecked(true); });
     return () => { active = false; };
   }, [needRefresh, syncIncompat]);
@@ -91,7 +89,7 @@ export function AppUpdatePrompt() {
   // force an immediate SW check so the waiting build is detected and applyUpdate
   // (not a bare reload) can install it.
   useEffect(() => {
-    const handler = () => { setSyncIncompat(true); forceCheck(); };
+    const handler = () => { setSyncIncompat(true); void forceCheck(); };
     onVersionIncompatible(handler);
     return () => offVersionIncompatible(handler);
   }, [forceCheck]);
