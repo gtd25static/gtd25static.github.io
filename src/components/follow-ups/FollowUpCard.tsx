@@ -112,6 +112,20 @@ export function FollowUpCard({ task, index, dragHandleProps }: Props) {
         })),
       });
     }
+    const taskLists = lists.filter((l) => l.type === 'tasks' && !l.archivedAt);
+    if (taskLists.length > 0) {
+      items.push({
+        label: 'Send to task list',
+        children: taskLists.map((l) => ({
+          label: l.name,
+          onClick: () => {
+            void moveTaskToList(task.id, l.id).then((moved) => {
+              if (moved) toast(`Moved to ${l.name}`, 'success');
+            });
+          },
+        })),
+      });
+    }
     items.push(
       { label: 'Edit', onClick: () => setEditing(true) },
       { label: 'Delete', onClick: async () => {

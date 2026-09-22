@@ -1,16 +1,21 @@
 // @vitest-environment jsdom
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import '../setup-component';
-import { resetAppState, makeTask, makeTaskList, TestDndWrapper } from '../helpers/component-helpers';
+import { resetAppState, makeTask, makeTaskList, makeSubtask, TestDndWrapper } from '../helpers/component-helpers';
 import { TaskCard } from '../../components/tasks/TaskCard';
+import type { Subtask } from '../../db/models';
 import { useAppState } from '../../stores/app-state';
 import { ConfirmDialogContainer } from '../../components/ui/ConfirmDialog';
 import { ToastContainer } from '../../components/ui/Toast';
 
 // Mock DB-dependent hooks
 const mockSubtasks: ReturnType<typeof import('../../hooks/use-subtasks').useSubtasks> = [];
-const mockLists = [makeTaskList({ id: 'list-1', name: 'Work' }), makeTaskList({ id: 'list-2', name: 'Personal' })];
+const mockLists = [
+  makeTaskList({ id: 'list-1', name: 'Work' }),
+  makeTaskList({ id: 'list-2', name: 'Personal' }),
+  makeTaskList({ id: 'fu-1', name: 'People', type: 'follow-ups' }),
+];
 
 vi.mock('../../hooks/use-subtasks', () => ({
   useSubtasks: () => mockSubtasks,
@@ -259,6 +264,45 @@ describe('TaskCard', () => {
         </TestDndWrapper>,
       );
       expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
+    });
+  });
+
+  describe('context menu', () => {
+    beforeEach(() => {
+      mockMoveTaskToList.mockResolvedValue(true);
+      mockSubtasks.length = 0;
+    });
+
+    // Submenu items are clicked with fireEvent: userEvent's pointer move fires a
+    // mouseout without relatedTarget, which React reads as leaving the menu and
+    // closes the submenu first (real browsers don't).
+    async function openSubmenu(user: ReturnType<typeof userEvent.setup>, label: string) {
+      fireEvent.contextMenu(screen.getByText('Menu task'));
+      await user.hover(screen.getByText(label));
+    }
+
+    it('keeps "Send to list" to task lists', async () => {
+      const { user } = renderCard({ title: 'Menu task' });
+      await openSubmenu(user, 'Send to list');
+      expect(screen.getByText('Personal')).toBeInTheDocument();
+      expect(screen.queryByText('People')).not.toBeInTheDocument();
+    });
+
+    it('turns the task into a follow-up via "Send to follow-up list"', async () => {
+      const { user, task } = renderCard({ title: 'Menu task' });
+      await openSubmenu(user, 'Send to follow-up list');
+      fireEvent.click(screen.getByText('People'));
+      expect(mockMoveTaskToList).toHaveBeenCalledWith(task.id, 'fu-1');
+      expect(await screen.findByText('Moved to People')).toBeInTheDocument();
+    });
+
+    it('refuses a task with subtasks, without calling the move', async () => {
+      (mockSubtasks as Subtask[]).push(makeSubtask('any'));
+      const { user } = renderCard({ title: 'Menu task' });
+      await openSubmenu(user, 'Send to follow-up list');
+      fireEvent.click(screen.getByText('People'));
+      expect(mockMoveTaskToList).not.toHaveBeenCalled();
+      expect(await screen.findByText("A task with subtasks can't become a follow-up")).toBeInTheDocument();
     });
   });
 });

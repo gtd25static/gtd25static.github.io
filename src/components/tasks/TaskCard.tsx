@@ -381,6 +381,7 @@ export function TaskCard({ task, index, dragHandleProps }: Props) {
 
   function buildContextMenuItems(): MenuItem[] {
     const otherLists = lists.filter((l) => l.id !== task.listId && l.type === 'tasks' && !l.archivedAt);
+    const followUpLists = lists.filter((l) => l.type === 'follow-ups' && !l.archivedAt);
     const items: MenuItem[] = [
       { label: task.starred ? 'Unstar' : 'Star', onClick: () => updateTask(task.id, { starred: !task.starred }) },
     ];
@@ -394,6 +395,23 @@ export function TaskCard({ task, index, dragHandleProps }: Props) {
         children: otherLists.map((l) => ({
           label: l.name,
           onClick: () => moveTaskToList(task.id, l.id),
+        })),
+      });
+    }
+    if (followUpLists.length > 0) {
+      items.push({
+        label: 'Send to follow-up list',
+        children: followUpLists.map((l) => ({
+          label: l.name,
+          onClick: () => {
+            if (subtasks.length > 0) {
+              toast("A task with subtasks can't become a follow-up", 'info');
+              return;
+            }
+            void moveTaskToList(task.id, l.id).then((moved) => {
+              if (moved) toast(`Moved to ${l.name}`, 'success');
+            });
+          },
         })),
       });
     }

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { render, screen, within } from '@testing-library/react';
+import { render, screen, within, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import '../setup-component';
 import { resetAppState, makeTask, makeTaskList } from '../helpers/component-helpers';
@@ -8,9 +8,10 @@ import { ConfirmDialogContainer } from '../../components/ui/ConfirmDialog';
 import { ToastContainer } from '../../components/ui/Toast';
 
 const fuList = makeTaskList({ id: 'fu-1', name: 'Follow Ups', type: 'follow-ups' });
+const workList = makeTaskList({ id: 'work', name: 'Work', type: 'tasks' });
 
 vi.mock('../../hooks/use-task-lists', () => ({
-  useTaskLists: () => [fuList],
+  useTaskLists: () => [fuList, workList],
 }));
 
 const mockUpdateTask = vi.fn();
@@ -175,6 +176,18 @@ describe('FollowUpCard', () => {
       await user.keyboard('{Escape}');
       expect(screen.getByText('Keep')).toBeInTheDocument();
       expect(mockUpdateTask).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('context menu', () => {
+    it('turns the follow-up into a task via "Send to task list"', async () => {
+      mockMoveTaskToList.mockResolvedValue(true);
+      const { user, task } = renderCard({ title: 'Menu follow-up' });
+      fireEvent.contextMenu(screen.getByText('Menu follow-up'));
+      await user.hover(screen.getByText('Send to task list'));
+      fireEvent.click(screen.getByText('Work'));
+      expect(mockMoveTaskToList).toHaveBeenCalledWith(task.id, 'work');
+      expect(await screen.findByText('Moved to Work')).toBeInTheDocument();
     });
   });
 });

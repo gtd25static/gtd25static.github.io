@@ -1,6 +1,7 @@
-// Dragging an item onto a sidebar list of the OTHER type: a task becomes a
-// follow-up and back again. Drives dnd-kit with a real pointer, which jsdom
-// can't, on the production build.
+// Moving an item to a list of the OTHER type, by dragging it onto the sidebar or
+// through the right-click menu: a task becomes a follow-up and back again.
+// Drives dnd-kit and the hover submenu with a real pointer, which jsdom can't,
+// on the production build.
 import type { Locator, Page } from '@playwright/test';
 import { test, expect } from './fixtures';
 import { createList, createTask, openApp, openList, taskCards } from './helpers';
@@ -15,6 +16,14 @@ async function createFollowUpList(page: Page, name: string): Promise<void> {
   await input.press('Enter');
   await expect(page.getByRole('heading', { level: 2, name, exact: true })).toBeVisible();
 }
+
+/** A list entry in the open right-click submenu (the menu is portaled to <body>, outside the sidebar). */
+const submenuItem = (page: Page, name: string): Locator =>
+  page.locator('body > div.fixed').getByRole('button', { name, exact: true });
+
+/** The follow-up card itself (its title also shows in the "Ready to discuss" banner). */
+const followUpCard = (page: Page, title: string): Locator =>
+  page.locator('[data-focus-id]').filter({ hasText: title }).filter({ has: page.getByRole('button', { name: 'Discussed' }) });
 
 const sidebarList = (page: Page, name: string): Locator =>
   page.locator('aside nav [data-focus-id]').filter({ hasText: name });
@@ -46,9 +55,7 @@ test('a task dragged onto a follow-up list becomes a follow-up, and drags back',
   // openList() waits for "Add a task"; a follow-up list says "Add a follow-up".
   await sidebarList(page, 'People').locator(':scope > button').click();
   await expect(page.getByRole('heading', { level: 2, name: 'People', exact: true })).toBeVisible();
-  const followUp = page.locator('[data-focus-id]')
-    .filter({ hasText: TITLE })
-    .filter({ has: page.getByRole('button', { name: 'Discussed' }) });
+  const followUp = followUpCard(page, TITLE);
   await expect(followUp).toBeVisible();
 
   // Follow-up list -> task list
@@ -78,4 +85,26 @@ test('a task with subtasks is refused by a follow-up list and stays put', async 
   await expect(page.getByText("A task with subtasks can't become a follow-up")).toBeVisible();
   await expect(card).toBeVisible();
   await expect(sidebarList(page, 'People')).not.toContainText('1');
+});
+
+test('the right-click menu sends a task to a follow-up list and back', async ({ page }) => {
+  await openApp(page);
+  await createFollowUpList(page, 'People');
+  await createList(page, 'Work');
+  await createTask(page, TITLE);
+
+  await taskCards(page).filter({ hasText: TITLE }).getByText(TITLE).click({ button: 'right' });
+  await page.getByText('Send to follow-up list').hover();
+  await submenuItem(page, 'People').click();
+  await expect(page.getByText('Moved to People')).toBeVisible();
+  await expect(taskCards(page)).toHaveCount(0);
+
+  await sidebarList(page, 'People').locator(':scope > button').click();
+  await followUpCard(page, TITLE).getByText(TITLE).click({ button: 'right' });
+  await page.getByText('Send to task list').hover();
+  await submenuItem(page, 'Work').click();
+  await expect(page.getByText('Moved to Work')).toBeVisible();
+
+  await openList(page, 'Work');
+  await expect(taskCards(page).filter({ hasText: TITLE })).toBeVisible();
 });
