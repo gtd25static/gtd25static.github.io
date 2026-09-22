@@ -15,6 +15,7 @@
 import { db } from '../db';
 import { lock } from '../db/vault';
 import { signalOtherTabs } from './tab-channel';
+import { closeAllNotifications } from './notifications';
 
 // Deliberately survives clearWebStorage (see skip below): it is the retry
 // breadcrumb for a wipe whose IndexedDB deletion could not be confirmed.
@@ -98,6 +99,7 @@ export async function panicWipe(opts: { reload?: boolean } = {}): Promise<void> 
   signalOtherTabs({ type: 'wipe' });
   try { localStorage.setItem(WIPE_PENDING_KEY, String(Date.now())); } catch { /* no storage — proceed */ }
 
+  await closeAllNotifications(); // nudges quote task titles; they would outlive the data
   const idbOutcome = await deleteIndexedDb();
   clearWebStorage();
   await clearCaches();

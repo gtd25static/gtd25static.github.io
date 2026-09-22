@@ -10,6 +10,19 @@ type NudgeNotificationOptions = NotificationOptions & {
   renotify?: boolean;
 };
 
+/**
+ * Close every notification this app has showing (nudges quote task titles).
+ * Only notifications shown through the service worker can be enumerated; one
+ * shown without it, and the OS's own notification history, are out of reach.
+ * Best-effort: never throws.
+ */
+export async function closeAllNotifications(): Promise<void> {
+  try {
+    const registration = await navigator.serviceWorker?.getRegistration();
+    for (const notification of (await registration?.getNotifications()) ?? []) notification.close();
+  } catch { /* no service worker or notifications in this context */ }
+}
+
 export function showTimerNotification(): void {
   if (!('Notification' in window) || Notification.permission !== 'granted') return;
   const n = new Notification('Pomodoro Complete', {

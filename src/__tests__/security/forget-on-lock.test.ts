@@ -25,8 +25,26 @@ beforeEach(async () => {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
   __resetVaultStateForTests();
   localStorage.removeItem('gtd25-paranoid');
+});
+
+describe("locking closes the app's notifications", () => {
+  it('closes every notification the service worker is showing', async () => {
+    const close = vi.fn();
+    vi.stubGlobal('navigator', {
+      serviceWorker: { getRegistration: async () => ({ getNotifications: async () => [{ close }, { close }] }) },
+    });
+    const stop = startForgettingSessionOnLock();
+    await enableParanoid(PASS);
+
+    lock();
+    await new Promise((r) => setTimeout(r, 20));
+
+    expect(close).toHaveBeenCalledTimes(2);
+    stop();
+  });
 });
 
 describe('locking forgets the session', () => {

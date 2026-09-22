@@ -36,6 +36,24 @@ afterEach(() => {
 });
 
 describe('panicWipe', () => {
+  it("closes the app's notifications before erasing anything", async () => {
+    await seedTask();
+    const close = vi.fn();
+    Object.defineProperty(globalThis, 'navigator', {
+      configurable: true,
+      value: {
+        serviceWorker: {
+          getRegistration: async () => ({ getNotifications: async () => [{ close }] }),
+          getRegistrations: async () => [],
+        },
+      },
+    });
+
+    await panicWipe({ reload: false });
+
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
   it('erases IndexedDB, gtd25 localStorage, sessionStorage, caches and the service worker', async () => {
     await seedTask();
     localStorage.setItem('gtd25-paranoid', '1');

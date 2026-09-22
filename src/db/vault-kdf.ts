@@ -53,5 +53,9 @@ export async function deriveVaultKek(
     hashLength: 32,
     outputType: 'binary',
   });
-  return crypto.subtle.importKey('raw', raw as BufferSource, 'AES-GCM', false, ['encrypt', 'decrypt']);
+  try {
+    return await crypto.subtle.importKey('raw', raw as BufferSource, 'AES-GCM', false, ['encrypt', 'decrypt']);
+  } finally {
+    raw.fill(0); // the KEK lives on only inside the (non-extractable) CryptoKey
+  }
 }

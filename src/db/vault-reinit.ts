@@ -7,6 +7,7 @@ import { placeholderRow, placeholderBlobBytes } from '../lib/placeholder-content
 import { purgeLocalBackups } from './backup';
 import { SHARE_CACHE } from '../lib/share-target';
 import { clearErrorLog } from '../lib/diagnostics';
+import { closeAllNotifications } from '../lib/notifications';
 import { newId } from '../lib/id';
 import { DEFAULT_MAX_ATTEMPTS } from '../lib/constants';
 
@@ -151,10 +152,7 @@ export async function reinitVaultWithPlaceholders(vault: Vault, realDek: CryptoK
   try {
     if (typeof caches !== 'undefined') await caches.delete(SHARE_CACHE);
   } catch { /* no Cache Storage in this context: nothing was stashed */ }
-  try {
-    const registration = await navigator.serviceWorker?.getRegistration();
-    for (const notification of (await registration?.getNotifications()) ?? []) notification.close();
-  } catch { /* no service worker or notifications in this context */ }
+  await closeAllNotifications();
 
   void realDek; // consumed only as the read key before this call; not persisted
   return newDek;

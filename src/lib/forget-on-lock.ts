@@ -4,6 +4,7 @@ import { useAppState } from '../stores/app-state';
 import { dismissFocusNudge } from '../stores/focus-nudge';
 import { forgetPendingClipboardText } from './clipboard-hygiene';
 import { revokeSessionObjectUrls } from './session-object-urls';
+import { closeAllNotifications } from './notifications';
 
 // Locking forgets what the session held in memory. These stores and the sync
 // engine's session outlive the unlocked UI, so without this the next unlock —
@@ -26,5 +27,7 @@ export function startForgettingSessionOnLock(): () => void {
     // from this origin (a shared-folder download keeps one alive for a minute).
     forgetPendingClipboardText();
     revokeSessionObjectUrls();
+    // A nudge left in the notification centre names a task after the lock.
+    void closeAllNotifications();
   });
 }

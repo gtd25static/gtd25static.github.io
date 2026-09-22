@@ -19,7 +19,7 @@ import { unlocksInWindow, effectiveMinutes } from '../../lib/relaxed-unlock';
 import {
   enableParanoid, disableParanoid, changePassphrase, rekeyVault, confirmCurrentPassphrase, configureIdleTimeout,
   configureMaxUnlockAttempts, verifyAtRestIntegrity, lock, addSecurityKey, removeSecurityKey,
-  listSecurityKeys, DEFAULT_IDLE_MINUTES, DEFAULT_MAX_ATTEMPTS,
+  listSecurityKeys, getVaultSecrets, DEFAULT_IDLE_MINUTES, DEFAULT_MAX_ATTEMPTS,
   setSecondaryPassphrase, clearSecondaryPassphrase, checkPassphrase, isUnlocked,
 } from '../../db/vault';
 import { isWebAuthnSupported } from '../../sync/webauthn-prf';
@@ -38,6 +38,7 @@ import { clearUnlockLog } from '../../lib/unlock-audit';
 import { clampClipboardClearSeconds, DEFAULT_CLIPBOARD_CLEAR_SECONDS } from '../../lib/clipboard-hygiene';
 import { checkSecretStrength } from '../../lib/password-strength';
 import { PasswordStrengthBar } from '../ui/PasswordStrengthBar';
+import { ExportDialog } from './ExportDialog';
 
 function clampMinutes(value: string): number {
   const n = parseInt(value, 10);
@@ -694,6 +695,7 @@ function ManageForm({ idleMinutes, maxAttempts, attemptWipeJustArmed, systemIdle
   const [newPassConfirm, setNewPassConfirm] = useState('');
   const [rekeyOnChange, setRekeyOnChange] = useState(true);
   const [rekeyPass, setRekeyPass] = useState('');
+  const [recoveryExport, setRecoveryExport] = useState(false);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
@@ -783,26 +785,6 @@ function ManageForm({ idleMinutes, maxAttempts, attemptWipeJustArmed, systemIdle
     } catch (e) {
       recordError('security.verifyAtRestIntegrity', e);
       toast(e instanceof Error ? e.message : 'Verification failed', 'error');
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function handleRecoveryExport() {
-    setBusy(true);
-    try {
-      const blob = await exportToZip();
-      const date = new Date().toISOString().slice(0, 10);
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `gtd25-recovery-${date}.zip`;
-      a.click();
-      URL.revokeObjectURL(url);
-      toast('Recovery backup downloaded', 'success');
-    } catch (e) {
-      recordError('security.recoveryExport', e);
-      toast(e instanceof Error ? e.message : 'Export failed', 'error');
     } finally {
       setBusy(false);
     }
@@ -919,9 +901,21 @@ function ManageForm({ idleMinutes, maxAttempts, attemptWipeJustArmed, systemIdle
           wiping. Verify checks every item still decrypts.
         </p>
         <div className="flex flex-wrap gap-2">
-          <Button size="sm" variant="secondary" onClick={handleRecoveryExport} disabled={busy}>Download recovery backup</Button>
+          <Button size="sm" variant="secondary" onClick={() => setRecoveryExport(true)} disabled={busy}>Download recovery backup</Button>
           <Button size="sm" variant="secondary" onClick={handleVerify} disabled={busy}>Verify integrity</Button>
         </div>
+        {/* The same dialog as every other export: encrypted by default here, plaintext only by choice. */}
+        <ExportDialog
+          open={recoveryExport}
+          onClose={() => setRecoveryExport(false)}
+          syncPassword={getVaultSecrets()?.syncPassword}
+          defaultEncrypted
+          source={{
+            title: 'Download recovery backup',
+            filename: `gtd25-recovery-${new Date().toISOString().slice(0, 10)}.zip`,
+            build: (opts) => exportToZip(opts),
+          }}
+        />
       </div>
 
       <div className="flex flex-wrap gap-2 border-t border-zinc-200 pt-3 dark:border-zinc-700">

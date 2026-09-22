@@ -8,6 +8,7 @@ import { onEncryptionPasswordNeeded, offEncryptionPasswordNeeded, syncNow } from
 import { getSyncPat, rememberSyncPassword } from '../../sync/sync-credentials';
 import { publishOwnRegistryEntry } from '../../sync/remote-unlock';
 import { recordError } from '../../lib/diagnostics';
+import { panicWipe } from '../../lib/panic-wipe';
 import { checkSecretStrength } from '../../lib/password-strength';
 import { PasswordStrengthBar } from '../ui/PasswordStrengthBar';
 
@@ -32,22 +33,10 @@ export function EncryptionPasswordModal() {
   if (salt === null) return null;
 
   async function handleWipeLocalData() {
-    // Delete IndexedDB database
-    db.close();
-    await new Promise<void>((resolve, reject) => {
-      const req = indexedDB.deleteDatabase('gtd25');
-      req.onsuccess = () => resolve();
-      req.onerror = () => reject(req.error);
-    });
-
-    // Clear all gtd25-related localStorage keys
-    const keysToRemove = Object.keys(localStorage).filter((k) => k.startsWith('gtd25-'));
-    for (const key of keysToRemove) {
-      localStorage.removeItem(key);
-    }
-
-    // Reload to start fresh
-    window.location.reload();
+    // The one wipe: it survives a blocked IndexedDB deletion (a second tab), and
+    // also clears Cache Storage, sessionStorage and the service worker, which the
+    // ad-hoc deletion this used to do left behind. Reloads when done.
+    await panicWipe();
   }
 
   async function handleSubmit(e: React.FormEvent) {
