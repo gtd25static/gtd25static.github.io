@@ -24,8 +24,9 @@ import { recordUnlockAttempt, type UnlockMethod } from '../lib/unlock-audit';
 import { pruneHistory } from '../lib/relaxed-unlock';
 import { checkSecretStrength } from '../lib/password-strength';
 import { reinitVaultWithPlaceholders } from './vault-reinit';
+import { rekeyVaultContent, type RekeyResult } from './vault-rekey';
 import { DEFAULT_MAX_ATTEMPTS } from '../lib/constants';
-import { purgeLocalBackups, decryptLocalBackups } from './backup';
+import { purgeLocalBackups, decryptLocalBackups, createLocalBackup } from './backup';
 import { onTabSignal, signalOtherTabs } from '../lib/tab-channel';
 import type { LocalSettings, Vault, PrfCredential } from './models';
 
@@ -39,6 +40,7 @@ export interface VaultSecrets {
   githubPat?: string;
   syncPassword?: string;
 }
+export type { RekeyResult };
 
 // --- In-memory state (never persisted) ---
 let currentDek: CryptoKey | null = null;
@@ -47,9 +49,17 @@ let idleTimeoutMs = DEFAULT_IDLE_MINUTES * 60_000;
 let idleTimer: ReturnType<typeof setTimeout> | null = null;
 // KDF used when (re)wrapping the DEK under the passphrase; persisted per-vault.
 let kdfParams: KdfParams = DEFAULT_ARGON2;
+// True only while the vault is being rewritten under another key (a secondary
+// unlock's re-init, or a re-key). Both read the content through currentDek, so a
+// lock landing in that window — another tab's idle lock or hotkey — would null
+// the key halfway through the read. Such a signal is not for this tab: at a
+// secondary unlock it is still at its lock screen, and a re-key shows nothing.
+let rekeying = false;
 
 // --- Reactive snapshot for React (useSyncExternalStore) ---
-export interface VaultSnapshot { enabled: boolean; unlocked: boolean; hasSecurityKey: boolean }
+// `busy`: the vault is being rewritten under another key; the app must not
+// render its content meanwhile (see rekeyVault).
+export interface VaultSnapshot { enabled: boolean; unlocked: boolean; hasSecurityKey: boolean; busy: boolean }
 const listeners = new Set<() => void>();
 let snapshot = computeSnapshot();
 
@@ -72,7 +82,7 @@ function setKeyFlag(on: boolean): void {
   } catch { /* ignore */ }
 }
 function computeSnapshot(): VaultSnapshot {
-  return { enabled: readFlag(), unlocked: currentDek !== null, hasSecurityKey: readKeyFlag() };
+  return { enabled: readFlag(), unlocked: currentDek !== null, hasSecurityKey: readKeyFlag(), busy: rekeying };
 }
 function emit(): void {
   snapshot = computeSnapshot();
@@ -210,13 +220,6 @@ export async function setVaultSecrets(patch: VaultSecrets): Promise<void> {
     secrets: await encryptBlob(currentDek, JSON.stringify(currentSecrets)),
   });
 }
-
-// True only while a secondary unlock re-keys the vault (see applySecondaryUnlock).
-// The re-init reads the real content through currentDek, so a lock landing in that
-// window — another tab's idle lock or hotkey — would null the key halfway through
-// the read. This tab is still at its lock screen with nothing a lock could take
-// away, so such a signal is not for it.
-let rekeying = false;
 
 /** Drop the keys held by THIS tab. */
 function lockThisTab(): void {
@@ -903,11 +906,80 @@ async function rewrapPassphrase(passphrase: string): Promise<void> {
   await db.vault.update('vault', { passSalt, dekWrappedByPass, kdf });
 }
 
-/** Re-wrap the DEK under a new passphrase. Requires the vault to be unlocked. */
-export async function changePassphrase(newPassphrase: string): Promise<void> {
+/**
+ * Change the passphrase. Needs the current one (the gate — see
+ * confirmCurrentPassphrase). With `rekey` the device is rewritten under a fresh
+ * DEK as well (rekeyVault); without it only slot 1 is re-wrapped, which keeps the
+ * security keys and the secondary passphrase working. Requires the vault unlocked.
+ */
+export async function changePassphrase(
+  currentPassphrase: string,
+  newPassphrase: string,
+  opts: { rekey: boolean },
+): Promise<RekeyResult | null> {
   if (!currentDek) throw new Error('Unlock the vault before changing the passphrase');
   if (!newPassphrase) throw new Error('A passphrase is required');
+  if (opts.rekey) return rekeyVault(currentPassphrase, newPassphrase);
+  if (!(await confirmCurrentPassphrase(currentPassphrase))) throw new Error('Incorrect passphrase');
   await rewrapPassphrase(newPassphrase);
+  return null;
+}
+
+/**
+ * Rewrite this device under a fresh DEK, so a key that was ever copied out of
+ * it — an old disk image plus the passphrase of that time, a security key since
+ * removed, a trusted device since revoked, a memory dump — opens nothing written
+ * from now on. Needs the current passphrase; `newPassphrase` changes it in the
+ * same step. The secondary passphrase (if any) must be set again afterwards and
+ * every security key enrolled again; remote unlock stays enrolled. Requires the
+ * vault unlocked. Rejects with 'Incorrect passphrase' for anything but the main
+ * passphrase — the secondary one included — counting and logging nothing.
+ */
+export async function rekeyVault(currentPassphrase: string, newPassphrase?: string): Promise<RekeyResult> {
+  if (!currentDek) throw new Error('Unlock the vault first');
+  if (rekeying) throw new Error('The vault is already being re-keyed');
+  const { vault, opensMain } = await authenticateMainPassphrase(currentPassphrase, 'vault.rekey');
+  if (!opensMain) throw new Error('Incorrect passphrase');
+  if (!currentDek) throw new Error('Unlock the vault first');
+  if (vault.migrationState !== 'done') {
+    throw new Error('Finish the pending encryption change first: lock and unlock once, then try again');
+  }
+  // The row read above must be the one this tab's key belongs to (another tab
+  // may have re-keyed meanwhile — its reload signal reaches us only afterwards).
+  if (!(await checkVerifier(currentDek, vault.verifier))) {
+    throw new Error('The vault changed underneath this tab. Reload the app and try again');
+  }
+  // Recovered under the OLD key, before the swap; re-wrapped under the new one.
+  const ruk = vault.dekWrappedByRuk ? await getRukRaw() : null;
+  const newSalt = generateSalt();
+  const newKek = await deriveVaultKek(newPassphrase ?? currentPassphrase, newSalt, kdfParams);
+
+  // The other tabs hold the old key and would keep showing (and writing) under
+  // it: lock them first. This tab stops rendering content (busy) and ends its
+  // sync session, so nothing is read or written around the swap.
+  signalOtherTabs({ type: 'lock' });
+  rekeying = true;
+  emit();
+  try {
+    const { newDek, result } = await rekeyVaultContent({
+      vault, newKek, newSalt, kdf: kdfParams, secrets: currentSecrets, ruk,
+    });
+    currentDek = newDek;
+    setKeyFlag(false); // the security keys' wraps opened the old DEK
+    // The safety backups were encrypted under the old key: replace them with one
+    // fresh copy under the new one, so the safety net is back immediately.
+    purgeLocalBackups();
+    await createLocalBackup();
+    // The other tabs' memory still holds what they showed under the old key.
+    signalOtherTabs({ type: 'reload' });
+    return result;
+  } finally {
+    // On failure the transaction rolled back and currentDek still is the old key.
+    rekeying = false;
+    if (ruk) ruk.fill(0);
+    resetIdleTimer();
+    emit();
+  }
 }
 
 export async function configureIdleTimeout(minutes: number): Promise<void> {
@@ -951,6 +1023,7 @@ export function __resetVaultStateForTests(): void {
   currentDek = null;
   currentSecrets = null;
   lastUnlockFailure = null;
+  rekeying = false;
   if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
   idleTimeoutMs = DEFAULT_IDLE_MINUTES * 60_000;
   emit();

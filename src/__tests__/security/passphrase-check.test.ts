@@ -90,7 +90,7 @@ describe('checkPassphrase answers like the lock screen', () => {
   });
 
   it('follows a change of the main passphrase', async () => {
-    await changePassphrase(ROTATED);
+    await changePassphrase(REAL, ROTATED, { rekey: false });
     expect(await checkPassphrase(ROTATED)).toBe('main');
     expect(await checkPassphrase(REAL)).toBe('none');
     expect(await checkPassphrase(SECONDARY)).toBe('secondary');

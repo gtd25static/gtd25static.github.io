@@ -95,7 +95,7 @@ test('B (control): the main passphrase opens the real content', async ({ page })
 test('C: after the main passphrase is changed, the secondary still opens the decoy', async ({ page }) => {
   await paranoidDeviceWithSecondary(page);
   const realIds = await contentRowIds(page);
-  await changePassphrase(page, ROTATED_PASSPHRASE);
+  await changePassphrase(page, MAIN_PASSPHRASE, ROTATED_PASSPHRASE, { rekey: false });
   await lock(page, 'button');
 
   expect(await unlock(page, SECONDARY_PASSPHRASE), 'the secondary passphrase still unlocks after a main-passphrase change').toBe(true);

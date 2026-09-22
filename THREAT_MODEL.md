@@ -1,6 +1,6 @@
 # GTD25 — Security Review & Threat Model
 
-**Last updated:** 2026-09-22 (**Every wrap of the DEK is now bound to its slot, and key management needs the passphrase.** (1) **The vault row was unauthenticated, and the two passphrase slots were interchangeable.** Each wrap of the DEK was AES-GCM under its KEK with nothing saying which slot it belonged to, so anyone able to rewrite the `vault` row of a locked device (a seized disk that is later returned, or anything running in the page) could swap `dekWrappedByPass` and `wrappedDek2`: from then on the **real passphrase ran the secondary-passphrase re-init over the real content**, and the **secondary passphrase opened the real content as an ordinary unlock** — the exact inversion the coerced-unlock feature exists to prevent, at the cost of a row swap. Every wrap (slot 1, slot 2, each security key's, the remote-unlock key's) now carries its slot as AES-GCM additional data, so a wrap moved to another slot fails to open there: a swapped row reads as two wrong passphrases (counted toward the tripwire like any other), and nothing is re-keyed. Wraps written before this change still open from any slot and are rewritten bound the next time the app holds the KEK that opens them — slot 1 at the next passphrase unlock, a security key's at its next unlock, the remote-unlock wrap at its next use, slot 2 the next time the secondary passphrase is set or removed (or at a re-key). **Residual until then:** a secondary passphrase set before this date keeps an unbound slot 2, and with it the swap exposure for that one slot — set it again to close it (Scenario 3b says the same). (2) **`confirmCurrentPassphrase`**, the gate the security settings will stand behind: accepts exactly the main passphrase (the secondary one is refused like any other and reads the same), derives it as the lock screen does, and acts on nothing — no write, no failed-attempt count, no unlock-log entry, no tab signal; it needs an unlocked vault and withholds its answer if the vault locks mid-check. Removing a security key now requires an unlocked vault, which it did not. No change to what is encrypted, the wire format, or the lock/wipe flows.)
+**Last updated:** 2026-09-22 (**Every wrap of the DEK is now bound to its slot, and key management needs the passphrase.** (1) **The vault row was unauthenticated, and the two passphrase slots were interchangeable.** Each wrap of the DEK was AES-GCM under its KEK with nothing saying which slot it belonged to, so anyone able to rewrite the `vault` row of a locked device (a seized disk that is later returned, or anything running in the page) could swap `dekWrappedByPass` and `wrappedDek2`: from then on the **real passphrase ran the secondary-passphrase re-init over the real content**, and the **secondary passphrase opened the real content as an ordinary unlock** — the exact inversion the coerced-unlock feature exists to prevent, at the cost of a row swap. Every wrap (slot 1, slot 2, each security key's, the remote-unlock key's) now carries its slot as AES-GCM additional data, so a wrap moved to another slot fails to open there: a swapped row reads as two wrong passphrases (counted toward the tripwire like any other), and nothing is re-keyed. Wraps written before this change still open from any slot and are rewritten bound the next time the app holds the KEK that opens them — slot 1 at the next passphrase unlock, a security key's at its next unlock, the remote-unlock wrap at its next use, slot 2 the next time the secondary passphrase is set or removed (or at a re-key). **Residual until then:** a secondary passphrase set before this date keeps an unbound slot 2, and with it the swap exposure for that one slot — set it again to close it (Scenario 3b says the same). (2) **`confirmCurrentPassphrase`**, the gate the security settings will stand behind: accepts exactly the main passphrase (the secondary one is refused like any other and reads the same), derives it as the lock screen does, and acts on nothing — no write, no failed-attempt count, no unlock-log entry, no tab signal; it needs an unlocked vault and withholds its answer if the vault locks mid-check. Removing a security key now requires an unlocked vault, which it did not. (3) **The DEK is no longer for life.** It was minted once when Paranoid Mode was enabled and never rotated: changing the passphrase, removing a security key, turning remote unlock off or revoking an approver only re-wrapped or dropped a *wrapper* of the same key, so anyone who ever held it — an old disk image plus the passphrase of that time, a security key since removed, a trusted device since revoked, a memory dump of an unlocked session — kept reading everything this device wrote afterwards, in any later image. A **re-key** (`rekeyVault`; Settings → Security, and the default when the passphrase is changed) mints a fresh DEK and rewrites every content row, the changelog and the vault row under it in one transaction (all crypto in memory first — the same shape as the secondary-passphrase re-init), with a new salt and Argon2id, the sync secrets carried over, slot 2 re-randomised (the secondary passphrase must be set again; the UI says so to everyone, whether or not one is in use), every security key dropped (each would need a touch to re-wrap; the count is reported), remote unlock re-wrapped under the same remote-unlock key (approvers unaffected — revoking one is `removeApprover`'s job, which rotates that key), the shared-blob cache dropped, and the safety backups replaced by one fresh copy under the new key. It needs the current passphrase (the secondary one is refused like any other wrong one, and neither counts nor logs), locks the other tabs first and reloads them after, ends this tab's sync session and shows a wait screen instead of the app meanwhile, and refuses if any row is unreadable with the current key or an enable/disable is still pending. Interrupted, it rolls back to the old key (tested). **This is post-compromise security, not forward secrecy** — what was copied stays readable to whoever holds the copy and its key; see the new §4 subsection. **Impact on prior conclusions:** Scenarios 2, 3 and 8 gain a recovery step after a suspected key exposure (before, the honest answer was "re-enable Paranoid Mode from scratch"); Scenario 3b's slot 2 is re-randomised by a re-key; nothing changes about what is encrypted, the wire format, or the lock/wipe flows.)
 
 **Previously updated:** 2026-09-22 (**Turning Paranoid Mode on or off survives the tab dying — and the safety backups around it.** (1) **An enable interrupted mid-encryption left the device looking un-Paranoid over rows it could no longer read, and a second enable then destroyed them.** The flag (`localStorage`) was raised only after every row had been rewritten, so a tab killed during the migration reloaded with no lock screen: the app ran un-Paranoid, the rows already encrypted showed blank, the PAT/sync password were still plaintext in `localSettings`, and the pre-existing plaintext safety backups were never purged. The only way out the UI offered — enabling again — minted a new DEK over the saved vault, and the rows encrypted by the first attempt became permanently unreadable (reproduced in a test before the fix). Now the flag goes up right after the vault is saved and before any row is touched, so a dead tab comes back at the lock screen and the unlock resumes the whole enable (encryption, then the credential strip, then the backup purge); an enable refuses to replace an existing vault; and a boot-time reconcile makes the flag agree with the vault in both directions (a vault saved just before the flag, and a flag left behind by a disable that had already deleted the vault, which otherwise stranded the app at a lock screen no vault could answer). Verified in Chromium by killing the tab mid-migration over 1500 rows. **If you ever saw blank lists after enabling Paranoid Mode and enabled it again, the content encrypted by the first attempt is gone from that device** — recover it from sync or another device. (2) **Disabling left the encrypted safety backups behind under a destroyed key**: listed, unrestorable, with a misleading "unlock the vault" error. The disable now rewrites them as plaintext while the key still exists (the rest of the database goes plaintext in the same step). (3) **"Download" on a safety backup wrote a plaintext zip to Downloads, even from a Paranoid device**, without asking; it now goes through the export dialog — encrypted by default in Paranoid Mode, plaintext only by explicit choice.)
 
@@ -530,6 +530,11 @@ cache.
     was enabled until storage compaction; the migration rewrites rows but cannot
     guarantee the underlying engine overwrote old pages; (c) app **presence** is
     evident from the SW cache + origin history.
+  - **Re-key after a suspected copy (2026-09-22).** If an image *and* the
+    passphrase of that time may be in someone's hands, Settings → Security →
+    *Re-key this device* mints a new DEK: the image stays readable to them,
+    everything written afterwards is not (post-compromise security, §4). A
+    passphrase change re-keys by default.
   - **Mitigations in place:** Argon2id KDF, security-key tier (recommended for
     real seizure risk), persistent-storage request, panic/failed-attempt wipe
     (note: wipes only help *before* imaging — a copied disk is immune). The wipe
@@ -601,7 +606,9 @@ cache.
     background code (recurring-task checks, liveQuery refreshes, sync) no longer
     defers the re-lock**, so an idle-but-open tab still locks on schedule (ACR-002).
     **Recommendation:** keep idle timeout short and lock before walking away; treat
-    memory capture while unlocked as unwinnable.
+    memory capture while unlocked as unwinnable — and **re-key** afterwards
+    (Settings → Security, 2026-09-22): a DEK lifted from memory opens nothing the
+    device writes after that.
   - **Locking is app-wide, not per tab (2026-07-27).** The DEK is a module
     variable, so it used to be that locking — by hotkey, idle timeout or
     lock-when-hidden — dropped the key *only in the tab that ran it*: a second,
@@ -1066,6 +1073,51 @@ locked device unwraps the DEK. Device identity keys are distributed via a regist
 
 ## 4. Cross-cutting residual risks (true in multiple scenarios)
 
+### Forward secrecy vs. post-compromise security — what rotation does and does not do
+
+Two properties, often confused, neither free:
+- **Forward secrecy:** a key obtained *today* does not open what was captured
+  *earlier*.
+- **Post-compromise security** (backward secrecy): a key obtained *earlier* does
+  not open what is written *after* the owner rotates.
+
+**Neither key here gives forward secrecy, and nothing in this design can.** The
+sync content key is derived from a static password: whoever captured ciphertext
+(a TLS proxy, a repo clone, git history, a disk image) and later learns the
+password reads all of it, forever — Scenario 7's "harvest now, crack later". At
+rest, an old disk image plus the passphrase or DEK of that time opens that image.
+Forward secrecy for a multi-device store would need per-device secrets that are
+not derived from the password (an enrolment ceremony between devices) — a
+redesign this app does not attempt — and against a proxy that already captured
+everything there is no forward secrecy to be had with a password-derived key at
+all.
+
+**Post-compromise security is what rotation buys:**
+- **At rest — re-key (2026-09-22).** A fresh DEK; everything on the device
+  rewritten under it (the header entry of that date has the mechanics). After
+  it, a copied wrapped DEK plus the old passphrase, a removed security key, a
+  revoked approver's remote-unlock key, or a DEK from a memory dump open
+  **nothing written from then on**. Old ciphertext in IndexedDB free space
+  (Scenario 2's forensic residue) is unreadable without the old image *and* the
+  old key — the crypto-shredding the secondary-passphrase re-init already
+  relied on.
+- **On the wire — changing the sync password.** Derives a new key at a new salt
+  and force-pushes the snapshot and an empty changelog under it. **As of this
+  entry it stops there**: the Shared Folder blobs, the three tier backups, the
+  migration backup that the force push itself writes, and the device registry's
+  MACs stay under the old key — and the blobs become unreadable on every device
+  (Scenario 7). Being fixed next; **do not change the sync password if you use
+  the Shared Folder until then.**
+
+**What rotation does not do**, said once so no scenario has to hedge: it does
+not un-copy — a clone, proxy log or disk image taken before the rotation stays
+exactly as readable as it was, to whoever holds its key. It does not erase —
+IndexedDB does not securely delete overwritten pages, and GitHub garbage-collects
+unreachable objects on its own schedule. And it is only as good as its trigger:
+the app cannot know a key leaked. **Re-key after removing a security key or a
+trusted device, after typing the passphrase on a machine you do not trust, and
+after any suspected copy of the device's storage** (Recommendation 10).
+
 ### Trusted Computing Base (TCB) — what you implicitly trust (ACR-016)
 All of this app's protections assume the code running in your browser is the code we
 shipped. The following are **inside the TCB**: compromising any one is equivalent to a
@@ -1257,6 +1309,11 @@ syncPassword and prune old backups if the earlier plaintext exposure matters.
    that the PAT is plaintext at rest while it is enabled (use a least-privilege PAT).
    Wipe confirmations are best-effort; a pending command may still have wiped the
    device if it lost network before writing the signed status.
+10. **Re-key the device** (Settings → Security) after removing a security key or a
+   trusted device, after typing the passphrase on a machine you do not trust, and
+   whenever a copy of the device's storage plus the passphrase of that time may
+   exist. Post-compromise security, not forward secrecy: what was copied stays
+   readable (§4). A passphrase change re-keys by default.
 
 ## 6. Summary matrix (content confidentiality)
 | # | Threat | Paranoid OFF | Paranoid ON |

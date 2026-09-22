@@ -14,8 +14,10 @@ import { revokeSessionObjectUrls } from './session-object-urls';
 /** Forget on every lock of this tab's vault. Returns an unsubscribe. */
 export function startForgettingSessionOnLock(): () => void {
   return subscribeVault(() => {
-    const { enabled, unlocked } = getVaultSnapshot();
-    if (!enabled || unlocked) return;
+    // A re-key (`busy`) forgets the session too: the content is about to be
+    // rewritten under another key, and a sync in flight must not write around it.
+    const { enabled, unlocked, busy } = getVaultSnapshot();
+    if (!enabled || (unlocked && !busy)) return;
     endSyncSession();
     useAppState.getState().setSearchQuery('');
     dismissFocusNudge();

@@ -3,6 +3,7 @@ import { Input } from '../ui/Input';
 import { Button } from '../ui/Button';
 import { toast } from '../ui/Toast';
 import { confirmDialog } from '../ui/ConfirmDialog';
+import type { RekeyResult } from '../../db/vault';
 import { useVault } from '../../hooks/use-vault';
 import { useLocalSettings, updateLocalSettings } from '../../hooks/use-settings';
 import {
@@ -610,11 +611,22 @@ function RelaxedUnlockToggle() {
   );
 }
 
+// After a re-key: what has to be set up again. The secondary passphrase is
+// "if you use one" — whether one was set is not known here, by design.
+function rekeyDoneMessage(prefix: string, result: RekeyResult): string {
+  const parts = [`${prefix}. Set the secondary passphrase again if you use one.`];
+  const n = result.securityKeysDropped;
+  if (n > 0) parts.push(`${n} security key${n === 1 ? '' : 's'} must be enrolled again.`);
+  return parts.join(' ');
+}
+
 function ManageForm({ idleMinutes, maxAttempts, attemptWipeJustArmed, systemIdleOn, systemIdleUnavailable, systemLockGraceOn, systemLockGraceMinutes, hasSecurityKey }: { idleMinutes: number; maxAttempts: number; attemptWipeJustArmed: boolean; systemIdleOn: boolean; systemIdleUnavailable: boolean; systemLockGraceOn: boolean; systemLockGraceMinutes: number; hasSecurityKey: boolean }) {
   const [idle, setIdle] = useState(String(idleMinutes));
   const [attempts, setAttempts] = useState(String(maxAttempts));
+  const [currentPass, setCurrentPass] = useState('');
   const [newPass, setNewPass] = useState('');
   const [newPassConfirm, setNewPassConfirm] = useState('');
+  const [rekeyOnChange, setRekeyOnChange] = useState(true);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
@@ -639,15 +651,16 @@ function ManageForm({ idleMinutes, maxAttempts, attemptWipeJustArmed, systemIdle
   }
 
   async function handleChangePass() {
+    if (!currentPass) { toast('Enter your current passphrase', 'error'); return; }
     if (newPass !== newPassConfirm) { toast('Passphrases do not match', 'error'); return; }
     if (!newPass.trim()) { toast('Enter a new passphrase', 'error'); return; }
     const strength = checkSecretStrength(newPass.trim(), 'vault');
     if (!strength.ok) { toast(strength.reason!, 'error'); return; }
     setBusy(true);
     try {
-      await changePassphrase(newPass.trim());
-      toast('Passphrase changed', 'success');
-      setNewPass(''); setNewPassConfirm('');
+      const rekeyed = await changePassphrase(currentPass, newPass.trim(), { rekey: rekeyOnChange });
+      toast(rekeyed ? rekeyDoneMessage('Passphrase changed and device re-keyed', rekeyed) : 'Passphrase changed', 'success');
+      setCurrentPass(''); setNewPass(''); setNewPassConfirm('');
     } catch (e) {
       recordError('security.changePassphrase', e);
       toast(e instanceof Error ? e.message : 'Could not change passphrase', 'error');
@@ -763,9 +776,28 @@ function ManageForm({ idleMinutes, maxAttempts, attemptWipeJustArmed, systemIdle
       </div>
 
       <div className="space-y-2 border-t border-zinc-200 pt-3 dark:border-zinc-700">
+        <h4 className="text-sm font-medium">Change passphrase</h4>
+        <Input label="Current passphrase" type="password" value={currentPass} onChange={(e) => setCurrentPass(e.target.value)} placeholder="Your current passphrase" disabled={busy} />
         <Input label="New passphrase" type="password" value={newPass} onChange={(e) => setNewPass(e.target.value)} placeholder="Change passphrase" disabled={busy} />
         <PasswordStrengthBar secret={newPass.trim()} kind="vault" />
         <Input label="Confirm new passphrase" type="password" value={newPassConfirm} onChange={(e) => setNewPassConfirm(e.target.value)} placeholder="Repeat new passphrase" disabled={busy} />
+        <label className="flex items-start gap-2 text-xs text-zinc-600 dark:text-zinc-300">
+          <input
+            type="checkbox"
+            checked={rekeyOnChange}
+            onChange={(e) => setRekeyOnChange(e.currentTarget.checked)}
+            disabled={busy}
+            className="mt-0.5 rounded accent-accent-600"
+          />
+          <span>
+            Also re-key this device (recommended)
+            <span className="block text-[11px] text-zinc-400 dark:text-zinc-500">
+              Re-encrypts this device's data under a new key, so a copy of its storage taken before now
+              can't be opened with the old passphrase. Security keys enrolled here must then be enrolled
+              again, and the secondary passphrase, if you use one, set again.
+            </span>
+          </span>
+        </label>
         <Button size="sm" variant="secondary" onClick={handleChangePass} disabled={busy}>Change passphrase</Button>
       </div>
 

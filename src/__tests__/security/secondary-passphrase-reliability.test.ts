@@ -85,7 +85,7 @@ describe('secondary passphrase survives main-passphrase changes', () => {
     await seedRealContent();
     await enableParanoid(REAL);
     await setSecondaryPassphrase(SECONDARY);
-    await changePassphrase(ROTATED);
+    await changePassphrase(REAL, ROTATED, { rekey: false });
     lock();
 
     expect(await unlockWithPassphrase(REAL)).toBe(false);    // the rotation itself worked

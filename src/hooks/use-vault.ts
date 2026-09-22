@@ -7,13 +7,15 @@ import { subscribeVault, getVaultSnapshot } from '../db/vault';
  * - `unlocked`: the DEK is in memory.
  * - `locked`: enabled but not yet unlocked -> show the lock screen / gate the app.
  * - `hasSecurityKey`: a FIDO2 security-key credential is enrolled on this device.
+ * - `busy`: the vault is being rewritten under another key -> show a wait screen, not the app.
  */
-export function useVault(): { enabled: boolean; unlocked: boolean; locked: boolean; hasSecurityKey: boolean } {
+export function useVault(): { enabled: boolean; unlocked: boolean; locked: boolean; hasSecurityKey: boolean; busy: boolean } {
   const snap = useSyncExternalStore(subscribeVault, getVaultSnapshot, getVaultSnapshot);
   return {
     enabled: snap.enabled,
     unlocked: snap.unlocked,
     locked: snap.enabled && !snap.unlocked,
     hasSecurityKey: snap.hasSecurityKey,
+    busy: snap.busy,
   };
 }

@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import { AppShell } from './components/layout/AppShell';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { LockScreen } from './components/security/LockScreen';
+import { VaultBusyScreen } from './components/security/VaultBusyScreen';
 import { ensureDefaults, onDatabaseSupersededByOtherTab } from './db';
 import { useKeyboard } from './hooks/use-keyboard';
 import { useTheme } from './components/settings/ThemeSettings';
@@ -35,7 +36,7 @@ export default function App() {
   // Theme is localStorage-only (no DB), safe to apply even while the vault is
   // locked so the lock screen respects light/dark.
   useTheme();
-  const { locked } = useVault();
+  const { locked, busy } = useVault();
 
   // Background tasks that DON'T touch decrypted data run here (always mounted),
   // so they keep working while the vault is locked:
@@ -70,7 +71,7 @@ export default function App() {
           a bug blocks unlock. */}
       <ServiceWorkerProvider>
         <AppUpdatePrompt />
-        {locked ? <LockScreen /> : <UnlockedApp />}
+        {locked ? <LockScreen /> : busy ? <VaultBusyScreen /> : <UnlockedApp />}
       </ServiceWorkerProvider>
     </ErrorBoundary>
   );

@@ -100,12 +100,20 @@ export async function setSecondaryPassphrase(page: Page, passphrase: string): Pr
   await expect(page.getByText('Secondary passphrase saved', { exact: true })).toBeVisible({ timeout: 90_000 });
 }
 
-export async function changePassphrase(page: Page, passphrase: string): Promise<void> {
+/**
+ * Settings → Security → Change passphrase. Re-keys the device by default (the
+ * checkbox is on); `rekey: false` unticks it so only slot 1 is re-wrapped.
+ */
+export async function changePassphrase(page: Page, current: string, next: string, opts: { rekey?: boolean } = {}): Promise<void> {
   const dialog = await openSettings(page, 'Security');
-  await dialog.getByLabel('New passphrase', { exact: true }).fill(passphrase);
-  await dialog.getByLabel('Confirm new passphrase', { exact: true }).fill(passphrase);
-  await dialog.getByRole('button', { name: 'Change passphrase' }).click();
-  await expect(page.getByText('Passphrase changed', { exact: true })).toBeVisible({ timeout: 90_000 });
+  const section = dialog.getByRole('heading', { name: 'Change passphrase', exact: true }).locator('..');
+  await section.getByLabel('Current passphrase', { exact: true }).fill(current);
+  await section.getByLabel('New passphrase', { exact: true }).fill(next);
+  await section.getByLabel('Confirm new passphrase', { exact: true }).fill(next);
+  if (opts.rekey === false) await section.getByLabel('Also re-key this device (recommended)').uncheck();
+  await section.getByRole('button', { name: 'Change passphrase' }).click();
+  const done = opts.rekey === false ? 'Passphrase changed' : 'Passphrase changed and device re-keyed';
+  await expect(page.getByText(done, { exact: false }).first()).toBeVisible({ timeout: 90_000 });
 }
 
 /** Lock with Settings → Security → "Lock now", or with the Ctrl/Cmd+Shift+L hotkey (enabled on demand). */
