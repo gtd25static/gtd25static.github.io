@@ -2,7 +2,7 @@ import { db } from './index';
 import type { Vault } from './models';
 import { generateDek, wrapDek, generateGarbageSlot } from './vault-crypto';
 import { createVerifier, encryptBlob } from '../sync/crypto';
-import { encryptRow, type Row } from './vault-middleware';
+import { CONTENT_TABLES, readContentRows, encryptContentRows } from './vault-content';
 import { placeholderRow, placeholderBlobBytes } from '../lib/placeholder-content';
 import { purgeLocalBackups } from './backup';
 import { SHARE_CACHE } from '../lib/share-target';
@@ -45,16 +45,6 @@ import { DEFAULT_MAX_ATTEMPTS } from '../lib/constants';
 // real DEK, which no longer exists anywhere on the device. Duress defends the
 // "unlock it now" coercion, not a before/after forensic diff.
 
-const CONTENT_TABLES: Array<{ name: string; entityType: string; table: () => import('dexie').Table<unknown, string> }> = [
-  { name: 'taskLists', entityType: 'taskList', table: () => db.taskLists as unknown as import('dexie').Table<unknown, string> },
-  { name: 'tasks', entityType: 'task', table: () => db.tasks as unknown as import('dexie').Table<unknown, string> },
-  { name: 'subtasks', entityType: 'subtask', table: () => db.subtasks as unknown as import('dexie').Table<unknown, string> },
-  { name: 'sharedItems', entityType: 'sharedItem', table: () => db.sharedItems as unknown as import('dexie').Table<unknown, string> },
-  { name: 'mindmapFolders', entityType: 'mindmapFolder', table: () => db.mindmapFolders as unknown as import('dexie').Table<unknown, string> },
-  { name: 'mindmaps', entityType: 'mindmap', table: () => db.mindmaps as unknown as import('dexie').Table<unknown, string> },
-  { name: 'mindmapNodes', entityType: 'mindmapNode', table: () => db.mindmapNodes as unknown as import('dexie').Table<unknown, string> },
-];
-
 // localStorage keys that only exist once sync has run on this device (owned by
 // sync-engine and remote-backups; pinned by the reliability test).
 const SYNC_HISTORY_KEYS = [
@@ -75,30 +65,19 @@ const SYNC_HISTORY_KEYS = [
  * reads (so the content decrypts), and MUST install the returned DEK afterwards.
  */
 export async function reinitVaultWithPlaceholders(vault: Vault, realDek: CryptoKey, duressKek: CryptoKey): Promise<CryptoKey> {
-  // 1. Read + decrypt every content row (real DEK is the active middleware key).
-  //    A row still carrying `_enc` was read WITHOUT the key: its decoy would keep
-  //    that ciphertext (encryptRow passes `_enc` rows through) and land in the new
-  //    vault unreadable — so refuse before anything is written. A quarantined row
-  //    (`_decryptError`) is different: its real content is already unreadable, so
-  //    it gets a decoy like any other, minus the corruption flag.
-  const plainByTable = new Map<string, Row[]>();
-  for (const t of CONTENT_TABLES) {
-    const rows = (await t.table().toArray()) as Row[];
-    if (rows.some((r) => r._enc !== undefined)) throw new Error(`${t.name} read without the vault key`);
-    plainByTable.set(t.name, rows.map(({ _decryptError: _corrupt, ...row }) => row));
-  }
+  // 1. Read + decrypt every content row (real DEK is the active middleware key);
+  //    readContentRows refuses a row still carrying `_enc` (read WITHOUT the key),
+  //    whose decoy would land in the new vault unreadable.
+  const plainByTable = await readContentRows();
   const blobs = await db.sharedBlobs.toArray();
 
-  // 2. Build decoy rows and pre-encrypt them under a FRESH DEK, in memory.
+  // 2. Build decoy rows and pre-encrypt them under a FRESH DEK, in memory. A
+  //    quarantined row (`_decryptError`) has real content that is already
+  //    unreadable, so it gets a decoy like any other, minus the corruption flag.
   const newDek = await generateDek();
-  const encByTable = new Map<string, Row[]>();
-  for (const t of CONTENT_TABLES) {
-    const rows = plainByTable.get(t.name) ?? [];
-    const enc = await Promise.all(
-      rows.map((r) => encryptRow(t.name, newDek, placeholderRow(t.entityType, r)) as Promise<Row>),
-    );
-    encByTable.set(t.name, enc);
-  }
+  const encByTable = await encryptContentRows(
+    newDek, plainByTable, (entityType, { _decryptError: _corrupt, ...row }) => placeholderRow(entityType, row),
+  );
   // Shared-blob cache: keep the ids/structure, replace bytes with dummy text.
   const placeholderBlobs = blobs.map((b) => ({ ...b, data: placeholderBlobBytes(b.id) }));
 
@@ -107,7 +86,7 @@ export async function reinitVaultWithPlaceholders(vault: Vault, realDek: CryptoK
   //    wrap and PRF/remote enrolment dropped).
   const newVault: Vault = {
     id: 'vault',
-    dekWrappedByPass: await wrapDek(duressKek, newDek),
+    dekWrappedByPass: await wrapDek(duressKek, newDek, 'slot1'),
     wrappedDek2: await generateGarbageSlot(),
     passSalt: vault.passSalt,
     kdf: vault.kdf,

@@ -1,7 +1,7 @@
 import { vi } from 'vitest';
 vi.setConfig({ testTimeout: 20_000 });
 import {
-  generateDek, exportDekRaw, wrapDek, unwrapDek, importKekFromBytes,
+  generateDek, exportDekRaw, wrapDek, unwrapDek, importKekFromBytes, generateGarbageSlot, isLegacyWrap,
 } from '../../db/vault-crypto';
 import { deriveKey, generateSalt, createVerifier, checkVerifier } from '../../sync/crypto';
 
@@ -47,5 +47,41 @@ describe('vault-crypto: DEK wrap/unwrap', () => {
 
     expect(await checkVerifier(dek, verifier)).toBe(true);
     expect(await checkVerifier(other, verifier)).toBe(false);
+  });
+});
+
+describe('vault-crypto: slot-bound wraps', () => {
+  it('opens only from the slot it was written for, never unbound', async () => {
+    const dek = await generateDek();
+    const kek = await deriveKey('passphrase', generateSalt());
+    const wrapped = await wrapDek(kek, dek, 'slot1');
+
+    expect(await exportDekRaw(await unwrapDek(kek, wrapped, 'slot1'))).toBe(await exportDekRaw(dek));
+    await expect(unwrapDek(kek, wrapped, 'slot2')).rejects.toBeTruthy();
+    await expect(unwrapDek(kek, wrapped, 'ruk')).rejects.toBeTruthy();
+    await expect(unwrapDek(kek, wrapped)).rejects.toBeTruthy();
+    expect(isLegacyWrap(wrapped)).toBe(false);
+  });
+
+  it('still opens a wrap written before binding, from any slot', async () => {
+    const dek = await generateDek();
+    const kek = await deriveKey('passphrase', generateSalt());
+    const legacy = await wrapDek(kek, dek);
+
+    expect(isLegacyWrap(legacy)).toBe(true);
+    expect(await exportDekRaw(await unwrapDek(kek, legacy, 'slot1'))).toBe(await exportDekRaw(dek));
+    expect(await exportDekRaw(await unwrapDek(kek, legacy, 'slot2'))).toBe(await exportDekRaw(dek));
+    expect(await exportDekRaw(await unwrapDek(kek, legacy))).toBe(await exportDekRaw(dek));
+  });
+
+  it('a garbage slot is shaped like a real bound wrap and opens with nothing', async () => {
+    const dek = await generateDek();
+    const kek = await deriveKey('passphrase', generateSalt());
+    const real = await wrapDek(kek, dek, 'slot2');
+    const garbage = await generateGarbageSlot();
+
+    expect(garbage.length).toBe(real.length);
+    expect(isLegacyWrap(garbage)).toBe(false);
+    await expect(unwrapDek(kek, garbage, 'slot2')).rejects.toBeTruthy();
   });
 });

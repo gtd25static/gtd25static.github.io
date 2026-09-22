@@ -13,7 +13,7 @@ import {
   encryptBlob, decryptBlob, clearEncryptionKey,
 } from '../sync/crypto';
 import { deriveVaultKek, DEFAULT_ARGON2, LEGACY_KDF, type KdfParams } from './vault-kdf';
-import { generateDek, wrapDek, unwrapDek, importKekFromBytes, generateGarbageSlot } from './vault-crypto';
+import { generateDek, wrapDek, unwrapDek, importKekFromBytes, generateGarbageSlot, isLegacyWrap } from './vault-crypto';
 import { setVaultKeyProvider } from './vault-middleware';
 import { encryptAllAtRest, decryptAllAtRest } from './vault-migration';
 import { registerPrfCredential, getPrfOutput } from '../sync/webauthn-prf';
@@ -262,7 +262,7 @@ export async function enableParanoid(passphrase: string, idleMinutes = DEFAULT_I
   const dek = await generateDek();
   const passSalt = generateSalt();
   const kek = await deriveVaultKek(passphrase, passSalt, kdfParams);
-  const dekWrappedByPass = await wrapDek(kek, dek);
+  const dekWrappedByPass = await wrapDek(kek, dek, 'slot1');
   const wrappedDek2 = await generateGarbageSlot(); // uniform slot 2 (no duress yet)
   const verifier = await createVerifier(dek);
   const prfSalt = generateSalt();
@@ -420,7 +420,7 @@ async function doUnlockWithPassphrase(passphrase: string): Promise<boolean> {
   const kek = await deriveVaultKek(passphrase, vault.passSalt, vault.kdf ?? LEGACY_KDF);
   let dek: CryptoKey | null = null;
   try {
-    dek = await unwrapDek(kek, vault.dekWrappedByPass);
+    dek = await unwrapDek(kek, vault.dekWrappedByPass, 'slot1');
   } catch { /* not the real passphrase -> try the duress slot below */ }
 
   // Slot 2: the duress passphrase. Unwraps the real DEK, then re-keys the vault
@@ -428,15 +428,17 @@ async function doUnlockWithPassphrase(passphrase: string): Promise<boolean> {
   if (!dek && vault.wrappedDek2) {
     let altDek: CryptoKey | null = null;
     try {
-      altDek = await unwrapDek(kek, vault.wrappedDek2);
+      altDek = await unwrapDek(kek, vault.wrappedDek2, 'slot2');
     } catch { /* neither slot -> genuinely wrong */ }
     if (altDek) return applySecondaryUnlock(vault, altDek, kek);
   }
 
-  if (!dek) lastUnlockFailure = 'wrong-credential';
-
-  const ok = dek ? await finishUnlock(vault, dek, 'passphrase') : false;
-  if (!ok) {
+  if (!dek) {
+    lastUnlockFailure = 'wrong-credential';
+    await registerFailedAttempt();
+    return false;
+  }
+  if (!(await finishUnlock(vault, dek, 'passphrase'))) {
     // Only a wrong credential counts toward the wipe tripwire (see UnlockFailureReason).
     if (lastUnlockFailure === 'wrong-credential') await registerFailedAttempt();
     return false;
@@ -450,6 +452,14 @@ async function doUnlockWithPassphrase(passphrase: string): Promise<boolean> {
       await rewrapPassphrase(passphrase);
     } catch (err) {
       recordError('vault.kdfUpgrade', err);
+    }
+  } else if (isLegacyWrap(vault.dekWrappedByPass)) {
+    // Same spirit: a slot-1 wrap from before slot binding is rewritten bound now
+    // that its KEK is in hand (the KDF upgrade above rewrites it bound anyway).
+    try {
+      await db.vault.update('vault', { dekWrappedByPass: await wrapDek(kek, dek, 'slot1') });
+    } catch (err) {
+      recordError('vault.slotBind', err);
     }
   }
   return true;
@@ -528,17 +538,39 @@ export async function setSecondaryPassphrase(duressPassphrase: string): Promise<
   // Reject a duress phrase equal to the real one: if it unwraps slot 1, it is the
   // real passphrase (we never store the real passphrase to compare directly).
   try {
-    await unwrapDek(kek, vault.dekWrappedByPass);
+    await unwrapDek(kek, vault.dekWrappedByPass, 'slot1');
     throw new Error('The secondary passphrase must be different from your main passphrase');
   } catch (e) {
     if (e instanceof Error && e.message.startsWith('The secondary')) throw e;
     /* expected: real passphrase KEK differs, so slot 1 won't unwrap */
   }
 
-  await db.vault.update('vault', { wrappedDek2: await wrapDek(kek, currentDek) });
+  await db.vault.update('vault', { wrappedDek2: await wrapDek(kek, currentDek, 'slot2') });
 }
 
 export type PassphraseCheck = 'main' | 'secondary' | 'none';
+
+// Derive a candidate's KEK exactly as the lock screen would (this vault's salt +
+// KDF, no trimming) and see whether it opens slot 1. Slot 2 is never consulted
+// here: the callers that may look at it do so themselves. Pure read.
+async function authenticateMainPassphrase(
+  candidate: string,
+  errorLabel: string,
+): Promise<{ vault: Vault; kek: CryptoKey; opensMain: boolean }> {
+  const vault = await db.vault.get('vault');
+  if (!vault) throw new Error('Vault not found');
+  let kek: CryptoKey;
+  try {
+    kek = await deriveVaultKek(candidate, vault.passSalt, vault.kdf ?? LEGACY_KDF);
+  } catch (err) {
+    // E.g. WebAssembly (Argon2id) unavailable. Record the real cause for
+    // diagnostics; surface a message the settings toast can show as-is.
+    recordError(errorLabel, err);
+    throw new Error('Could not derive the key on this device — make sure the app is up to date and try again');
+  }
+  const opensMain = await unwrapDek(kek, vault.dekWrappedByPass, 'slot1').then(() => true, () => false);
+  return { vault, kek, opensMain };
+}
 
 /**
  * Which slot a passphrase would open at the lock screen — slot 1 first, then the
@@ -553,22 +585,30 @@ export type PassphraseCheck = 'main' | 'secondary' | 'none';
 export async function checkPassphrase(candidate: string): Promise<PassphraseCheck> {
   if (!currentDek) throw new Error('Unlock the vault first');
   if (!candidate) return 'none'; // the lock screen ignores an empty field too
-  const vault = await db.vault.get('vault');
-  if (!vault) throw new Error('Vault not found');
-  let kek: CryptoKey;
-  try {
-    kek = await deriveVaultKek(candidate, vault.passSalt, vault.kdf ?? LEGACY_KDF);
-  } catch (err) {
-    recordError('vault.checkPassphrase', err);
-    throw new Error('Could not derive the key on this device — make sure the app is up to date and try again');
-  }
-  const opens = (wrapped: string | undefined) =>
-    wrapped ? unwrapDek(kek, wrapped).then(() => true, () => false) : Promise.resolve(false);
+  const { vault, kek, opensMain } = await authenticateMainPassphrase(candidate, 'vault.checkPassphrase');
   let result: PassphraseCheck = 'none';
-  if (await opens(vault.dekWrappedByPass)) result = 'main';
-  else if (await opens(vault.wrappedDek2)) result = 'secondary';
+  if (opensMain) result = 'main';
+  else if (vault.wrappedDek2 && await unwrapDek(kek, vault.wrappedDek2, 'slot2').then(() => true, () => false)) result = 'secondary';
   if (!currentDek) throw new Error('Unlock the vault first');
   return result;
+}
+
+/**
+ * Whether `candidate` is this vault's main passphrase: the gate in front of the
+ * actions that change how the vault opens (new passphrase, security keys,
+ * secondary passphrase, approvers, the attempt limit, disabling), so an unlocked
+ * but unattended session cannot be used to add a way in. Only slot 1 counts — the
+ * secondary passphrase is refused like any other wrong one, and reads the same.
+ * Pure read (no write, no failed-attempt count, no unlock-log entry, no tab
+ * signal); requires the vault unlocked and refuses to answer if it locked
+ * mid-check.
+ */
+export async function confirmCurrentPassphrase(candidate: string): Promise<boolean> {
+  if (!currentDek) throw new Error('Unlock the vault first');
+  if (!candidate) return false;
+  const { opensMain } = await authenticateMainPassphrase(candidate, 'vault.confirmPassphrase');
+  if (!currentDek) throw new Error('Unlock the vault first');
+  return opensMain;
 }
 
 /** Remove any duress passphrase by re-randomising slot 2. Requires unlock. */
@@ -625,10 +665,22 @@ export async function unlockWithSecurityKey(): Promise<boolean> {
 
   const kek = await importKekFromBytes(prfOutput);
   for (const k of keys) {
+    let dek: CryptoKey;
     try {
-      const dek = await unwrapDek(kek, k.dekWrappedByPrf);
-      return await finishUnlock(vault, dek, 'securityKey');
-    } catch { /* not this credential — try the next */ }
+      dek = await unwrapDek(kek, k.dekWrappedByPrf, `prf:${k.credentialId}`);
+    } catch { continue; /* not this credential — try the next */ }
+    const ok = await finishUnlock(vault, dek, 'securityKey');
+    if (ok && isLegacyWrap(k.dekWrappedByPrf)) {
+      // Rewrite a wrap from before slot binding bound to its credential, now that
+      // its KEK is in hand. Opportunistic: never fails the unlock.
+      try {
+        const bound = await wrapDek(kek, dek, `prf:${k.credentialId}`);
+        await writeSecurityKeys(keys.map((e) => (e === k ? { ...e, dekWrappedByPrf: bound } : e)));
+      } catch (err) {
+        recordError('vault.slotBind', err);
+      }
+    }
+    return ok;
   }
   // An authenticator answered but reconstructed no enrolled wrap. Logged, so the
   // audit trail is tamper-evident for this method too — but NOT counted toward
@@ -746,7 +798,7 @@ export async function addSecurityKey(label?: string): Promise<void> {
   const kek = await importKekFromBytes(reg.prfOutput);
   const entry: PrfCredential = {
     credentialId: reg.credentialId,
-    dekWrappedByPrf: await wrapDek(kek, currentDek),
+    dekWrappedByPrf: await wrapDek(kek, currentDek, `prf:${reg.credentialId}`),
     label: label?.trim() || undefined,
     addedAt: Date.now(),
     transports: reg.transports,
@@ -766,6 +818,7 @@ export async function addSecurityKey(label?: string): Promise<void> {
  * is safe.
  */
 export async function removeSecurityKey(credentialId?: string): Promise<void> {
+  if (!currentDek) throw new Error('Unlock the vault before removing a security key');
   const vault = await db.vault.get('vault');
   if (!vault) return;
   const remaining = credentialId
@@ -782,7 +835,7 @@ export async function removeSecurityKey(credentialId?: string): Promise<void> {
 export async function wrapDekWithRuk(rukRaw: Uint8Array): Promise<void> {
   if (!currentDek) throw new Error('Unlock the vault before enrolling remote unlock');
   const kek = await importKekFromBytes(rukRaw);
-  const dekWrappedByRuk = await wrapDek(kek, currentDek);
+  const dekWrappedByRuk = await wrapDek(kek, currentDek, 'ruk');
   const rukWrappedByDek = await encryptBlob(currentDek, b64encode(rukRaw));
   await db.vault.update('vault', { dekWrappedByRuk, rukWrappedByDek });
 }
@@ -802,12 +855,21 @@ export async function unlockWithRemoteKey(rukRaw: Uint8Array): Promise<boolean> 
   const kek = await importKekFromBytes(rukRaw);
   let dek: CryptoKey;
   try {
-    dek = await unwrapDek(kek, vault.dekWrappedByRuk);
+    dek = await unwrapDek(kek, vault.dekWrappedByRuk, 'ruk');
   } catch {
     await registerFailedAttempt('remote', false); // logged, but never wipes (see above)
     return false; // wrong RUK
   }
-  return finishUnlock(vault, dek, 'remote');
+  const ok = await finishUnlock(vault, dek, 'remote');
+  if (ok && isLegacyWrap(vault.dekWrappedByRuk)) {
+    // Bind a pre-binding wrap to its slot now that its KEK is in hand (see vault-crypto).
+    try {
+      await db.vault.update('vault', { dekWrappedByRuk: await wrapDek(kek, dek, 'ruk') });
+    } catch (err) {
+      recordError('vault.slotBind', err);
+    }
+  }
+  return ok;
 }
 
 /** True once remote unlock is enrolled on this device (a wrapped-by-RUK DEK exists). */
@@ -837,7 +899,7 @@ async function rewrapPassphrase(passphrase: string): Promise<void> {
   const passSalt = upgrading ? generateSalt() : vault.passSalt;
   const kdf = upgrading ? kdfParams : (vault.kdf ?? kdfParams);
   const kek = await deriveVaultKek(passphrase, passSalt, kdf);
-  const dekWrappedByPass = await wrapDek(kek, currentDek);
+  const dekWrappedByPass = await wrapDek(kek, currentDek, 'slot1');
   await db.vault.update('vault', { passSalt, dekWrappedByPass, kdf });
 }
 

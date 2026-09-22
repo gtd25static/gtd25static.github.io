@@ -345,11 +345,13 @@ export interface PrfCredential {
 // with id='vault'. See src/db/vault.ts.
 export interface Vault {
   id: string; // always 'vault'
-  dekWrappedByPass: string;       // slot 1: encryptBlob(KEK_passphrase, rawDEK)
+  // Every wrap below is AES-GCM under its KEK, bound to its slot as additional
+  // data (see db/vault-crypto.ts), so a wrap moved to another slot won't open.
+  dekWrappedByPass: string;       // slot 1: the DEK wrapped by the passphrase KEK
   // Slot 2 (LUKS-style, ALWAYS present so its presence signals nothing): random
   // garbage when no duress passphrase is set, else the DEK wrapped by the duress
   // passphrase KEK (SAME passSalt+kdf as slot 1, so one derivation unwraps either).
-  // Entering the duress passphrase re-keys the vault to decoy content — see db/duress.ts.
+  // Entering the duress passphrase re-keys the vault to decoy content — see db/vault-reinit.ts.
   wrappedDek2?: string;
   passSalt: string;               // salt for the passphrase KEK (both slots)
   // How the passphrase KEK is derived. Absent => legacy PBKDF2 (pre-Argon2id);

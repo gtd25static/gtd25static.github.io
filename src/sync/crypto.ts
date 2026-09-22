@@ -160,10 +160,10 @@ export async function decryptBlob(key: CryptoKey, base64Str: string, aad?: Uint8
 // Returns/consumes IV(12) || ciphertext as raw bytes (no base64 — the GitHub
 // layer base64-encodes for transport, the at-rest cache stores bytes directly).
 
-export async function encryptBytes(key: CryptoKey, bytes: Uint8Array): Promise<Uint8Array> {
+export async function encryptBytes(key: CryptoKey, bytes: Uint8Array, aad?: Uint8Array): Promise<Uint8Array> {
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const ciphertext = await crypto.subtle.encrypt(
-    { name: 'AES-GCM', iv },
+    { name: 'AES-GCM', iv, ...(aad ? { additionalData: aad as BufferSource } : {}) },
     key,
     bytes as BufferSource,
   );
@@ -173,11 +173,11 @@ export async function encryptBytes(key: CryptoKey, bytes: Uint8Array): Promise<U
   return result;
 }
 
-export async function decryptBytes(key: CryptoKey, data: Uint8Array): Promise<Uint8Array> {
+export async function decryptBytes(key: CryptoKey, data: Uint8Array, aad?: Uint8Array): Promise<Uint8Array> {
   const iv = data.slice(0, 12);
   const ciphertext = data.slice(12);
   const plaintext = await crypto.subtle.decrypt(
-    { name: 'AES-GCM', iv },
+    { name: 'AES-GCM', iv, ...(aad ? { additionalData: aad as BufferSource } : {}) },
     key,
     ciphertext as BufferSource,
   );
