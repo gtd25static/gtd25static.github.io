@@ -6,6 +6,7 @@ interface PromptRequest {
   title: string;
   message?: string;
   confirmLabel?: string;
+  placeholder?: string;
   resolve: (password: string | null) => void;
 }
 
@@ -14,7 +15,7 @@ let showPromptFn: ((req: Omit<PromptRequest, 'resolve'>) => Promise<string | nul
 /** Imperatively ask the user for a password. Resolves to null if cancelled. */
 export function promptPassword(
   title: string,
-  options?: { message?: string; confirmLabel?: string },
+  options?: { message?: string; confirmLabel?: string; placeholder?: string },
 ): Promise<string | null> {
   if (!showPromptFn) return Promise.resolve(null);
   return showPromptFn({ title, ...options });
@@ -78,7 +79,7 @@ export function PasswordPromptContainer() {
           type="password"
           value={value}
           onChange={(e) => setValue(e.target.value)}
-          placeholder="Password"
+          placeholder={request.placeholder ?? 'Password'}
           autoFocus
         />
         <div className="mt-4 flex justify-end gap-2">

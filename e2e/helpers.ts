@@ -91,12 +91,19 @@ export async function enableParanoid(page: Page, passphrase: string): Promise<vo
   await expect(dialog.getByText('Active — local data on this device is encrypted at rest.')).toBeVisible({ timeout: 90_000 });
 }
 
-export async function setSecondaryPassphrase(page: Page, passphrase: string): Promise<void> {
+/** Answer the "Confirm your passphrase" prompt the security settings raise before changing how the vault opens. */
+export async function confirmPassphrasePrompt(page: Page, passphrase = MAIN_PASSPHRASE): Promise<void> {
+  await page.getByPlaceholder('Vault passphrase').fill(passphrase);
+  await page.getByRole('button', { name: 'Continue', exact: true }).click();
+}
+
+export async function setSecondaryPassphrase(page: Page, passphrase: string, mainPassphrase = MAIN_PASSPHRASE): Promise<void> {
   const dialog = await openSettings(page, 'Security');
   const section = dialog.getByRole('heading', { name: 'Secondary passphrase', exact: true }).locator('..');
   await section.getByLabel('Secondary passphrase', { exact: true }).fill(passphrase);
   await section.getByLabel('Confirm', { exact: true }).fill(passphrase);
   await section.getByRole('button', { name: 'Save', exact: true }).click();
+  await confirmPassphrasePrompt(page, mainPassphrase);
   await expect(page.getByText('Secondary passphrase saved', { exact: true })).toBeVisible({ timeout: 90_000 });
 }
 
@@ -113,6 +120,19 @@ export async function changePassphrase(page: Page, current: string, next: string
   if (opts.rekey === false) await section.getByLabel('Also re-key this device (recommended)').uncheck();
   await section.getByRole('button', { name: 'Change passphrase' }).click();
   const done = opts.rekey === false ? 'Passphrase changed' : 'Passphrase changed and device re-keyed';
+  await expect(page.getByText(done, { exact: false }).first()).toBeVisible({ timeout: 90_000 });
+}
+
+/**
+ * Settings → Security → Re-key this device. Resolves once the toast confirms
+ * it, or (`expectIncorrect`) once the app has refused the passphrase.
+ */
+export async function rekeyVault(page: Page, passphrase: string, opts: { expectIncorrect?: boolean } = {}): Promise<void> {
+  const dialog = await openSettings(page, 'Security');
+  const section = dialog.getByRole('heading', { name: 'Re-key this device', exact: true }).locator('..');
+  await section.getByLabel('Current passphrase', { exact: true }).fill(passphrase);
+  await section.getByRole('button', { name: 'Re-key device' }).click();
+  const done = opts.expectIncorrect ? 'Incorrect passphrase' : 'Device re-keyed';
   await expect(page.getByText(done, { exact: false }).first()).toBeVisible({ timeout: 90_000 });
 }
 

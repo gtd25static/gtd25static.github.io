@@ -12,9 +12,17 @@ type AddToast = (message: string, type?: ToastData['type'], onUndo?: () => void,
 
 let addToastFn: AddToast | null = null;
 
+// A toast fired while no container is mounted waits, briefly, for the next one:
+// the app shell is swapped out for a wait screen during a vault re-key, and the
+// confirmation is fired right as it comes back. Anything older is dropped, so a
+// message from before a lock never surfaces after the unlock.
+const PENDING_TOAST_TTL_MS = 5_000;
+let pendingToasts: Array<{ at: number; message: string; type: ToastData['type']; onUndo?: () => void; durationMs?: number }> = [];
+
 /** `durationMs` overrides the message-length heuristic below (for undos that need a longer window). */
 export function toast(message: string, type: ToastData['type'] = 'info', onUndo?: () => void, durationMs?: number) {
-  addToastFn?.(message, type, onUndo, durationMs);
+  if (addToastFn) addToastFn(message, type, onUndo, durationMs);
+  else pendingToasts.push({ at: Date.now(), message, type, onUndo, durationMs });
 }
 
 // Longer messages linger longer: 3s for short toasts, scaling linearly to 6s at
@@ -54,6 +62,9 @@ export function ToastContainer() {
 
   useEffect(() => {
     addToastFn = addToast;
+    const fresh = pendingToasts.filter((t) => Date.now() - t.at < PENDING_TOAST_TTL_MS);
+    pendingToasts = [];
+    for (const t of fresh) addToast(t.message, t.type, t.onUndo, t.durationMs);
     return () => { addToastFn = null; };
   }, [addToast]);
 

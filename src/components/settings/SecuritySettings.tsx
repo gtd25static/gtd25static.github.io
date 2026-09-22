@@ -3,7 +3,10 @@ import { Input } from '../ui/Input';
 import { Button } from '../ui/Button';
 import { toast } from '../ui/Toast';
 import { confirmDialog } from '../ui/ConfirmDialog';
+import { promptPassword } from '../ui/PasswordPrompt';
 import type { RekeyResult } from '../../db/vault';
+import { db } from '../../db';
+import { isLegacyWrap } from '../../db/vault-crypto';
 import { useVault } from '../../hooks/use-vault';
 import { useLocalSettings, updateLocalSettings } from '../../hooks/use-settings';
 import {
@@ -14,7 +17,7 @@ import { useRelaxedUnlockStore } from '../../stores/relaxed-unlock';
 import { clampBackgroundLockSeconds, DEFAULT_BACKGROUND_LOCK_SECONDS } from '../../hooks/use-background-lock';
 import { unlocksInWindow, effectiveMinutes } from '../../lib/relaxed-unlock';
 import {
-  enableParanoid, disableParanoid, changePassphrase, configureIdleTimeout,
+  enableParanoid, disableParanoid, changePassphrase, rekeyVault, confirmCurrentPassphrase, configureIdleTimeout,
   configureMaxUnlockAttempts, verifyAtRestIntegrity, lock, addSecurityKey, removeSecurityKey,
   listSecurityKeys, DEFAULT_IDLE_MINUTES, DEFAULT_MAX_ATTEMPTS,
   setSecondaryPassphrase, clearSecondaryPassphrase, checkPassphrase, isUnlocked,
@@ -97,6 +100,7 @@ function SecurityKeySection({ hasSecurityKey }: { hasSecurityKey: boolean }) {
   useEffect(() => { void reload(); }, [reload, hasSecurityKey]);
 
   async function handleAdd() {
+    if (await requirePassphrase('Your passphrase is needed to add a way to unlock this device.') === null) return;
     setBusy(true);
     try {
       await addSecurityKey(label);
@@ -125,11 +129,31 @@ function SecurityKeySection({ hasSecurityKey }: { hasSecurityKey: boolean }) {
       { confirmLabel: 'Remove', danger: true },
     );
     if (!ok) return;
+    const passphrase = await requirePassphrase('Your passphrase is needed to remove a security key.');
+    if (passphrase === null) return;
     setBusy(true);
     try {
       await removeSecurityKey(credentialId);
       await reload();
       toast('Security key removed', 'success');
+    } finally {
+      setBusy(false);
+    }
+    // The removed key still opens a copy of this device made before now; only a
+    // new key makes what comes next unreadable with it. Same passphrase, no
+    // second prompt.
+    const rekey = await confirmDialog(
+      "Removed. That key could still open a copy of this device's storage made before now. Re-key the device so nothing written from here on can be read with it? Any other security key must then be enrolled again, and the secondary passphrase, if you use one, set again.",
+      { confirmLabel: 'Re-key now', danger: true },
+    );
+    if (!rekey) return;
+    setBusy(true);
+    try {
+      const result = await rekeyVault(passphrase);
+      toast(rekeyDoneMessage('Device re-keyed', result), 'success');
+    } catch (e) {
+      recordError('security.rekey', e);
+      toast(e instanceof Error ? e.message : 'Could not re-key this device', 'error');
     } finally {
       setBusy(false);
     }
@@ -200,13 +224,23 @@ function SecondaryPassphraseSection() {
   const [confirm, setConfirm] = useState('');
   const [candidate, setCandidate] = useState('');
   const [busy, setBusy] = useState(false);
+  // Slot 2 written before wraps were bound to their slot (2026-09-22): shown to
+  // everyone with such a vault, whether or not a secondary passphrase is in use.
+  const [needsRewrite, setNeedsRewrite] = useState(false);
+  const refreshNeedsRewrite = useCallback(async () => {
+    const vault = await db.vault.get('vault');
+    setNeedsRewrite(!!vault?.wrappedDek2 && isLegacyWrap(vault.wrappedDek2));
+  }, []);
+  useEffect(() => { void refreshNeedsRewrite(); }, [refreshNeedsRewrite]);
 
   async function save() {
     if (pass !== confirm) { toast('Passphrases do not match', 'error'); return; }
+    if (await requirePassphrase('Your passphrase is needed to change the secondary passphrase.') === null) return;
     setBusy(true);
     try {
       await setSecondaryPassphrase(pass.trim());
       setPass(''); setConfirm('');
+      await refreshNeedsRewrite();
       toast('Secondary passphrase saved', 'success');
     } catch (e) {
       recordError('settings.secondaryPassphrase', e);
@@ -218,9 +252,11 @@ function SecondaryPassphraseSection() {
 
   async function remove() {
     if (!await confirmDialog('Remove the secondary passphrase, if one is set?', { confirmLabel: 'Remove' })) return;
+    if (await requirePassphrase('Your passphrase is needed to remove the secondary passphrase.') === null) return;
     setBusy(true);
     try {
       await clearSecondaryPassphrase();
+      await refreshNeedsRewrite();
       toast('Secondary passphrase removed', 'success');
     } catch (e) {
       recordError('settings.secondaryPassphrase', e);
@@ -255,6 +291,11 @@ function SecondaryPassphraseSection() {
         used to unlock, this device keeps only that workspace — your other devices are not affected. It
         must be as strong as, and different from, your main passphrase.
       </p>
+      {needsRewrite && (
+        <p className="text-xs text-amber-600 dark:text-amber-400">
+          If you use a secondary passphrase, set it again to finish a security update on this device.
+        </p>
+      )}
       <Input label="Secondary passphrase" type="password" value={pass} onChange={(e) => setPass(e.target.value)} disabled={busy} />
       <PasswordStrengthBar secret={pass.trim()} kind="vault" />
       <Input label="Confirm" type="password" value={confirm} onChange={(e) => setConfirm(e.target.value)} disabled={busy} />
@@ -620,6 +661,31 @@ function rekeyDoneMessage(prefix: string, result: RekeyResult): string {
   return parts.join(' ');
 }
 
+// The gate in front of anything that changes how this vault opens: an unlocked
+// but unattended session must not be enough to add a way in. Returns the
+// passphrase (a follow-up may need it — a re-key) or null when cancelled or not
+// the main passphrase; the toast is already shown. The secondary passphrase is
+// refused here like any other wrong one.
+async function requirePassphrase(reason: string): Promise<string | null> {
+  const typed = await promptPassword('Confirm your passphrase', {
+    message: reason, confirmLabel: 'Continue', placeholder: 'Vault passphrase',
+  });
+  if (typed === null) return null;
+  let ok = false;
+  try {
+    ok = await confirmCurrentPassphrase(typed);
+  } catch (e) {
+    recordError('security.confirmPassphrase', e);
+    toast(e instanceof Error ? e.message : 'Could not check the passphrase', 'error');
+    return null;
+  }
+  if (!ok) {
+    toast('Incorrect passphrase', 'error');
+    return null;
+  }
+  return typed;
+}
+
 function ManageForm({ idleMinutes, maxAttempts, attemptWipeJustArmed, systemIdleOn, systemIdleUnavailable, systemLockGraceOn, systemLockGraceMinutes, hasSecurityKey }: { idleMinutes: number; maxAttempts: number; attemptWipeJustArmed: boolean; systemIdleOn: boolean; systemIdleUnavailable: boolean; systemLockGraceOn: boolean; systemLockGraceMinutes: number; hasSecurityKey: boolean }) {
   const [idle, setIdle] = useState(String(idleMinutes));
   const [attempts, setAttempts] = useState(String(maxAttempts));
@@ -627,6 +693,7 @@ function ManageForm({ idleMinutes, maxAttempts, attemptWipeJustArmed, systemIdle
   const [newPass, setNewPass] = useState('');
   const [newPassConfirm, setNewPassConfirm] = useState('');
   const [rekeyOnChange, setRekeyOnChange] = useState(true);
+  const [rekeyPass, setRekeyPass] = useState('');
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
@@ -644,6 +711,7 @@ function ManageForm({ idleMinutes, maxAttempts, attemptWipeJustArmed, systemIdle
   }
 
   async function handleSaveAttempts() {
+    if (await requirePassphrase('Your passphrase is needed to change the failed-attempt wipe limit.') === null) return;
     const n = Math.max(0, Math.min(50, parseInt(attempts, 10) || 0));
     await configureMaxUnlockAttempts(n);
     setAttempts(String(n));
@@ -669,12 +737,28 @@ function ManageForm({ idleMinutes, maxAttempts, attemptWipeJustArmed, systemIdle
     }
   }
 
+  async function handleRekey() {
+    if (!rekeyPass) { toast('Enter your current passphrase', 'error'); return; }
+    setBusy(true);
+    try {
+      const result = await rekeyVault(rekeyPass);
+      toast(rekeyDoneMessage('Device re-keyed', result), 'success');
+      setRekeyPass('');
+    } catch (e) {
+      recordError('security.rekey', e);
+      toast(e instanceof Error ? e.message : 'Could not re-key this device', 'error');
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function handleDisable() {
     const ok = await confirmDialog(
       'This decrypts all local data back to plaintext on this device. The data will no longer be protected at rest.',
       { confirmLabel: 'Disable', danger: true },
     );
     if (!ok) return;
+    if (await requirePassphrase('Your passphrase is needed to turn Paranoid Mode off.') === null) return;
     setBusy(true);
     try {
       await disableParanoid();
@@ -777,7 +861,7 @@ function ManageForm({ idleMinutes, maxAttempts, attemptWipeJustArmed, systemIdle
 
       <div className="space-y-2 border-t border-zinc-200 pt-3 dark:border-zinc-700">
         <h4 className="text-sm font-medium">Change passphrase</h4>
-        <Input label="Current passphrase" type="password" value={currentPass} onChange={(e) => setCurrentPass(e.target.value)} placeholder="Your current passphrase" disabled={busy} />
+        <Input id="change-current-passphrase" label="Current passphrase" type="password" value={currentPass} onChange={(e) => setCurrentPass(e.target.value)} placeholder="Your current passphrase" disabled={busy} />
         <Input label="New passphrase" type="password" value={newPass} onChange={(e) => setNewPass(e.target.value)} placeholder="Change passphrase" disabled={busy} />
         <PasswordStrengthBar secret={newPass.trim()} kind="vault" />
         <Input label="Confirm new passphrase" type="password" value={newPassConfirm} onChange={(e) => setNewPassConfirm(e.target.value)} placeholder="Repeat new passphrase" disabled={busy} />
@@ -799,6 +883,19 @@ function ManageForm({ idleMinutes, maxAttempts, attemptWipeJustArmed, systemIdle
           </span>
         </label>
         <Button size="sm" variant="secondary" onClick={handleChangePass} disabled={busy}>Change passphrase</Button>
+      </div>
+
+      <div className="space-y-2 border-t border-zinc-200 pt-3 dark:border-zinc-700">
+        <h4 className="text-sm font-medium">Re-key this device</h4>
+        <p className="text-xs text-zinc-400 dark:text-zinc-500">
+          Generates a new encryption key for this device and re-encrypts everything under it. Do this
+          after removing a security key or a trusted device, or if a copy of this device's storage and
+          your old passphrase may be in someone else's hands: what they copied stays readable to them,
+          but nothing written from now on will be. Security keys must be enrolled again afterwards, and
+          the secondary passphrase, if you use one, set again.
+        </p>
+        <Input id="rekey-current-passphrase" label="Current passphrase" type="password" value={rekeyPass} onChange={(e) => setRekeyPass(e.target.value)} placeholder="Your current passphrase" disabled={busy} />
+        <Button size="sm" variant="danger" onClick={handleRekey} disabled={busy || !rekeyPass}>Re-key device</Button>
       </div>
 
       <SecondaryPassphraseSection />
@@ -867,6 +964,7 @@ function RemoteUnlockSection() {
 
   async function confirm() {
     if (selected.size === 0) { toast('Select at least one device', 'error'); return; }
+    if (await requirePassphrase('Your passphrase is needed to let other devices unlock this one.') === null) return;
     setBusy(true);
     try {
       const ctx = await buildEnrollContext();
@@ -894,6 +992,7 @@ function RemoteUnlockSection() {
       { confirmLabel: 'Remove', danger: true },
     );
     if (!ok) return;
+    if (await requirePassphrase('Your passphrase is needed to change which devices can unlock this one.') === null) return;
     setBusy(true);
     try {
       const ctx = await buildEnrollContext();
@@ -911,6 +1010,7 @@ function RemoteUnlockSection() {
   async function disable() {
     const ok = await confirmDialog('Turn off remote unlock? Trusted devices will no longer be able to unlock or wipe this device.', { confirmLabel: 'Turn off', danger: true });
     if (!ok) return;
+    if (await requirePassphrase('Your passphrase is needed to turn remote unlock off.') === null) return;
     setBusy(true);
     try { await disableRemoteUnlock(); toast('Remote unlock disabled', 'success'); setCandidates(null); await reload(); }
     finally { setBusy(false); }
