@@ -80,17 +80,22 @@ export function DndProvider({ children }: { children: ReactNode }) {
     const overData = over.data.current as (DragItemData | DropZoneData) | undefined;
     if (!activeData || !overData) return;
 
-    // Cross-list move: task/follow-up dropped on a sidebar list
+    // Cross-list move: task/follow-up dropped on a sidebar list, of either type
+    // (moveTaskToList translates the state that doesn't carry across).
     if (
       (activeData.type === 'task' || activeData.type === 'follow-up') &&
       overData.type === 'sidebarList'
     ) {
-      // Validate type match: tasks to task lists, follow-ups to follow-up lists
-      if (activeData.listType !== overData.listType) return;
       // Don't move to the same list
       if (activeData.listId === overData.listId) return;
-      moveTaskToList(String(active.id), overData.listId!);
-      toast(`Moved to ${overData.listName ?? 'list'}`, 'success');
+      if (activeData.hasSubtasks && overData.listType === 'follow-ups') {
+        toast("A task with subtasks can't become a follow-up", 'info');
+        return;
+      }
+      const listName = overData.listName ?? 'list';
+      void moveTaskToList(String(active.id), overData.listId!).then((moved) => {
+        if (moved) toast(`Moved to ${listName}`, 'success');
+      });
       return;
     }
 

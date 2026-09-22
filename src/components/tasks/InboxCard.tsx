@@ -57,8 +57,9 @@ export function InboxCard({ task, index }: Props) {
 
   function handleMoveTo(listId: string) {
     const target = lists.find((l) => l.id === listId);
-    moveTaskToList(task.id, listId);
-    toast(`Moved to ${target?.name ?? 'list'}`, 'success');
+    void moveTaskToList(task.id, listId).then((moved) => {
+      if (moved) toast(`Moved to ${target?.name ?? 'list'}`, 'success');
+    });
   }
 
   return (

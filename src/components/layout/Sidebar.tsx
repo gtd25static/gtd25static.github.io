@@ -136,15 +136,17 @@ function ListItem({ list, selected, onSelect, highlight, focused, count, allList
     const singleTaskId = e.dataTransfer.getData('application/x-inbox-task');
     const inboxListId = e.dataTransfer.getData('application/x-inbox-all');
     if (singleTaskId) {
-      moveTaskToList(singleTaskId, list.id);
-      toast(`Moved to ${list.name}`, 'success');
+      void moveTaskToList(singleTaskId, list.id).then((moved) => {
+        if (moved) toast(`Moved to ${list.name}`, 'success');
+      });
     } else if (inboxListId && allLists) {
       const inboxList = allLists.find((l) => l.id === inboxListId);
       if (inboxList) {
-        db.tasks.where('listId').equals(inboxListId).toArray().then((tasks) => {
+        db.tasks.where('listId').equals(inboxListId).toArray().then(async (tasks) => {
           const live = tasks.filter((t) => !t.deletedAt && t.status !== 'done');
-          live.forEach((t) => moveTaskToList(t.id, list.id));
-          toast(`Moved ${live.length} item${live.length !== 1 ? 's' : ''} to ${list.name}`, 'success');
+          const results = await Promise.all(live.map((t) => moveTaskToList(t.id, list.id)));
+          const movedCount = results.filter(Boolean).length;
+          toast(`Moved ${movedCount} item${movedCount !== 1 ? 's' : ''} to ${list.name}`, 'success');
         });
       }
     }

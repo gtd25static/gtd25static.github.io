@@ -27,6 +27,7 @@ vi.mock('../../hooks/use-tasks', () => ({
 describe('InboxCard', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockMoveTaskToList.mockResolvedValue(true);
   });
 
   function renderCard(taskOverrides: Partial<Parameters<typeof makeTask>[1]> = {}) {
@@ -65,6 +66,16 @@ describe('InboxCard', () => {
     await user.click(screen.getByText('Process'));
     await user.click(screen.getByText('Work'));
     expect(mockMoveTaskToList).toHaveBeenCalledWith(task.id, 'work');
+    expect(await screen.findByText('Moved to Work')).toBeInTheDocument();
+  });
+
+  it('does not claim a move that was refused', async () => {
+    mockMoveTaskToList.mockResolvedValue(false);
+    const { user } = renderCard();
+    await user.click(screen.getByText('Process'));
+    await user.click(screen.getByText('Work'));
+    await Promise.resolve();
+    expect(screen.queryByText('Moved to Work')).not.toBeInTheDocument();
   });
 
   it('shows delete button', () => {

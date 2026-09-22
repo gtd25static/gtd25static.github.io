@@ -1,6 +1,6 @@
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../db';
-import type { ChangeEntry, Task, TaskStatus, TaskLink } from '../db/models';
+import type { ChangeEntry, ListType, Task, TaskStatus, TaskLink } from '../db/models';
 import { newId } from '../lib/id';
 import { recordChangeInTx, recordChangeBatchInTx, ensureDeviceId } from '../sync/change-log';
 import { scheduleSyncDebounced } from '../sync/sync-engine';
@@ -246,23 +246,78 @@ export async function restoreTask(id: string) {
   }
 }
 
-export async function moveTaskToList(taskId: string, targetListId: string) {
+/**
+ * State a task has to shed when it crosses list types, because the destination
+ * can neither show nor clear it (it would linger in the Blocked/Recurring views).
+ * Content — title, notes, links, due date, star, warning — and the follow-up
+ * fields (snooze, discussion history) are kept: dormant on a task, back in use
+ * if it returns to a follow-up list.
+ */
+function crossTypeUpdates(task: Task, targetType: ListType, now: number): Partial<Task> {
+  const updates: Partial<Task> = {};
+  if (targetType === 'follow-ups') {
+    // Follow-ups have no done/blocked states: done becomes resolved, blocked is lifted.
+    if (task.status === 'done') updates.archived = true;
+    if (task.status !== 'todo') updates.status = 'todo';
+    if (task.blockedAt != null) updates.blockedAt = undefined;
+    if (task.recurrenceType) {
+      Object.assign(updates, {
+        recurrenceType: undefined,
+        recurrenceInterval: undefined,
+        recurrenceUnit: undefined,
+        nextOccurrence: undefined,
+        lastCompletedAt: undefined,
+      });
+    }
+  } else if (task.archived) {
+    // A resolved follow-up lands as a completed task.
+    updates.archived = undefined;
+    updates.status = 'done';
+    updates.completedAt = task.completedAt ?? now;
+  }
+  return updates;
+}
+
+/**
+ * Move a task to the end of another list, translating its state when it
+ * crosses between a task list and a follow-up list. Returns false when nothing
+ * moved: unknown task or list, or a task with subtasks headed for a follow-up
+ * list (follow-up cards don't show subtasks, so they'd vanish from view).
+ */
+export async function moveTaskToList(taskId: string, targetListId: string): Promise<boolean> {
   try {
+    const [task, targetList] = await Promise.all([db.tasks.get(taskId), db.taskLists.get(targetListId)]);
+    if (!task || !targetList) return false;
+    const sourceList = await db.taskLists.get(task.listId);
+    const crossesType = !!sourceList && sourceList.type !== targetList.type;
+    if (crossesType && targetList.type === 'follow-ups') {
+      const subtasks = await db.subtasks.where('taskId').equals(taskId).toArray();
+      if (subtasks.some((s) => !s.deletedAt)) return false;
+    }
+
     await ensureDeviceId();
     await db.transaction('rw', [db.tasks, db.changeLog], async () => {
       const count = await db.tasks.where('listId').equals(targetListId).count();
       const existing = await db.tasks.get(taskId);
+      if (!existing) return;
       const now = Date.now();
-      const fieldTimestamps = stampUpdatedFields(existing?.fieldTimestamps, ['listId', 'order'], now);
-      await db.tasks.update(taskId, { listId: targetListId, order: count, updatedAt: now, fieldTimestamps });
+      const translated = crossesType ? crossTypeUpdates(existing, targetList.type, now) : {};
+      const fieldTimestamps = stampUpdatedFields(
+        existing.fieldTimestamps,
+        ['listId', 'order', ...Object.keys(translated)],
+        now,
+      );
+      await db.tasks.update(taskId, { ...translated, listId: targetListId, order: count, updatedAt: now, fieldTimestamps });
       const updated = await db.tasks.get(taskId);
       if (updated) {
         await recordChangeInTx('task', taskId, 'upsert', updated as unknown as Record<string, unknown>);
       }
     });
     scheduleSyncDebounced();
+    return true;
   } catch (error) {
     handleDbError(error, 'move task');
+    return false;
   }
 }
 

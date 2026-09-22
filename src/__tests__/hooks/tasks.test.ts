@@ -103,6 +103,157 @@ describe('moveTaskToList', () => {
     expect(moved?.listId).toBe(list2.id);
     expect(moved?.order).toBe(1); // appended after existing
   });
+
+  it('leaves task state alone when moving between task lists', async () => {
+    const list2 = await createTaskList('Other List');
+    const task = assertDefined(await createTask(listId, {
+      title: 'Blocked', recurrenceType: 'date-based', recurrenceInterval: 1, recurrenceUnit: 'weeks', nextOccurrence: Date.now() + 1000,
+    }));
+    await setTaskStatus(task.id, 'blocked');
+
+    expect(await moveTaskToList(task.id, list2.id)).toBe(true);
+
+    const moved = assertDefined(await db.tasks.get(task.id));
+    expect(moved.status).toBe('blocked');
+    expect(moved.blockedAt).toBeDefined();
+    expect(moved.recurrenceType).toBe('date-based');
+  });
+});
+
+describe('moveTaskToList across list types', () => {
+  let followUpListId: string;
+
+  beforeEach(async () => {
+    followUpListId = (await createTaskList('People', 'follow-ups')).id;
+  });
+
+  it('turns a task into an active follow-up, keeping its content', async () => {
+    const dueDate = Date.now() + 86_400_000;
+    const task = assertDefined(await createTask(listId, {
+      title: 'Ask Ana', description: 'about the budget', links: [{ url: 'https://x.com' }], dueDate,
+    }));
+    await updateTask(task.id, { starred: true, hasWarning: true });
+
+    expect(await moveTaskToList(task.id, followUpListId)).toBe(true);
+
+    const moved = assertDefined(await db.tasks.get(task.id));
+    expect(moved.listId).toBe(followUpListId);
+    expect(moved.status).toBe('todo');
+    expect(moved.archived).toBeFalsy();
+    expect(moved.title).toBe('Ask Ana');
+    expect(moved.description).toBe('about the budget');
+    expect(moved.links).toEqual([{ url: 'https://x.com' }]);
+    expect(moved.dueDate).toBe(dueDate);
+    expect(moved.starred).toBe(true);
+    expect(moved.hasWarning).toBe(true);
+  });
+
+  it('lifts the blocked state, which a follow-up cannot show or clear', async () => {
+    const task = assertDefined(await createTask(listId, { title: 'Blocked' }));
+    await setTaskStatus(task.id, 'blocked');
+
+    await moveTaskToList(task.id, followUpListId);
+
+    const moved = assertDefined(await db.tasks.get(task.id));
+    expect(moved.status).toBe('todo');
+    expect(moved.blockedAt).toBeUndefined();
+    // Stamped, so the unblock wins over an older remote value on sync.
+    expect(moved.fieldTimestamps?.status).toBe(moved.updatedAt);
+    expect(moved.fieldTimestamps?.blockedAt).toBe(moved.updatedAt);
+  });
+
+  it('turns a done task into a resolved follow-up', async () => {
+    const task = assertDefined(await createTask(listId, { title: 'Done' }));
+    await setTaskStatus(task.id, 'done');
+
+    await moveTaskToList(task.id, followUpListId);
+
+    const moved = assertDefined(await db.tasks.get(task.id));
+    expect(moved.archived).toBe(true);
+    expect(moved.status).toBe('todo');
+  });
+
+  it('drops recurrence, which follow-up lists do not run', async () => {
+    const task = assertDefined(await createTask(listId, {
+      title: 'Weekly', recurrenceType: 'time-based', recurrenceInterval: 1, recurrenceUnit: 'weeks', nextOccurrence: Date.now() - 1000,
+    }));
+
+    await moveTaskToList(task.id, followUpListId);
+
+    const moved = assertDefined(await db.tasks.get(task.id));
+    expect(moved.recurrenceType).toBeUndefined();
+    expect(moved.recurrenceInterval).toBeUndefined();
+    expect(moved.recurrenceUnit).toBeUndefined();
+    expect(moved.nextOccurrence).toBeUndefined();
+    expect(moved.fieldTimestamps?.recurrenceType).toBe(moved.updatedAt);
+  });
+
+  it('refuses to turn a task with subtasks into a follow-up', async () => {
+    const task = assertDefined(await createTask(listId, { title: 'Parent' }));
+    await createSubtask(task.id, { title: 'Child' });
+    const changesBefore = await db.changeLog.count();
+
+    expect(await moveTaskToList(task.id, followUpListId)).toBe(false);
+
+    const unmoved = assertDefined(await db.tasks.get(task.id));
+    expect(unmoved.listId).toBe(listId);
+    expect(await db.changeLog.count()).toBe(changesBefore);
+  });
+
+  it('allows it once the subtasks are deleted', async () => {
+    const task = assertDefined(await createTask(listId, { title: 'Parent' }));
+    const sub = assertDefined(await createSubtask(task.id, { title: 'Child' }));
+    await db.subtasks.update(sub.id, { deletedAt: Date.now() });
+
+    expect(await moveTaskToList(task.id, followUpListId)).toBe(true);
+    expect((await db.tasks.get(task.id))?.listId).toBe(followUpListId);
+  });
+
+  it('turns a follow-up into a task, keeping its history and snooze for a trip back', async () => {
+    const fu = assertDefined(await createTask(followUpListId, { title: 'Topic' }));
+    const until = Date.now() + 86_400_000;
+    const discussionLog = [{ id: 'd1', at: Date.now(), note: 'talked' }];
+    await updateTask(fu.id, { pingedAt: Date.now(), pingCooldown: 'custom', pingCooldownUntil: until, discussionLog, snoozeCadence: '6d' });
+
+    expect(await moveTaskToList(fu.id, listId)).toBe(true);
+
+    const moved = assertDefined(await db.tasks.get(fu.id));
+    expect(moved.listId).toBe(listId);
+    expect(moved.status).toBe('todo');
+    expect(moved.discussionLog).toEqual(discussionLog);
+    expect(moved.pingCooldownUntil).toBe(until);
+    expect(moved.snoozeCadence).toBe('6d');
+  });
+
+  it('turns a resolved follow-up into a done task', async () => {
+    const fu = assertDefined(await createTask(followUpListId, { title: 'Resolved' }));
+    await updateTask(fu.id, { archived: true });
+
+    await moveTaskToList(fu.id, listId);
+
+    const moved = assertDefined(await db.tasks.get(fu.id));
+    expect(moved.archived).toBeFalsy();
+    expect(moved.status).toBe('done');
+    expect(moved.completedAt).toBeDefined();
+  });
+
+  it('records the translated state in the change log', async () => {
+    const task = assertDefined(await createTask(listId, { title: 'Blocked' }));
+    await setTaskStatus(task.id, 'blocked');
+
+    await moveTaskToList(task.id, followUpListId);
+
+    const entries = await db.changeLog.orderBy('timestamp').toArray();
+    const last = entries.filter((e) => e.entityId === task.id).at(-1);
+    expect(last?.data?.listId).toBe(followUpListId);
+    expect(last?.data?.status).toBe('todo');
+  });
+
+  it('refuses a missing target list', async () => {
+    const task = assertDefined(await createTask(listId, { title: 'Stay' }));
+    expect(await moveTaskToList(task.id, 'no-such-list')).toBe(false);
+    expect((await db.tasks.get(task.id))?.listId).toBe(listId);
+  });
 });
 
 describe('reorderTasks', () => {
