@@ -1,6 +1,8 @@
 # GTD25 — Security Review & Threat Model
 
-**Last updated:** 2026-09-22 (**Checking the secondary passphrase without using it.** Settings → Security → *Secondary passphrase* gains a **Check** field: type a passphrase and it says whether it is the main one, the secondary one, or neither — derived exactly as the lock screen would (same salt + KDF, slot 1 then slot 2, no trimming) but **never acted on**: no unlock, no re-key, no write of any kind, no unlock-log entry, no failed-attempt count, no tab signal. It exists so the user can confirm the secondary passphrase still works (e.g. after a main-passphrase change) without destroying the real data on this device to find out. **Impact on prior conclusions (Scenario 3b):** the "no way to query whether a secondary passphrase is set" property **holds** — the answer needs the passphrase itself, and a wrong guess reads the same whether slot 2 is in use or garbage. **New residual:** anyone holding an *unlocked* session gets a guess oracle for the secondary passphrase that is **not rate-limited and not logged** (each guess costs one full Argon2id derivation — the same as a lock-screen attempt); the lock screen's failed-attempt tripwire does not apply because the vault is already open. Against coercion it changes nothing: the lock-screen path is untouched, and a lock during a check suppresses its answer so it never surfaces on the lock screen. Also new: `e2e` now greps the built `dist/` for telltale vocabulary on every run, instead of by hand.)
+**Last updated:** 2026-09-22 (**Turning Paranoid Mode on or off survives the tab dying — and the safety backups around it.** (1) **An enable interrupted mid-encryption left the device looking un-Paranoid over rows it could no longer read, and a second enable then destroyed them.** The flag (`localStorage`) was raised only after every row had been rewritten, so a tab killed during the migration reloaded with no lock screen: the app ran un-Paranoid, the rows already encrypted showed blank, the PAT/sync password were still plaintext in `localSettings`, and the pre-existing plaintext safety backups were never purged. The only way out the UI offered — enabling again — minted a new DEK over the saved vault, and the rows encrypted by the first attempt became permanently unreadable (reproduced in a test before the fix). Now the flag goes up right after the vault is saved and before any row is touched, so a dead tab comes back at the lock screen and the unlock resumes the whole enable (encryption, then the credential strip, then the backup purge); an enable refuses to replace an existing vault; and a boot-time reconcile makes the flag agree with the vault in both directions (a vault saved just before the flag, and a flag left behind by a disable that had already deleted the vault, which otherwise stranded the app at a lock screen no vault could answer). Verified in Chromium by killing the tab mid-migration over 1500 rows. **If you ever saw blank lists after enabling Paranoid Mode and enabled it again, the content encrypted by the first attempt is gone from that device** — recover it from sync or another device. (2) **Disabling left the encrypted safety backups behind under a destroyed key**: listed, unrestorable, with a misleading "unlock the vault" error. The disable now rewrites them as plaintext while the key still exists (the rest of the database goes plaintext in the same step). (3) **"Download" on a safety backup wrote a plaintext zip to Downloads, even from a Paranoid device**, without asking; it now goes through the export dialog — encrypted by default in Paranoid Mode, plaintext only by explicit choice.)
+
+**Previously updated:** 2026-09-22 (**Checking the secondary passphrase without using it.** Settings → Security → *Secondary passphrase* gains a **Check** field: type a passphrase and it says whether it is the main one, the secondary one, or neither — derived exactly as the lock screen would (same salt + KDF, slot 1 then slot 2, no trimming) but **never acted on**: no unlock, no re-key, no write of any kind, no unlock-log entry, no failed-attempt count, no tab signal. It exists so the user can confirm the secondary passphrase still works (e.g. after a main-passphrase change) without destroying the real data on this device to find out. **Impact on prior conclusions (Scenario 3b):** the "no way to query whether a secondary passphrase is set" property **holds** — the answer needs the passphrase itself, and a wrong guess reads the same whether slot 2 is in use or garbage. **New residual:** anyone holding an *unlocked* session gets a guess oracle for the secondary passphrase that is **not rate-limited and not logged** (each guess costs one full Argon2id derivation — the same as a lock-screen attempt); the lock screen's failed-attempt tripwire does not apply because the vault is already open. Against coercion it changes nothing: the lock-screen path is untouched, and a lock during a check suppresses its answer so it never surfaces on the lock screen. Also new: `e2e` now greps the built `dist/` for telltale vocabulary on every run, instead of by hand.)
 
 **Previously updated:** 2026-09-20 (**Archiving lists — one new plaintext field and a scheduled destructive action.** Lists of both types can now be archived: `taskList.archivedAt` (a timestamp, absent = active) joins `deletedAt` in the always-plaintext metadata set, on the wire and at rest. It is **not** content — the list's `name` stays encrypted — but a backend reader now learns *which* lists you archived and *when*, and can tell an archived list from a live one without the key, the same exposure `deletedAt` already had. The new part worth stating plainly: this plaintext field **drives an automated deletion**. At startup, any list archived more than 12 months ago is soft-deleted into the Trash (cascading to its tasks and subtasks, recorded in the changelog so the deletion syncs), and the existing 30-day purge then hard-deletes it. So an attacker with **write** access to the backend — already able to destroy data by flipping `deletedAt`, which is equally unauthenticated — gains a quieter variant: back-dating `archivedAt` makes the *victim's own device* delete the list at its next start. No new capability class (see Scenario 7's least-privilege PAT recommendation), and the 30-day Trash window plus local backups remain the recovery path. Nothing else moved: no change to key derivation, the lock/unlock flows, SYNC_VERSION, or what runs while locked, and the section's device-local collapsed/expanded flag is a single boolean in `localStorage` — no names, never synced.)
 
@@ -458,8 +460,15 @@ This is a modifier on every other scenario, summarised here:
   rotates out** — two copies are kept, so a task deleted now can still sit in a
   backup taken before the deletion. No new key material and no new key exposure:
   same key, same lock, same wipe. It is never written while locked (the rows
-  would still be ciphertext), and a secondary-passphrase unlock deletes it
-  (Scenario 3b). **Locked writes fail closed** (since 2026-09-10): with the vault
+  would still be ciphertext) — including the boot-time copy, which on a
+  Paranoid device therefore only happens when the vault is unlocked within the
+  first seconds after start — and a secondary-passphrase unlock deletes it
+  (Scenario 3b). Enabling deletes the plaintext copies that existed before, once
+  every row has been rewritten (so they stay a recovery point during the
+  migration) — by `removeItem`, which, like IndexedDB, does not securely erase:
+  their bytes may linger in the browser's storage files until overwritten.
+  Disabling rewrites the encrypted copies as plaintext while the key still
+  exists (before 2026-09-22 they were left encrypted under a destroyed key). **Locked writes fail closed** (since 2026-09-10): with the vault
   locked, the at-rest middleware refuses any write that would store plaintext
   content, so work still in flight when the vault locks — a sync mid-pull, most
   obviously — fails instead of landing on disk unencrypted; locking also aborts
@@ -485,6 +494,20 @@ This is a modifier on every other scenario, summarised here:
   from a distance.
   Protection is bounded by **passphrase strength** (or the security key) and is
   **only effective while locked** (see Scenario 3).
+- **Turning it on or off survives the tab dying (since 2026-09-22).** The two
+  halves of "this device is Paranoid" live in different stores — the flag in
+  `localStorage`, the vault in IndexedDB — and can't be written atomically; the
+  vault is the authority, since it holds the only key to the encrypted rows. An
+  enable saves the vault (with the credentials already inside it), raises the
+  flag, and only then rewrites rows; a crash at any later point comes back at the
+  lock screen, and the unlock resumes the whole enable. A boot-time reconcile
+  (before the first render) raises the flag for a vault saved just before a crash
+  and drops a flag left behind by a disable that had already deleted the vault.
+  An enable never replaces an existing vault. Before this, a crash
+  mid-migration reloaded as an un-Paranoid app over half-encrypted rows (plaintext
+  credentials and backups still in place), and re-enabling destroyed the rows the
+  first attempt had encrypted. A device that went through that before the fix
+  keeps the loss; the fix does not recover it.
 
 ### Scenario 2 — Device seized, **disk imaged** (offline)
 What the attacker gets from the image: IndexedDB, `localStorage`, the SW asset
@@ -537,6 +560,10 @@ cache.
   Argon2id. Export reads decrypted data, so in Paranoid Mode it requires an
   **unlocked vault**. The separate Paranoid recovery export
   (`SecuritySettings.handleRecoveryExport`) is still plaintext by design.
+- **Downloading a safety backup** (Settings → Backups → *Download*) goes through
+  the same dialog and the same choice since 2026-09-22 — encrypted by default in
+  Paranoid Mode. Before, it silently wrote a **plaintext** zip to Downloads, even
+  from a Paranoid device.
 
 ### Scenario 3 — Device seized, **memory dumped** (RAM capture while powered on)
 - **Paranoid OFF — 🔴.** Plaintext content + PAT + syncPassword are in the JS heap.

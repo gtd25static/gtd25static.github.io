@@ -4,7 +4,7 @@ import App from './App';
 import './styles/index.css';
 import { installGlobalErrorHandlers, requestPersistentStorage } from './lib/diagnostics';
 import { retryPendingWipe } from './lib/panic-wipe';
-import { startCrossTabLock } from './db/vault';
+import { startCrossTabLock, reconcileParanoidFlag } from './db/vault';
 import { onTabSignal } from './lib/tab-channel';
 import { startForgettingSessionOnLock } from './lib/forget-on-lock';
 import { flushPendingClipboardClear } from './lib/clipboard-hygiene';
@@ -37,7 +37,10 @@ onTabSignal((signal) => {
 
 // Finish any wipe whose IndexedDB deletion was blocked (e.g. by a second tab)
 // BEFORE the app opens the database again; renders immediately when none is pending.
-void retryPendingWipe().finally(() => {
+// Then make the Paranoid flag agree with the vault, which a crash in the middle
+// of an enable or disable can leave out of step — before the first render, so
+// the lock screen (or its absence) is right from the first paint.
+void retryPendingWipe().finally(() => reconcileParanoidFlag()).finally(() => {
   createRoot(document.getElementById('root')!).render(
     <StrictMode>
       <App />

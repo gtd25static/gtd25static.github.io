@@ -6,7 +6,7 @@ import { restoreFromBackup, wipeAllData, importData } from '../../sync/sync-engi
 import { zipImportData } from '../../db/export-import';
 import { getLocalBackups, readLocalBackup } from '../../db/backup';
 import { parseImportZip } from '../../db/export-import';
-import { ExportDialog } from './ExportDialog';
+import { ExportDialog, type ExportSource } from './ExportDialog';
 import { toast } from '../ui/Toast';
 import { confirmDialog } from '../ui/ConfirmDialog';
 import { promptPassword } from '../ui/PasswordPrompt';
@@ -23,6 +23,7 @@ export function BackupsSettings() {
   const [restoringTier, setRestoringTier] = useState<string | null>(null);
   const [restoringLocalKey, setRestoringLocalKey] = useState<string | null>(null);
   const [showExport, setShowExport] = useState(false);
+  const [downloadingBackup, setDownloadingBackup] = useState<{ key: string; timestamp: number } | null>(null);
 
   // Paranoid devices keep the PAT in the vault; the remote-backup READ/restore
   // path still works (only the create path is disabled). Non-paranoid: localSettings.
@@ -87,28 +88,27 @@ export function BackupsSettings() {
   }
 
   // Safety backups only live in this device's localStorage; downloading one
-  // packages it in the standard backup zip so another device can import it.
-  async function handleDownloadLocal(backup: { key: string; timestamp: number }) {
-    try {
-      // Mindmaps are deliberately dropped from the DOWNLOADED zip (they are kept
-      // in the backup itself, for restoring here): importing a zip that carries
-      // `mindmaps: []` would wipe the maps of whichever device you import it on,
-      // while omitting the field tells the importer to leave them alone.
-      const { mindmapFolders: _f, mindmaps: _m, mindmapNodes: _n, ...portable } =
-        await readLocalBackup(backup.key);
-      const blob = await zipImportData(portable, backup.timestamp);
-      const stamp = new Date(backup.timestamp).toISOString().slice(0, 16).replace(/[:T]/g, '-');
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `gtd25-safety-backup-${stamp}.zip`;
-      a.click();
-      URL.revokeObjectURL(url);
-    } catch (err) {
-      recordError('backups.downloadLocal', err);
-      toast(err instanceof Error ? err.message : 'Download failed', 'error');
-    }
+  // packages it in the standard backup zip so another device can import it. It
+  // goes through the export dialog, so it gets the same encryption choice as an
+  // export (encrypted by default in Paranoid Mode) — it used to be written to
+  // Downloads in plaintext, even from a Paranoid device.
+  function safetyBackupSource(backup: { key: string; timestamp: number }): ExportSource {
+    const stamp = new Date(backup.timestamp).toISOString().slice(0, 16).replace(/[:T]/g, '-');
+    return {
+      title: 'Download safety backup',
+      filename: `gtd25-safety-backup-${stamp}.zip`,
+      build: async (opts) => {
+        // Mindmaps are deliberately dropped from the DOWNLOADED zip (they are kept
+        // in the backup itself, for restoring here): importing a zip that carries
+        // `mindmaps: []` would wipe the maps of whichever device you import it on,
+        // while omitting the field tells the importer to leave them alone.
+        const { mindmapFolders: _f, mindmaps: _m, mindmapNodes: _n, ...portable } =
+          await readLocalBackup(backup.key);
+        return zipImportData(portable, backup.timestamp, opts);
+      },
+    };
   }
+
 
   async function handleImportFile(file: File) {
     try {
@@ -161,6 +161,15 @@ export function BackupsSettings() {
         syncPassword={syncPassword}
         defaultEncrypted={paranoid}
       />
+      {downloadingBackup && (
+        <ExportDialog
+          open
+          onClose={() => setDownloadingBackup(null)}
+          syncPassword={syncPassword}
+          defaultEncrypted={paranoid}
+          source={safetyBackupSource(downloadingBackup)}
+        />
+      )}
       {localBackups.length > 0 && (
         <div className="space-y-2">
           <h3 className="text-sm font-medium text-zinc-700 dark:text-zinc-300">Safety Backups</h3>
@@ -176,7 +185,7 @@ export function BackupsSettings() {
                 <Button
                   size="sm"
                   variant="secondary"
-                  onClick={() => void handleDownloadLocal(b)}
+                  onClick={() => setDownloadingBackup(b)}
                 >
                   Download
                 </Button>
@@ -193,8 +202,8 @@ export function BackupsSettings() {
           ))}
           <p className="text-xs text-zinc-400 dark:text-zinc-500">
             Created automatically on this device at app start; they hold lists, tasks and subtasks (not mindmaps).
-            Restore replaces that data and syncs to other devices. Download saves an unencrypted backup zip you
-            can import on another device.
+            Restore replaces that data and syncs to other devices. Download saves it as a backup zip you can
+            import on another device — encrypted or not, as with Export.
           </p>
         </div>
       )}

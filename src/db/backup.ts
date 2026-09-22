@@ -55,6 +55,33 @@ export function purgeLocalBackups(): void {
   } catch { /* storage unavailable: nothing we could remove */ }
 }
 
+/**
+ * Paranoid disable: rewrite this device's encrypted safety backups as plaintext
+ * while the at-rest key still exists. The disable destroys the key, which used to
+ * leave backups listed in Settings that could never be opened again. One that
+ * fails to decrypt is dropped rather than kept as a dead entry.
+ */
+export async function decryptLocalBackups(): Promise<void> {
+  const key = getActiveAtRestKey();
+  if (!key) return;
+  for (const storageKey of listBackupKeys()) {
+    let stored: StoredBackup;
+    try {
+      stored = JSON.parse(localStorage.getItem(storageKey) ?? '') as StoredBackup;
+    } catch {
+      continue; // not JSON: readLocalBackup already reports it as corrupted
+    }
+    if (!stored.encrypted) continue;
+    try {
+      const payload = JSON.parse(await decryptBlob(key, stored.encrypted)) as BackupPayload;
+      localStorage.setItem(storageKey, JSON.stringify({ timestamp: stored.timestamp, ...payload }));
+    } catch (err) {
+      recordError('backup.decryptOnDisable', err);
+      localStorage.removeItem(storageKey);
+    }
+  }
+}
+
 async function readPayload(): Promise<BackupPayload> {
   const [taskLists, tasks, subtasks, mindmapFolders, mindmaps, mindmapNodes] = await Promise.all([
     db.taskLists.toArray(),
@@ -142,7 +169,11 @@ export async function readLocalBackup(key: string): Promise<ImportData> {
   let body: Partial<BackupPayload> = stored;
   if (stored.encrypted) {
     const atRestKey = getActiveAtRestKey();
-    if (!atRestKey) throw new Error('Unlock the vault to restore this backup');
+    if (!atRestKey) {
+      throw new Error(isParanoidFlagSet()
+        ? 'Unlock the vault to restore this backup'
+        : 'This backup was encrypted by Paranoid Mode, which has since been turned off, so it can no longer be opened');
+    }
     try {
       body = JSON.parse(await decryptBlob(atRestKey, stored.encrypted)) as Partial<BackupPayload>;
     } catch {

@@ -2,11 +2,18 @@ import { useState } from 'react';
 import { Modal } from '../ui/Modal';
 import { Button } from '../ui/Button';
 import { Input } from '../ui/Input';
-import { exportToZip, type ExportKeySource } from '../../db/export-import';
+import { exportToZip, type ExportKeySource, type ExportOptions } from '../../db/export-import';
 import { toast } from '../ui/Toast';
 import { recordError } from '../../lib/diagnostics';
 
 type Mode = 'plain' | 'passphrase' | 'sync';
+
+/** Something other than the live data to export, packaged with the same encryption choice. */
+export interface ExportSource {
+  title: string;
+  filename: string;
+  build: (opts?: ExportOptions) => Promise<Blob>;
+}
 
 interface Props {
   open: boolean;
@@ -15,9 +22,11 @@ interface Props {
   syncPassword?: string;
   // Default to encrypted selection (e.g. in Paranoid Mode).
   defaultEncrypted: boolean;
+  // Export this instead of the live data (e.g. a device-local safety backup).
+  source?: ExportSource;
 }
 
-export function ExportDialog({ open, onClose, syncPassword, defaultEncrypted }: Props) {
+export function ExportDialog({ open, onClose, syncPassword, defaultEncrypted, source }: Props) {
   const syncPasswordAvailable = !!syncPassword;
   const [mode, setMode] = useState<Mode>(defaultEncrypted ? 'passphrase' : 'plain');
   const [password, setPassword] = useState('');
@@ -45,12 +54,13 @@ export function ExportDialog({ open, onClose, syncPassword, defaultEncrypted }: 
 
     setBusy(true);
     try {
-      const blob = await exportToZip(encrypt ? { encrypt } : undefined);
+      const opts = encrypt ? { encrypt } : undefined;
+      const blob = source ? await source.build(opts) : await exportToZip(opts);
       const date = new Date().toISOString().slice(0, 10);
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `gtd25-backup-${date}.zip`;
+      a.download = source?.filename ?? `gtd25-backup-${date}.zip`;
       a.click();
       URL.revokeObjectURL(url);
       reset();
@@ -66,7 +76,7 @@ export function ExportDialog({ open, onClose, syncPassword, defaultEncrypted }: 
   }
 
   return (
-    <Modal open={open} onClose={onClose} title="Export backup">
+    <Modal open={open} onClose={onClose} title={source?.title ?? 'Export backup'}>
       <div className="space-y-3">
         <label className="flex items-start gap-2 text-sm">
           <input type="radio" name="export-mode" checked={mode === 'plain'} onChange={() => setMode('plain')} className="mt-1" />

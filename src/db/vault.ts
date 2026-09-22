@@ -25,7 +25,7 @@ import { pruneHistory } from '../lib/relaxed-unlock';
 import { checkSecretStrength } from '../lib/password-strength';
 import { reinitVaultWithPlaceholders } from './vault-reinit';
 import { DEFAULT_MAX_ATTEMPTS } from '../lib/constants';
-import { purgeLocalBackups } from './backup';
+import { purgeLocalBackups, decryptLocalBackups } from './backup';
 import { onTabSignal, signalOtherTabs } from '../lib/tab-channel';
 import type { LocalSettings, Vault, PrfCredential } from './models';
 
@@ -251,6 +251,13 @@ export function startCrossTabLock(): () => void {
 export async function enableParanoid(passphrase: string, idleMinutes = DEFAULT_IDLE_MINUTES): Promise<void> {
   if (readFlag()) throw new Error('Paranoid mode is already enabled');
   if (!passphrase) throw new Error('A passphrase is required');
+  // A vault row without the flag is an enable that never finished. Its DEK is the
+  // only key to the rows it already encrypted, so minting a new vault over it
+  // destroyed them. Never replace it: finishing it is reconcileParanoidFlag's and
+  // the next unlock's job.
+  if (await db.vault.get('vault')) {
+    throw new Error('An earlier Paranoid Mode setup is unfinished. Reload the app and unlock with the passphrase you chose then to complete it.');
+  }
 
   const dek = await generateDek();
   const passSalt = generateSalt();
@@ -260,14 +267,10 @@ export async function enableParanoid(passphrase: string, idleMinutes = DEFAULT_I
   const verifier = await createVerifier(dek);
   const prfSalt = generateSalt();
 
-  // Snapshot current sync credentials into the vault (encrypted with the DEK).
+  // Snapshot current sync credentials into the vault (encrypted with the DEK) up
+  // front, so an enable resumed after a crash still has them.
   const local = await db.localSettings.get('local');
   const secrets: VaultSecrets = { githubPat: local?.githubPat, syncPassword: local?.encryptionPassword };
-
-  // Activate the DEK first so the migration encrypts as it rewrites.
-  currentDek = dek;
-  currentSecrets = secrets;
-  idleTimeoutMs = idleMinutes * 60_000;
 
   await db.vault.put({
     id: 'vault',
@@ -277,36 +280,82 @@ export async function enableParanoid(passphrase: string, idleMinutes = DEFAULT_I
     kdf: kdfParams,
     prfSalt,
     verifier,
+    secrets: await encryptBlob(dek, JSON.stringify(secrets)),
     idleTimeoutMinutes: idleMinutes,
     maxUnlockAttempts: DEFAULT_MAX_ATTEMPTS,
     failedUnlockAttempts: 0,
     migrationState: 'encrypting',
   });
 
-  await encryptAllAtRest();
+  // Activate the DEK so the migration encrypts as it rewrites, then raise the
+  // flag BEFORE touching any row: from here on the device is Paranoid, so a crash
+  // brings it back to the lock screen and the next unlock resumes the enable.
+  // (Raised last, as it used to be, a crash mid-migration left a device that
+  // looked un-Paranoid over rows it could no longer read.)
+  currentDek = dek;
+  currentSecrets = secrets;
+  idleTimeoutMs = idleMinutes * 60_000;
+  setFlag(true);
 
-  await db.vault.update('vault', {
-    secrets: await encryptBlob(dek, JSON.stringify(secrets)),
-    migrationState: 'done',
-  });
-  // Close the at-rest gap: the PAT and sync password now live (encrypted) in the
-  // vault, so strip the plaintext copies from localSettings (which is NOT covered
-  // by the at-rest middleware). Sync reads them from getVaultSecrets() henceforth.
+  try {
+    await completeEnable();
+  } catch (err) {
+    recordError('vault.enable', err);
+    const reason = err instanceof Error ? err.message : String(err);
+    throw new Error(`Encryption didn't finish (${reason}). It resumes the next time you unlock.`);
+  } finally {
+    resetIdleTimer();
+    emit();
+  }
+}
+
+/**
+ * Everything an enable does once the vault exists — idempotent, so an
+ * interrupted enable resumes it at the next unlock (finishUnlock). Encrypt every
+ * row; strip the plaintext credentials (already in vault.secrets) from
+ * localSettings, which the at-rest middleware doesn't cover; and only then drop
+ * the plaintext safety backups, so they stay a recovery point until every row
+ * has been rewritten.
+ */
+async function completeEnable(): Promise<void> {
+  await encryptAllAtRest();
+  await db.vault.update('vault', { migrationState: 'done' });
+  const vault = await db.vault.get('vault');
   await db.localSettings.update('local', {
     paranoidEnabled: true,
-    paranoidIdleTimeoutMinutes: idleMinutes,
-    paranoidMaxUnlockAttempts: DEFAULT_MAX_ATTEMPTS,
+    paranoidIdleTimeoutMinutes: vault?.idleTimeoutMinutes ?? DEFAULT_IDLE_MINUTES,
+    paranoidMaxUnlockAttempts: vault?.maxUnlockAttempts ?? DEFAULT_MAX_ATTEMPTS,
     githubPat: undefined,
     encryptionPassword: undefined,
     // A Paranoid device must NOT be a remote-unlock approver — drop any approver
     // secrets it held (enforcement, alongside the runtime refusals in remote-unlock).
     remoteApproverFor: undefined,
   });
-
   purgeLocalBackups();
-  setFlag(true);
-  resetIdleTimer();
-  emit();
+}
+
+/**
+ * Boot-time repair of the two halves of "this device is Paranoid", which live in
+ * different stores — the flag in localStorage, the vault in IndexedDB — and so
+ * can't be written atomically. The vault is the authority (it holds the only key
+ * to the encrypted rows):
+ *  - vault but no flag: an enable died right after saving the vault. Raise the
+ *    flag so the lock screen appears; the unlock resumes the enable.
+ *  - flag but no vault: a disable died right after deleting the vault (the rows
+ *    are already plaintext). Drop the flag, or the lock screen would ask forever
+ *    for a passphrase no vault can check.
+ * main.tsx runs it before the first render. Never throws.
+ */
+export async function reconcileParanoidFlag(): Promise<void> {
+  try {
+    const hasVault = !!(await db.vault.get('vault'));
+    if (hasVault === readFlag()) return;
+    setFlag(hasVault);
+    if (!hasVault) setKeyFlag(false);
+    emit();
+  } catch (err) {
+    recordError('vault.reconcileFlag', err);
+  }
 }
 
 export async function disableParanoid(): Promise<void> {
@@ -317,6 +366,8 @@ export async function disableParanoid(): Promise<void> {
 
 async function completeDisable(): Promise<void> {
   await decryptAllAtRest();
+  // The safety backups too, while the key that opens them still exists.
+  await decryptLocalBackups();
   // Restore the plaintext credentials to localSettings so non-paranoid sync works.
   const restored = currentSecrets;
   await db.localSettings.update('local', {
@@ -625,8 +676,7 @@ async function finishUnlock(vault: Vault, dek: CryptoKey, method: UnlockMethod =
     }
     // Resume an interrupted migration.
     if (vault.migrationState === 'encrypting') {
-      await encryptAllAtRest();
-      await db.vault.update('vault', { migrationState: 'done' });
+      await completeEnable();
     } else if (vault.migrationState === 'decrypting') {
       await completeDisable();
       return true;
