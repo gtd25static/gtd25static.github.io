@@ -253,7 +253,7 @@ export async function restoreTask(id: string) {
  * fields (snooze, discussion history) are kept: dormant on a task, back in use
  * if it returns to a follow-up list.
  */
-function crossTypeUpdates(task: Task, targetType: ListType, now: number): Partial<Task> {
+export function crossTypeUpdates(task: Task, targetType: ListType, now: number): Partial<Task> {
   const updates: Partial<Task> = {};
   if (targetType === 'follow-ups') {
     // Follow-ups have no done/blocked states: done becomes resolved, blocked is lifted.

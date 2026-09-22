@@ -108,3 +108,36 @@ test('the right-click menu sends a task to a follow-up list and back', async ({ 
   await openList(page, 'Work');
   await expect(taskCards(page).filter({ hasText: TITLE })).toBeVisible();
 });
+
+test('bulk Move sends selected tasks to a follow-up list, leaving tasks with subtasks behind', async ({ page }) => {
+  const OTHER = 'Book the venue for March';
+  const PARENT = 'Plan the offsite';
+  await openApp(page);
+  await createFollowUpList(page, 'People');
+  await createList(page, 'Work');
+  for (const title of [TITLE, OTHER, PARENT]) await createTask(page, title);
+
+  const parent = taskCards(page).filter({ hasText: PARENT });
+  await parent.getByText(PARENT).click(); // expand
+  await page.getByRole('button', { name: 'Add subtask' }).click();
+  const subtaskInput = page.getByPlaceholder('Subtask title');
+  await subtaskInput.fill('Pick a date');
+  await subtaskInput.press('Enter');
+  await expect(page.getByText('Pick a date')).toBeVisible();
+  await parent.getByText(PARENT).click(); // collapse
+
+  await page.getByRole('heading', { level: 2, name: 'Work', exact: true }).locator('..').getByRole('button').click();
+  await page.getByRole('button', { name: 'Select', exact: true }).click();
+  for (const title of [TITLE, OTHER, PARENT]) await taskCards(page).filter({ hasText: title }).getByText(title).click();
+  await expect(page.getByText('3 selected')).toBeVisible();
+
+  await page.getByRole('button', { name: 'Move', exact: true }).filter({ visible: true }).click();
+  await page.getByRole('button', { name: 'People', exact: true }).filter({ visible: true }).last().click();
+
+  await expect(page.getByText("2 tasks moved to People — 1 with subtasks stayed (can't become a follow-up)")).toBeVisible();
+  await expect(taskCards(page)).toHaveCount(1);
+  await expect(taskCards(page).filter({ hasText: PARENT })).toBeVisible();
+
+  await sidebarList(page, 'People').locator(':scope > button').click();
+  for (const title of [TITLE, OTHER]) await expect(followUpCard(page, title)).toBeVisible();
+});

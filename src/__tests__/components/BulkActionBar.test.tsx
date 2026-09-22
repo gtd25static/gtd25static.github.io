@@ -10,9 +10,10 @@ import { ToastContainer } from '../../components/ui/Toast';
 
 const workList = makeTaskList({ id: 'work', name: 'Work', type: 'tasks' });
 const personalList = makeTaskList({ id: 'personal', name: 'Personal', type: 'tasks' });
+const peopleList = makeTaskList({ id: 'people', name: 'People', type: 'follow-ups' });
 
 vi.mock('../../hooks/use-task-lists', () => ({
-  useTaskLists: () => [workList, personalList],
+  useTaskLists: () => [workList, personalList, peopleList],
 }));
 
 const mockDeleteTasksBatch = vi.fn();
@@ -128,5 +129,56 @@ describe('BulkActionBar', () => {
     await user.click(doneButtons[0]);
     const state = useAppState.getState();
     expect(state.bulkMode).toBe(false);
+  });
+
+  describe('Move', () => {
+    async function moveTo(user: ReturnType<typeof userEvent.setup>, listName: string) {
+      // Desktop and mobile bars both render (CSS shows one); use the desktop Move.
+      await user.click(screen.getAllByText('Move')[0]);
+      await user.click(screen.getByText(listName));
+    }
+
+    it('offers follow-up lists as targets', async () => {
+      const { user } = renderBar();
+      await user.click(screen.getAllByText('Move')[0]);
+      expect(screen.getByText('People')).toBeInTheDocument();
+    });
+
+    it('reports a full move', async () => {
+      mockMoveTasksToListBatch.mockResolvedValue({ moved: 2, skipped: 0 });
+      const { user } = renderBar();
+      await moveTo(user, 'People');
+      expect(mockMoveTasksToListBatch).toHaveBeenCalledWith(['t1', 't2'], 'people');
+      expect(await screen.findByText('2 tasks moved to People')).toBeInTheDocument();
+    });
+
+    it('says which tasks stayed behind because of their subtasks', async () => {
+      mockMoveTasksToListBatch.mockResolvedValue({ moved: 1, skipped: 1 });
+      const { user } = renderBar();
+      await moveTo(user, 'People');
+      expect(await screen.findByText("1 task moved to People — 1 with subtasks stayed (can't become a follow-up)")).toBeInTheDocument();
+    });
+
+    it('explains when nothing could move', async () => {
+      mockMoveTasksToListBatch.mockResolvedValue({ moved: 0, skipped: 2 });
+      const { user } = renderBar();
+      await moveTo(user, 'People');
+      expect(await screen.findByText("Tasks with subtasks can't become follow-ups")).toBeInTheDocument();
+      expect(screen.queryByText(/moved to People/)).not.toBeInTheDocument();
+    });
+
+    it('opens only the picker of the bar that was used (regression: a hidden twin closed it)', async () => {
+      const { user } = renderBar();
+      await user.click(screen.getAllByText('Move')[1]); // mobile bar
+      expect(screen.getAllByText('People')).toHaveLength(1);
+    });
+
+    it('claims nothing when the move failed', async () => {
+      mockMoveTasksToListBatch.mockResolvedValue({ moved: 0, skipped: 0 });
+      const { user } = renderBar();
+      await moveTo(user, 'Personal');
+      await Promise.resolve();
+      expect(screen.queryByText(/moved to Personal/)).not.toBeInTheDocument();
+    });
   });
 });

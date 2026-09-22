@@ -20,7 +20,10 @@ export function BulkActionBar({ activeTaskIds, currentListId }: Props) {
     selectAllTasks: s.selectAllTasks,
   })));
   const lists = useTaskLists();
-  const [showListPicker, setShowListPicker] = useState(false);
+  // One picker per bar: both bars are always mounted (CSS picks one), and a
+  // shared flag rendered both pickers — the hidden one's outside-click handler
+  // then closed the visible one on mousedown, before its click could land.
+  const [pickerIn, setPickerIn] = useState<'desktop' | 'mobile' | null>(null);
 
   const count = selectedTaskIds.size;
   const otherLists = lists.filter((l) => l.id !== currentListId && !l.archivedAt);
@@ -49,9 +52,12 @@ export function BulkActionBar({ activeTaskIds, currentListId }: Props) {
     const ids = [...selectedTaskIds];
     const targetName = lists.find((l) => l.id === targetListId)?.name ?? 'list';
     clearSelection();
-    setShowListPicker(false);
-    await moveTasksToListBatch(ids, targetListId);
-    toast(`${ids.length} task${ids.length > 1 ? 's' : ''} moved to ${targetName}`, 'success');
+    setPickerIn(null);
+    const { moved, skipped } = await moveTasksToListBatch(ids, targetListId);
+    const movedText = `${moved} task${moved !== 1 ? 's' : ''} moved to ${targetName}`;
+    if (moved > 0 && skipped === 0) toast(movedText, 'success');
+    else if (moved > 0) toast(`${movedText} — ${skipped} with subtasks stayed (can't become a follow-up)`, 'info');
+    else if (skipped > 0) toast("Tasks with subtasks can't become follow-ups", 'info');
   }
 
   return (
@@ -64,9 +70,9 @@ export function BulkActionBar({ activeTaskIds, currentListId }: Props) {
         <button onClick={() => handleStatus('todo')} className="rounded px-2 py-0.5 text-xs font-medium text-zinc-600 hover:bg-accent-100 dark:text-zinc-300 dark:hover:bg-accent-900/40">Todo</button>
         <button onClick={() => handleStatus('blocked')} className="rounded px-2 py-0.5 text-xs font-medium text-zinc-600 hover:bg-accent-100 dark:text-zinc-300 dark:hover:bg-accent-900/40">Block</button>
         <div className="relative">
-          <button onClick={() => setShowListPicker(!showListPicker)} className="rounded px-2 py-0.5 text-xs font-medium text-zinc-600 hover:bg-accent-100 dark:text-zinc-300 dark:hover:bg-accent-900/40">Move</button>
-          {showListPicker && (
-            <BulkListPicker lists={otherLists} onSelect={handleMove} onClose={() => setShowListPicker(false)} />
+          <button onClick={() => setPickerIn(pickerIn === 'desktop' ? null : 'desktop')} className="rounded px-2 py-0.5 text-xs font-medium text-zinc-600 hover:bg-accent-100 dark:text-zinc-300 dark:hover:bg-accent-900/40">Move</button>
+          {pickerIn === 'desktop' && (
+            <BulkListPicker lists={otherLists} onSelect={handleMove} onClose={() => setPickerIn(null)} />
           )}
         </div>
         <button onClick={handleDelete} className="rounded px-2 py-0.5 text-xs font-medium text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20">Delete</button>
@@ -91,12 +97,12 @@ export function BulkActionBar({ activeTaskIds, currentListId }: Props) {
           <span className="text-[10px]">Block</span>
         </button>
         <div className="relative flex flex-col items-center gap-0.5">
-          <button onClick={() => setShowListPicker(!showListPicker)} className="flex flex-col items-center gap-0.5 text-zinc-600 dark:text-zinc-300">
+          <button onClick={() => setPickerIn(pickerIn === 'mobile' ? null : 'mobile')} className="flex flex-col items-center gap-0.5 text-zinc-600 dark:text-zinc-300">
             <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M4 6h12M4 10h12M4 14h12" strokeLinecap="round" /></svg>
             <span className="text-[10px]">Move</span>
           </button>
-          {showListPicker && (
-            <BulkListPicker lists={otherLists} onSelect={handleMove} onClose={() => setShowListPicker(false)} />
+          {pickerIn === 'mobile' && (
+            <BulkListPicker lists={otherLists} onSelect={handleMove} onClose={() => setPickerIn(null)} />
           )}
         </div>
         <button onClick={handleDelete} className="flex flex-col items-center gap-0.5 text-red-500">
