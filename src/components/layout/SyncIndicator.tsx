@@ -37,7 +37,7 @@ export function SyncIndicator() {
     return (
       <button
         onClick={triggerSync}
-        className="flex items-center gap-1.5 rounded-full px-2 py-1 text-xs text-zinc-400 cursor-pointer hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
+        className="flex min-w-0 items-center gap-1.5 rounded-full px-2 py-1 text-xs text-zinc-400 cursor-pointer hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
         title="Syncing..."
       >
         <svg width="12" height="12" viewBox="0 0 16 16" fill="none" className="animate-spin text-accent-500">
@@ -53,7 +53,7 @@ export function SyncIndicator() {
     return (
       <button
         onClick={triggerSync}
-        className="flex items-center gap-1.5 rounded-full px-2 py-1 text-xs text-zinc-400 cursor-pointer hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
+        className="flex min-w-0 items-center gap-1.5 rounded-full px-2 py-1 text-xs text-zinc-400 cursor-pointer hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
         title={lastSyncedTitle}
       >
         <div className="h-1.5 w-1.5 shrink-0 rounded-full bg-zinc-400" />
@@ -68,7 +68,7 @@ export function SyncIndicator() {
     return (
       <button
         onClick={triggerSync}
-        className="flex items-center gap-1.5 rounded-full px-2 py-1 text-xs text-red-500 cursor-pointer hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
+        className="flex min-w-0 items-center gap-1.5 rounded-full px-2 py-1 text-xs text-red-500 cursor-pointer hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
         title={`Click to retry: ${info.message}`}
       >
         <div className="h-1.5 w-1.5 shrink-0 rounded-full bg-red-500" />
@@ -84,7 +84,7 @@ export function SyncIndicator() {
     return (
       <button
         onClick={triggerSync}
-        className="flex items-center gap-1.5 rounded-full px-2 py-1 text-xs text-green-500 cursor-pointer hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
+        className="flex min-w-0 items-center gap-1.5 rounded-full px-2 py-1 text-xs text-green-500 cursor-pointer hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
         title={lastSyncedTitle}
       >
         <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -104,7 +104,7 @@ export function SyncIndicator() {
     return (
       <button
         onClick={triggerSync}
-        className="flex items-center gap-1.5 rounded-full px-2 py-1 text-xs text-green-500 cursor-pointer hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
+        className="flex min-w-0 items-center gap-1.5 rounded-full px-2 py-1 text-xs text-green-500 cursor-pointer hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
         title={lastSyncedTitle}
       >
         <div className="h-1.5 w-1.5 shrink-0 rounded-full bg-green-500" />
@@ -117,7 +117,7 @@ export function SyncIndicator() {
   return (
     <button
       onClick={triggerSync}
-      className={`flex items-center gap-1.5 rounded-full px-2 py-1 text-xs cursor-pointer hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors ${
+      className={`flex min-w-0 items-center gap-1.5 rounded-full px-2 py-1 text-xs cursor-pointer hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors ${
         pendingChanges ? 'text-yellow-600 dark:text-yellow-500' : 'text-zinc-400'
       }`}
       title={lastSyncedTitle}

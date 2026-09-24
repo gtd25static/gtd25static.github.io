@@ -379,7 +379,7 @@ export function Sidebar() {
   }
 
   return (
-    <aside className="flex h-full w-[280px] flex-col bg-white dark:bg-zinc-900">
+    <aside className="flex h-full w-[280px] flex-col overflow-hidden bg-white dark:bg-zinc-900">
       {/* Header: brand, build, sync status and settings on one row */}
       <div className="flex items-center gap-2 px-3 py-2">
         <button
@@ -395,8 +395,12 @@ export function Sidebar() {
           <rect width="32" height="32" rx="6" fill="#4285f4"/>
           <path d="M8 16l5 5L24 10" stroke="white" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" fill="none"/>
         </svg>
-        <span className="text-lg font-normal leading-none text-zinc-700 dark:text-zinc-200">GTD25</span>
-        <span className="self-end text-[10px] font-mono leading-none text-zinc-400 dark:text-zinc-500">{GIT_COMMIT}</span>
+        <div className="flex shrink-0 flex-col gap-0.5">
+          <span className="text-lg font-normal leading-none text-zinc-700 dark:text-zinc-200">GTD25</span>
+          <span className="text-[10px] font-mono leading-none text-zinc-400 dark:text-zinc-500">{GIT_COMMIT}</span>
+        </div>
+        {/* The sync label is the only thing here allowed to shrink (it truncates),
+            so the row never grows past the sidebar's fixed width. */}
         <div className="ml-auto flex min-w-0 items-center">
           <SyncIndicator />
           <button
@@ -615,10 +619,8 @@ export function Sidebar() {
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className={`shrink-0 ${selectedListId === '__shared__' ? 'text-accent-600' : 'text-zinc-400'}`}>
             <path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z" strokeLinejoin="round" />
           </svg>
+          {/* Usage lives in the tooltip: a half-width tile can't fit label + size. */}
           <span className="flex-1 min-w-0 truncate text-left">Shared</span>
-          {sharedStorage.usedBytes > 0 && (
-            <span className="shrink-0 text-[11px] text-zinc-400">{formatBytes(sharedStorage.usedBytes)}</span>
-          )}
         </button>
 
         {/* Mindmaps */}

@@ -59,7 +59,11 @@ export function DiscussionHistory({ task, open, onClose }: Props) {
     .map(({ entry }) => entry);
 
   const [newNote, setNewNote] = useState('');
-  const [newDate, setNewDate] = useState(localISODate());
+  // null = "today", resolved when the entry is added: the card can stay mounted
+  // across midnight (or for days), so a date captured at mount would go stale.
+  const [newDate, setNewDate] = useState<string | null>(null);
+  const today = localISODate();
+  const dateValue = newDate ?? today;
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editText, setEditText] = useState('');
 
@@ -94,7 +98,7 @@ export function DiscussionHistory({ task, open, onClose }: Props) {
     // same day still sort in the order they were added (and today's is simply now).
     const now = new Date();
     let at = now.getTime();
-    if (newDate) {
+    if (newDate && newDate !== localISODate(now)) {
       const [y, m, d] = newDate.split('-').map(Number);
       if (y && m && d) {
         at = Math.min(
@@ -106,7 +110,7 @@ export function DiscussionHistory({ task, open, onClose }: Props) {
     const entry: DiscussionEntry = { id: newId(), at, ...(trimmed ? { note: trimmed } : {}) };
     await persist([...log, entry]);
     setNewNote('');
-    setNewDate(localISODate());
+    setNewDate(null);
   }
 
   return (
@@ -191,7 +195,7 @@ export function DiscussionHistory({ task, open, onClose }: Props) {
             data-redact
             value={newNote}
             onChange={(e) => setNewNote(e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); if (newNote.trim() || newDate) addEntry(); } }}
+            onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); if (newNote.trim() || dateValue) addEntry(); } }}
             placeholder="What was discussed?"
             rows={2}
             className={`mb-2 ${sharedTextarea}`}
@@ -199,8 +203,8 @@ export function DiscussionHistory({ task, open, onClose }: Props) {
           <div className="flex items-center gap-2">
             <input
               type="date"
-              value={newDate}
-              max={localISODate()}
+              value={dateValue}
+              max={today}
               onChange={(e) => setNewDate(e.target.value)}
               onClick={(e) => openNativePicker(e.currentTarget)}
               className="min-h-[44px] rounded-lg border border-zinc-300 bg-white px-3 text-sm outline-none focus:border-accent-500 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200 md:min-h-0 md:py-2"
@@ -208,7 +212,7 @@ export function DiscussionHistory({ task, open, onClose }: Props) {
             />
             <button
               onClick={addEntry}
-              disabled={!newNote.trim() && !newDate}
+              disabled={!newNote.trim() && !dateValue}
               className="ml-auto min-h-[44px] rounded-lg bg-indigo-600 px-5 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-40 md:min-h-0 md:py-2"
             >
               Add entry

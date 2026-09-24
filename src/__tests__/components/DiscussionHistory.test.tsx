@@ -158,4 +158,20 @@ describe('DiscussionHistory (editable)', () => {
     const notes = screen.getAllByText(/same-day|day before/).map((el) => el.textContent);
     expect(notes).toEqual(['second same-day', 'first same-day', 'day before']);
   });
+
+  it('uses the day of adding, not of mounting, when the date was left untouched', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(new Date(2026, 8, 21, 23, 58));
+      const { user } = renderHistory();
+      // The card stays mounted past midnight; the user adds without touching the date.
+      vi.setSystemTime(new Date(2026, 8, 22, 0, 3));
+      await user.type(screen.getByPlaceholderText('What was discussed?'), 'after midnight{Enter}');
+
+      const at = new Date(mockUpdateTask.mock.calls[0][1].discussionLog[1].at);
+      expect([at.getDate(), at.getHours(), at.getMinutes()]).toEqual([22, 0, 3]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
