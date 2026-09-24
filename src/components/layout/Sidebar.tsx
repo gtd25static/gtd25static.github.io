@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import {
   useDndMonitor,
@@ -72,6 +72,13 @@ function ListItem({ list, selected, onSelect, highlight, focused, count, allList
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState('');
   const [dropHighlight, setDropHighlight] = useState(false);
+  const rowRef = useRef<HTMLDivElement | null>(null);
+
+  // Keep the selected list visible in the scrolling area (e.g. on load, or when
+  // it was picked from elsewhere); a no-op when it's already on screen.
+  useEffect(() => {
+    if (selected) rowRef.current?.scrollIntoView?.({ block: 'nearest' });
+  }, [selected]);
 
   // Make this list item a drop target for tasks/follow-ups from the shared DndContext
   const { setNodeRef: setDropRef, isOver } = useDroppable({
@@ -98,15 +105,15 @@ function ListItem({ list, selected, onSelect, highlight, focused, count, allList
           e.preventDefault();
           handleSave();
         }}
-        className="flex items-center gap-3 px-3 py-3.5 md:py-2"
+        className="flex items-center gap-2.5 px-3 py-3.5 md:py-1"
       >
         {list.type === 'follow-ups' ? (
-          <svg width="20" height="20" viewBox="0 0 20 20" fill="none" className="shrink-0 text-zinc-400">
+          <svg width="18" height="18" viewBox="0 0 20 20" fill="none" className="shrink-0 text-zinc-400">
             <circle cx="10" cy="10" r="7" stroke="currentColor" strokeWidth="1.5" />
             <path d="M10 6.5v4l2.5 1.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
           </svg>
         ) : (
-          <svg width="20" height="20" viewBox="0 0 20 20" fill="none" className="shrink-0 text-zinc-400">
+          <svg width="18" height="18" viewBox="0 0 20 20" fill="none" className="shrink-0 text-zinc-400">
             <rect x="3" y="3" width="14" height="14" rx="2" stroke="currentColor" strokeWidth="1.5" fill="currentColor" fillOpacity={0.15} />
             <path d="M6 10l2.5 2.5L14 7" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
           </svg>
@@ -161,7 +168,7 @@ function ListItem({ list, selected, onSelect, highlight, focused, count, allList
 
   return (
     <div
-      ref={setDropRef}
+      ref={(el) => { setDropRef(el); rowRef.current = el; }}
       data-focus-id={list.id}
       className={`group flex items-center ${(dropHighlight || isOver) ? 'ring-2 ring-accent-500 rounded-lg' : ''}`}
       onDragOver={handleDragOver}
@@ -175,7 +182,7 @@ function ListItem({ list, selected, onSelect, highlight, focused, count, allList
     >
       <button
         onClick={onSelect}
-        className={`flex flex-1 min-w-0 items-center gap-3 rounded-full px-3 py-3.5 md:py-2 text-sm transition-colors ${
+        className={`flex flex-1 min-w-0 items-center gap-2.5 rounded-full px-3 py-3.5 md:py-1 text-sm transition-colors ${
           focused
             ? 'ring-2 ring-accent-500/40 dark:ring-accent-400/30'
             : ''
@@ -186,12 +193,12 @@ function ListItem({ list, selected, onSelect, highlight, focused, count, allList
         }`}
       >
         {list.type === 'follow-ups' ? (
-          <svg width="20" height="20" viewBox="0 0 20 20" fill="none" className={selected ? 'text-orange-500' : 'text-zinc-400'}>
+          <svg width="18" height="18" viewBox="0 0 20 20" fill="none" className={`shrink-0 ${selected ? 'text-orange-500' : 'text-zinc-400'}`}>
             <circle cx="10" cy="10" r="7" stroke="currentColor" strokeWidth="1.5" />
             <path d="M10 6.5v4l2.5 1.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
           </svg>
         ) : (
-          <svg width="20" height="20" viewBox="0 0 20 20" fill="none" className={selected ? 'text-accent-600' : 'text-zinc-400'}>
+          <svg width="18" height="18" viewBox="0 0 20 20" fill="none" className={`shrink-0 ${selected ? 'text-accent-600' : 'text-zinc-400'}`}>
             <rect x="3" y="3" width="14" height="14" rx="2" stroke="currentColor" strokeWidth="1.5" fill="currentColor" fillOpacity={0.15} />
             <path d="M6 10l2.5 2.5L14 7" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
           </svg>
@@ -278,6 +285,23 @@ function readArchivedExpanded(): boolean {
   }
 }
 
+// Section headers stick to the top of the scrolling list area, so the current
+// group stays labelled however far down it is scrolled.
+const sectionHeaderClass =
+  'sticky top-0 z-10 flex items-center justify-between bg-white px-3 py-1 text-[11px] font-medium uppercase tracking-wide text-zinc-500 dark:bg-zinc-900 dark:text-zinc-400';
+
+const bottomIconClass =
+  'flex min-h-[44px] min-w-[44px] items-center justify-center rounded-full text-zinc-500 hover:bg-zinc-100 hover:text-zinc-700 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-200 md:min-h-0 md:min-w-0 md:p-2';
+
+// A cell in the two-column grid of fixed views (Focus, Shared, …).
+function viewTileClass(active: boolean): string {
+  return `flex min-w-0 items-center gap-2 rounded-full px-3 py-3 md:py-1 text-sm transition-colors ${
+    active
+      ? 'bg-accent-50 text-accent-700 font-medium dark:bg-accent-900/20 dark:text-accent-300'
+      : 'text-zinc-700 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800'
+  }`;
+}
+
 export function Sidebar() {
   const lists = useTaskLists();
   const { selectedListId, selectList, setSidebarOpen, setSettingsOpen, setTrashOpen, searchQuery, setSearchQuery } = useAppState(useShallow(s => ({ selectedListId: s.selectedListId, selectList: s.selectList, setSidebarOpen: s.setSidebarOpen, setSettingsOpen: s.setSettingsOpen, setTrashOpen: s.setTrashOpen, searchQuery: s.searchQuery, setSearchQuery: s.setSearchQuery })));
@@ -356,8 +380,8 @@ export function Sidebar() {
 
   return (
     <aside className="flex h-full w-[280px] flex-col bg-white dark:bg-zinc-900">
-      {/* Header */}
-      <div className="flex items-center gap-2 px-4 py-3">
+      {/* Header: brand, build, sync status and settings on one row */}
+      <div className="flex items-center gap-2 px-3 py-2">
         <button
           onClick={() => setSidebarOpen(false)}
           className="rounded-full p-2 text-zinc-600 hover:bg-zinc-100 md:hidden dark:text-zinc-400 dark:hover:bg-zinc-800"
@@ -367,49 +391,35 @@ export function Sidebar() {
             <path fillRule="evenodd" d="M3 5a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zM3 10a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zM3 15a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1z" clipRule="evenodd" />
           </svg>
         </button>
-        <svg width="24" height="24" viewBox="0 0 32 32" className="shrink-0">
+        <svg width="20" height="20" viewBox="0 0 32 32" className="shrink-0">
           <rect width="32" height="32" rx="6" fill="#4285f4"/>
           <path d="M8 16l5 5L24 10" stroke="white" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" fill="none"/>
         </svg>
-        <div className="flex flex-col">
-          <span className="text-[22px] font-normal leading-tight text-zinc-700 dark:text-zinc-200">GTD25</span>
-          <span className="text-[10px] font-mono text-zinc-400 dark:text-zinc-500">{GIT_COMMIT}</span>
-        </div>
-        <div className="ml-auto">
+        <span className="text-lg font-normal leading-none text-zinc-700 dark:text-zinc-200">GTD25</span>
+        <span className="self-end text-[10px] font-mono leading-none text-zinc-400 dark:text-zinc-500">{GIT_COMMIT}</span>
+        <div className="ml-auto flex min-w-0 items-center">
           <SyncIndicator />
+          <button
+            onClick={() => setSettingsOpen(true)}
+            className="shrink-0 rounded-full p-1.5 text-zinc-500 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800"
+            aria-label="Settings"
+            title="Settings"
+          >
+            <svg width="18" height="18" viewBox="0 0 20 20" fill="currentColor">
+              <path fillRule="evenodd" d="M11.49 3.17c-.38-1.56-2.6-1.56-2.98 0a1.532 1.532 0 01-2.286.948c-1.372-.836-2.942.734-2.106 2.106.54.886.061 2.042-.947 2.287-1.561.379-1.561 2.6 0 2.978a1.532 1.532 0 01.947 2.287c-.836 1.372.734 2.942 2.106 2.106a1.532 1.532 0 012.287.947c.379 1.561 2.6 1.561 2.978 0a1.533 1.533 0 012.287-.947c1.372.836 2.942-.734 2.106-2.106a1.533 1.533 0 01.947-2.287c1.561-.379 1.561-2.6 0-2.978a1.532 1.532 0 01-.947-2.287c.836-1.372-.734-2.942-2.106-2.106a1.532 1.532 0 01-2.287-.947zM10 13a3 3 0 100-6 3 3 0 000 6z" clipRule="evenodd" />
+            </svg>
+          </button>
         </div>
       </div>
 
       {/* Pomodoro timer */}
-      <div className="px-3 pb-2 overflow-hidden">
+      <div className="px-3 pb-1.5 overflow-hidden">
         <PomodoroBar />
       </div>
 
-      {/* Create button + Settings cog */}
-      <div className="flex items-center gap-2 px-3 pb-2">
-        <button
-          onClick={() => setCreating(true)}
-          className="flex items-center gap-3 rounded-2xl border border-zinc-300 px-5 py-2.5 text-sm font-medium text-zinc-700 shadow-sm transition-shadow hover:shadow-md dark:border-zinc-600 dark:text-zinc-200"
-        >
-          <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2" className="text-accent-600">
-            <path d="M10 4v12M4 10h12" />
-          </svg>
-          Create
-        </button>
-        <button
-          onClick={() => setSettingsOpen(true)}
-          className="ml-auto rounded-full p-2 text-zinc-500 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800"
-          aria-label="Settings"
-        >
-          <svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor">
-            <path fillRule="evenodd" d="M11.49 3.17c-.38-1.56-2.6-1.56-2.98 0a1.532 1.532 0 01-2.286.948c-1.372-.836-2.942.734-2.106 2.106.54.886.061 2.042-.947 2.287-1.561.379-1.561 2.6 0 2.978a1.532 1.532 0 01.947 2.287c-.836 1.372.734 2.942 2.106 2.106a1.532 1.532 0 012.287.947c.379 1.561 2.6 1.561 2.978 0a1.533 1.533 0 012.287-.947c1.372.836 2.942-.734 2.106-2.106a1.533 1.533 0 01.947-2.287c1.561-.379 1.561-2.6 0-2.978a1.532 1.532 0 01-.947-2.287c.836-1.372-.734-2.942-2.106-2.106a1.532 1.532 0 01-2.287-.947zM10 13a3 3 0 100-6 3 3 0 000 6z" clipRule="evenodd" />
-          </svg>
-        </button>
-      </div>
-
-      {/* Search box */}
-      <div className="px-3 pb-2">
-        <div className="relative">
+      {/* Search box + new list */}
+      <div className="flex items-center gap-1 px-3 pb-1.5">
+        <div className="relative flex-1 min-w-0">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="absolute left-2.5 top-1/2 -translate-y-1/2 text-zinc-400 dark:text-zinc-400 pointer-events-none">
             <circle cx="11" cy="11" r="8" />
             <path d="M21 21l-4.35-4.35" strokeLinecap="round" />
@@ -437,11 +447,21 @@ export function Sidebar() {
             </button>
           )}
         </div>
+        <button
+          onClick={() => setCreating(true)}
+          className="flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-lg text-accent-600 hover:bg-zinc-100 dark:text-accent-400 dark:hover:bg-zinc-800 md:min-h-0 md:min-w-0 md:p-1.5"
+          aria-label="Create new list"
+          title="Create new list"
+        >
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2">
+            <path d="M10 4v12M4 10h12" />
+          </svg>
+        </button>
       </div>
 
       {/* Create new list */}
-      <div className="px-2">
-        {creating ? (
+      {creating && (
+        <div className="px-2">
           <form
             onSubmit={(e) => { e.preventDefault(); handleCreate(); }}
             className="mx-1 mt-1 mb-2 space-y-2 rounded-xl border border-zinc-200 bg-zinc-50 p-3 dark:border-zinc-700 dark:bg-zinc-800"
@@ -482,50 +502,12 @@ export function Sidebar() {
               <button type="button" onClick={() => setCreating(false)} className="rounded-lg px-3 py-1.5 text-xs font-medium text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-700">Cancel</button>
             </div>
           </form>
-        ) : (
-          <button
-            onClick={() => setCreating(true)}
-            className="flex w-full items-center gap-3 rounded-full px-3 py-3.5 md:py-2 text-sm text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800"
-          >
-            <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" className="text-zinc-400">
-              <path d="M10 4v12M4 10h12" />
-            </svg>
-            Create new list
-          </button>
-        )}
-      </div>
-
-      {/* Focus Mode: today's 2-3 task commitment set */}
-      <div className="px-2 pb-1">
-        <button
-          onClick={() => {
-            selectList('__focus__');
-            setSidebarOpen(false);
-          }}
-          className={`flex w-full items-center gap-3 rounded-full px-3 py-3.5 md:py-2 text-sm transition-colors ${
-            selectedListId === '__focus__'
-              ? 'bg-accent-50 text-accent-700 font-medium dark:bg-accent-900/20 dark:text-accent-300'
-              : 'text-zinc-700 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800'
-          }`}
-        >
-          {/* Target icon */}
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className={selectedListId === '__focus__' ? 'text-accent-600' : 'text-zinc-400'}>
-            <circle cx="12" cy="12" r="9" />
-            <circle cx="12" cy="12" r="5" />
-            <circle cx="12" cy="12" r="1.2" fill="currentColor" stroke="none" />
-          </svg>
-          <span className="flex-1 text-left">Focus</span>
-          {focusCount > 0 && (
-            <span className="flex h-5 min-w-[20px] items-center justify-center rounded-full bg-accent-500 px-1.5 text-xs font-medium text-white">
-              {focusCount}
-            </span>
-          )}
-        </button>
-      </div>
+        </div>
+      )}
 
       {/* Inbox row (visible when items pending) */}
       {inboxList && inboxCount > 0 && (
-        <div className="px-2 pb-1">
+        <div className="px-2 pb-0.5">
           <button
             draggable="true"
             onDragStart={(e) => {
@@ -536,14 +518,14 @@ export function Sidebar() {
               selectList(inboxList.id);
               setSidebarOpen(false);
             }}
-            className={`flex w-full items-center gap-3 rounded-full px-3 py-3.5 md:py-2 text-sm transition-colors cursor-grab active:cursor-grabbing ${
+            className={`flex w-full items-center gap-2.5 rounded-full px-3 py-3 md:py-1 text-sm transition-colors cursor-grab active:cursor-grabbing ${
               selectedListId === inboxList.id
                 ? 'bg-accent-50 text-accent-700 font-medium dark:bg-accent-900/20 dark:text-accent-300'
                 : 'bg-accent-50/50 text-accent-700 hover:bg-accent-100 dark:bg-accent-900/10 dark:text-accent-300 dark:hover:bg-accent-900/20'
             }`}
           >
             {/* Inbox tray icon */}
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="text-accent-500">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="text-accent-500">
               <path d="M22 12h-6l-2 3H10l-2-3H2" />
               <path d="M5.45 5.11L2 12v6a2 2 0 002 2h16a2 2 0 002-2v-6l-3.45-6.89A2 2 0 0016.76 4H7.24a2 2 0 00-1.79 1.11z" />
             </svg>
@@ -557,19 +539,19 @@ export function Sidebar() {
 
       {/* Special list counter */}
       {specialTotal > 0 && (
-        <div className="px-2 pb-1">
+        <div className="px-2 pb-0.5">
           <button
             onClick={() => {
               selectList('__special__');
               setSidebarOpen(false);
             }}
-            className={`flex w-full items-center gap-3 rounded-full px-3 py-3.5 md:py-2 text-sm transition-colors ${
+            className={`flex w-full items-center gap-2.5 rounded-full px-3 py-3 md:py-1 text-sm transition-colors ${
               selectedListId === '__special__'
                 ? 'bg-amber-50 text-amber-700 font-medium dark:bg-amber-900/20 dark:text-amber-300'
                 : 'text-zinc-700 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800'
             }`}
           >
-            <svg width="20" height="20" viewBox="0 0 20 20" fill="none" className={selectedListId === '__special__' ? 'text-amber-500' : 'text-zinc-400'}>
+            <svg width="18" height="18" viewBox="0 0 20 20" fill="none" className={selectedListId === '__special__' ? 'text-amber-500' : 'text-zinc-400'}>
               <path d="M10 2l2.5 5 5.5.8-4 3.9.9 5.5L10 14.7l-4.9 2.5.9-5.5-4-3.9 5.5-.8z" fill="currentColor" />
             </svg>
             <span className="flex-1 text-left">Attention</span>
@@ -597,31 +579,49 @@ export function Sidebar() {
         </div>
       )}
 
-      {/* Shared folder */}
-      <div className="px-2 pb-1">
+      {/* Fixed views, two per row to leave the height to the lists below */}
+      <div className="grid grid-cols-2 gap-0.5 px-2 pb-1.5">
+        {/* Focus Mode: today's 2-3 task commitment set */}
+        <button
+          onClick={() => {
+            selectList('__focus__');
+            setSidebarOpen(false);
+          }}
+          className={viewTileClass(selectedListId === '__focus__')}
+        >
+          {/* Target icon */}
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className={`shrink-0 ${selectedListId === '__focus__' ? 'text-accent-600' : 'text-zinc-400'}`}>
+            <circle cx="12" cy="12" r="9" />
+            <circle cx="12" cy="12" r="5" />
+            <circle cx="12" cy="12" r="1.2" fill="currentColor" stroke="none" />
+          </svg>
+          <span className="flex-1 min-w-0 truncate text-left">Focus</span>
+          {focusCount > 0 && (
+            <span className="flex h-5 min-w-[20px] items-center justify-center rounded-full bg-accent-500 px-1.5 text-xs font-medium text-white">
+              {focusCount}
+            </span>
+          )}
+        </button>
+
+        {/* Shared folder */}
         <button
           onClick={() => {
             selectList('__shared__');
             setSidebarOpen(false);
           }}
-          className={`flex w-full items-center gap-3 rounded-full px-3 py-3.5 md:py-2 text-sm transition-colors ${
-            selectedListId === '__shared__'
-              ? 'bg-accent-50 text-accent-700 font-medium dark:bg-accent-900/20 dark:text-accent-300'
-              : 'text-zinc-700 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800'
-          }`}
+          className={viewTileClass(selectedListId === '__shared__')}
+          title={sharedStorage.usedBytes > 0 ? `Shared — ${formatBytes(sharedStorage.usedBytes)} used` : 'Shared'}
         >
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className={selectedListId === '__shared__' ? 'text-accent-600' : 'text-zinc-400'}>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className={`shrink-0 ${selectedListId === '__shared__' ? 'text-accent-600' : 'text-zinc-400'}`}>
             <path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z" strokeLinejoin="round" />
           </svg>
-          <span className="flex-1 text-left">Shared</span>
+          <span className="flex-1 min-w-0 truncate text-left">Shared</span>
           {sharedStorage.usedBytes > 0 && (
-            <span className="text-xs text-zinc-400">{formatBytes(sharedStorage.usedBytes)}</span>
+            <span className="shrink-0 text-[11px] text-zinc-400">{formatBytes(sharedStorage.usedBytes)}</span>
           )}
         </button>
-      </div>
 
-      {/* Mindmaps */}
-      <div className="px-2 pb-1">
+        {/* Mindmaps */}
         <button
           onClick={() => {
             // Clicking again while already in the section pops back to the browser
@@ -631,56 +631,47 @@ export function Sidebar() {
             selectList('__mindmaps__');
             setSidebarOpen(false);
           }}
-          className={`flex w-full items-center gap-3 rounded-full px-3 py-3.5 md:py-2 text-sm transition-colors ${
-            selectedListId === '__mindmaps__'
-              ? 'bg-accent-50 text-accent-700 font-medium dark:bg-accent-900/20 dark:text-accent-300'
-              : 'text-zinc-700 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800'
-          }`}
+          className={viewTileClass(selectedListId === '__mindmaps__')}
         >
           {/* Node-graph icon */}
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className={selectedListId === '__mindmaps__' ? 'text-accent-600' : 'text-zinc-400'}>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className={`shrink-0 ${selectedListId === '__mindmaps__' ? 'text-accent-600' : 'text-zinc-400'}`}>
             <circle cx="5" cy="12" r="2.5" />
             <circle cx="18" cy="5.5" r="2.5" />
             <circle cx="18" cy="18.5" r="2.5" />
             <path d="M7.4 11l8.2-4.3M7.4 13l8.2 4.3" strokeLinecap="round" />
           </svg>
-          <span className="flex-1 text-left">Mindmaps</span>
+          <span className="flex-1 min-w-0 truncate text-left">Mindmaps</span>
         </button>
-      </div>
 
-      {/* Insights dashboard */}
-      <div className="px-2 pb-1">
+        {/* Insights dashboard */}
         <button
           onClick={() => {
             selectList('__insights__');
             setSidebarOpen(false);
           }}
-          className={`flex w-full items-center gap-3 rounded-full px-3 py-3.5 md:py-2 text-sm transition-colors ${
-            selectedListId === '__insights__'
-              ? 'bg-accent-50 text-accent-700 font-medium dark:bg-accent-900/20 dark:text-accent-300'
-              : 'text-zinc-700 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800'
-          }`}
+          className={viewTileClass(selectedListId === '__insights__')}
         >
           {/* Bar chart icon */}
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className={selectedListId === '__insights__' ? 'text-accent-600' : 'text-zinc-400'}>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className={`shrink-0 ${selectedListId === '__insights__' ? 'text-accent-600' : 'text-zinc-400'}`}>
             <path d="M3 3v18h18" strokeLinecap="round" strokeLinejoin="round" />
             <rect x="7" y="12" width="3" height="5" rx="0.5" />
             <rect x="12" y="8" width="3" height="9" rx="0.5" />
             <rect x="17" y="5" width="3" height="12" rx="0.5" />
           </svg>
-          <span className="flex-1 text-left">Insights</span>
+          <span className="flex-1 min-w-0 truncate text-left">Insights</span>
         </button>
       </div>
 
       {/* The only scrolling part of the sidebar: a 1px rule above and below marks
           where lists scroll under the fixed sections, a shade stronger than the
           rules between its own sections. */}
-      <nav className="flex-1 overflow-y-auto px-2 pt-1 scrollbar-thin border-y border-zinc-300 dark:border-zinc-600">
+      <nav className="min-h-0 flex-1 overflow-y-auto px-2 scrollbar-thin border-y border-zinc-300 dark:border-zinc-600">
         {/* Task lists section */}
         {taskLists.length > 0 && (
           <div className="mb-1">
-            <div className="flex items-center justify-between px-3 py-2">
-              <span className="text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Lists</span>
+            <div className={sectionHeaderClass}>
+              <span>Lists</span>
+              <span className="font-normal normal-case text-zinc-400">{taskLists.length}</span>
             </div>
             <SortableContext items={taskLists.map((l) => l.id)} strategy={verticalListSortingStrategy}>
               {taskLists.map((list) => (
@@ -702,8 +693,9 @@ export function Sidebar() {
         {/* Follow-ups section */}
         {followUpLists.length > 0 && (
           <div className="mb-1">
-            <div className="flex items-center justify-between px-3 py-2 mt-1 border-t border-zinc-200 dark:border-zinc-700">
-              <span className="text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Follow-ups</span>
+            <div className={`${sectionHeaderClass} border-t border-zinc-200 dark:border-zinc-700`}>
+              <span>Follow-ups</span>
+              <span className="font-normal normal-case text-zinc-400">{followUpLists.length}</span>
             </div>
             <SortableContext items={followUpLists.map((l) => l.id)} strategy={verticalListSortingStrategy}>
               {followUpLists.map((list) => (
@@ -732,7 +724,7 @@ export function Sidebar() {
                 try { localStorage.setItem(ARCHIVED_EXPANDED_KEY, next ? '1' : '0'); } catch { /* private mode — collapse state is cosmetic */ }
               }}
               aria-expanded={showArchived}
-              className="flex w-full items-center gap-2 px-3 py-2 mt-1 border-t border-zinc-200 text-xs font-medium uppercase tracking-wide text-zinc-500 hover:text-zinc-700 dark:border-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-200"
+              className="flex w-full items-center gap-2 px-3 py-1.5 border-t border-zinc-200 text-xs font-medium uppercase tracking-wide text-zinc-500 hover:text-zinc-700 dark:border-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-200"
             >
               <svg
                 width="12" height="12" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2"
@@ -765,13 +757,15 @@ export function Sidebar() {
         )}
       </nav>
 
-      {/* Bottom actions (the nav's bottom rule separates them) */}
-      <div className="px-2 py-2">
+      {/* Bottom actions as one row of icons (the nav's bottom rule separates them) */}
+      <div className="flex items-center justify-around px-2 py-1">
         {paranoidEnabled && localSettings.paranoidRedactModeEnabled && (
           <button
             onClick={() => setRedacted(!redacted)}
             aria-pressed={redacted}
-            className="flex w-full items-center gap-3 rounded-full px-3 py-3.5 md:py-2 text-sm text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800"
+            aria-label={redacted ? 'Reveal content' : 'Redact content'}
+            title={redacted ? 'Reveal content' : 'Redact content'}
+            className={bottomIconClass}
           >
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
               {redacted ? (
@@ -786,30 +780,31 @@ export function Sidebar() {
                 </>
               )}
             </svg>
-            <span className="flex-1 text-left">{redacted ? 'Reveal content' : 'Redact content'}</span>
           </button>
         )}
         {paranoidEnabled && (
           <button
             onClick={() => { lockVault(); setSidebarOpen(false); }}
-            className="flex w-full items-center gap-3 rounded-full px-3 py-3.5 md:py-2 text-sm text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800"
+            aria-label="Lock now"
+            title="Lock now"
+            className={bottomIconClass}
           >
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
               <rect x="5" y="11" width="14" height="10" rx="2" />
               <path d="M8 11V7a4 4 0 018 0v4" strokeLinecap="round" />
             </svg>
-            <span className="flex-1 text-left">Lock now</span>
           </button>
         )}
         <CheckForUpdatesButton onActivate={() => setSidebarOpen(false)} />
         <button
           onClick={() => setTrashOpen(true)}
-          className="flex w-full items-center gap-3 rounded-full px-3 py-3.5 md:py-2 text-sm text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800"
+          aria-label="Trash"
+          title="Trash"
+          className={bottomIconClass}
         >
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
             <path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6" />
           </svg>
-          Trash
         </button>
       </div>
     </aside>

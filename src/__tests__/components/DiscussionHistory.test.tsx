@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import '../setup-component';
 import { makeTask } from '../helpers/component-helpers';
@@ -118,5 +118,44 @@ describe('DiscussionHistory (editable)', () => {
     await user.type(screen.getByPlaceholderText('What was discussed?'), 'first one');
     await user.click(screen.getByText('Add entry'));
     expect(mockUpdateTask).toHaveBeenCalledTimes(1);
+  });
+
+  it('stamps a new entry with the current time, not a fixed 12:00', async () => {
+    const { user } = renderHistory();
+    const before = Date.now();
+    await user.type(screen.getByPlaceholderText('What was discussed?'), 'now-ish{Enter}');
+    const after = Date.now();
+
+    const entry = mockUpdateTask.mock.calls[0][1].discussionLog[1];
+    expect(entry.at).toBeGreaterThanOrEqual(before);
+    expect(entry.at).toBeLessThanOrEqual(after);
+  });
+
+  it('keeps the time of day when logging on a past date', async () => {
+    const { user } = renderHistory();
+    const input = document.querySelector('input[type="date"]') as HTMLInputElement;
+    const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const iso = `${yesterday.getFullYear()}-${String(yesterday.getMonth() + 1).padStart(2, '0')}-${String(yesterday.getDate()).padStart(2, '0')}`;
+    fireEvent.change(input, { target: { value: iso } });
+    const before = new Date();
+    await user.click(screen.getByText('Add entry'));
+
+    const at = new Date(mockUpdateTask.mock.calls[0][1].discussionLog[1].at);
+    expect(at.getDate()).toBe(yesterday.getDate());
+    // Time of day comes from "now" (within the test's run time), so it isn't pinned to noon.
+    expect(Math.abs(at.getHours() * 60 + at.getMinutes() - (before.getHours() * 60 + before.getMinutes()))).toBeLessThanOrEqual(1);
+  });
+
+  it('lists entries newest first, breaking timestamp ties by the last one added', () => {
+    const noon = new Date(2026, 8, 20, 12).getTime();
+    renderHistory({
+      discussionLog: [
+        { id: 'a', at: noon - 86_400_000, note: 'day before' },
+        { id: 'b', at: noon, note: 'first same-day' },
+        { id: 'c', at: noon, note: 'second same-day' },
+      ],
+    });
+    const notes = screen.getAllByText(/same-day|day before/).map((el) => el.textContent);
+    expect(notes).toEqual(['second same-day', 'first same-day', 'day before']);
   });
 });

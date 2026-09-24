@@ -51,7 +51,12 @@ const sharedTextarea =
  */
 export function DiscussionHistory({ task, open, onClose }: Props) {
   const log = task.discussionLog ?? [];
-  const entries = [...log].sort((a, b) => b.at - a.at);
+  // Newest first. Equal timestamps (older entries logged via the date picker were
+  // all pinned to 12:00) fall back to insertion order, so the last one added wins.
+  const entries = log
+    .map((entry, index) => ({ entry, index }))
+    .sort((a, b) => b.entry.at - a.entry.at || b.index - a.index)
+    .map(({ entry }) => entry);
 
   const [newNote, setNewNote] = useState('');
   const [newDate, setNewDate] = useState(localISODate());
@@ -85,10 +90,18 @@ export function DiscussionHistory({ task, open, onClose }: Props) {
 
   async function addEntry() {
     const trimmed = newNote.trim();
-    let at = Date.now();
+    // Keep the current time of day on the picked date, so entries logged on the
+    // same day still sort in the order they were added (and today's is simply now).
+    const now = new Date();
+    let at = now.getTime();
     if (newDate) {
       const [y, m, d] = newDate.split('-').map(Number);
-      if (y && m && d) at = new Date(y, m - 1, d, 12, 0, 0, 0).getTime();
+      if (y && m && d) {
+        at = Math.min(
+          now.getTime(),
+          new Date(y, m - 1, d, now.getHours(), now.getMinutes(), now.getSeconds(), now.getMilliseconds()).getTime(),
+        );
+      }
     }
     const entry: DiscussionEntry = { id: newId(), at, ...(trimmed ? { note: trimmed } : {}) };
     await persist([...log, entry]);
