@@ -37,6 +37,8 @@ export function toastDurationMs(message: string, hasUndo = false): number {
 // above any z-index. Promoting the toaster to a popover puts toasts in the same
 // top layer so they stay visible above those dialogs — notably full-screen ones
 // on mobile. Falls back to plain z-index where the Popover API is unavailable.
+const MAX_VISIBLE = 3;
+
 const SUPPORTS_POPOVER =
   typeof HTMLElement !== 'undefined' && 'popover' in HTMLElement.prototype;
 
@@ -45,20 +47,41 @@ export function ToastContainer() {
   const nextId = useRef(0);
   const toasterRef = useRef<HTMLDivElement>(null);
 
-  const dismiss = useCallback((id: number) => {
-    // Start exit animation
-    setToasts((prev) => prev.map((t) => (t.id === id ? { ...t, leaving: true } : t)));
-    // Remove after animation
-    setTimeout(() => {
-      setToasts((prev) => prev.filter((t) => t.id !== id));
-    }, 300);
+  // Kept in step synchronously (several toasts can fire before React re-renders),
+  // so a repeat and the cap below see every toast already added.
+  const live = useRef<ToastData[]>([]);
+  const timers = useRef(new Map<number, ReturnType<typeof setTimeout>>());
+  const publish = useCallback((next: ToastData[]) => {
+    live.current = next;
+    setToasts(next);
   }, []);
 
+  const dismiss = useCallback((id: number) => {
+    clearTimeout(timers.current.get(id));
+    timers.current.delete(id);
+    // Start exit animation, then remove
+    publish(live.current.map((t) => (t.id === id ? { ...t, leaving: true } : t)));
+    setTimeout(() => publish(live.current.filter((t) => t.id !== id)), 300);
+  }, [publish]);
+
   const addToast = useCallback<AddToast>((message, type = 'info', onUndo, durationMs) => {
+    const ms = durationMs ?? toastDurationMs(message, !!onUndo);
+    const arm = (id: number) => {
+      clearTimeout(timers.current.get(id));
+      timers.current.set(id, setTimeout(() => dismiss(id), ms));
+    };
+    // The same message already on screen just stays up longer (the review saw 14
+    // identical ones stacked). Undo toasts never merge: each undoes something else.
+    const same = !onUndo && live.current.find((t) => !t.leaving && !t.onUndo && t.message === message && t.type === type);
+    if (same) { arm(same.id); return; }
+
     const id = nextId.current++;
-    setToasts((prev) => [...prev, { id, message, type, onUndo }]);
-    setTimeout(() => dismiss(id), durationMs ?? toastDurationMs(message, !!onUndo));
-  }, [dismiss]);
+    publish([...live.current, { id, message, type, onUndo }]);
+    arm(id);
+    // At most MAX_VISIBLE at once: the oldest make way.
+    const showing = live.current.filter((t) => !t.leaving);
+    for (const old of showing.slice(0, Math.max(0, showing.length - MAX_VISIBLE))) dismiss(old.id);
+  }, [dismiss, publish]);
 
   useEffect(() => {
     addToastFn = addToast;

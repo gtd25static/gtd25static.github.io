@@ -117,4 +117,39 @@ describe('toastDurationMs', () => {
     expect(toastDurationMs('Deleted', true)).toBe(4000); // 1 word (3.3s) floored to 4s
     expect(toastDurationMs(words(12), true)).toBe(6000); // long undo stays 6s
   });
+
+  describe('does not pile up', () => {
+    // The review saw 14 identical toasts stacked 664 px high.
+    beforeEach(() => { vi.useFakeTimers(); });
+    afterEach(() => { vi.useRealTimers(); });
+    it('a message already on screen is not shown twice', () => {
+      render(<ToastContainer />);
+      act(() => { for (let i = 0; i < 14; i++) toast('Sync failed', 'error'); });
+      expect(screen.getAllByText('Sync failed')).toHaveLength(1);
+    });
+
+    it('a repeat keeps it up for the full time again', () => {
+      render(<ToastContainer />);
+      act(() => { toast('Saved'); });
+      act(() => { vi.advanceTimersByTime(toastDurationMs('Saved') - 500); });
+      act(() => { toast('Saved'); });
+      act(() => { vi.advanceTimersByTime(1000); });
+      expect(screen.getByText('Saved')).toBeInTheDocument();
+    });
+
+    it('shows at most three at a time, the newest ones', () => {
+      render(<ToastContainer />);
+      act(() => { ['one', 'two', 'three', 'four', 'five'].forEach((m) => toast(m)); });
+      act(() => { vi.advanceTimersByTime(300); }); // the pushed-out ones finish leaving
+      expect(screen.queryByText('one')).not.toBeInTheDocument();
+      expect(screen.queryByText('two')).not.toBeInTheDocument();
+      for (const m of ['three', 'four', 'five']) expect(screen.getByText(m)).toBeInTheDocument();
+    });
+
+    it('two undo toasts with the same text both stay: each undoes something else', () => {
+      render(<ToastContainer />);
+      act(() => { toast('Task deleted', 'info', () => {}); toast('Task deleted', 'info', () => {}); });
+      expect(screen.getAllByText('Task deleted')).toHaveLength(2);
+    });
+  });
 });
