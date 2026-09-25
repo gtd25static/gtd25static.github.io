@@ -103,7 +103,6 @@ export function ConfirmDialogContainer() {
             variant={request.danger !== false ? 'danger' : 'primary'}
             size="sm"
             type="submit"
-            onClick={handleConfirm}
             disabled={!typedMatches}
             autoFocus={!request.typeToConfirm}
           >

@@ -58,6 +58,26 @@ describe('ConfirmDialog', () => {
     expect(confirmBtn).toHaveClass('bg-red-600');
   });
 
+  // Regression: the submit button also had onClick={handleConfirm}. In Chrome
+  // React flushes that click's state update (unmounting the dialog) before the
+  // button's submit activation runs, so every confirm logged "Form submission
+  // canceled because the form is not connected". The form's submit must be the
+  // one and only confirm path (jsdom can't reproduce the ordering itself).
+  it('confirms only through the form submit, not a separate click handler', async () => {
+    const user = userEvent.setup();
+    let result: boolean | undefined;
+    act(() => {
+      confirmDialog('Delete this?').then((r) => { result = r; });
+    });
+    const form = screen.getByText('Delete this?').closest('form')!;
+    const swallow = vi.fn((e: Event) => { e.preventDefault(); e.stopPropagation(); });
+    form.addEventListener('submit', swallow, true);
+    await user.click(screen.getByRole('button', { name: 'Confirm' }));
+    expect(swallow).toHaveBeenCalledTimes(1);
+    expect(result).toBeUndefined();
+    expect(screen.getByText('Delete this?')).toBeInTheDocument();
+  });
+
   it('closes the dialog after confirmation', async () => {
     const user = userEvent.setup();
     act(() => {
