@@ -4,6 +4,7 @@ import { updateTask } from '../../hooks/use-tasks';
 import { applyDiscussed } from '../../hooks/use-follow-ups';
 import { newId } from '../../lib/id';
 import { openNativePicker } from '../../lib/native-picker';
+import { toInputDate } from '../../lib/date-utils';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -14,9 +15,24 @@ const CADENCE_PRESETS: { value: PingCooldown; label: string }[] = [
   { value: '12w', label: '12 weeks' },
 ];
 
+// Local calendar date `days` from today, as a date input wants it.
+function inDays(days: number): string {
+  const date = new Date();
+  date.setDate(date.getDate() + days);
+  return toInputDate(date.getTime());
+}
+
+function rememberedCustomDays(task: Task): number | undefined {
+  const days = task.snoozeCadenceDays;
+  return task.snoozeCadence === 'custom' && Number.isFinite(days) && days! > 0 ? days : undefined;
+}
+
 // Map any remembered cadence (incl. legacy presets) onto a current preset so the
-// popover opens with a sensible default; fall back to 6 days.
+// popover opens with a sensible default; fall back to 6 days. A remembered
+// custom cadence reopens as custom, dated that many days out (what the card's
+// "every Nd" says).
 function initialCadence(task: Task): PingCooldown {
+  if (rememberedCustomDays(task)) return 'custom';
   const legacy: Record<string, PingCooldown> = {
     '12h': '20h',
     '1week': '6d',
@@ -45,7 +61,10 @@ interface Props {
 export function DiscussedPopover({ task, align, onDone }: Props) {
   const [note, setNote] = useState('');
   const [cadence, setCadence] = useState<PingCooldown>(initialCadence(task));
-  const [customDate, setCustomDate] = useState<string>('');
+  const [customDate, setCustomDate] = useState<string>(() => {
+    const days = rememberedCustomDays(task);
+    return days ? inDays(days) : '';
+  });
   const rootRef = useRef<HTMLDivElement>(null);
   const [openUp, setOpenUp] = useState(false);
   const [shiftX, setShiftX] = useState(0);
@@ -65,10 +84,9 @@ export function DiscussedPopover({ task, align, onDone }: Props) {
     else if (rect.right > window.innerWidth - 8) setShiftX(window.innerWidth - 8 - rect.right);
   }, []);
 
-  // Minimum date for the custom picker: tomorrow.
-  const tomorrow = new Date();
-  tomorrow.setDate(tomorrow.getDate() + 1);
-  const minDate = tomorrow.toISOString().split('T')[0];
+  // Minimum date for the custom picker: tomorrow, in local time (toISOString
+  // gave the UTC date, which just after local midnight was still today).
+  const minDate = inDays(1);
 
   const isCustom = cadence === 'custom';
   const customValid = !isCustom || Boolean(customDate);
@@ -92,7 +110,10 @@ export function DiscussedPopover({ task, align, onDone }: Props) {
       if (!year || !month || !day) return;
       const target = new Date(year, month - 1, day, 23, 59, 59, 999);
       if (target.getTime() <= Date.now()) return;
-      const days = Math.max(1, Math.round((target.getTime() - Date.now()) / DAY_MS));
+      // Calendar days from today, so the card's "every Nd" matches the date picked.
+      const startOfToday = new Date();
+      startOfToday.setHours(0, 0, 0, 0);
+      const days = Math.max(1, Math.round((new Date(year, month - 1, day).getTime() - startOfToday.getTime()) / DAY_MS));
       const cadenceUpdate: Partial<Task> = { snoozeCadence: 'custom', snoozeCadenceDays: days };
       await updateTask(task.id, {
         ...cadenceUpdate,

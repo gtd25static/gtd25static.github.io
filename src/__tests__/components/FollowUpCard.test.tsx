@@ -35,6 +35,7 @@ vi.mock('../../hooks/use-follow-ups', () => ({
   cooldownRemaining: () => 3600000,
   formatCooldown: () => '1h',
   cadenceMs: () => 7 * 24 * 60 * 60 * 1000,
+  cadenceLabel: () => 'every 1w',
   isAwake: () => true,
   applyDiscussed: (_t: unknown, note?: string) => ({
     discussionLog: [{ id: 'x', at: 1, note }],

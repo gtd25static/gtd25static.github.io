@@ -5,7 +5,7 @@ import { toast } from '../ui/Toast';
 import { confirmDialog } from '../ui/ConfirmDialog';
 import { useAppState } from '../../stores/app-state';
 import { useShallow } from 'zustand/react/shallow';
-import { isInCooldown, cooldownRemaining, formatCooldown, cadenceMs } from '../../hooks/use-follow-ups';
+import { isInCooldown, cooldownRemaining, formatCooldown, cadenceMs, cadenceLabel } from '../../hooks/use-follow-ups';
 import { toggleWarning } from '../../hooks/use-warning';
 import { useTaskLists } from '../../hooks/use-task-lists';
 import { PingCooldownBadge } from './PingCooldownBadge';
@@ -17,17 +17,6 @@ import { formatDate, dueDateColor } from '../../lib/date-utils';
 import { LinksList } from '../shared/LinksList';
 import { ExpandableText } from '../shared/ExpandableText';
 import { TaskForm } from '../tasks/TaskForm';
-
-function cadenceLabel(ms: number): string {
-  const days = Math.round(ms / (24 * 60 * 60 * 1000));
-  if (days >= 30) {
-    const months = Math.round(days / 30);
-    return `every ${months}mo`;
-  }
-  if (days >= 7 && days % 7 === 0) return `every ${days / 7}w`;
-  if (days >= 1) return `every ${days}d`;
-  return `every ${Math.round(ms / (60 * 60 * 1000))}h`;
-}
 
 // Action-chip layout: a 44px tap target on phones (per platform touch guidance),
 // a touch more compact on md+ desktop. Colours are appended per chip.

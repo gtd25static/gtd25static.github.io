@@ -170,6 +170,50 @@ describe('DiscussedPopover', () => {
     expect(payload.pingCooldownUntil).toBe(new Date(2099, 5, 22, 23, 59, 59, 999).getTime());
   });
 
+  describe('custom dates', () => {
+    const originalTz = process.env.TZ;
+    afterEach(() => {
+      vi.useRealTimers();
+      process.env.TZ = originalTz;
+    });
+
+    // Snoozing to a date 11 days away labelled the card "every 11d" (or 12),
+    // but the next Discussed opened on "6 days".
+    it('reopens on the remembered custom cadence, dated that many days from today', () => {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(new Date(2026, 8, 25, 10, 0));
+      const { container } = renderPopover({ snoozeCadence: 'custom', snoozeCadenceDays: 11 });
+      expect(screen.getByText('custom').className).toContain('bg-indigo-600');
+      expect(screen.getByText('6 days').className).not.toContain('bg-indigo-600');
+      expect((container.querySelector('input[type="date"]') as HTMLInputElement).value).toBe('2026-10-06');
+    });
+
+    // Counted in 24h blocks up to 23:59 of the chosen day, so "11 days away"
+    // picked mid-morning was remembered as 12.
+    it('remembers the cadence as the calendar days to the chosen date', async () => {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(new Date(2026, 8, 25, 10, 0));
+      const { user, container } = renderPopover();
+      await user.click(screen.getByText('custom'));
+      await act(async () => {
+        fireEvent.change(container.querySelector('input[type="date"]')!, { target: { value: '2026-10-06' } });
+      });
+      await user.click(screen.getByText('Snooze'));
+      expect(mockUpdateTask.mock.calls[0][1].snoozeCadenceDays).toBe(11);
+    });
+
+    // The minimum came from toISOString(), i.e. UTC: just after midnight in
+    // Madrid it was still "today" there, and the snooze ended that night.
+    it('offers tomorrow in local time as the earliest date', async () => {
+      process.env.TZ = 'Europe/Madrid';
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(new Date('2026-09-25T22:30:00Z')); // 00:30 on the 26th in Madrid
+      const { user, container } = renderPopover();
+      await user.click(screen.getByText('custom'));
+      expect(container.querySelector('input[type="date"]')!.getAttribute('min')).toBe('2026-09-27');
+    });
+  });
+
   it('clicking the custom date field opens the native picker', async () => {
     const showPicker = vi.fn();
     HTMLInputElement.prototype.showPicker = showPicker as unknown as () => void;

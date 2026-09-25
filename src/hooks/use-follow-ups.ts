@@ -65,9 +65,23 @@ function isReasonableWakeTime(value: number | undefined): value is number {
 
 export function formatCooldown(ms: number): string {
   const hours = Math.floor(ms / (1000 * 60 * 60));
+  // Minutes in the last hour, which read "0h left"; never "0m" while still snoozed.
+  if (hours < 1) return `${Math.max(1, Math.floor(ms / (1000 * 60)))}m`;
   if (hours < 24) return `${hours}h`;
   const days = Math.floor(hours / 24);
   return `${days}d`;
+}
+
+/**
+ * How often a follow-up comes back, for its card. Under a day in hours (the 20h
+ * preset read "every 1d"); whole weeks as weeks (12 weeks read "every 3mo").
+ */
+export function cadenceLabel(ms: number): string {
+  if (ms < DAY_MS) return `every ${Math.round(ms / (60 * 60 * 1000))}h`;
+  const days = Math.round(ms / DAY_MS);
+  if (days % 7 === 0) return `every ${days / 7}w`;
+  if (days >= 30) return `every ${Math.round(days / 30)}mo`;
+  return `every ${days}d`;
 }
 
 /** A follow-up is "awake" when it's live, not resolved, and not snoozed. */

@@ -1,4 +1,4 @@
-import { isInCooldown, cooldownRemaining, cooldownUntil, formatCooldown, cadenceMs, applyDiscussed, isAwake } from '../../hooks/use-follow-ups';
+import { isInCooldown, cooldownRemaining, cooldownUntil, formatCooldown, cadenceMs, cadenceLabel, applyDiscussed, isAwake } from '../../hooks/use-follow-ups';
 import type { Task } from '../../db/models';
 
 function makeTask(overrides?: Partial<Task>): Task {
@@ -131,6 +131,36 @@ describe('formatCooldown', () => {
 
   it('formats days when 24h or more', () => {
     expect(formatCooldown(3 * 24 * 60 * 60 * 1000)).toBe('3d');
+  });
+
+  // It said "0h left" for the whole last hour.
+  it('formats minutes under an hour, never "0"', () => {
+    expect(formatCooldown(59 * 60 * 1000 + 30_000)).toBe('59m');
+    expect(formatCooldown(30 * 60 * 1000)).toBe('30m');
+    expect(formatCooldown(20_000)).toBe('1m');
+  });
+});
+
+// The chip under a follow-up that says how often it comes back.
+describe('cadenceLabel', () => {
+  const HOUR = 60 * 60 * 1000;
+  const D = 24 * HOUR;
+
+  it('shows the 20h preset as 20h (it said "every 1d")', () => {
+    expect(cadenceLabel(20 * HOUR)).toBe('every 20h');
+    expect(cadenceLabel(12 * HOUR)).toBe('every 12h');
+  });
+
+  it('shows whole weeks as weeks, including 12 weeks (it said "every 3mo")', () => {
+    expect(cadenceLabel(7 * D)).toBe('every 1w');
+    expect(cadenceLabel(12 * 7 * D)).toBe('every 12w');
+  });
+
+  it('shows days and months', () => {
+    expect(cadenceLabel(6 * D)).toBe('every 6d');
+    expect(cadenceLabel(11 * D)).toBe('every 11d');
+    expect(cadenceLabel(30 * D)).toBe('every 1mo');
+    expect(cadenceLabel(90 * D)).toBe('every 3mo');
   });
 });
 
