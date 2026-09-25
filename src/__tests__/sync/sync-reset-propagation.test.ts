@@ -28,7 +28,8 @@ vi.mock('../../sync/history-compaction', () => ({ maybeSquashDefaultBranch: vi.f
 
 import { getFile, putFile, deleteFile } from '../../sync/github-api';
 import { syncNow, importData, wipeAllData, SNAPSHOT_FILE, CHANGELOG_FILE } from '../../sync/sync-engine';
-import { cacheEncryptionKey, deriveKey, generateSalt, createVerifier, encryptSyncData, decryptSyncData } from '../../sync/crypto';
+import { cacheEncryptionKey, clearEncryptionKey, deriveKey, generateSalt, createVerifier, encryptSyncData, decryptSyncData } from '../../sync/crypto';
+import { toast } from '../../components/ui/Toast';
 
 let testKey: CryptoKey;
 let testSalt: string;
@@ -173,5 +174,39 @@ describe('repos left without a changelog by older builds', () => {
 
     expect(remoteChangelog().map((e) => e.entityId)).toEqual(['later']);
     expect(await db.taskLists.get('later')).toBeDefined();
+  });
+});
+
+describe('after the cached sync key has expired', () => {
+  // The key cache clears after 30 min idle / 5 min hidden. Wipe and import used
+  // to skip the remote write silently then, reporting success for a change that
+  // only happened on this device.
+  beforeEach(async () => {
+    await setRemoteSnapshot({ taskLists: [list('old', 'Everywhere')] });
+    remote.set(CHANGELOG_FILE, { data: '[]', sha: `sha-${++shaCounter}` });
+    await db.syncMeta.update('sync-meta', { lastPulledAt: Date.now() - 60_000 });
+    await db.taskLists.add(list('old', 'Everywhere'));
+    clearEncryptionKey();
+  });
+
+  it('wipe re-derives the key from the stored password and wipes the remote too', async () => {
+    await wipeAllData();
+    expect(await db.taskLists.count()).toBe(0);
+    const snap = await remoteSnapshot();
+    expect(snap.taskLists).toEqual([]);
+    expect(snap.wipedAt).toBeGreaterThan(0);
+  });
+
+  it('import re-derives the key and replaces the remote too', async () => {
+    await importData({ taskLists: [list('imp', 'Imported')], tasks: [], subtasks: [] });
+    expect((await remoteSnapshot()).taskLists.map((l) => l.id)).toEqual(['imp']);
+  });
+
+  it('with no usable password, changes nothing anywhere and says so', async () => {
+    await db.localSettings.update('local', { encryptionPassword: undefined });
+    await wipeAllData();
+    expect(await db.taskLists.count()).toBe(1);
+    expect((await remoteSnapshot()).taskLists.map((l) => l.id)).toEqual(['old']);
+    expect(toast).toHaveBeenCalledWith(expect.stringMatching(/nothing was (wiped|changed)/i), 'error');
   });
 });

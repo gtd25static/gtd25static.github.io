@@ -760,6 +760,27 @@ async function pruneRemoteBackups(pat: string, repo: string) {
 }
 
 /**
+ * The key a whole-snapshot replacement (wipe / import / backup restore) must
+ * write with: the remote's current key, re-derived from the stored password when
+ * the cache has expired (30 min idle / 5 min hidden) and checked against the
+ * remote verifier. Null when it can't be had — the caller must then change
+ * NOTHING, not even locally: these used to skip the remote write when the cache
+ * was empty and still report success, leaving the other devices untouched.
+ */
+async function keyForRemoteReplace(
+  creds: { pat: string; repo: string },
+  signal: AbortSignal,
+): Promise<{ encKey: CryptoKey; existing: { data: string; sha: string } | null } | null> {
+  const existing = await getFile(creds.pat, creds.repo, SNAPSHOT_FILE, signal);
+  const parsed = existing ? safeParseJson<SyncData>(existing.data, 'existing snapshot (replace key)') : null;
+  const remote = parsed?.ok ? parsed.value : undefined;
+  const encKey = await resolveEncryptionKey(remote?.encryptionSalt);
+  if (encKey === 'needs-password') return null;
+  if (remote?.encryptionVerifier && !(await checkVerifier(encKey, remote.encryptionVerifier))) return null;
+  return { encKey, existing };
+}
+
+/**
  * After a wipe / import / backup restore has replaced the remote snapshot (stamped
  * with `wipedAt`), reset the changelog to empty — never delete it. Other devices
  * adopt the new snapshot through the wipedAt guard and then keep syncing through
@@ -1802,6 +1823,15 @@ export async function wipeAllData() {
   if (!signal) return;
 
   try {
+    // Sync configured: settle the key before touching anything, so the wipe
+    // happens on every device or on none.
+    const creds = await getCredentials();
+    const remoteKey = creds ? await keyForRemoteReplace(creds, signal) : null;
+    if (creds && !remoteKey) {
+      toast('Sync password needed — nothing was wiped. Sync once, then try again.', 'error');
+      return;
+    }
+
     // Clear local task data
     await Promise.all([
       db.taskLists.clear(),
@@ -1817,10 +1847,9 @@ export async function wipeAllData() {
     localStorage.removeItem('gtd25-mindmap-ui');
 
     // Push empty snapshot to remote if sync is configured
-    const creds = await getCredentials();
     let wipedAt: number | undefined;
-    if (creds && hasEncryptionKey()) {
-      const encKey = getCachedEncryptionKey()!;
+    if (creds && remoteKey) {
+      const { encKey, existing } = remoteKey;
       const salt = getCachedSalt()!;
 
       const currentPomSettings = await db.pomodoroSettings.get('pomodoro') ?? undefined;
@@ -1844,7 +1873,6 @@ export async function wipeAllData() {
       };
       emptySnapshot = await encryptSyncData(encKey, emptySnapshot);
 
-      const existing = await getFile(creds.pat, creds.repo, SNAPSHOT_FILE, signal);
       // Recoverability: back up the remote snapshot before replacing it with the
       // empty one, so a "Wipe All Data" can be undone (this propagates to every
       // device). Mirrors forcePush's pre-overwrite backup.
@@ -1889,11 +1917,22 @@ export async function importData(data: ImportData) {
   const signal = acquireSyncLock();
   if (!signal) return;
 
-  // Everything below replaces local state wholesale. Take a device-local safety
-  // copy first so a mis-click is recoverable (Settings → Backups).
-  await createLocalBackup();
-
   try {
+    // Sync configured: settle the key before touching anything, so the import
+    // lands on every device or on none.
+    const creds = await getCredentials();
+    const remoteKey = creds ? await keyForRemoteReplace(creds, signal) : null;
+    if (creds && !remoteKey) {
+      toast('Sync password needed — nothing was changed. Sync once, then try again.', 'error');
+      return;
+    }
+    const existing = remoteKey?.existing;
+    if (refuseWriteOverNewerRemote(existing?.data, 'importData')) return;
+
+    // Everything below replaces local state wholesale. Take a device-local safety
+    // copy first so a mis-click is recoverable (Settings → Backups).
+    await createLocalBackup();
+
     // FK validation: skip orphaned records
     const validListIds = new Set(data.taskLists.map((l) => l.id));
     const validTasks = data.tasks.filter((t) => validListIds.has(t.listId));
@@ -1944,10 +1983,9 @@ export async function importData(data: ImportData) {
     await clearPendingEntries();
 
     // Push to remote if sync is configured
-    const creds = await getCredentials();
     let wipedAt: number | undefined;
-    if (creds && hasEncryptionKey()) {
-      const encKey = getCachedEncryptionKey()!;
+    if (creds && remoteKey) {
+      const { encKey } = remoteKey;
       const salt = getCachedSalt()!;
 
       const theme = data.settings?.theme ?? (localStorage.getItem('gtd25-theme') as Settings['theme']) ?? 'system';
@@ -1971,8 +2009,6 @@ export async function importData(data: ImportData) {
       };
       snapshot = await encryptSyncData(encKey, snapshot);
 
-      const existing = await getFile(creds.pat, creds.repo, SNAPSHOT_FILE, signal);
-      if (refuseWriteOverNewerRemote(existing?.data, 'importData')) return;
       await putFile(creds.pat, creds.repo, SNAPSHOT_FILE, JSON.stringify(snapshot), existing?.sha, signal);
 
       // Other devices adopt the imported snapshot through the wipedAt guard.
@@ -2029,10 +2065,6 @@ export async function restoreFromBackup(tier: BackupTier) {
   const signal = acquireSyncLock();
   if (!signal) return;
 
-  // Everything below replaces local state wholesale. Take a device-local safety
-  // copy first so a mis-click is recoverable (Settings → Backups).
-  await createLocalBackup();
-
   try {
     const creds = await getCredentials();
     if (!creds) {
@@ -2040,13 +2072,19 @@ export async function restoreFromBackup(tier: BackupTier) {
       return;
     }
 
-    // Resolve encryption key
-    const encResult = await resolveEncryptionKey();
-    if (encResult === 'needs-password') {
+    // The remote's current key (re-derived if the cache expired). Without a
+    // remote salt this used to mint a fresh one — a key no backup opens.
+    const remoteKey = await keyForRemoteReplace(creds, signal);
+    if (!remoteKey) {
       toast('Encryption password required', 'error');
       return;
     }
-    const encKey = encResult;
+    const { encKey, existing } = remoteKey;
+    if (refuseWriteOverNewerRemote(existing?.data, 'restoreFromBackup')) return;
+
+    // Everything below replaces local state wholesale. Take a device-local safety
+    // copy first so a mis-click is recoverable (Settings → Backups).
+    await createLocalBackup();
 
     // Fetch backup file
     const backupFile = await getFile(creds.pat, creds.repo, BACKUP_FILES[tier], signal);
@@ -2105,8 +2143,6 @@ export async function restoreFromBackup(tier: BackupTier) {
     };
     snapshot = await encryptSyncData(encKey, snapshot);
 
-    const existing = await getFile(creds.pat, creds.repo, SNAPSHOT_FILE, signal);
-    if (refuseWriteOverNewerRemote(existing?.data, 'restoreFromBackup')) return;
     await putFile(creds.pat, creds.repo, SNAPSHOT_FILE, JSON.stringify(snapshot), existing?.sha, signal);
 
     // Other devices adopt the restored snapshot through the wipedAt guard.
