@@ -8,6 +8,8 @@ import { computeNextOccurrence } from './use-recurring';
 import { handleDbError } from '../lib/db-error';
 import { initFieldTimestamps, stampUpdatedFields } from '../sync/field-timestamps';
 import { undeleteRowInTx, type TaskSideChange } from './use-task-lists';
+import { setTaskStatus } from './use-tasks';
+import { MAX_TITLE_LENGTH } from '../lib/constants';
 
 export function useSubtasks(taskId: string | undefined) {
   return useLiveQuery(
@@ -35,7 +37,7 @@ export async function createSubtask(
       subtask = {
         id,
         taskId,
-        title: data.title,
+        title: data.title.slice(0, MAX_TITLE_LENGTH),
         link: data.link,
         linkTitle: data.linkTitle,
         dueDate: data.dueDate,
@@ -58,6 +60,8 @@ export async function createSubtask(
 }
 
 export async function updateSubtask(id: string, updates: Partial<Subtask>) {
+  // Every caller (inline edit included) gets the same cap as the task forms.
+  if (updates.title !== undefined) updates = { ...updates, title: updates.title.slice(0, MAX_TITLE_LENGTH) };
   try {
     await ensureDeviceId();
     await db.transaction('rw', [db.subtasks, db.changeLog], async () => {
@@ -97,6 +101,13 @@ export async function setSubtaskStatus(id: string, status: SubtaskStatus) {
       updates.completedAt = undefined;
     }
     await updateSubtask(id, updates);
+
+    // A subtask reopened under a done parent reopens the parent: it was left
+    // "done" with an open subtask hidden inside it (GUI review).
+    if (status !== 'done' && subtask?.status === 'done') {
+      const parent = await db.tasks.get(subtask.taskId);
+      if (parent?.status === 'done' && !parent.deletedAt) await setTaskStatus(parent.id, 'todo');
+    }
 
     // Auto-complete parent task when all subtasks are done
     if (status === 'done') {

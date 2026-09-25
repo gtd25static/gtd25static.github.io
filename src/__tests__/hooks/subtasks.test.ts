@@ -1,9 +1,10 @@
 import { db } from '../../db';
+import { MAX_TITLE_LENGTH } from '../../lib/constants';
 import { resetDb, assertDefined } from '../helpers/db-helpers';
 import { createTaskList } from '../../hooks/use-task-lists';
 import { createTask } from '../../hooks/use-tasks';
 import {
-  createSubtask, setSubtaskStatus, deleteSubtask, restoreSubtask,
+  createSubtask, setSubtaskStatus, deleteSubtask, restoreSubtask, updateSubtask,
   convertSubtaskToTask, reorderSubtasks,
 } from '../../hooks/use-subtasks';
 
@@ -151,5 +152,33 @@ describe('reorderSubtasks', () => {
     expect(subs[0].id).toBe(c.id);
     expect(subs[1].id).toBe(a.id);
     expect(subs[2].id).toBe(b.id);
+  });
+});
+
+describe('parent completion follows its subtasks both ways', () => {
+  it('unchecking a subtask reopens a parent that was completed by its subtasks', async () => {
+    const list = await createTaskList('L');
+    const task = assertDefined(await createTask(list.id, { title: 'Parent' }));
+    const a = assertDefined(await createSubtask(task.id, { title: 'a' }));
+    const b = assertDefined(await createSubtask(task.id, { title: 'b' }));
+    await setSubtaskStatus(a.id, 'done');
+    await setSubtaskStatus(b.id, 'done');
+    expect((await db.tasks.get(task.id))?.status).toBe('done');
+
+    await setSubtaskStatus(b.id, 'todo');
+    const parent = await db.tasks.get(task.id);
+    expect(parent?.status).toBe('todo');
+    expect(parent?.completedAt).toBeUndefined();
+  });
+});
+
+describe('subtask title length', () => {
+  it('is capped at MAX_TITLE_LENGTH on create and on update', async () => {
+    const list = await createTaskList('L');
+    const task = assertDefined(await createTask(list.id, { title: 'Parent' }));
+    const sub = assertDefined(await createSubtask(task.id, { title: 'x'.repeat(3000) }));
+    expect((await db.subtasks.get(sub.id))?.title).toHaveLength(MAX_TITLE_LENGTH);
+    await updateSubtask(sub.id, { title: 'y'.repeat(900) });
+    expect((await db.subtasks.get(sub.id))?.title).toHaveLength(MAX_TITLE_LENGTH);
   });
 });
