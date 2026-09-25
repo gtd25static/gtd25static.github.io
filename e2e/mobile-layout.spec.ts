@@ -44,8 +44,10 @@ test.describe('on a phone', () => {
     await page.getByRole('button', { name: 'Create', exact: true }).click();
     const root = page.locator('[data-mindmap-node]').first();
     await expect(root).toBeVisible();
+    // By label, not DOM position: with motion on, nodes aren't in creation order.
+    let parent = 'Plan';
     for (let depth = 0; depth < 3; depth++) {
-      await page.locator('[data-mindmap-node]').last().tap();
+      await page.locator('[data-mindmap-node]').filter({ hasText: parent }).tap();
       // The node action buttons are SVG <g>s named by their <title>.
       await page.locator('svg g').filter({ has: page.locator('title', { hasText: 'Add child (Tab)' }) }).last().tap();
       const editor = page.locator('[data-mindmap-node] textarea');
@@ -56,8 +58,9 @@ test.describe('on a phone', () => {
       }, { message: 'the editor is on screen' }).toBe(true);
       await editor.fill(depth === 2 ? 'x'.repeat(300) : `Level ${depth}`);
       await editor.press('Enter');
+      parent = `Level ${depth}`;
     }
-    const overflow = await page.locator('[data-mindmap-node]').last().evaluate((node) => {
+    const overflow = await page.locator('[data-mindmap-node]').filter({ hasText: 'xxxxxxxx' }).evaluate((node) => {
       const label = node.firstElementChild as HTMLElement;
       return label.scrollWidth - label.clientWidth;
     });
