@@ -4,7 +4,7 @@
 // sync password here must enforce the same strength check as the encryption
 // password modal (this entry point used to bypass it entirely). Uses the REAL
 // password-strength estimator — these tests also pin the recalibrated threshold.
-import { render, screen } from '@testing-library/react';
+import { render, screen, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import '../setup-component';
 import { GitHubSettings } from '../../components/settings/GitHubSettings';
@@ -18,6 +18,8 @@ const h = vi.hoisted(() => ({
   setVaultSecrets: vi.fn(async () => undefined),
   isRemoteUnlockEnrolled: vi.fn(async () => false),
   contentReplacedByLinking: vi.fn(async () => null as null | { lists: number; tasks: number; maps: number }),
+  hasEncryptionKey: vi.fn(() => false),
+  rotateSyncKey: vi.fn(),
   confirm: vi.fn(async () => true),
 }));
 
@@ -27,11 +29,6 @@ vi.mock('../../hooks/use-settings', () => ({
 }));
 vi.mock('../../hooks/use-vault', () => ({
   useVault: () => h.vault,
-}));
-vi.mock('../../db/vault', () => ({
-  getVaultSecrets: () => h.secrets,
-  setVaultSecrets: h.setVaultSecrets,
-  isRemoteUnlockEnrolled: h.isRemoteUnlockEnrolled,
 }));
 vi.mock('../../sync/github-api', () => ({ testConnection: vi.fn() }));
 vi.mock('../../sync/sync-engine', () => ({
@@ -45,10 +42,16 @@ vi.mock('../../sync/crypto', () => ({
   deriveKey: vi.fn(async () => ({})),
   cacheEncryptionKey: vi.fn(),
   generateSalt: vi.fn(() => 'salt'),
-  hasEncryptionKey: vi.fn(() => false),
+  hasEncryptionKey: () => h.hasEncryptionKey(),
+}));
+vi.mock('../../db/vault', async () => ({
+  getVaultSecrets: () => h.secrets,
+  setVaultSecrets: h.setVaultSecrets,
+  isRemoteUnlockEnrolled: h.isRemoteUnlockEnrolled,
+  touchVaultActivity: vi.fn(),
 }));
 vi.mock('../../sync/key-rotation', () => ({
-  rotateSyncKey: vi.fn(),
+  rotateSyncKey: (...args: unknown[]) => (h.rotateSyncKey as (...a: unknown[]) => unknown)(...args),
   hasUnfinishedRotation: vi.fn(async () => false),
   discardUnfinishedRotation: vi.fn(),
 }));
@@ -206,5 +209,48 @@ describe('GitHubSettings — linking a device that already has data', () => {
 
     expect(h.confirm).not.toHaveBeenCalled();
     expect(h.updateLocalSettings).toHaveBeenCalledWith(expect.objectContaining({ syncEnabled: true }));
+  });
+});
+
+describe('GitHubSettings — changing the sync password', () => {
+  beforeEach(() => {
+    h.updateLocalSettings.mockClear();
+    h.confirm.mockReset();
+    h.confirm.mockResolvedValue(true);
+    h.hasEncryptionKey.mockReturnValue(true);
+    h.vault = { enabled: false, unlocked: false };
+    h.secrets = undefined;
+    h.local = {
+      githubPat: 'ghp_token',
+      githubRepo: 'owner/repo',
+      encryptionPassword: 'alpha rhino cactus velvet moon',
+      syncEnabled: true,
+    };
+  });
+  afterEach(() => h.hasEncryptionKey.mockReturnValue(false));
+
+  it('covers the screen with the progress dialog for the whole rotation, then removes it', async () => {
+    let report!: (p: { phase: string; done?: number; total?: number }) => void;
+    let finish!: () => void;
+    h.rotateSyncKey.mockImplementation((_pw: string, onProgress: typeof report) => {
+      report = onProgress;
+      return new Promise((resolve) => { finish = () => resolve({ blobsRewritten: 0, blobsUnreadable: 0, historySquashed: true }); });
+    });
+    const user = userEvent.setup();
+    render(<GitHubSettings />);
+    const field = screen.getByLabelText('Encryption Password');
+    await user.clear(field);
+    await user.type(field, 'harbor velvet 91 frosty lantern orbit');
+    await user.type(screen.getByLabelText('Confirm Password'), 'harbor velvet 91 frosty lantern orbit');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+
+    const dialog = await screen.findByRole('dialog', { name: 'Changing the sync password' });
+    expect(dialog).toHaveAttribute('open');
+    await act(async () => report({ phase: 'files', done: 0, total: 2 }));
+    expect(screen.getByText(/Re-encrypting shared files 1\/2/)).toBeInTheDocument();
+
+    await act(async () => finish());
+    expect(screen.queryByRole('dialog', { name: 'Changing the sync password' })).not.toBeInTheDocument();
+    expect(h.toast).toHaveBeenCalledWith(expect.stringMatching(/Sync password changed/), 'success');
   });
 });

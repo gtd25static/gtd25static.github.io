@@ -16,18 +16,7 @@ import { getVaultSecrets, setVaultSecrets, isRemoteUnlockEnrolled } from '../../
 import { recordError } from '../../lib/diagnostics';
 import { checkSecretStrength } from '../../lib/password-strength';
 import { PasswordStrengthBar } from '../ui/PasswordStrengthBar';
-
-// What the rotation is doing right now, for the line under the Save button.
-function rotationLabel({ phase, done, total }: RotationProgress): string {
-  switch (phase) {
-    case 'syncing': return 'Syncing…';
-    case 'files': return total ? `Re-encrypting shared files ${Math.min(done ?? 0, total - 1) + 1}/${total}…` : 'Re-encrypting shared files…';
-    case 'snapshot': return 'Rewriting the snapshot…';
-    case 'backups': return 'Rewriting backups…';
-    case 'registry': return 'Updating the device registry…';
-    case 'history': return 'Compacting history…';
-  }
-}
+import { RotationProgressDialog } from './RotationProgressDialog';
 
 function describeContent({ lists, tasks, maps }: { lists: number; tasks: number; maps: number }): string {
   const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
@@ -258,9 +247,7 @@ export function GitHubSettings() {
           <button type="button" className="ml-2 underline" onClick={handleDiscardRotation}>Forget it</button>
         </div>
       )}
-      {rotation && (
-        <p role="status" className="text-xs text-zinc-500 dark:text-zinc-400">{rotationLabel(rotation)}</p>
-      )}
+      <RotationProgressDialog progress={rotation} />
       <div className="flex flex-wrap gap-2">
         <Button size="sm" onClick={handleSave} disabled={!!rotation}>Save</Button>
         <Button size="sm" variant="secondary" onClick={handleTest} disabled={testing || !!rotation}>
