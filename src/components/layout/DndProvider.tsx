@@ -1,6 +1,7 @@
-import { useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import {
   DndContext,
+  useDndContext,
   PointerSensor,
   KeyboardSensor,
   useSensor,
@@ -31,8 +32,27 @@ export interface DropZoneData {
   taskId: string;
 }
 
+// Tailwind's transition-transform on the phone drawer lasts 150ms; re-measure
+// a little after it has settled.
+const DRAWER_SETTLE_MS = 300;
+
+// dnd-kit measures droppables when a drag starts and doesn't re-measure when an
+// ancestor moves. On phones the drawer auto-opens on drag start, still
+// off-screen (-translate-x-full) at that moment, so its lists were measured
+// off-screen and could never be hit. Re-measure once the drawer has slid in.
+function RemeasureAfterDrawerOpens({ opens }: { opens: number }) {
+  const { measureDroppableContainers } = useDndContext();
+  useEffect(() => {
+    if (!opens) return;
+    const timer = setTimeout(() => measureDroppableContainers([]), DRAWER_SETTLE_MS);
+    return () => clearTimeout(timer);
+  }, [opens, measureDroppableContainers]);
+  return null;
+}
+
 export function DndProvider({ children }: { children: ReactNode }) {
   const [activeDrag, setActiveDrag] = useState<{ id: string; data: DragItemData } | null>(null);
+  const [drawerOpens, setDrawerOpens] = useState(0);
   const sidebarOpen = useAppState((s) => s.sidebarOpen);
   const setSidebarOpen = useAppState((s) => s.setSidebarOpen);
 
@@ -48,6 +68,7 @@ export function DndProvider({ children }: { children: ReactNode }) {
       // Auto-open sidebar on mobile for cross-list drag
       if ((data.type === 'task' || data.type === 'follow-up') && !sidebarOpen && window.innerWidth < 768) {
         setSidebarOpen(true);
+        setDrawerOpens((n) => n + 1);
       }
     }
   }
@@ -105,6 +126,7 @@ export function DndProvider({ children }: { children: ReactNode }) {
       onDragEnd={handleDragEnd}
     >
       {children}
+      <RemeasureAfterDrawerOpens opens={drawerOpens} />
       <DragOverlay dropAnimation={null}>
         {activeDrag ? (
           <div className="rounded-lg border border-accent-500/50 bg-white px-3 py-2 shadow-xl dark:bg-zinc-800 dark:border-accent-400/50 max-w-xs">

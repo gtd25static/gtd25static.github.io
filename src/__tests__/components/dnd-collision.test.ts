@@ -55,6 +55,29 @@ describe('customCollisionDetection', () => {
     expect(collisions.some((c) => String(c.id).startsWith(LIST_DROP_ID_PREFIX))).toBe(false);
   });
 
+  // Phone: the drawer covers the task list and the dragged card is as wide as
+  // the screen. The finger is on "Dest", but the centre of the dragged card is
+  // still nearer the card's own slot behind the drawer, so closestCenter picked
+  // the task itself and the drop did nothing.
+  it('a task dropped with the pointer on a sidebar list lands on that list (phone geometry)', () => {
+    const drawerRow = rect(263, 48, 8, 264);
+    const ownSlot = rect(208, 48, 16, 358);
+    const containers = [
+      container('task-1', { type: 'task', listId: 'src', sortable: { containerId: 'tasks', index: 0, items: ['task-1'] } }, ownSlot),
+      container(`${LIST_DROP_ID_PREFIX}dest`, { type: 'sidebarList', listId: 'dest', listType: 'tasks' }, drawerRow),
+      container('dest', { type: 'sidebarList', listId: 'dest', listType: 'tasks', sortable: { containerId: 'lists', index: 0, items: ['dest'] } }, drawerRow),
+    ];
+    const rects = new Map(containers.map((c) => [c.id, c.rect.current!]));
+    const collisions = customCollisionDetection({
+      active: active('task-1', { type: 'task', listId: 'src', title: 'Carry me' }),
+      collisionRect: rect(263.5, 48, 52, 358), // the card moved by the drag delta
+      droppableRects: rects,
+      droppableContainers: containers,
+      pointerCoordinates: { x: 68, y: 288 },
+    });
+    expect(collisions[0]?.id).toBe(`${LIST_DROP_ID_PREFIX}dest`);
+  });
+
   it('a task dragged over the sidebar still lands on that list', () => {
     const { containers, rects } = sidebarRows(['a', 'b', 'c']);
     const collisions = customCollisionDetection({
