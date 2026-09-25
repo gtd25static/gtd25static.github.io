@@ -9,12 +9,18 @@ function git(cmd: string): string {
 }
 
 const gitCommit = git('git rev-parse --short HEAD')
-const gitMessage = git('git log -1 --pretty=%s')
+// Commit subjects ship inside version.json, so a subject naming the secondary
+// passphrase's cover would put a telltale word in the bundle (the e2e "shipped
+// bundle names none of this" test): such subjects are left out.
+const TELLTALE = /duress|decoy/i
+const lastSubject = git('git log -1 --pretty=%s')
+const gitMessage = TELLTALE.test(lastSubject) ? '' : lastSubject
 // Recent commits as a mini changelog: {h: short hash, s: subject}.
 const gitLog = git('git log -25 --pretty=%h%x09%s')
   .split('\n')
   .filter(Boolean)
   .map((line) => { const [h, ...rest] = line.split('\t'); return { h, s: rest.join('\t') } })
+  .filter(({ s }) => !TELLTALE.test(s))
 
 // Inject a Content-Security-Policy meta into the PRODUCTION index.html only (ACR-016).
 // Applied at build time so it does not break Vite's dev server (HMR uses inline scripts
