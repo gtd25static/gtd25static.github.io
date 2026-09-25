@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { Button } from '../ui/Button';
 import { Input } from '../ui/Input';
@@ -258,9 +258,22 @@ function NameModal({ dialog, onClose, currentFolderId, onOpenMap }: {
     : dialog.kind === 'rename-folder' ? 'Rename folder'
     : 'Rename mindmap';
 
+  // A double click / double Enter submitted twice and created the map twice.
+  const inFlight = useRef(false);
+
   async function submit() {
     const trimmed = name.trim();
-    if (!trimmed) return;
+    if (!trimmed || inFlight.current) return;
+    inFlight.current = true;
+    try {
+      await save(trimmed);
+    } finally {
+      inFlight.current = false;
+    }
+    onClose();
+  }
+
+  async function save(trimmed: string) {
     switch (dialog.kind) {
       case 'new-folder':
         await createMindmapFolder(trimmed, currentFolderId);
@@ -277,7 +290,6 @@ function NameModal({ dialog, onClose, currentFolderId, onOpenMap }: {
         await renameMindmap(dialog.map.id, trimmed);
         break;
     }
-    onClose();
   }
 
   return (

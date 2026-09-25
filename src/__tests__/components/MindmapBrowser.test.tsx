@@ -89,6 +89,31 @@ describe('MindmapBrowser', () => {
     expect(useAppState.getState().openMindmapId).toBe('new-map');
   });
 
+  it('a double click on Create makes one map, not two', async () => {
+    const user = userEvent.setup();
+    let resolve!: (m: Mindmap) => void;
+    mockCreateMap.mockImplementation(() => new Promise((r) => { resolve = r; }));
+    render(<MindmapBrowser />);
+    await user.click(screen.getByRole('button', { name: 'New map' }));
+    await user.type(screen.getByPlaceholderText('Name'), 'Once');
+    const create = screen.getByRole('button', { name: 'Create' });
+    await user.dblClick(create);
+    resolve(makeMap({ id: 'once' }));
+    await waitFor(() => expect(mockCreateMap).toHaveBeenCalledTimes(1));
+  });
+
+  it('a double click on Create makes one folder, not two', async () => {
+    const user = userEvent.setup();
+    let resolve!: (f: MindmapFolder) => void;
+    mockCreateFolder.mockImplementation(() => new Promise((r) => { resolve = r; }));
+    render(<MindmapBrowser />);
+    await user.click(screen.getByRole('button', { name: 'New folder' }));
+    await user.type(screen.getByPlaceholderText('Name'), 'Once');
+    await user.dblClick(screen.getByRole('button', { name: 'Create' }));
+    resolve(makeFolder({ id: 'once' }));
+    await waitFor(() => expect(mockCreateFolder).toHaveBeenCalledTimes(1));
+  });
+
   it('opens a map from its row', async () => {
     const user = userEvent.setup();
     mockUseMaps.mockReturnValue([makeMap({ id: 'm1', name: 'Plan' })]);
