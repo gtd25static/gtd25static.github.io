@@ -84,6 +84,9 @@ function ListItem({ list, selected, onSelect, highlight, focused, count, allList
   // Make this list item a drop target for tasks/follow-ups from the shared DndContext
   const { setNodeRef: setDropRef, isOver } = useDroppable({
     id: `${LIST_DROP_ID_PREFIX}${list.id}`,
+    // An archived list takes no tasks — its menu doesn't offer it as a target,
+    // and a drop onto it used to move the task there anyway.
+    disabled: !!list.archivedAt,
     data: {
       type: 'sidebarList',
       listId: list.id,
@@ -234,8 +237,8 @@ function ListItem({ list, selected, onSelect, highlight, focused, count, allList
                   } },
             { label: 'Delete', onClick: async () => {
                   if (!await confirmDialog('Delete this list and all its tasks?', { confirmLabel: 'Delete' })) return;
-                  deleteTaskList(list.id);
-                  toast('List deleted', 'info', () => restoreTaskList(list.id));
+                  const deletedAt = await deleteTaskList(list.id);
+                  toast('List deleted', 'info', () => restoreTaskList(list.id, deletedAt));
                 }, danger: true },
           ]}
         />

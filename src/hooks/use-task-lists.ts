@@ -139,15 +139,18 @@ export async function undeleteRowInTx(
  * (and get no new delete entry): that difference is how restoreTaskList tells
  * what this delete took from what was already in the Trash.
  */
-export async function deleteTaskList(id: string) {
+/** Returns the delete's time (the cascade's deletedAt), for its Undo; undefined if nothing was deleted. */
+export async function deleteTaskList(id: string): Promise<number | undefined> {
   try {
     const now = Date.now();
     const batch: TaskSideChange[] = [];
+    let deleted = false;
 
     await ensureDeviceId();
     await db.transaction('rw', [db.taskLists, db.tasks, db.subtasks, db.changeLog], async () => {
       const list = await db.taskLists.get(id);
       if (!list || list.deletedAt) return;
+      deleted = true;
       const listFT = stampUpdatedFields(list.fieldTimestamps, ['deletedAt'], now);
       await db.taskLists.update(id, { deletedAt: now, updatedAt: now, fieldTimestamps: listFT });
       batch.push({ entityType: 'taskList', entityId: id, operation: 'delete' });
@@ -172,8 +175,10 @@ export async function deleteTaskList(id: string) {
     });
 
     scheduleSyncDebounced();
+    return deleted ? now : undefined;
   } catch (error) {
     handleDbError(error, 'delete task list');
+    return undefined;
   }
 }
 
@@ -183,23 +188,28 @@ export async function deleteTaskList(id: string) {
  * Anything deleted on its own before stays in the Trash. On other devices the
  * delete entries stamp deletedAt with the entry timestamp, which the whole
  * batch shares, so the equality holds there too.
+ *
+ * `cascadeAt` (the toast's Undo passes the delete's time): restoring one task
+ * from the Trash brings its list back too, after which the Undo found a live
+ * list and restored nothing else. With it, the rest of that delete comes back.
  */
-export async function restoreTaskList(id: string) {
+export async function restoreTaskList(id: string, cascadeAt?: number) {
   try {
     const now = Date.now();
     await ensureDeviceId();
     await db.transaction('rw', [db.taskLists, db.tasks, db.subtasks, db.changeLog], async () => {
       const list = await db.taskLists.get(id);
-      if (!list?.deletedAt) return;
-      const cascadeAt = list.deletedAt;
-      const batch: TaskSideChange[] = [await undeleteRowInTx('taskList', list, now)];
+      if (!list) return;
+      const takenAt = list.deletedAt ?? cascadeAt;
+      if (takenAt === undefined) return;
+      const batch: TaskSideChange[] = list.deletedAt ? [await undeleteRowInTx('taskList', list, now)] : [];
       const tasks = await db.tasks.where('listId').equals(id).toArray();
       for (const task of tasks) {
-        if (task.deletedAt !== cascadeAt) continue;
+        if (task.deletedAt !== takenAt) continue;
         batch.push(await undeleteRowInTx('task', task, now));
         const subs = await db.subtasks.where('taskId').equals(task.id).toArray();
         for (const sub of subs) {
-          if (sub.deletedAt === cascadeAt) batch.push(await undeleteRowInTx('subtask', sub, now));
+          if (sub.deletedAt === takenAt) batch.push(await undeleteRowInTx('subtask', sub, now));
         }
       }
       await recordChangeBatchInTx(batch);

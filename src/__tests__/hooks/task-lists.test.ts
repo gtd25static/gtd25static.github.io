@@ -1,7 +1,7 @@
 import { db } from '../../db';
 import { resetDb, assertDefined } from '../helpers/db-helpers';
 import { createTaskList, deleteTaskList, updateTaskList, restoreTaskList, reorderTaskLists, moveListOrder } from '../../hooks/use-task-lists';
-import { createTask } from '../../hooks/use-tasks';
+import { createTask, restoreTask } from '../../hooks/use-tasks';
 import { createSubtask } from '../../hooks/use-subtasks';
 import { seedListWithEarlierDeletes, loggedIds } from '../helpers/cascade-fixtures';
 import { applyRemoteEntries } from '../../sync/change-log';
@@ -113,6 +113,25 @@ describe('list delete / restore vs. children deleted earlier', () => {
     expect((await db.subtasks.get(s.goneSub.id))?.deletedAt).toBe(s.earlier.goneSub);
     // Upserts for exactly the rows that came back, so other devices converge.
     expect(await loggedIds('upsert')).toEqual([s.list.id, s.keep.id, s.keepSub.id].sort());
+  });
+
+  // Restoring one task from the Trash brings its list back too, so the list's
+  // Undo then found a live list and did nothing: the other tasks stayed in the
+  // Trash. The Undo carries the time of that delete to finish the job.
+  it('the Undo still restores the rest after one task was restored from the Trash', async () => {
+    const list = assertDefined(await createTaskList('Errands'));
+    const first = assertDefined(await createTask(list.id, { title: 'First' }));
+    const second = assertDefined(await createTask(list.id, { title: 'Second' }));
+    const sub = assertDefined(await createSubtask(second.id, { title: 'Step' }));
+    const deletedAt = assertDefined(await deleteTaskList(list.id), 'the delete time');
+    await restoreTask(first.id);
+    expect((await db.taskLists.get(list.id))?.deletedAt).toBeUndefined();
+
+    await restoreTaskList(list.id, deletedAt);
+
+    expect((await db.tasks.get(second.id))?.deletedAt).toBeUndefined();
+    expect((await db.subtasks.get(sub.id))?.deletedAt).toBeUndefined();
+    expect(await loggedIds('upsert')).toEqual(expect.arrayContaining([second.id, sub.id]));
   });
 
   it('converges across devices: B restores what A deleted, A applies B\'s restore', async () => {
