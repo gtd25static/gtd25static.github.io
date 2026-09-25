@@ -139,4 +139,18 @@ describe('DiscussedPopover', () => {
       Reflect.deleteProperty(HTMLInputElement.prototype, 'showPicker');
     }
   });
+
+  it('Escape closes it without logging or snoozing — from the note or a cadence chip', async () => {
+    const task = makeTask('fu-1');
+    const onDone = vi.fn();
+    const user = userEvent.setup();
+    render(<DiscussedPopover task={task} align="right" onDone={onDone} />);
+    await user.type(screen.getByPlaceholderText('What came of it?'), 'half a thought{Escape}');
+    expect(onDone).toHaveBeenCalledTimes(1);
+
+    screen.getByText('30 days').focus();
+    await user.keyboard('{Escape}');
+    expect(onDone).toHaveBeenCalledTimes(2);
+    expect(mockUpdateTask).not.toHaveBeenCalled();
+  });
 });

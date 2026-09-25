@@ -68,7 +68,14 @@ export function InlineTaskForm({ onSubmit, onCancel }: Props) {
   }
 
   return (
-    <form data-redact onSubmit={handleSubmit} className="space-y-2 py-3">
+    <form
+      data-redact
+      onSubmit={handleSubmit}
+      // Escape cancels however the form was opened: the global handler only
+      // closes the one `n` opened (via creatingTask), not the button's.
+      onKeyDown={(e) => { if (e.key === 'Escape') onCancel(); }}
+      className="space-y-2 py-3"
+    >
       <div className="flex gap-2">
         <textarea
           placeholder="Task title"

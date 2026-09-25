@@ -90,6 +90,15 @@ describe('InlineTaskForm', () => {
     expect(screen.queryByLabelText('Due date')).not.toBeInTheDocument();
   });
 
+  // The form opened by the "Add a task" button used to ignore Escape (only the
+  // one opened with `n` closed, via the global creatingTask flag).
+  it('Escape cancels without submitting', async () => {
+    const { user } = renderForm();
+    await user.type(screen.getByPlaceholderText('Task title'), 'half typed{Escape}');
+    expect(onCancel).toHaveBeenCalledTimes(1);
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
   it('submits with recurrence data', async () => {
     const { user } = renderForm();
     await user.type(screen.getByPlaceholderText('Task title'), 'Recurring task');

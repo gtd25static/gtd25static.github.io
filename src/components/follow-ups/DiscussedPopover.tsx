@@ -105,6 +105,7 @@ export function DiscussedPopover({ task, align, onDone }: Props) {
   return (
     <div
       ref={rootRef}
+      onKeyDown={(e) => { if (e.key === 'Escape') onDone(); }}
       className={`absolute z-50 w-64 rounded-xl border border-zinc-200 bg-white p-3 shadow-lg dark:border-zinc-700 dark:bg-zinc-900 ${align === 'right' ? 'right-0' : 'left-0'} ${openUp ? 'bottom-full mb-1' : 'top-full mt-1'}`}
     >
       <label className="mb-1 block text-xs font-medium text-zinc-500 dark:text-zinc-400">

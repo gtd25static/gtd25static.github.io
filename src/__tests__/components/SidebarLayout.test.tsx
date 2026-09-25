@@ -47,6 +47,13 @@ describe('Sidebar compact layout', () => {
     expect(screen.getByPlaceholderText('List name')).toBeInTheDocument();
   });
 
+  it('Escape closes the new-list form, like Cancel', async () => {
+    const { user } = renderSidebar();
+    await user.click(screen.getByRole('button', { name: 'Create new list' }));
+    await user.type(screen.getByPlaceholderText('List name'), 'half typed{Escape}');
+    expect(screen.queryByPlaceholderText('List name')).not.toBeInTheDocument();
+  });
+
   it('keeps the fixed views reachable and selectable', async () => {
     const { user } = renderSidebar();
     for (const [label, id] of [['Focus', '__focus__'], ['Shared', '__shared__'], ['Mindmaps', '__mindmaps__'], ['Insights', '__insights__']]) {

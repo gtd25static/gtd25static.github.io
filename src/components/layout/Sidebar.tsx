@@ -468,6 +468,7 @@ export function Sidebar() {
         <div className="px-2">
           <form
             onSubmit={(e) => { e.preventDefault(); handleCreate(); }}
+            onKeyDown={(e) => { if (e.key === 'Escape') setCreating(false); }}
             className="mx-1 mt-1 mb-2 space-y-2 rounded-xl border border-zinc-200 bg-zinc-50 p-3 dark:border-zinc-700 dark:bg-zinc-800"
           >
             <Input
