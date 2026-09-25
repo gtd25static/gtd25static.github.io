@@ -116,26 +116,41 @@ export async function cleanOrphans() {
   await ensureDeviceId();
   await db.transaction('rw', [db.taskLists, db.tasks, db.subtasks, db.changeLog], async () => {
     const changeBatch: Array<{ entityType: 'taskList' | 'task' | 'subtask'; entityId: string; operation: 'upsert'; data: Record<string, unknown> }> = [];
+    // Each table is read once (on a Paranoid device every read decrypts every
+    // row, which on a large database is what makes this slow); the fixes below
+    // work on these copies and are written back in one bulkPut per table.
+    const lists = await db.taskLists.toArray();
+    const tasks = await db.tasks.toArray();
+    const subtasks = await db.subtasks.toArray();
+    const changedTasks = new Map<string, Task>();
+    const changedSubtasks = new Map<string, Subtask>();
+    const fixTask = (task: Task, changes: Partial<Task>): Task => {
+      const fieldTimestamps = stampUpdatedFields(task.fieldTimestamps, Object.keys(changes), now);
+      const next = { ...task, ...changes, updatedAt: now, fieldTimestamps };
+      changedTasks.set(task.id, next);
+      return next;
+    };
+    const fixSubtask = (sub: Subtask, changes: Partial<Subtask>): Subtask => {
+      const fieldTimestamps = stampUpdatedFields(sub.fieldTimestamps, Object.keys(changes), now);
+      const next = { ...sub, ...changes, updatedAt: now, fieldTimestamps };
+      changedSubtasks.set(sub.id, next);
+      return next;
+    };
 
-    // Find subtasks whose parent task doesn't exist
-    const taskIds = new Set((await db.tasks.toArray()).map((t) => t.id));
-    const allSubtasks = await db.subtasks.toArray();
-    for (const sub of allSubtasks) {
+    // Subtasks whose parent task doesn't exist
+    const taskIds = new Set(tasks.map((t) => t.id));
+    for (const sub of subtasks) {
       if (!taskIds.has(sub.taskId) && !sub.deletedAt) {
-        const ft = stampUpdatedFields(sub.fieldTimestamps, ['deletedAt'], now);
-        await db.subtasks.update(sub.id, { deletedAt: now, updatedAt: now, fieldTimestamps: ft });
-        const updated = await db.subtasks.get(sub.id);
-        if (updated) changeBatch.push({ entityType: 'subtask', entityId: sub.id, operation: 'upsert', data: updated as unknown as Record<string, unknown> });
+        fixSubtask(sub, { deletedAt: now });
         orphanedSubtasks++;
       }
     }
 
-    // Find tasks whose parent list doesn't exist → move them to the Inbox,
-    // creating one if needed. (Trashing them instead looped: restoring one left
-    // it pointing at the missing list, and the next startup trashed it again.)
-    const lists = await db.taskLists.toArray();
+    // Tasks whose parent list doesn't exist → move them to the Inbox, creating
+    // one if needed. (Trashing them instead looped: restoring one left it
+    // pointing at the missing list, and the next startup trashed it again.)
     const listIds = new Set(lists.map((l) => l.id));
-    const orphans = (await db.tasks.toArray()).filter((t) => !listIds.has(t.listId) && !t.deletedAt);
+    const orphans = tasks.filter((t) => !listIds.has(t.listId) && !t.deletedAt);
     let inbox: TaskList | undefined = pickInboxList(lists);
     if (orphans.length > 0 && !inbox) {
       inbox = { id: newId(), name: INBOX_LIST_NAME, type: 'tasks', order: lists.length, createdAt: now, updatedAt: now };
@@ -143,12 +158,8 @@ export async function cleanOrphans() {
       await db.taskLists.add(inbox);
       changeBatch.push({ entityType: 'taskList', entityId: inbox.id, operation: 'upsert', data: inbox as unknown as Record<string, unknown> });
     }
-
     for (const task of orphans) {
-      const ft = stampUpdatedFields(task.fieldTimestamps, ['listId'], now);
-      await db.tasks.update(task.id, { listId: inbox!.id, updatedAt: now, fieldTimestamps: ft });
-      const updated = await db.tasks.get(task.id);
-      if (updated) changeBatch.push({ entityType: 'task', entityId: task.id, operation: 'upsert', data: updated as unknown as Record<string, unknown> });
+      fixTask(task, { listId: inbox!.id });
       orphanedTasks++;
     }
 
@@ -160,25 +171,29 @@ export async function cleanOrphans() {
     // on the other devices and break the equality the cascade restore relies on.
     const deletedListAt = new Map(lists.filter((l) => l.deletedAt).map((l) => [l.id, l.deletedAt!]));
     const deletedTaskAt = new Map<string, number>();
-    for (const task of await db.tasks.toArray()) {
+    for (const original of tasks) {
+      const task = changedTasks.get(original.id) ?? original;
       if (task.deletedAt) { deletedTaskAt.set(task.id, task.deletedAt); continue; }
       const cascadeAt = deletedListAt.get(task.listId);
       if (!cascadeAt) continue;
-      const ft = stampUpdatedFields(task.fieldTimestamps, ['deletedAt'], now);
-      await db.tasks.update(task.id, { deletedAt: cascadeAt, updatedAt: now, fieldTimestamps: ft });
+      fixTask(task, { deletedAt: cascadeAt });
       deletedTaskAt.set(task.id, cascadeAt);
-      const updated = await db.tasks.get(task.id);
-      if (updated) changeBatch.push({ entityType: 'task', entityId: task.id, operation: 'upsert', data: updated as unknown as Record<string, unknown> });
     }
-    for (const sub of await db.subtasks.toArray()) {
+    for (const original of subtasks) {
+      const sub = changedSubtasks.get(original.id) ?? original;
       const cascadeAt = deletedTaskAt.get(sub.taskId);
       if (sub.deletedAt || !cascadeAt) continue;
-      const ft = stampUpdatedFields(sub.fieldTimestamps, ['deletedAt'], now);
-      await db.subtasks.update(sub.id, { deletedAt: cascadeAt, updatedAt: now, fieldTimestamps: ft });
-      const updated = await db.subtasks.get(sub.id);
-      if (updated) changeBatch.push({ entityType: 'subtask', entityId: sub.id, operation: 'upsert', data: updated as unknown as Record<string, unknown> });
+      fixSubtask(sub, { deletedAt: cascadeAt });
     }
 
+    if (changedTasks.size > 0) await db.tasks.bulkPut([...changedTasks.values()]);
+    if (changedSubtasks.size > 0) await db.subtasks.bulkPut([...changedSubtasks.values()]);
+    for (const task of changedTasks.values()) {
+      changeBatch.push({ entityType: 'task', entityId: task.id, operation: 'upsert', data: task as unknown as Record<string, unknown> });
+    }
+    for (const sub of changedSubtasks.values()) {
+      changeBatch.push({ entityType: 'subtask', entityId: sub.id, operation: 'upsert', data: sub as unknown as Record<string, unknown> });
+    }
     if (changeBatch.length > 0) {
       await recordChangeBatchInTx(changeBatch);
     }
