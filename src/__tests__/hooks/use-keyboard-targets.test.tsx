@@ -127,15 +127,24 @@ describe('useKeyboard — a focused control owns Enter/Space', () => {
   });
 
   it('Enter/Space on the page body still drive the keyboard ring', () => {
-    render(<Harness />);
-    const space = press(' ');
-    expect(space.defaultPrevented).toBe(true);
-    expect(useAppState.getState().editingItemId).toBe('t1');
+    // Sidebar Enter moves the ring into the list on a 100ms timer — run it here
+    // so it can't fire into a later test.
+    vi.useFakeTimers();
+    try {
+      render(<Harness />);
+      const space = press(' ');
+      expect(space.defaultPrevented).toBe(true);
+      expect(useAppState.getState().editingItemId).toBe('t1');
 
-    useAppState.setState({ editingItemId: null, focusZone: 'sidebar', focusedItemId: 'L2' });
-    const enter = press('Enter');
-    expect(enter.defaultPrevented).toBe(true);
-    expect(useAppState.getState().selectedListId).toBe('L2');
+      useAppState.setState({ editingItemId: null, focusZone: 'sidebar', focusedItemId: 'L2' });
+      const enter = press('Enter');
+      expect(enter.defaultPrevented).toBe(true);
+      expect(useAppState.getState().selectedListId).toBe('L2');
+      act(() => { vi.runAllTimers(); });
+      expect(useAppState.getState().focusedItemId).toBe('create-task');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('other shortcuts still work while a button holds focus (e.g. j after clicking a list)', () => {
