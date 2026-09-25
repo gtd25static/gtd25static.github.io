@@ -11,7 +11,7 @@ import {
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { useTaskLists, createTaskList, updateTaskList, deleteTaskList, restoreTaskList, reorderTaskLists, archiveTaskList, unarchiveTaskList } from '../../hooks/use-task-lists';
+import { useTaskLists, createTaskList, updateTaskList, deleteTaskList, restoreTaskList, reorderTaskLists, moveListOrder, archiveTaskList, unarchiveTaskList } from '../../hooks/use-task-lists';
 import { toast } from '../ui/Toast';
 import { confirmDialog } from '../ui/ConfirmDialog';
 import { useShallow } from 'zustand/react/shallow';
@@ -21,6 +21,7 @@ import { DropdownMenu } from '../ui/DropdownMenu';
 import { db } from '../../db';
 import type { ListType } from '../../db/models';
 import type { DragItemData } from './DndProvider';
+import { LIST_DROP_ID_PREFIX } from './dnd-collision';
 import { SyncIndicator } from './SyncIndicator';
 import { PomodoroBar } from '../pomodoro/PomodoroBar';
 import { GIT_COMMIT, MAX_LIST_NAME_LENGTH, isInboxList } from '../../lib/constants';
@@ -82,7 +83,7 @@ function ListItem({ list, selected, onSelect, highlight, focused, count, allList
 
   // Make this list item a drop target for tasks/follow-ups from the shared DndContext
   const { setNodeRef: setDropRef, isOver } = useDroppable({
-    id: `list-drop-${list.id}`,
+    id: `${LIST_DROP_ID_PREFIX}${list.id}`,
     data: {
       type: 'sidebarList',
       listId: list.id,
@@ -256,6 +257,7 @@ function SortableListItem({ list, selected, onSelect, highlight, focused, count,
       listId: list.id,
       listType: list.type,
       listName: list.name,
+      title: list.name, // shown in the drag overlay
     } satisfies DragItemData,
   });
 
@@ -351,21 +353,13 @@ export function Sidebar() {
       // Only reorder within same group
       if (activeData.listType !== overData.listType) return;
 
-      const group = activeData.listType === 'tasks' ? 'tasks' : 'follow-ups';
-      const sourceList = group === 'tasks' ? taskLists : followUpLists;
-      const otherList = group === 'tasks' ? followUpLists : taskLists;
-      const oldIndex = sourceList.findIndex((l) => l.id === active.id);
-      const newIndex = sourceList.findIndex((l) => l.id === over.id);
-      if (oldIndex === -1 || newIndex === -1) return;
+      const sourceList = activeData.listType === 'tasks' ? taskLists : followUpLists;
+      if (!sourceList.some((l) => l.id === active.id) || !sourceList.some((l) => l.id === over.id)) return;
 
-      const reordered = [...sourceList];
-      const [moved] = reordered.splice(oldIndex, 1);
-      reordered.splice(newIndex, 0, moved);
-
-      const allOrdered = group === 'tasks'
-        ? [...reordered, ...otherList]
-        : [...otherList, ...reordered];
-      reorderTaskLists(allOrdered.map((l) => l.id));
+      // Reorder against ALL lists, not just the ones a search filter shows:
+      // renumbering only the visible subset from 0 collided with hidden lists.
+      const allOrdered = moveListOrder(lists.map((l) => l.id), String(active.id), String(over.id));
+      if (allOrdered) reorderTaskLists(allOrdered);
     },
   });
 

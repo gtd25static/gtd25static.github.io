@@ -1,6 +1,6 @@
 import { db } from '../../db';
 import { resetDb, assertDefined } from '../helpers/db-helpers';
-import { createTaskList, deleteTaskList, updateTaskList, restoreTaskList, reorderTaskLists } from '../../hooks/use-task-lists';
+import { createTaskList, deleteTaskList, updateTaskList, restoreTaskList, reorderTaskLists, moveListOrder } from '../../hooks/use-task-lists';
 import { createTask } from '../../hooks/use-tasks';
 import { createSubtask } from '../../hooks/use-subtasks';
 import { seedListWithEarlierDeletes, loggedIds } from '../helpers/cascade-fixtures';
@@ -176,6 +176,34 @@ describe('reorderTaskLists', () => {
     expect(lists[0].order).toBe(0);
     expect(lists[1].order).toBe(1);
     expect(lists[2].order).toBe(2);
+  });
+});
+
+describe('moveListOrder', () => {
+  it('moves a list up before the target and down after it', () => {
+    expect(moveListOrder(['a', 'b', 'c', 'd'], 'd', 'a')).toEqual(['d', 'a', 'b', 'c']);
+    expect(moveListOrder(['a', 'b', 'c', 'd'], 'a', 'c')).toEqual(['b', 'c', 'a', 'd']);
+  });
+
+  it('returns null for a no-op or an unknown id', () => {
+    expect(moveListOrder(['a', 'b'], 'a', 'a')).toBeNull();
+    expect(moveListOrder(['a', 'b'], 'a', 'list-drop-b')).toBeNull();
+  });
+
+  // A sidebar search hides lists. Reordering only the visible subset used to
+  // renumber it from 0, colliding with the hidden lists' order values.
+  it('keeps hidden lists in place and every order value distinct (search filter active)', async () => {
+    const a = await createTaskList('Alpha');
+    const b = await createTaskList('Beta');
+    const c = await createTaskList('Charlie');
+    const d = await createTaskList('Delta');
+    const all = (await db.taskLists.orderBy('order').toArray()).map((l) => l.id);
+    // Visible under a search: Alpha and Delta. Drag Delta onto Alpha.
+    await reorderTaskLists(assertDefined(moveListOrder(all, d.id, a.id) ?? undefined));
+
+    const after = await db.taskLists.orderBy('order').toArray();
+    expect(after.map((l) => l.id)).toEqual([d.id, a.id, b.id, c.id]);
+    expect(new Set(after.map((l) => l.order)).size).toBe(after.length);
   });
 });
 

@@ -1,8 +1,6 @@
 import { useState, type ReactNode } from 'react';
 import {
   DndContext,
-  closestCenter,
-  pointerWithin,
   PointerSensor,
   KeyboardSensor,
   useSensor,
@@ -10,9 +8,9 @@ import {
   DragOverlay,
   type DragStartEvent,
   type DragEndEvent,
-  type CollisionDetection,
 } from '@dnd-kit/core';
 import { sortableKeyboardCoordinates } from '@dnd-kit/sortable';
+import { customCollisionDetection } from './dnd-collision';
 import { moveTaskToList } from '../../hooks/use-tasks';
 import { convertTaskToSubtask } from '../../hooks/use-subtasks';
 import { toast } from '../ui/Toast';
@@ -32,22 +30,6 @@ export interface DropZoneData {
   type: 'subtaskDropZone';
   taskId: string;
 }
-
-// Prioritize subtask drop zones over sortable items when dragging a task.
-// Without this, closestCenter always picks sortable task items (compact centers)
-// over the subtask drop zone (tall expanded area, center farther away).
-const customCollisionDetection: CollisionDetection = (args) => {
-  if (args.active.data.current?.type === 'task') {
-    const subtaskZones = args.droppableContainers.filter(
-      (c) => c.data.current?.type === 'subtaskDropZone'
-    );
-    if (subtaskZones.length > 0) {
-      const collisions = pointerWithin({ ...args, droppableContainers: subtaskZones });
-      if (collisions.length > 0) return collisions;
-    }
-  }
-  return closestCenter(args);
-};
 
 export function DndProvider({ children }: { children: ReactNode }) {
   const [activeDrag, setActiveDrag] = useState<{ id: string; data: DragItemData } | null>(null);

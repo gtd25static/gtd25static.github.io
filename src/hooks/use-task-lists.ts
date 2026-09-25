@@ -211,6 +211,22 @@ export async function restoreTaskList(id: string) {
   }
 }
 
+/**
+ * The full list order after dragging `activeId` onto `overId`: up lands before
+ * the target, down after it. Works on ALL lists (hidden by a search filter,
+ * archived, Inbox) so reorderTaskLists renumbers every list and no two share an
+ * order value. Null when either id isn't a list or nothing moves.
+ */
+export function moveListOrder(orderedIds: string[], activeId: string, overId: string): string[] | null {
+  const from = orderedIds.indexOf(activeId);
+  const to = orderedIds.indexOf(overId);
+  if (from === -1 || to === -1 || from === to) return null;
+  const next = [...orderedIds];
+  const [moved] = next.splice(from, 1);
+  next.splice(to, 0, moved);
+  return next;
+}
+
 export async function reorderTaskLists(orderedIds: string[]) {
   try {
     const now = Date.now();
