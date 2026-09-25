@@ -21,9 +21,9 @@ import { closeAllNotifications } from './notifications';
 // breadcrumb for a wipe whose IndexedDB deletion could not be confirmed.
 export const WIPE_PENDING_KEY = 'gtd25-wipe-pending';
 
-async function deleteIndexedDb(): Promise<'deleted' | 'incomplete'> {
+async function deleteIndexedDb(closeOptions: { disableAutoOpen: boolean }): Promise<'deleted' | 'incomplete'> {
   try {
-    db.close();
+    db.close(closeOptions);
   } catch { /* already closed */ }
   return await new Promise<'deleted' | 'incomplete'>((resolve) => {
     let settled = false;
@@ -90,6 +90,16 @@ async function unregisterServiceWorkers(): Promise<void> {
 export async function panicWipe(opts: { reload?: boolean } = {}): Promise<void> {
   const { reload = true } = opts;
 
+  // This page is done with the database: nothing still running in it may reopen
+  // (and so recreate) the database being deleted before the reload.
+  await wipeDevice({ disableAutoOpen: true });
+
+  if (reload && typeof window !== 'undefined') {
+    try { window.location.reload(); } catch { /* environment without a real location */ }
+  }
+}
+
+async function wipeDevice(closeOptions: { disableAutoOpen: boolean }): Promise<void> {
   try { lock(); } catch { /* vault may not be active */ }
   // Other tabs: drop your keys and reload. Two reasons — they must not keep
   // showing (or writing) data this device is erasing, and an open connection in
@@ -100,17 +110,13 @@ export async function panicWipe(opts: { reload?: boolean } = {}): Promise<void> 
   try { localStorage.setItem(WIPE_PENDING_KEY, String(Date.now())); } catch { /* no storage — proceed */ }
 
   await closeAllNotifications(); // nudges quote task titles; they would outlive the data
-  const idbOutcome = await deleteIndexedDb();
+  const idbOutcome = await deleteIndexedDb(closeOptions);
   clearWebStorage();
   await clearCaches();
   await unregisterServiceWorkers();
 
   if (idbOutcome === 'deleted') {
     try { localStorage.removeItem(WIPE_PENDING_KEY); } catch { /* ignore */ }
-  }
-
-  if (reload && typeof window !== 'undefined') {
-    try { window.location.reload(); } catch { /* environment without a real location */ }
   }
 }
 
@@ -119,10 +125,16 @@ export async function panicWipe(opts: { reload?: boolean } = {}): Promise<void> 
  * Re-runs the wipe steps without reloading — if the deletion is still blocked
  * the marker stays armed for the next boot and the app continues; the steps
  * are idempotent on an already-clean profile.
+ *
+ * The app renders on this same database instance right after, so it is closed
+ * WITHOUT disabling auto-open (Dexie's default close does): it reopens, empty,
+ * on first use — behind the deletion if a second tab still blocks it. With
+ * auto-open disabled every read and write of that session failed with
+ * DatabaseClosedError until the next reload.
  */
 export async function retryPendingWipe(): Promise<void> {
   let pending = false;
   try { pending = localStorage.getItem(WIPE_PENDING_KEY) != null; } catch { /* no storage */ }
   if (!pending) return;
-  await panicWipe({ reload: false });
+  await wipeDevice({ disableAutoOpen: false });
 }

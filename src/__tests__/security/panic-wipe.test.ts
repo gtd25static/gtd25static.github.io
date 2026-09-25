@@ -141,6 +141,33 @@ describe('blocked wipe + boot retry', () => {
     expect(await db.tasks.count()).toBe(0);
   });
 
+  it('leaves the database usable for the app that boots right after it (no explicit reopen)', async () => {
+    // main.tsx renders the app as soon as the retry is done. The retry closed the
+    // database the Dexie way that also disables auto-open, so every read and write
+    // of that session failed (DatabaseClosedError) until the next manual reload.
+    await seedTask();
+    localStorage.setItem(WIPE_PENDING_KEY, String(Date.now()));
+
+    await retryPendingWipe();
+
+    expect(localStorage.getItem(WIPE_PENDING_KEY)).toBeNull();
+    expect(await db.tasks.count()).toBe(0);
+    await seedTask();
+    expect(await db.tasks.count()).toBe(1);
+  });
+
+  it('the same after a wipe whose deletion was blocked, finished by the next boot', async () => {
+    await seedTask();
+    stubBlockedDeleteOnce();
+    await panicWipe({ reload: false }); // the wiping page: blocked, then it reloads
+
+    await retryPendingWipe(); // the next boot
+
+    expect(await db.tasks.count()).toBe(0);
+    await seedTask();
+    expect(await db.tasks.count()).toBe(1);
+  });
+
   it('retryPendingWipe is a no-op without the marker', async () => {
     await seedTask();
     const deleteSpy = vi.spyOn(indexedDB, 'deleteDatabase');
