@@ -25,8 +25,17 @@ const MAX_BACKUPS = 2;
  */
 type BackupPayload = Pick<ImportData, 'taskLists' | 'tasks' | 'subtasks' | 'mindmapFolders' | 'mindmaps' | 'mindmapNodes'>;
 
+/**
+ * Why a copy was taken: at app start, or right before something replaced local
+ * data. Only two copies are kept and every start takes one, so without telling
+ * them apart two restarts pushed out the copy taken before an import / restore /
+ * pull — the one a mistake would need. Older copies have no reason (read: boot).
+ */
+export type BackupReason = 'boot' | 'change';
+
 interface StoredBackup extends Partial<BackupPayload> {
   timestamp: number;
+  reason?: BackupReason;
   /** Paranoid devices: AES-GCM ciphertext of the JSON payload, and nothing else. */
   encrypted?: string;
 }
@@ -42,9 +51,43 @@ function listBackupKeys(): string[] {
   return keys.sort().reverse();
 }
 
+function reasonOf(key: string): BackupReason {
+  try {
+    return (JSON.parse(localStorage.getItem(key) ?? '') as StoredBackup).reason ?? 'boot';
+  } catch {
+    return 'boot';
+  }
+}
+
+// Keep the MAX_BACKUPS newest copies, plus the newest one taken before a change
+// if app starts have pushed it out of those (at most one extra copy).
 function pruneOldBackups() {
-  for (const key of listBackupKeys().slice(MAX_BACKUPS)) {
-    localStorage.removeItem(key);
+  const keys = listBackupKeys();
+  const keep = new Set(keys.slice(0, MAX_BACKUPS));
+  const newestBeforeChange = keys.find((key) => reasonOf(key) === 'change');
+  if (newestBeforeChange) keep.add(newestBeforeChange);
+  for (const key of keys) {
+    if (!keep.has(key)) localStorage.removeItem(key);
+  }
+}
+
+// Whether the newest stored copy already holds exactly this payload (then an app
+// start has nothing new to save). Decrypts on a Paranoid device rather than
+// keeping a content fingerprint, which would let a guess be confirmed.
+async function newestCopyHolds(payload: BackupPayload, key: CryptoKey | null): Promise<boolean> {
+  const newest = listBackupKeys()[0];
+  if (!newest) return false;
+  try {
+    const stored = JSON.parse(localStorage.getItem(newest) ?? '') as StoredBackup;
+    const body: Partial<BackupPayload> = stored.encrypted
+      ? (key ? JSON.parse(await decryptBlob(key, stored.encrypted)) : {})
+      : stored;
+    const pick = (b: Partial<BackupPayload>) => JSON.stringify([
+      b.taskLists, b.tasks, b.subtasks, b.mindmapFolders, b.mindmaps, b.mindmapNodes,
+    ]);
+    return pick(body) === pick(payload);
+  } catch {
+    return false;
   }
 }
 
@@ -117,7 +160,7 @@ function writeWithRoom(key: string, serialized: string): void {
   pruneOldBackups();
 }
 
-export async function createLocalBackup(): Promise<void> {
+export async function createLocalBackup({ reason = 'change' }: { reason?: BackupReason } = {}): Promise<void> {
   try {
     const key = getActiveAtRestKey();
     // Paranoid + locked: rows come back still encrypted, so this would store
@@ -129,11 +172,12 @@ export async function createLocalBackup(): Promise<void> {
     const isEmpty = payload.taskLists.length === 0 && payload.tasks.length === 0 &&
       payload.subtasks.length === 0 && (payload.mindmaps?.length ?? 0) === 0;
     if (isEmpty) return;
+    if (reason === 'boot' && await newestCopyHolds(payload, key)) return;
 
     const timestamp = Date.now();
     const backup: StoredBackup = key
-      ? { timestamp, encrypted: await encryptBlob(key, JSON.stringify(payload)) }
-      : { timestamp, ...payload };
+      ? { timestamp, reason, encrypted: await encryptBlob(key, JSON.stringify(payload)) }
+      : { timestamp, reason, ...payload };
 
     writeWithRoom(`${BACKUP_KEY_PREFIX}${timestamp}`, JSON.stringify(backup));
   } catch (err) {

@@ -363,7 +363,7 @@ export async function ensureDefaults() {
   await pruneChangelogIfSyncDisabled();
 
   // Defer backup so it doesn't block initial render
-  setTimeout(() => createLocalBackup(), 5000);
+  setTimeout(() => createLocalBackup({ reason: 'boot' }), 5000);
 
   // Run local migrations if needed
   const current = await db.localSettings.get('local');

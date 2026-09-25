@@ -89,3 +89,34 @@ describe('downloading a safety backup', () => {
     expect(imported.mindmaps).toBeUndefined();
   });
 });
+
+describe('safety backups survive app restarts', () => {
+  // Only two copies are kept and every app start takes one, so two restarts used
+  // to push out the copy taken right before an import / restore / pull.
+  async function edit(title: string) {
+    const now = Date.now();
+    await db.tasks.put({ id: 't', listId: 'l1', title, status: 'todo', order: 0, createdAt: now, updatedAt: now } as Task);
+  }
+
+  it('keeps the newest copy taken before a destructive change however many app starts follow', async () => {
+    await edit('before import');
+    await createLocalBackup(); // before a destructive change (the default)
+    const [protectedKey] = localBackupKeys();
+    for (const title of ['start 1', 'start 2', 'start 3']) {
+      await new Promise((r) => setTimeout(r, 2));
+      await edit(title);
+      await createLocalBackup({ reason: 'boot' });
+    }
+    expect(localBackupKeys()).toContain(protectedKey);
+    expect((await readLocalBackup(protectedKey)).tasks[0].title).toBe('before import');
+    expect(localBackupKeys().length).toBeLessThanOrEqual(3);
+  });
+
+  it('an app start with nothing changed since the newest copy takes no new copy', async () => {
+    await edit('unchanged');
+    await createLocalBackup({ reason: 'boot' });
+    await new Promise((r) => setTimeout(r, 2));
+    await createLocalBackup({ reason: 'boot' });
+    expect(localBackupKeys()).toHaveLength(1);
+  });
+});
