@@ -20,6 +20,7 @@ const h = vi.hoisted(() => ({
   contentReplacedByLinking: vi.fn(async () => null as null | { lists: number; tasks: number; maps: number }),
   hasEncryptionKey: vi.fn(() => false),
   rotateSyncKey: vi.fn(),
+  requirePassphrase: vi.fn(async (): Promise<string | null> => 'the passphrase'),
   confirm: vi.fn(async () => true),
 }));
 
@@ -38,6 +39,7 @@ vi.mock('../../sync/sync-engine', () => ({
   contentReplacedByLinking: h.contentReplacedByLinking,
 }));
 vi.mock('../../components/ui/ConfirmDialog', () => ({ confirmDialog: h.confirm }));
+vi.mock('../../components/settings/passphrase-gate', () => ({ requirePassphrase: h.requirePassphrase }));
 vi.mock('../../sync/crypto', () => ({
   deriveKey: vi.fn(async () => ({})),
   cacheEncryptionKey: vi.fn(),
@@ -252,5 +254,50 @@ describe('GitHubSettings — changing the sync password', () => {
     await act(async () => finish());
     expect(screen.queryByRole('dialog', { name: 'Changing the sync password' })).not.toBeInTheDocument();
     expect(h.toast).toHaveBeenCalledWith(expect.stringMatching(/Sync password changed/), 'success');
+  });
+});
+
+describe('GitHubSettings — Paranoid: where this device syncs is behind the passphrase', () => {
+  // An unlocked but unattended session could point the device at another
+  // repository — every later change would be streamed there (GUI review).
+  beforeEach(() => {
+    h.updateLocalSettings.mockClear();
+    h.setVaultSecrets.mockClear();
+    h.requirePassphrase.mockReset();
+    h.vault = { enabled: true, unlocked: true };
+    h.secrets = { githubPat: 'ghp_old', syncPassword: 'alpha rhino cactus velvet moon' };
+    h.local = { githubRepo: 'owner/repo', syncEnabled: true };
+  });
+
+  async function repoChangedTo(user: ReturnType<typeof userEvent.setup>, repo: string) {
+    const field = screen.getByLabelText('Repository (owner/name)');
+    await user.clear(field);
+    await user.type(field, repo);
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+  }
+
+  it('asks, and saves nothing without it', async () => {
+    h.requirePassphrase.mockResolvedValue(null);
+    const user = userEvent.setup();
+    render(<GitHubSettings />);
+    await repoChangedTo(user, 'someone-else/repo');
+    expect(h.requirePassphrase).toHaveBeenCalledOnce();
+    expect(h.setVaultSecrets).not.toHaveBeenCalled();
+    expect(h.updateLocalSettings).not.toHaveBeenCalled();
+  });
+
+  it('saves once the passphrase is confirmed', async () => {
+    h.requirePassphrase.mockResolvedValue('the passphrase');
+    const user = userEvent.setup();
+    render(<GitHubSettings />);
+    await repoChangedTo(user, 'owner/new-repo');
+    expect(h.updateLocalSettings).toHaveBeenCalledWith(expect.objectContaining({ githubRepo: 'owner/new-repo' }));
+  });
+
+  it('does not ask when nothing about the sync target changed', async () => {
+    const user = userEvent.setup();
+    render(<GitHubSettings />);
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    expect(h.requirePassphrase).not.toHaveBeenCalled();
   });
 });

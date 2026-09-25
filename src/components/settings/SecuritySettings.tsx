@@ -3,7 +3,6 @@ import { Input } from '../ui/Input';
 import { Button } from '../ui/Button';
 import { toast } from '../ui/Toast';
 import { confirmDialog } from '../ui/ConfirmDialog';
-import { promptPassword } from '../ui/PasswordPrompt';
 import type { RekeyResult } from '../../db/vault';
 import { db } from '../../db';
 import { isLegacyWrap } from '../../db/vault-crypto';
@@ -17,7 +16,7 @@ import { useRelaxedUnlockStore } from '../../stores/relaxed-unlock';
 import { clampBackgroundLockSeconds, DEFAULT_BACKGROUND_LOCK_SECONDS } from '../../hooks/use-background-lock';
 import { unlocksInWindow, effectiveMinutes } from '../../lib/relaxed-unlock';
 import {
-  enableParanoid, disableParanoid, changePassphrase, rekeyVault, confirmCurrentPassphrase, configureIdleTimeout,
+  enableParanoid, disableParanoid, changePassphrase, rekeyVault, configureIdleTimeout,
   configureMaxUnlockAttempts, verifyAtRestIntegrity, lock, addSecurityKey, removeSecurityKey,
   listSecurityKeys, getVaultSecrets, DEFAULT_IDLE_MINUTES, DEFAULT_MAX_ATTEMPTS,
   setSecondaryPassphrase, clearSecondaryPassphrase, checkPassphrase, isUnlocked,
@@ -39,6 +38,7 @@ import { clampClipboardClearSeconds, DEFAULT_CLIPBOARD_CLEAR_SECONDS } from '../
 import { checkSecretStrength } from '../../lib/password-strength';
 import { PasswordStrengthBar } from '../ui/PasswordStrengthBar';
 import { ExportDialog } from './ExportDialog';
+import { requirePassphrase, updateSecuritySettings } from './passphrase-gate';
 
 function clampMinutes(value: string): number {
   const n = parseInt(value, 10);
@@ -326,7 +326,7 @@ function SystemIdleToggle({ enabled, unavailable, graceEnabled, graceMinutes }: 
 
   async function saveGrace() {
     const n = clampSystemLockGraceMinutes(grace);
-    await updateLocalSettings({ paranoidSystemLockGraceMinutes: n });
+    if (!(await updateSecuritySettings({ paranoidSystemLockGraceMinutes: n }))) { setGrace(String(graceMinutes)); return; }
     setGrace(String(n));
     toast(`Will wait ${n} ${n === 1 ? 'minute' : 'minutes'} after screen lock before locking GTD25`, 'success');
   }
@@ -335,7 +335,7 @@ function SystemIdleToggle({ enabled, unavailable, graceEnabled, graceMinutes }: 
     setBusy(true);
     try {
       if (enabled) {
-        await updateLocalSettings({ paranoidSystemIdleLock: false });
+        if (!(await updateSecuritySettings({ paranoidSystemIdleLock: false }))) return;
         toast('System idle lock disabled', 'success');
       } else {
         const granted = await requestSystemIdlePermission();
@@ -376,7 +376,7 @@ function SystemIdleToggle({ enabled, unavailable, graceEnabled, graceMinutes }: 
                   checked={graceEnabled}
                   onChange={async (e) => {
                     const on = e.currentTarget.checked;
-                    await updateLocalSettings({ paranoidSystemLockGraceEnabled: on });
+                    if (!(await updateSecuritySettings({ paranoidSystemLockGraceEnabled: on }))) return;
                     toast(
                       on
                         ? 'Will delay GTD25 lock after screen lock'
@@ -435,20 +435,20 @@ function ParanoidExtrasSection() {
         label="Privacy screen"
         description="Blur the whole app once it has been in the background — hidden, or just not the focused window — for half the time still left before the auto-lock. Any movement or key brings it back. Hides the screen from onlookers; the real protection is still the auto-lock."
         checked={!!local.paranoidPrivacyOverlayEnabled}
-        onChange={(on) => updateLocalSettings({ paranoidPrivacyOverlayEnabled: on })}
+        onChange={(on) => void updateSecuritySettings({ paranoidPrivacyOverlayEnabled: on })}
       >
         <SubToggle
           label="Blur the moment it goes to the background"
           description="Skip the wait, whatever time is left before the auto-lock. Turn this on if you want the phone's app-switcher preview blanked: that snapshot is taken the instant you leave, so a delayed veil never reaches it."
           checked={!!local.paranoidPrivacyOverlayImmediate}
-          onChange={(on) => updateLocalSettings({ paranoidPrivacyOverlayImmediate: on })}
+          onChange={(on) => void updateSecuritySettings({ paranoidPrivacyOverlayImmediate: on })}
         />
       </ExtraToggle>
       <ExtraToggle
         label="Lock when hidden"
         description="Lock the vault once this tab has been in the background for the delay below (0 = immediately). Catches tab switches, which the system idle lock doesn't see. Background timers are throttled, so read it as “at least” that many seconds."
         checked={!!local.paranoidBackgroundLockEnabled}
-        onChange={(on) => updateLocalSettings({ paranoidBackgroundLockEnabled: on })}
+        onChange={(on) => void updateSecuritySettings({ paranoidBackgroundLockEnabled: on })}
       >
         <BackgroundLockDelay seconds={local.paranoidBackgroundLockSeconds ?? DEFAULT_BACKGROUND_LOCK_SECONDS} />
       </ExtraToggle>
@@ -456,19 +456,19 @@ function ParanoidExtrasSection() {
         label="Redact mode (Ctrl/Cmd+Shift+H)"
         description="Adds an eye button (sidebar, bottom) and a hotkey that blur titles and content across the app, revealing only what's under the cursor or keyboard focus. For working in public. Deterrence only — a photo of the screen still blurs, but the data is on the device."
         checked={!!local.paranoidRedactModeEnabled}
-        onChange={(on) => updateLocalSettings({ paranoidRedactModeEnabled: on })}
+        onChange={(on) => void updateSecuritySettings({ paranoidRedactModeEnabled: on })}
       />
       <ExtraToggle
         label="Instant-lock hotkey (Ctrl/Cmd+Shift+L)"
         description="Lock the vault from anywhere with one chord — the reflex version of the sidebar lock button. Works even while typing in a field."
         checked={!!local.paranoidLockHotkeyEnabled}
-        onChange={(on) => updateLocalSettings({ paranoidLockHotkeyEnabled: on })}
+        onChange={(on) => void updateSecuritySettings({ paranoidLockHotkeyEnabled: on })}
       />
       <ExtraToggle
         label="Unlock audit trail"
         description="Keep a private log of unlocks and failed attempts on this device (never synced). After unlocking you'll see when it was last unlocked and how many wrong attempts happened since — so tampering while you were away is visible."
         checked={!!local.paranoidUnlockLogEnabled}
-        onChange={(on) => updateLocalSettings({ paranoidUnlockLogEnabled: on })}
+        onChange={(on) => void updateSecuritySettings({ paranoidUnlockLogEnabled: on })}
       >
         <UnlockLogView log={local.unlockLog ?? []} />
       </ExtraToggle>
@@ -476,7 +476,7 @@ function ParanoidExtrasSection() {
         label="Auto-clear clipboard"
         description="After you copy from the app (an outline, a PNG, a diagnostics report), wipe the clipboard once the delay below passes. Best-effort: it can't reach OS clipboard history, and needs the app focused to clear."
         checked={!!local.paranoidClipboardClearEnabled}
-        onChange={(on) => updateLocalSettings({ paranoidClipboardClearEnabled: on })}
+        onChange={(on) => void updateSecuritySettings({ paranoidClipboardClearEnabled: on })}
       >
         <ClipboardClearDelay seconds={local.paranoidClipboardClearSeconds ?? DEFAULT_CLIPBOARD_CLEAR_SECONDS} />
       </ExtraToggle>
@@ -502,7 +502,7 @@ function ClipboardClearDelay({ seconds }: { seconds: number }) {
         variant="secondary"
         onClick={async () => {
           const n = clampClipboardClearSeconds(value);
-          await updateLocalSettings({ paranoidClipboardClearSeconds: n });
+          if (!(await updateSecuritySettings({ paranoidClipboardClearSeconds: n }))) return;
           setValue(String(n));
           toast(`Clipboard will clear ${n}s after copying`, 'success');
         }}
@@ -530,7 +530,13 @@ function UnlockLogView({ log }: { log: import('../../lib/unlock-audit').UnlockLo
         </ul>
       )}
       {log.length > 0 && (
-        <Button size="sm" variant="secondary" onClick={async () => { await clearUnlockLog(); toast('Unlock log cleared', 'success'); }}>
+        <Button size="sm" variant="secondary" onClick={async () => {
+          // The log is the evidence of what happened while you were away; an
+          // unattended session must not be able to erase it.
+          if (await requirePassphrase('Your passphrase is needed to clear the unlock log.') === null) return;
+          await clearUnlockLog();
+          toast('Unlock log cleared', 'success');
+        }}>
           Clear log
         </Button>
       )}
@@ -556,7 +562,7 @@ function BackgroundLockDelay({ seconds }: { seconds: number }) {
         variant="secondary"
         onClick={async () => {
           const n = clampBackgroundLockSeconds(value);
-          await updateLocalSettings({ paranoidBackgroundLockSeconds: n });
+          if (!(await updateSecuritySettings({ paranoidBackgroundLockSeconds: n }))) return;
           setValue(String(n));
           toast(n === 0 ? 'Will lock the instant the tab hides' : `Will lock after ${n}s in the background`, 'success');
         }}
@@ -626,7 +632,7 @@ function RelaxedUnlockToggle() {
   const unlockCount = unlocksInWindow(local.unlockHistory ?? [], Date.now());
 
   async function toggle() {
-    await updateLocalSettings({ relaxedUnlockEnabled: !enabled });
+    if (!(await updateSecuritySettings({ relaxedUnlockEnabled: !enabled }))) return;
     toast(enabled ? 'Relaxed unlock disabled' : 'Relaxed unlock enabled', 'success');
   }
 
@@ -662,31 +668,6 @@ function rekeyDoneMessage(prefix: string, result: RekeyResult): string {
   return parts.join(' ');
 }
 
-// The gate in front of anything that changes how this vault opens: an unlocked
-// but unattended session must not be enough to add a way in. Returns the
-// passphrase (a follow-up may need it — a re-key) or null when cancelled or not
-// the main passphrase; the toast is already shown. The secondary passphrase is
-// refused here like any other wrong one.
-async function requirePassphrase(reason: string): Promise<string | null> {
-  const typed = await promptPassword('Confirm your passphrase', {
-    message: reason, confirmLabel: 'Continue', placeholder: 'Vault passphrase',
-  });
-  if (typed === null) return null;
-  let ok = false;
-  try {
-    ok = await confirmCurrentPassphrase(typed);
-  } catch (e) {
-    recordError('security.confirmPassphrase', e);
-    toast(e instanceof Error ? e.message : 'Could not check the passphrase', 'error');
-    return null;
-  }
-  if (!ok) {
-    toast('Incorrect passphrase', 'error');
-    return null;
-  }
-  return typed;
-}
-
 function ManageForm({ idleMinutes, maxAttempts, attemptWipeJustArmed, systemIdleOn, systemIdleUnavailable, systemLockGraceOn, systemLockGraceMinutes, hasSecurityKey }: { idleMinutes: number; maxAttempts: number; attemptWipeJustArmed: boolean; systemIdleOn: boolean; systemIdleUnavailable: boolean; systemLockGraceOn: boolean; systemLockGraceMinutes: number; hasSecurityKey: boolean }) {
   const [idle, setIdle] = useState(String(idleMinutes));
   const [attempts, setAttempts] = useState(String(maxAttempts));
@@ -707,8 +688,14 @@ function ManageForm({ idleMinutes, maxAttempts, attemptWipeJustArmed, systemIdle
   }, [maxAttempts]);
 
   async function handleSaveIdle() {
-    await configureIdleTimeout(clampMinutes(idle));
-    setIdle(String(clampMinutes(idle)));
+    const minutes = clampMinutes(idle);
+    // A longer auto-lock loosens the device's protection (see passphrase-gate).
+    if (minutes > idleMinutes && await requirePassphrase('Your passphrase is needed to lengthen the auto-lock.') === null) {
+      setIdle(String(idleMinutes));
+      return;
+    }
+    await configureIdleTimeout(minutes);
+    setIdle(String(minutes));
     toast('Auto-lock updated', 'success');
   }
 
