@@ -1,6 +1,8 @@
 import { createContext, useContext, type ReactNode } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../db';
+import { isLiveSubtask } from '../lib/attention';
+import { useMinuteTick } from './use-minute-tick';
 
 export interface SpecialItem {
   id: string;
@@ -34,18 +36,24 @@ export function useSpecialListContext(): SpecialListData {
 }
 
 function useSpecialList() {
+  // The overdue-recurring check compares against Date.now(); re-run each minute.
+  const tick = useMinuteTick();
   const data = useLiveQuery(async () => {
     const now = Date.now();
     const items: SpecialItem[] = [];
 
-    // Use indexed queries instead of full table scans
-    const [warningTasks, blockedTasks, recurringTasks, warningSubs, blockedSubs] = await Promise.all([
-      db.tasks.where('hasWarning').equals(1).toArray(),
-      db.tasks.where('status').equals('blocked').toArray(),
+    // hasWarning is stored as `true`, and booleans are not valid IndexedDB keys,
+    // so the `hasWarning` index is always empty. Warnings are read from the
+    // not-done rows instead (done ones never count), through the status index.
+    const [openTasks, recurringTasks, openSubs] = await Promise.all([
+      db.tasks.where('status').notEqual('done').toArray(),
       db.tasks.where('nextOccurrence').belowOrEqual(now).toArray(),
-      db.subtasks.where('hasWarning').equals(1).toArray(),
-      db.subtasks.where('status').equals('blocked').toArray(),
+      db.subtasks.where('status').notEqual('done').toArray(),
     ]);
+    const warningTasks = openTasks.filter((t) => t.hasWarning);
+    const blockedTasks = openTasks.filter((t) => t.status === 'blocked');
+    const warningSubs = openSubs.filter((s) => s.hasWarning);
+    const blockedSubs = openSubs.filter((s) => s.status === 'blocked');
 
     for (const t of warningTasks) {
       if (t.deletedAt || t.status === 'done' || t.archived) continue;
@@ -99,9 +107,8 @@ function useSpecialList() {
     const parentMap = new Map(parents.filter(Boolean).map((p) => [p!.id, p!]));
 
     for (const s of warningSubs) {
-      if (s.deletedAt || s.status === 'done') continue;
       const parent = parentMap.get(s.taskId);
-      if (!parent || parent.deletedAt || parent.archived) continue;
+      if (!isLiveSubtask(s, parent)) continue;
       items.push({
         id: s.id,
         taskId: s.taskId,
@@ -115,9 +122,8 @@ function useSpecialList() {
     }
 
     for (const s of blockedSubs) {
-      if (s.deletedAt || s.status === 'done') continue;
       const parent = parentMap.get(s.taskId);
-      if (!parent || parent.deletedAt || parent.archived) continue;
+      if (!isLiveSubtask(s, parent)) continue;
       items.push({
         id: s.id,
         taskId: s.taskId,
@@ -153,7 +159,7 @@ function useSpecialList() {
     const recurringCount = items.filter((i) => i.type === 'recurring').length;
 
     return { items, warningCount, blockedCount, recurringCount };
-  }, []);
+  }, [tick]);
 
   return data ?? { items: [], warningCount: 0, blockedCount: 0, recurringCount: 0 };
 }

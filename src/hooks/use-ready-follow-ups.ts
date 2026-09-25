@@ -1,6 +1,7 @@
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../db';
 import { isAwake } from './use-follow-ups';
+import { useMinuteTick } from './use-minute-tick';
 
 export interface ReadyFollowUpItem {
   taskId: string;
@@ -16,6 +17,9 @@ export interface ReadyFollowUpItem {
  * vault is locked (titles still require an unlocked vault to read).
  */
 export function useReadyFollowUps(): ReadyFollowUpItem[] {
+  // isAwake compares against Date.now(): re-run each minute so a snooze
+  // running out shows up without waiting for an unrelated DB write.
+  const tick = useMinuteTick();
   const items = useLiveQuery(async () => {
     const lists = await db.taskLists.toArray();
     const followUpLists = lists.filter((l) => l.type === 'follow-ups' && !l.deletedAt && !l.archivedAt);
@@ -32,7 +36,7 @@ export function useReadyFollowUps(): ReadyFollowUpItem[] {
       }
     }
     return result;
-  }, []);
+  }, [tick]);
 
   return items ?? [];
 }
