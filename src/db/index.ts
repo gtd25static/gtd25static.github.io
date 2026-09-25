@@ -4,7 +4,8 @@ import { newId } from '../lib/id';
 import { createLocalBackup } from './backup';
 import { purgeOldTrashItems, expireArchivedLists } from './purge';
 import { ensureDeviceId, recordChangeBatchInTx, pruneChangelogIfSyncDisabled } from '../sync/change-log';
-import { stampUpdatedFields } from '../sync/field-timestamps';
+import { initFieldTimestamps, stampUpdatedFields } from '../sync/field-timestamps';
+import { INBOX_LIST_NAME, pickInboxList } from '../lib/constants';
 import { SYNC_VERSION } from '../sync/version';
 import { runLocalMigrations } from '../sync/local-migrations';
 import { vaultMiddleware } from './vault-middleware';
@@ -114,7 +115,7 @@ export async function cleanOrphans() {
 
   await ensureDeviceId();
   await db.transaction('rw', [db.taskLists, db.tasks, db.subtasks, db.changeLog], async () => {
-    const changeBatch: Array<{ entityType: 'task' | 'subtask'; entityId: string; operation: 'upsert'; data: Record<string, unknown> }> = [];
+    const changeBatch: Array<{ entityType: 'taskList' | 'task' | 'subtask'; entityId: string; operation: 'upsert'; data: Record<string, unknown> }> = [];
 
     // Find subtasks whose parent task doesn't exist
     const taskIds = new Set((await db.tasks.toArray()).map((t) => t.id));
@@ -129,26 +130,26 @@ export async function cleanOrphans() {
       }
     }
 
-    // Find tasks whose parent list doesn't exist → move to Inbox or soft-delete
-    const listIds = new Set((await db.taskLists.toArray()).map((l) => l.id));
-    const allTasks = await db.tasks.toArray();
-    const inbox = allTasks.length > 0
-      ? (await db.taskLists.toArray()).find((l) => !l.deletedAt && l.name === 'Inbox' && l.type === 'tasks')
-      : undefined;
+    // Find tasks whose parent list doesn't exist → move them to the Inbox,
+    // creating one if needed. (Trashing them instead looped: restoring one left
+    // it pointing at the missing list, and the next startup trashed it again.)
+    const lists = await db.taskLists.toArray();
+    const listIds = new Set(lists.map((l) => l.id));
+    const orphans = (await db.tasks.toArray()).filter((t) => !listIds.has(t.listId) && !t.deletedAt);
+    let inbox: TaskList | undefined = pickInboxList(lists);
+    if (orphans.length > 0 && !inbox) {
+      inbox = { id: newId(), name: INBOX_LIST_NAME, type: 'tasks', order: lists.length, createdAt: now, updatedAt: now };
+      inbox.fieldTimestamps = initFieldTimestamps(inbox as unknown as Record<string, unknown>, now);
+      await db.taskLists.add(inbox);
+      changeBatch.push({ entityType: 'taskList', entityId: inbox.id, operation: 'upsert', data: inbox as unknown as Record<string, unknown> });
+    }
 
-    for (const task of allTasks) {
-      if (!listIds.has(task.listId) && !task.deletedAt) {
-        if (inbox) {
-          const ft = stampUpdatedFields(task.fieldTimestamps, ['listId'], now);
-          await db.tasks.update(task.id, { listId: inbox.id, updatedAt: now, fieldTimestamps: ft });
-        } else {
-          const ft = stampUpdatedFields(task.fieldTimestamps, ['deletedAt'], now);
-          await db.tasks.update(task.id, { deletedAt: now, updatedAt: now, fieldTimestamps: ft });
-        }
-        const updated = await db.tasks.get(task.id);
-        if (updated) changeBatch.push({ entityType: 'task', entityId: task.id, operation: 'upsert', data: updated as unknown as Record<string, unknown> });
-        orphanedTasks++;
-      }
+    for (const task of orphans) {
+      const ft = stampUpdatedFields(task.fieldTimestamps, ['listId'], now);
+      await db.tasks.update(task.id, { listId: inbox!.id, updatedAt: now, fieldTimestamps: ft });
+      const updated = await db.tasks.get(task.id);
+      if (updated) changeBatch.push({ entityType: 'task', entityId: task.id, operation: 'upsert', data: updated as unknown as Record<string, unknown> });
+      orphanedTasks++;
     }
 
     if (changeBatch.length > 0) {

@@ -52,8 +52,9 @@ describe('cleanOrphans', () => {
     expect(task?.deletedAt).toBeUndefined();
   });
 
-  it('soft-deletes orphaned tasks when no Inbox exists', async () => {
-    // Create a non-Inbox list, then add an orphaned task referencing a deleted list
+  it('creates an Inbox for orphaned tasks when none exists, instead of trashing them', async () => {
+    // Trashing them looped: restoring one left it pointing at the missing list,
+    // and the next startup trashed it again.
     const orphanTaskId = newId();
     await db.tasks.add({
       id: orphanTaskId,
@@ -70,7 +71,12 @@ describe('cleanOrphans', () => {
     warnSpy.mockRestore();
 
     const task = await db.tasks.get(orphanTaskId);
-    expect(task?.deletedAt).toBeDefined();
+    expect(task?.deletedAt).toBeUndefined();
+    const inbox = (await db.taskLists.toArray()).find((l) => l.name === 'Inbox');
+    expect(inbox).toBeDefined();
+    expect(task?.listId).toBe(inbox!.id);
+    // …and the new Inbox syncs like any list.
+    expect((await db.changeLog.toArray()).some((e) => e.entityType === 'taskList' && e.entityId === inbox!.id)).toBe(true);
   });
 
   it('does nothing when there are no orphans', async () => {
