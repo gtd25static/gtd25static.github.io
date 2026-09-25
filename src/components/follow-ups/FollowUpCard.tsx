@@ -333,6 +333,7 @@ export function FollowUpCard({ task, index, dragHandleProps }: Props) {
 
       {editing && (
         <TaskForm
+          allowRecurrence={false}
           open={editing}
           onClose={() => setEditing(false)}
           initial={task}

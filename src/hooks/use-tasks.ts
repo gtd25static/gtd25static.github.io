@@ -280,6 +280,9 @@ export function crossTypeUpdates(task: Task, targetType: ListType, now: number):
     if (task.status === 'done') updates.archived = true;
     if (task.status !== 'todo') updates.status = 'todo';
     if (task.blockedAt != null) updates.blockedAt = undefined;
+    // Kept, it made the follow-up — reopened, or moved back as an open task —
+    // count as completed in Insights.
+    if (task.completedAt != null) updates.completedAt = undefined;
     if (task.recurrenceType) {
       Object.assign(updates, {
         recurrenceType: undefined,

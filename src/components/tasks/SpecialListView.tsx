@@ -1,7 +1,8 @@
 import { useSpecialListContext, type SpecialItem } from '../../hooks/use-special-list';
 import { useShallow } from 'zustand/react/shallow';
 import { useAppState } from '../../stores/app-state';
-import { setTaskStatus } from '../../hooks/use-tasks';
+import { setTaskStatus, updateTask } from '../../hooks/use-tasks';
+import { confirmDialog } from '../ui/ConfirmDialog';
 import { setSubtaskStatus } from '../../hooks/use-subtasks';
 import { toggleWarning } from '../../hooks/use-warning';
 
@@ -24,14 +25,23 @@ function SpecialItemRow({ item }: { item: SpecialItem }) {
     if (taskId) toggleTaskExpanded(taskId);
   }
 
-  function handleDone(e: React.MouseEvent) {
+  async function handleDone(e: React.MouseEvent) {
     e.stopPropagation();
+    if (item.followUp) {
+      // A follow-up has no done state (it used to be set to 'done' here and stay
+      // on as an active card): resolve it, as its own card does.
+      if (!await confirmDialog('Resolve this follow-up? It moves to the Resolved section and you can reopen it later.', { confirmLabel: 'Resolve' })) return;
+      await updateTask(item.id, { archived: true });
+      return;
+    }
     if (item.entityType === 'task') {
       setTaskStatus(item.id, 'done');
     } else {
       setSubtaskStatus(item.id, 'done');
     }
   }
+
+  const doneLabel = item.followUp ? 'Resolve' : 'Done';
 
   function handleUnblock(e: React.MouseEvent) {
     e.stopPropagation();
@@ -71,7 +81,7 @@ function SpecialItemRow({ item }: { item: SpecialItem }) {
               onClick={handleDone}
               className="rounded px-3 py-1.5 md:px-2 md:py-0.5 text-sm md:text-xs text-accent-600 hover:bg-accent-50 dark:text-accent-400 dark:hover:bg-accent-900/20"
             >
-              Done
+              {doneLabel}
             </button>
           </>
         )}
@@ -87,7 +97,7 @@ function SpecialItemRow({ item }: { item: SpecialItem }) {
               onClick={handleDone}
               className="rounded px-3 py-1.5 md:px-2 md:py-0.5 text-sm md:text-xs text-accent-600 hover:bg-accent-50 dark:text-accent-400 dark:hover:bg-accent-900/20"
             >
-              Done
+              {doneLabel}
             </button>
           </>
         )}
@@ -96,7 +106,7 @@ function SpecialItemRow({ item }: { item: SpecialItem }) {
             onClick={handleDone}
             className="rounded px-3 py-1.5 md:px-2 md:py-0.5 text-sm md:text-xs text-accent-600 hover:bg-accent-50 dark:text-accent-400 dark:hover:bg-accent-900/20"
           >
-            Done
+            {doneLabel}
           </button>
         )}
       </div>

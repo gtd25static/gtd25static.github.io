@@ -216,3 +216,56 @@ describe('cleanOrphans — live children of a deleted parent', () => {
     expect((await db.subtasks.get(sub!.id))?.deletedAt).toBe(7_000);
   });
 });
+
+describe('cleanOrphans — follow-ups left in states they do not have', () => {
+  // Attention's "Done" set status 'done' on follow-ups, and the add/edit forms
+  // let them recur; a done task moved in kept its completedAt. Such a follow-up
+  // stayed an active card with nothing showing why (GUI review).
+  it('resolves a follow-up marked done, without a completion time', async () => {
+    const leads = await createTaskList('Leads', 'follow-ups');
+    const topic = await createTask(leads.id, { title: 'Marked done' });
+    await db.tasks.update(topic!.id, { status: 'done', completedAt: 9_000 });
+
+    await cleanOrphans();
+
+    const repaired = await db.tasks.get(topic!.id);
+    expect(repaired).toMatchObject({ status: 'todo', archived: true });
+    expect(repaired?.completedAt).toBeUndefined();
+    expect(repaired?.fieldTimestamps?.archived).toBe(repaired?.updatedAt);
+    const logged = (await db.changeLog.toArray()).map((e) => e.entityId);
+    expect(logged).toContain(topic!.id);
+  });
+
+  it('drops a recurrence, and a stale completion time, from an open follow-up', async () => {
+    const leads = await createTaskList('Leads', 'follow-ups');
+    const topic = await createTask(leads.id, {
+      title: 'Recurring', recurrenceType: 'time-based', recurrenceInterval: 1, recurrenceUnit: 'days', nextOccurrence: 1_000,
+    });
+    await db.tasks.update(topic!.id, { completedAt: 9_000 });
+
+    await cleanOrphans();
+
+    const repaired = await db.tasks.get(topic!.id);
+    expect(repaired?.archived).toBeFalsy();
+    expect(repaired?.status).toBe('todo');
+    expect(repaired?.recurrenceType).toBeUndefined();
+    expect(repaired?.nextOccurrence).toBeUndefined();
+    expect(repaired?.completedAt).toBeUndefined();
+  });
+
+  it('leaves tasks in task lists, and healthy follow-ups, alone', async () => {
+    const work = await createTaskList('Work');
+    const task = await createTask(work.id, {
+      title: 'Weekly', recurrenceType: 'time-based', recurrenceInterval: 1, recurrenceUnit: 'weeks',
+    });
+    await db.tasks.update(task!.id, { status: 'done', completedAt: 9_000 });
+    const leads = await createTaskList('Leads', 'follow-ups');
+    await createTask(leads.id, { title: 'Fine' });
+    const changesBefore = await db.changeLog.count();
+
+    await cleanOrphans();
+
+    expect(await db.tasks.get(task!.id)).toMatchObject({ status: 'done', completedAt: 9_000, recurrenceType: 'time-based' });
+    expect(await db.changeLog.count()).toBe(changesBefore);
+  });
+});

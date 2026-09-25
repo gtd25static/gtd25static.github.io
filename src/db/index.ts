@@ -163,6 +163,28 @@ export async function cleanOrphans() {
       orphanedTasks++;
     }
 
+    // Follow-ups have no done state and no recurrence, but Attention's "Done" set
+    // status 'done' on them and the add/edit forms let them recur (GUI review):
+    // such a follow-up stayed an active card with nothing showing why. Resolve it
+    // — what the "Done" meant — and drop the recurrence and any completion time
+    // (a done task moved in kept its own), as moving a task into a follow-up
+    // list now does.
+    const followUpLists = new Set(lists.filter((l) => l.type === 'follow-ups').map((l) => l.id));
+    for (const original of tasks) {
+      const task = changedTasks.get(original.id) ?? original;
+      if (task.deletedAt || !followUpLists.has(task.listId)) continue;
+      const repair: Partial<Task> = {};
+      if (task.status === 'done') Object.assign(repair, { status: 'todo', archived: true });
+      if (task.completedAt != null) repair.completedAt = undefined;
+      if (task.recurrenceType) {
+        Object.assign(repair, {
+          recurrenceType: undefined, recurrenceInterval: undefined, recurrenceUnit: undefined,
+          nextOccurrence: undefined, lastCompletedAt: undefined,
+        });
+      }
+      if (Object.keys(repair).length > 0) fixTask(task, repair);
+    }
+
     // Live children of a parent in the Trash — another device deleted the list
     // (or task) while this one added to it — were invisible until the parent was
     // restored. They join the parent's cascade: its exact deletedAt, so restoring

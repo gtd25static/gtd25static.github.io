@@ -123,3 +123,46 @@ describe('FollowUpList — show/hide snoozed toggle', () => {
     expect(screen.getByText('All follow-ups are snoozed')).toBeInTheDocument();
   });
 });
+
+describe('FollowUpList — sort by date and the add form', () => {
+  beforeEach(() => {
+    resetAppState();
+    resetFactories();
+    vi.clearAllMocks();
+  });
+
+  const titlesInOrder = () =>
+    screen.getAllByText(/^(Later|Undated|Sooner|Snoozed)$/).map((el) => el.textContent);
+
+  // The menu item was wired to nothing.
+  it('"Sort by date" orders by due date, undated after, snoozed still last; again turns it off', async () => {
+    setFollowUps([
+      makeTask(fuList.id, { title: 'Later', dueDate: Date.now() + 5 * DAY_MS, order: 3 }),
+      makeTask(fuList.id, { title: 'Undated', order: 2 }),
+      makeTask(fuList.id, { title: 'Sooner', dueDate: Date.now() + DAY_MS, order: 1 }),
+      { ...snoozedTask('Snoozed'), dueDate: Date.now(), order: 0 },
+    ]);
+    const { user, container } = renderList();
+    await user.click(screen.getByRole('button', { name: /show snoozed/i }));
+    const before = titlesInOrder();
+
+    await user.click(container.querySelector('[data-dropdown-trigger]')!);
+    await user.click(screen.getByText('Sort by date'));
+    expect(titlesInOrder()).toEqual(['Sooner', 'Later', 'Undated', 'Snoozed']);
+
+    await user.click(container.querySelector('[data-dropdown-trigger]')!);
+    await user.click(screen.getByText('Sort by date ✓'));
+    expect(titlesInOrder()).toEqual(before);
+  });
+
+  // Follow-ups have no done state for a recurrence to reset from.
+  it('the add form offers no recurrence', async () => {
+    setFollowUps([]);
+    const { user } = renderList();
+    await user.click(screen.getByText('Add a follow-up'));
+    await user.click(screen.getByText(/^\+ description, link, due date/));
+    expect(screen.getByLabelText('Due date')).toBeInTheDocument();
+    expect(screen.queryByText('Recurring')).toBeNull();
+    expect(screen.queryByText(/recurrence/)).toBeNull();
+  });
+});

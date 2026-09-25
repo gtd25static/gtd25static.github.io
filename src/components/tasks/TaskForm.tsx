@@ -25,9 +25,11 @@ interface Props {
     skipFirst?: boolean;
   }) => void;
   initial?: Partial<Task>;
+  /** Follow-up lists have no recurrence (nor a done state for it to reset from). */
+  allowRecurrence?: boolean;
 }
 
-export function TaskForm({ open, onClose, onSubmit, initial }: Props) {
+export function TaskForm({ open, onClose, onSubmit, initial, allowRecurrence = true }: Props) {
   const [title, setTitle] = useState(initial?.title ?? '');
   const [description, setDescription] = useState(initial?.description ?? '');
   const [link, setLink] = useState(initial?.link ?? '');
@@ -36,7 +38,8 @@ export function TaskForm({ open, onClose, onSubmit, initial }: Props) {
   const [addingLink, setAddingLink] = useState(false);
 
   // Recurrence
-  const [recurring, setRecurring] = useState(!!initial?.recurrenceType);
+  // Off where recurrence isn't allowed, so saving clears one picked up earlier.
+  const [recurring, setRecurring] = useState(allowRecurrence && !!initial?.recurrenceType);
   const [recurrenceType, setRecurrenceType] = useState<'time-based' | 'date-based'>(initial?.recurrenceType ?? 'time-based');
   const [recurrenceInterval, setRecurrenceInterval] = useState(initial?.recurrenceInterval ?? 1);
   const [recurrenceUnit, setRecurrenceUnit] = useState<'hours' | 'days' | 'weeks' | 'months'>(initial?.recurrenceUnit ?? 'days');
@@ -145,7 +148,7 @@ export function TaskForm({ open, onClose, onSubmit, initial }: Props) {
         </div>
 
         {/* Recurrence — hidden when dueDate is set */}
-        {!dueDate && (
+        {allowRecurrence && !dueDate && (
           <div className="flex flex-col gap-2">
             <label className="flex items-center gap-2 text-xs font-medium text-zinc-500 dark:text-zinc-400">
               <input type="checkbox" checked={recurring} onChange={(e) => { setRecurring(e.target.checked); if (e.target.checked) setDueDate(''); }} className="shrink-0 rounded" />

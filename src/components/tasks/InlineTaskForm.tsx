@@ -22,9 +22,11 @@ interface Props {
     skipFirst?: boolean;
   }) => void;
   onCancel: () => void;
+  /** Follow-up lists have no recurrence (nor a done state for it to reset from). */
+  allowRecurrence?: boolean;
 }
 
-export function InlineTaskForm({ onSubmit, onCancel }: Props) {
+export function InlineTaskForm({ onSubmit, onCancel, allowRecurrence = true }: Props) {
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [link, setLink] = useState('');
@@ -94,7 +96,7 @@ export function InlineTaskForm({ onSubmit, onCancel }: Props) {
       </div>
       {!showMore && (
         <button type="button" onClick={() => setShowMore(true)} className="text-xs text-zinc-400 hover:text-zinc-600 dark:text-zinc-400 dark:hover:text-zinc-300">
-          + description, link, due date, recurrence
+          + description, link, due date{allowRecurrence ? ', recurrence' : ''}
         </button>
       )}
       {showMore && (
@@ -117,7 +119,7 @@ export function InlineTaskForm({ onSubmit, onCancel }: Props) {
           {!recurring && (
             <Input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} label="Due date" />
           )}
-          <div className="flex flex-col gap-2">
+          {allowRecurrence && <div className="flex flex-col gap-2">
             <label className="flex items-center gap-2 text-xs font-medium text-zinc-500 dark:text-zinc-400">
               <input type="checkbox" checked={recurring} onChange={(e) => { setRecurring(e.target.checked); if (e.target.checked) setDueDate(''); }} className="shrink-0 rounded" />
               Recurring
@@ -158,7 +160,7 @@ export function InlineTaskForm({ onSubmit, onCancel }: Props) {
                 </label>
               </>
             )}
-          </div>
+          </div>}
 
           {/* Additional links */}
           <div className="flex flex-col gap-1">

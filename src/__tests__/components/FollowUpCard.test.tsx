@@ -143,6 +143,29 @@ describe('FollowUpCard', () => {
     });
   });
 
+  // The create form was fixed first; the edit dialog let you switch it on too.
+  it('the edit dialog offers no recurrence', async () => {
+    const { user, container } = renderCard();
+    await user.click(container.querySelector('[data-dropdown-trigger]')!);
+    await user.click(screen.getByText('Edit'));
+    expect(await screen.findByLabelText('Due date')).toBeInTheDocument();
+    expect(screen.queryByText('Recurring')).toBeNull();
+  });
+
+  it('saving the edit dialog drops a recurrence the follow-up picked up earlier', async () => {
+    const { user, container, task } = renderCard({
+      recurrenceType: 'time-based', recurrenceInterval: 1, recurrenceUnit: 'weeks', nextOccurrence: Date.now() + 1000,
+    });
+    await user.click(container.querySelector('[data-dropdown-trigger]')!);
+    await user.click(screen.getByText('Edit'));
+    await user.click(await screen.findByRole('button', { name: 'Save' }));
+    expect(mockUpdateTask).toHaveBeenCalledWith(task.id, expect.objectContaining({
+      recurrenceType: undefined, recurrenceInterval: undefined, recurrenceUnit: undefined, nextOccurrence: undefined,
+    }));
+    const [, payload] = mockUpdateTask.mock.calls[0];
+    expect('recurrenceType' in payload).toBe(true); // cleared, not just left out
+  });
+
   it('shows star button', () => {
     renderCard();
     expect(screen.getByTitle('Star')).toBeInTheDocument();

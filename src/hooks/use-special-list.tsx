@@ -13,6 +13,8 @@ export interface SpecialItem {
   type: 'warning' | 'blocked' | 'recurring';
   stateDate: number;
   entityType: 'task' | 'subtask';
+  /** A follow-up has no done state: Attention offers Resolve instead of Done. */
+  followUp?: boolean;
 }
 
 export interface SpecialListData {
@@ -47,13 +49,16 @@ function useSpecialList() {
     // (Reading all open tasks instead re-ran on every task write and decrypted
     // them all each time — enough to stall the app on large lists.) Warnings
     // are indexed as 1; see db/warning-index.ts.
-    const [warningTasks, blockedTasks, recurringTasks, warningSubs, blockedSubs] = await Promise.all([
+    const [lists, warningTasks, blockedTasks, recurringTasks, warningSubs, blockedSubs] = await Promise.all([
+      db.taskLists.toArray(),
       db.tasks.where('hasWarning').equals(1).toArray(),
       db.tasks.where('status').equals('blocked').toArray(),
       db.tasks.where('nextOccurrence').belowOrEqual(now).toArray(),
       db.subtasks.where('hasWarning').equals(1).toArray(),
       db.subtasks.where('status').equals('blocked').toArray(),
     ]);
+
+    const followUpLists = new Set(lists.filter((l) => l.type === 'follow-ups').map((l) => l.id));
 
     for (const t of warningTasks) {
       if (t.deletedAt || t.status === 'done' || t.archived) continue;
@@ -64,6 +69,7 @@ function useSpecialList() {
         type: 'warning',
         stateDate: t.warningAt ?? t.updatedAt,
         entityType: 'task',
+        followUp: followUpLists.has(t.listId),
       });
     }
 
@@ -76,6 +82,7 @@ function useSpecialList() {
         type: 'blocked',
         stateDate: t.blockedAt ?? t.updatedAt,
         entityType: 'task',
+        followUp: followUpLists.has(t.listId),
       });
     }
 
@@ -89,6 +96,7 @@ function useSpecialList() {
         type: 'recurring',
         stateDate: t.nextOccurrence,
         entityType: 'task',
+        followUp: followUpLists.has(t.listId),
       });
     }
 

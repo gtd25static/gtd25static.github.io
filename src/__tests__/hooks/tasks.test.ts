@@ -225,6 +225,19 @@ describe('moveTaskToList across list types', () => {
     expect(moved.status).toBe('todo');
   });
 
+  // It kept its completedAt, so once reopened it was an open follow-up — and,
+  // moved back, an open task — that Insights counted as completed.
+  it('a done task becoming a follow-up loses its completion time', async () => {
+    const task = assertDefined(await createTask(listId, { title: 'Done' }));
+    await setTaskStatus(task.id, 'done');
+
+    await moveTaskToList(task.id, followUpListId);
+
+    const moved = assertDefined(await db.tasks.get(task.id));
+    expect(moved.completedAt).toBeUndefined();
+    expect(moved.fieldTimestamps?.completedAt).toBe(moved.updatedAt);
+  });
+
   it('drops recurrence, which follow-up lists do not run', async () => {
     const task = assertDefined(await createTask(listId, {
       title: 'Weekly', recurrenceType: 'time-based', recurrenceInterval: 1, recurrenceUnit: 'weeks', nextOccurrence: Date.now() - 1000,

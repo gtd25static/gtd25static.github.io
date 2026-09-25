@@ -19,7 +19,8 @@ import { FollowUpCard } from './FollowUpCard';
 import { InlineTaskForm } from '../tasks/InlineTaskForm';
 import { DropdownMenu } from '../ui/DropdownMenu';
 import { MergeSuggestionsCard } from '../tasks/MergeSuggestionsCard';
-import { sortFollowUpsForDisplay } from '../../lib/task-sort';
+import { sortFollowUpsForDisplay, sortTasksByDate } from '../../lib/task-sort';
+import { toast } from '../ui/Toast';
 
 function SortableFollowUpItem({ task, index, listId }: { task: Task; index: number; listId: string }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
@@ -53,7 +54,12 @@ interface Props {
 
 export function FollowUpList({ listId, listName }: Props) {
   const { active: rawActive, archived } = useFollowUps(listId);
-  const active = sortFollowUpsForDisplay(rawActive);
+  // "Sort by date": awake follow-ups by due date; snoozed ones still at the bottom.
+  const [sortByDate, setSortByDate] = useState(false);
+  const displayed = sortFollowUpsForDisplay(rawActive);
+  const active = sortByDate
+    ? [...sortTasksByDate(displayed.filter((t) => !isInCooldown(t))), ...displayed.filter(isInCooldown)]
+    : displayed;
   const [showSnoozed, setShowSnoozed] = useState(false);
   // Snoozed items always sort to the bottom of `active`; the toggle hides them by default.
   const snoozed = active.filter(isInCooldown);
@@ -97,6 +103,11 @@ export function FollowUpList({ listId, listName }: Props) {
       if (!activeData || !overData) return;
       if (activeData.type !== 'follow-up' || overData.type !== 'follow-up') return;
       if (activeData.listId !== overData.listId || activeData.listId !== listId) return;
+      // Sorted by date, the positions on screen aren't the manual order.
+      if (sortByDate) {
+        toast('Turn off “Sort by date” to rearrange follow-ups by hand', 'info');
+        return;
+      }
 
       const oldIndex = visible.findIndex((t) => t.id === dragActive.id);
       const newIndex = visible.findIndex((t) => t.id === over.id);
@@ -143,7 +154,7 @@ export function FollowUpList({ listId, listName }: Props) {
                 </svg>
               }
               items={[
-                { label: 'Sort by date', onClick: () => {} },
+                { label: `Sort by date${sortByDate ? ' ✓' : ''}`, onClick: () => setSortByDate(!sortByDate) },
               ]}
             />
           </div>
@@ -154,6 +165,7 @@ export function FollowUpList({ listId, listName }: Props) {
           {/* Add inline */}
           {creating ? (
             <InlineTaskForm
+              allowRecurrence={false}
               onSubmit={(data) => { createTask(listId, data); setCreatingTask(false); }}
               onCancel={() => { setCreating(false); setCreatingTask(false); }}
             />
