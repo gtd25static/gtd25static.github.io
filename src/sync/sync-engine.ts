@@ -14,6 +14,7 @@ import type { BackupTier } from './remote-backups';
 import { isParanoidFlagSet } from '../db/paranoid-flag';
 import { getVaultSecrets } from '../db/vault';
 import { recordError } from '../lib/diagnostics';
+import { storeTheme } from '../lib/theme';
 import { classifySyncError, type SyncErrorInfo } from './sync-errors';
 import { prepareEntityRowsForAtRest, prepareSyncDataForAtRest } from './at-rest-writes';
 import { maybeCompactBlobBranch, compactBlobBranch } from './shared-blobs';
@@ -1844,7 +1845,7 @@ export async function forcePull() {
     }
 
     if (snapshot.settings?.theme) {
-      localStorage.setItem('gtd25-theme', snapshot.settings.theme);
+      storeTheme(snapshot.settings.theme);
     }
 
     // Clear local change log
@@ -2087,7 +2088,7 @@ export async function importData(data: ImportData) {
 
     // Apply theme from imported settings
     if (data.settings?.theme) {
-      localStorage.setItem('gtd25-theme', data.settings.theme);
+      storeTheme(data.settings.theme);
     }
 
     toast('Backup imported successfully', 'success');
@@ -2219,7 +2220,7 @@ export async function restoreFromBackup(tier: BackupTier) {
 
     // Apply theme from backup settings
     if (backupData.settings?.theme) {
-      localStorage.setItem('gtd25-theme', backupData.settings.theme);
+      storeTheme(backupData.settings.theme);
     }
 
     toast('Backup restored successfully', 'success');

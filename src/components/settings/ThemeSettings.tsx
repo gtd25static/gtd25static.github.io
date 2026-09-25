@@ -1,26 +1,14 @@
 import { useEffect, useState } from 'react';
-
-type Theme = 'light' | 'dark' | 'system';
-
-function getStoredTheme(): Theme {
-  return (localStorage.getItem('gtd25-theme') as Theme) ?? 'system';
-}
-
-function applyTheme(theme: Theme) {
-  const root = document.documentElement;
-  if (theme === 'dark' || (theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
-    root.classList.add('dark');
-  } else {
-    root.classList.remove('dark');
-  }
-}
+import { applyTheme, getStoredTheme, onThemeChange, storeTheme, type Theme } from '../../lib/theme';
 
 export function useTheme() {
   const [theme, setThemeState] = useState<Theme>(getStoredTheme);
 
+  // Every instance (App's, the Settings panel's) follows a change made anywhere.
+  useEffect(() => onThemeChange(setThemeState), []);
+
   useEffect(() => {
     applyTheme(theme);
-    localStorage.setItem('gtd25-theme', theme);
   }, [theme]);
 
   useEffect(() => {
@@ -31,7 +19,7 @@ export function useTheme() {
     return () => mq.removeEventListener('change', handler);
   }, [theme]);
 
-  return { theme, setTheme: setThemeState };
+  return { theme, setTheme: storeTheme };
 }
 
 export function ThemeSettings() {
