@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { render, screen } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import '../setup-component';
 import { resetAppState } from '../helpers/component-helpers';
@@ -99,6 +99,71 @@ describe('QuickCapture', () => {
     render(<QuickCapture />);
     await user.type(screen.getByPlaceholderText('Quick capture to Inbox...'), '{Enter}');
     expect(mockCreateTask).not.toHaveBeenCalled();
+  });
+
+  // The field used to be cleared only after awaiting getOrCreateInbox() and
+  // createTask(): keystrokes typed during that await landed in the old title and
+  // were then wiped or merged into it (lost first chars, "alpha onebravo two").
+  describe('typing the next item while the previous one saves', { timeout: 15_000 }, () => {
+    function deferred<T>() {
+      let resolve!: (v: T) => void;
+      const promise = new Promise<T>((r) => { resolve = r; });
+      return { promise, resolve };
+    }
+
+    function renderOpen() {
+      useAppState.setState({ quickCaptureOpen: true });
+      const user = userEvent.setup();
+      render(<><ToastContainer /><QuickCapture /></>);
+      return { user, input: screen.getByPlaceholderText('Quick capture to Inbox...') };
+    }
+
+    it('clears the field on Enter, before the save finishes, and keeps what is typed next', async () => {
+      const inbox = deferred<string>();
+      mockGetOrCreateInbox.mockReturnValueOnce(inbox.promise);
+      const { user, input } = renderOpen();
+
+      await user.type(input, 'alpha one{Enter}');
+      expect(input).toHaveValue('');
+      await user.type(input, 'bravo');
+      expect(input).toHaveValue('bravo');
+
+      await act(async () => { inbox.resolve('inbox-1'); });
+      await waitFor(() => expect(mockCreateTask).toHaveBeenCalledTimes(1));
+      expect(input).toHaveValue('bravo');
+      expect(mockCreateTask).toHaveBeenCalledWith('inbox-1', expect.objectContaining({ title: 'alpha one' }));
+
+      await user.type(input, ' two{Enter}');
+      await waitFor(() => expect(mockCreateTask).toHaveBeenCalledTimes(2));
+      expect(mockCreateTask).toHaveBeenLastCalledWith('inbox-1', expect.objectContaining({ title: 'bravo two' }));
+    });
+
+    it('a second Enter on the same item does not capture it twice', async () => {
+      const inbox = deferred<string>();
+      mockGetOrCreateInbox.mockReturnValueOnce(inbox.promise);
+      const { user, input } = renderOpen();
+
+      await user.type(input, 'once{Enter}{Enter}');
+      await act(async () => { inbox.resolve('inbox-1'); });
+      await waitFor(() => expect(mockCreateTask).toHaveBeenCalledTimes(1));
+      await new Promise((r) => setTimeout(r, 20));
+      expect(mockCreateTask).toHaveBeenCalledTimes(1);
+    });
+
+    it('saves items one after another, in the order typed', async () => {
+      const inbox = deferred<string>();
+      mockGetOrCreateInbox.mockReturnValueOnce(inbox.promise);
+      const { user, input } = renderOpen();
+
+      await user.type(input, 'first{Enter}second{Enter}');
+      // The second save waits for the first (so a first-ever capture can't
+      // create two Inboxes).
+      expect(mockGetOrCreateInbox).toHaveBeenCalledTimes(1);
+
+      await act(async () => { inbox.resolve('inbox-1'); });
+      await waitFor(() => expect(mockCreateTask).toHaveBeenCalledTimes(2));
+      expect(mockCreateTask.mock.calls.map((c) => c[1].title)).toEqual(['first', 'second']);
+    });
   });
 
   it('extracts URL from input and sets as link', async () => {

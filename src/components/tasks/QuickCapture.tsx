@@ -12,6 +12,9 @@ export function QuickCapture() {
   const setOpen = useAppState((s) => s.setQuickCaptureOpen);
   const [title, setTitle] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
+  // Saves run one after another, in the order typed (and a first-ever capture
+  // can't race another into creating two Inboxes).
+  const saveQueue = useRef<Promise<void>>(Promise.resolve());
 
   useEffect(() => {
     if (open) {
@@ -37,11 +40,7 @@ export function QuickCapture() {
     }
   }
 
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    const trimmed = title.trim();
-    if (!trimmed) return;
-
+  async function capture(trimmed: string) {
     const inboxId = await getOrCreateInbox();
     const url = extractUrl(trimmed);
     if (url) {
@@ -56,7 +55,22 @@ export function QuickCapture() {
       const task = await createTask(inboxId, { title: trimmed });
       if (task) toast('Captured to Inbox', 'success');
     }
+  }
+
+  function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    const trimmed = title.trim();
+    if (!trimmed) return;
+    // Clear before any await: whatever is typed while this saves belongs to the
+    // next item (clearing afterwards wiped or merged those keystrokes), and a
+    // repeated Enter finds an empty field instead of capturing it twice.
     setTitle('');
+    saveQueue.current = saveQueue.current
+      .then(() => capture(trimmed))
+      .catch((err) => {
+        recordError('quickCapture.save', err);
+        toast('Could not capture to Inbox', 'error');
+      });
     // Stay open for the next item
     requestAnimationFrame(() => inputRef.current?.focus());
   }
