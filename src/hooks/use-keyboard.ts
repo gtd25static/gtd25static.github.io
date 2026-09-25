@@ -23,6 +23,21 @@ function isActionItem(item: NavItem): boolean {
   return item.type === 'banner-blocked' || item.type === 'create' || item.type === 'add-subtask';
 }
 
+// Controls whose native Enter/Space behaviour (press, follow, toggle) must win
+// over the list shortcuts while they hold DOM focus.
+const NATIVE_KEY_CONTROLS =
+  'button, a[href], summary, [role="button"], [role="link"], [role="menuitem"], [role="tab"], [role="checkbox"], [role="switch"], [role="option"]';
+
+function isNativeKeyControl(el: EventTarget | null): el is HTMLElement {
+  return el instanceof HTMLElement && el.closest(NATIVE_KEY_CONTROLS) !== null;
+}
+
+// A modal — a native <dialog> opened with showModal(), or an aria-modal overlay
+// — owns the keyboard while it is up.
+function isModalOpen(): boolean {
+  return document.querySelector('dialog[open], [aria-modal="true"]') !== null;
+}
+
 export function useKeyboard() {
   const expandedTaskIds = useAppState((s) => s.expandedTaskIds);
   const selectedListId = useAppState((s) => s.selectedListId);
@@ -260,6 +275,28 @@ export function useKeyboard() {
       // browser from ever firing the `paste` event the Shared Folder relies on.
       // (Shift stays allowed: '?' and shift-extended j/k selection need it.)
       if (e.ctrlKey || e.metaKey || e.altKey) return;
+
+      // With a modal up, no shortcut may act on the list behind it, and nothing
+      // is preventDefault-ed: cancelling the keydown would stop Escape from
+      // closing the <dialog> and Enter/Space from pressing its buttons.
+      if (isModalOpen()) {
+        if (e.key === '?' && s.helpOpen) {
+          // The help overlay is itself a modal; `?` keeps toggling it closed.
+          e.preventDefault();
+          s.setHelpOpen(false);
+        }
+        return;
+      }
+
+      // Enter/Space on a focused button, link, … press it natively.
+      if ((e.key === 'Enter' || e.key === ' ') && isNativeKeyControl(target)) return;
+
+      // Moving the keyboard ring hands Enter/Space back to it: release DOM focus
+      // left on a clicked or tabbed-to control (e.g. the sidebar list just
+      // clicked), or the next Enter would press that control instead.
+      if (['j', 'J', 'k', 'K', 'h', 'l'].includes(e.key) && isNativeKeyControl(document.activeElement)) {
+        document.activeElement.blur();
+      }
 
       const items = s.focusZone === 'sidebar' ? listsRef.current : mainRef.current;
       const idx = items.findIndex((i) => i.id === s.focusedItemId);
