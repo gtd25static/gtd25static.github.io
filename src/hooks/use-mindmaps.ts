@@ -498,27 +498,41 @@ export async function deleteMindmap(id: string): Promise<void> {
   }
 }
 
-/** Restore a soft-deleted map together with all its nodes (Trash). */
+type MindmapRestoreEntry = { entityType: 'mindmapFolder' | 'mindmap' | 'mindmapNode'; entityId: string; operation: 'upsert'; data: Record<string, unknown> };
+
+const tableForMindmapEntity = { mindmapFolder: 'mindmapFolders', mindmap: 'mindmaps', mindmapNode: 'mindmapNodes' } as const;
+
+// Clear deletedAt on one folder, map or node row inside the caller's
+// transaction and return the upsert entry to record for it. Only this row.
+async function undeleteMindmapRowInTx(
+  entityType: MindmapRestoreEntry['entityType'],
+  row: MindmapFolder | Mindmap | MindmapNode,
+  now: number,
+): Promise<MindmapRestoreEntry> {
+  const table = db.table(tableForMindmapEntity[entityType]);
+  const fieldTimestamps = stampUpdatedFields(row.fieldTimestamps, ['deletedAt'], now);
+  await table.update(row.id, { deletedAt: undefined, updatedAt: now, fieldTimestamps });
+  const restored = await table.get(row.id);
+  return { entityType, entityId: row.id, operation: 'upsert', data: restored as Record<string, unknown> };
+}
+
+/**
+ * Restore a soft-deleted map (Trash) with the nodes carrying its exact
+ * deletedAt — the ones deleteMindmap / deleteMindmapFolder took. Nodes deleted
+ * on their own before stay deleted.
+ */
 export async function restoreMindmap(id: string): Promise<void> {
   try {
     const now = Date.now();
     await ensureDeviceId();
     await db.transaction('rw', [db.mindmaps, db.mindmapNodes, db.changeLog], async () => {
-      const existing = await db.mindmaps.get(id);
-      if (!existing) return;
-      const ft = stampUpdatedFields(existing.fieldTimestamps, ['deletedAt'], now);
-      await db.mindmaps.update(id, { deletedAt: undefined, updatedAt: now, fieldTimestamps: ft });
+      const map = await db.mindmaps.get(id);
+      if (!map?.deletedAt) return;
+      const cascadeAt = map.deletedAt;
+      const batch: MindmapRestoreEntry[] = [await undeleteMindmapRowInTx('mindmap', map, now)];
       const nodes = await db.mindmapNodes.where('mapId').equals(id).toArray();
       for (const n of nodes) {
-        const nft = stampUpdatedFields(n.fieldTimestamps, ['deletedAt'], now);
-        await db.mindmapNodes.update(n.id, { deletedAt: undefined, updatedAt: now, fieldTimestamps: nft });
-      }
-      const batch: Array<{ entityType: 'mindmap' | 'mindmapNode'; entityId: string; operation: 'upsert'; data: Record<string, unknown> }> = [];
-      const map = await db.mindmaps.get(id);
-      if (map) batch.push({ entityType: 'mindmap', entityId: id, operation: 'upsert', data: map as unknown as Record<string, unknown> });
-      const restored = await db.mindmapNodes.where('mapId').equals(id).toArray();
-      for (const n of restored) {
-        batch.push({ entityType: 'mindmapNode', entityId: n.id, operation: 'upsert', data: n as unknown as Record<string, unknown> });
+        if (n.deletedAt === cascadeAt) batch.push(await undeleteMindmapRowInTx('mindmapNode', n, now));
       }
       await recordChangeBatchInTx(batch);
     });
@@ -528,35 +542,35 @@ export async function restoreMindmap(id: string): Promise<void> {
   }
 }
 
-/** Restore a soft-deleted folder with its whole cascade (like restoring a task list). */
+/**
+ * Restore a soft-deleted folder with what its delete took (like restoring a
+ * task list): the descendant folders, maps and nodes carrying the folder's
+ * exact deletedAt. Anything deleted on its own before stays in the Trash.
+ */
 export async function restoreMindmapFolder(id: string): Promise<void> {
   try {
     const now = Date.now();
     await ensureDeviceId();
     const folderIds = [id, ...(await descendantFolderIds(id, true))];
-    const folderSet = new Set(folderIds);
     await db.transaction('rw', [db.mindmapFolders, db.mindmaps, db.mindmapNodes, db.changeLog], async () => {
-      const batch: Array<{ entityType: 'mindmapFolder' | 'mindmap' | 'mindmapNode'; entityId: string; operation: 'upsert'; data: Record<string, unknown> }> = [];
+      const folder = await db.mindmapFolders.get(id);
+      if (!folder?.deletedAt) return;
+      const cascadeAt = folder.deletedAt;
+      const batch: MindmapRestoreEntry[] = [];
+      const restoredFolders = new Set<string>();
       for (const folderId of folderIds) {
         const f = await db.mindmapFolders.get(folderId);
-        if (!f) continue;
-        const ft = stampUpdatedFields(f.fieldTimestamps, ['deletedAt'], now);
-        await db.mindmapFolders.update(folderId, { deletedAt: undefined, updatedAt: now, fieldTimestamps: ft });
-        const restored = await db.mindmapFolders.get(folderId);
-        if (restored) batch.push({ entityType: 'mindmapFolder', entityId: folderId, operation: 'upsert', data: restored as unknown as Record<string, unknown> });
+        if (!f || f.deletedAt !== cascadeAt) continue;
+        batch.push(await undeleteMindmapRowInTx('mindmapFolder', f, now));
+        restoredFolders.add(folderId);
       }
-      const maps = (await db.mindmaps.toArray()).filter((m) => m.folderId && folderSet.has(m.folderId));
+      const maps = (await db.mindmaps.toArray())
+        .filter((m) => m.folderId && restoredFolders.has(m.folderId) && m.deletedAt === cascadeAt);
       for (const m of maps) {
-        const ft = stampUpdatedFields(m.fieldTimestamps, ['deletedAt'], now);
-        await db.mindmaps.update(m.id, { deletedAt: undefined, updatedAt: now, fieldTimestamps: ft });
-        const restoredMap = await db.mindmaps.get(m.id);
-        if (restoredMap) batch.push({ entityType: 'mindmap', entityId: m.id, operation: 'upsert', data: restoredMap as unknown as Record<string, unknown> });
+        batch.push(await undeleteMindmapRowInTx('mindmap', m, now));
         const nodes = await db.mindmapNodes.where('mapId').equals(m.id).toArray();
         for (const n of nodes) {
-          const nft = stampUpdatedFields(n.fieldTimestamps, ['deletedAt'], now);
-          await db.mindmapNodes.update(n.id, { deletedAt: undefined, updatedAt: now, fieldTimestamps: nft });
-          const restoredNode = await db.mindmapNodes.get(n.id);
-          if (restoredNode) batch.push({ entityType: 'mindmapNode', entityId: n.id, operation: 'upsert', data: restoredNode as unknown as Record<string, unknown> });
+          if (n.deletedAt === cascadeAt) batch.push(await undeleteMindmapRowInTx('mindmapNode', n, now));
         }
       }
       await recordChangeBatchInTx(batch);

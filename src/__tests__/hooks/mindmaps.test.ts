@@ -25,6 +25,7 @@ import {
 } from '../../hooks/use-mindmaps';
 import { restoreFromTrash, permanentlyDelete } from '../../hooks/use-trash';
 import { useMindmapUi } from '../../stores/mindmap-ui';
+import { tick, loggedIds } from '../helpers/cascade-fixtures';
 
 beforeEach(async () => {
   await resetDb();
@@ -310,6 +311,100 @@ describe('trash integration', () => {
     expect(await db.mindmapFolders.get(folder.id)).toBeUndefined();
     expect(await db.mindmaps.get(map.id)).toBeUndefined();
     expect(await db.mindmapNodes.where('mapId').equals(map.id).count()).toBe(0);
+  });
+});
+
+/**
+ * Top > Sub > Inner (root, live node `kept`, node `goneNode` deleted earlier).
+ * Top also holds a live map `sibling`, a map `goneMap` deleted earlier and a
+ * folder `goneFolder` deleted earlier (with map `goneFolderMap` inside).
+ */
+async function seedMindmapTree() {
+  const top = assertDefined(await createMindmapFolder('Top'));
+  const sub = assertDefined(await createMindmapFolder('Sub', top.id));
+  const inner = assertDefined(await createMindmap('Inner', sub.id));
+  const innerRoot = await rootOf(inner.id);
+  const kept = assertDefined(await createMindmapNode(inner.id, innerRoot.id, 'Kept'));
+  const goneNode = assertDefined(await createMindmapNode(inner.id, innerRoot.id, 'Gone node'));
+  const sibling = assertDefined(await createMindmap('Sibling', top.id));
+  const goneMap = assertDefined(await createMindmap('Gone map', top.id));
+  const goneFolder = assertDefined(await createMindmapFolder('Gone folder', top.id));
+  const goneFolderMap = assertDefined(await createMindmap('In gone folder', goneFolder.id));
+  await deleteMindmapNodeSubtree(goneNode.id);
+  await deleteMindmap(goneMap.id);
+  await deleteMindmapFolder(goneFolder.id);
+  const earlier = {
+    goneNode: assertDefined((await db.mindmapNodes.get(goneNode.id))?.deletedAt),
+    goneMap: assertDefined((await db.mindmaps.get(goneMap.id))?.deletedAt),
+    goneFolder: assertDefined((await db.mindmapFolders.get(goneFolder.id))?.deletedAt),
+    goneFolderMap: assertDefined((await db.mindmaps.get(goneFolderMap.id))?.deletedAt),
+  };
+  await tick();
+  return { top, sub, inner, innerRoot, kept, goneNode, sibling, goneMap, goneFolder, goneFolderMap, earlier };
+}
+
+async function expectEarlierDeletesKept(s: Awaited<ReturnType<typeof seedMindmapTree>>) {
+  expect((await db.mindmapNodes.get(s.goneNode.id))?.deletedAt).toBe(s.earlier.goneNode);
+  expect((await db.mindmaps.get(s.goneMap.id))?.deletedAt).toBe(s.earlier.goneMap);
+  expect((await db.mindmapFolders.get(s.goneFolder.id))?.deletedAt).toBe(s.earlier.goneFolder);
+  expect((await db.mindmaps.get(s.goneFolderMap.id))?.deletedAt).toBe(s.earlier.goneFolderMap);
+  expect((await rootOf(s.goneFolderMap.id)).deletedAt).toBe(s.earlier.goneFolderMap);
+}
+
+describe('mindmap delete / restore vs. rows deleted earlier', () => {
+  it('a node subtree delete stamps every node with one deletedAt', async () => {
+    const map = assertDefined(await createMindmap('M'));
+    const root = await rootOf(map.id);
+    const a = assertDefined(await createMindmapNode(map.id, root.id, 'A'));
+    const a1 = assertDefined(await createMindmapNode(map.id, a.id, 'A1'));
+    const a11 = assertDefined(await createMindmapNode(map.id, a1.id, 'A11'));
+    await deleteMindmapNodeSubtree(a.id);
+    const at = assertDefined((await db.mindmapNodes.get(a.id))?.deletedAt);
+    expect((await db.mindmapNodes.get(a1.id))?.deletedAt).toBe(at);
+    expect((await db.mindmapNodes.get(a11.id))?.deletedAt).toBe(at);
+  });
+
+  it('deleteMindmapFolder keeps the deletedAt of rows deleted before and logs no delete for them', async () => {
+    const s = await seedMindmapTree();
+    await db.changeLog.clear();
+
+    await deleteMindmapFolder(s.top.id);
+
+    await expectEarlierDeletesKept(s);
+    expect(await loggedIds('delete')).toEqual(
+      [s.top.id, s.sub.id, s.inner.id, s.innerRoot.id, s.kept.id, s.sibling.id, (await rootOf(s.sibling.id)).id].sort(),
+    );
+  });
+
+  it('restoreMindmap brings back only the nodes the map delete took', async () => {
+    const s = await seedMindmapTree();
+    await deleteMindmap(s.inner.id);
+    await db.changeLog.clear();
+
+    await restoreMindmap(s.inner.id);
+
+    expect((await db.mindmaps.get(s.inner.id))?.deletedAt).toBeUndefined();
+    expect((await db.mindmapNodes.get(s.innerRoot.id))?.deletedAt).toBeUndefined();
+    expect((await db.mindmapNodes.get(s.kept.id))?.deletedAt).toBeUndefined();
+    expect((await db.mindmapNodes.get(s.goneNode.id))?.deletedAt).toBe(s.earlier.goneNode);
+    expect(await loggedIds('upsert')).toEqual([s.inner.id, s.innerRoot.id, s.kept.id].sort());
+  });
+
+  it('restoreMindmapFolder brings back only the folders, maps and nodes the folder delete took', async () => {
+    const s = await seedMindmapTree();
+    await deleteMindmapFolder(s.top.id);
+    await db.changeLog.clear();
+
+    await restoreFromTrash({ id: s.top.id, type: 'mindmapFolder', title: 'Top', deletedAt: Date.now() });
+
+    for (const f of [s.top, s.sub]) expect((await db.mindmapFolders.get(f.id))?.deletedAt).toBeUndefined();
+    for (const m of [s.inner, s.sibling]) expect((await db.mindmaps.get(m.id))?.deletedAt).toBeUndefined();
+    expect((await db.mindmapNodes.get(s.kept.id))?.deletedAt).toBeUndefined();
+    await expectEarlierDeletesKept(s);
+    const siblingRoot = await rootOf(s.sibling.id);
+    expect(await loggedIds('upsert')).toEqual(
+      [s.top.id, s.sub.id, s.inner.id, s.innerRoot.id, s.kept.id, s.sibling.id, siblingRoot.id].sort(),
+    );
   });
 });
 
