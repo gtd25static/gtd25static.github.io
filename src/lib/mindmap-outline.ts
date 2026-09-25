@@ -27,7 +27,14 @@ import { MAX_MINDMAP_LABEL_LENGTH, MAX_MINDMAP_IMPORT_NODES } from './constants'
 //   - headings nest: `##` under the nearest `#`, and bullets hang off the
 //     heading they follow. One shallowest heading, first ⇒ it is the root;
 //     otherwise a synthetic root holds them all.
-//   - bullet markers `-`, `*`, `+`, `1.`, `1)` (the marker is dropped)
+//   - bullet markers `-`, `*`, `+`, `•`, `◦`, `▪`, `‣`, `1.`, `1)`, `a.`, `a)`
+//     (the marker is dropped)
+//   - a line that is only a bold span (`**Methods**`) is a section, like a
+//     heading one level below any `#` heading
+//   - code fences (```, ~~~) are ignored — chatbots wrap the outline in one
+//   - a paragraph after a blank line, outdented past the open bullet, ends the
+//     list: it extends the section it sits in, or — after the last node — is a
+//     sign-off ("Let me know if…") and is left out with a warning
 //   - nesting comes from the indent COLUMN (tab = 2), compared against the open
 //     bullets — so 2-, 3- or 4-space indents and tabs all nest correctly and
 //     siblings stay siblings
@@ -59,9 +66,14 @@ export interface ParsedOutline {
 // Applied to a line with its indent already removed, so no pattern starts with
 // a greedy whitespace class — a `/^[ \t]*-/` style regex backtracks
 // quadratically on a pasted megabyte of spaces.
-const BULLET_RE = /^(?:[-*+]|\d{1,9}[.)])[ \t]+/;
+const BULLET_RE = /^(?:[-*+•◦▪‣]|\d{1,9}[.)]|[a-zA-Z][.)])[ \t]+/;
 const HEADING_RE = /^(#{1,6})[ \t]+(.*)$/;
 const RULE_RE = /^(?:-{3,}|\*{3,}|_{3,})[ \t]*$/;
+/** A line that is nothing but one bold span, maybe with a colon: a section title. */
+const BOLD_LINE_RE = /^(\*\*|__)(?=\S)(?:(?!\1).)+?\1:?[ \t]*$/;
+const FENCE_RE = /^(?:`{3,}|~{3,})/;
+/** Heading level given to bold-only lines: below every `#` level. */
+const BOLD_SECTION_LEVEL = 7;
 /** Indent columns a heading may carry and still be a heading (CommonMark). */
 const MAX_HEADING_INDENT = 3;
 
@@ -86,7 +98,8 @@ function splitIndent(line: string): { columns: number; rest: string } {
  */
 function looksLikeStructure(line: string): boolean {
   const { rest } = splitIndent(line);
-  return BULLET_RE.test(rest) || HEADING_RE.test(rest) || RULE_RE.test(rest);
+  return BULLET_RE.test(rest) || HEADING_RE.test(rest) || RULE_RE.test(rest)
+    || BOLD_LINE_RE.test(rest) || FENCE_RE.test(rest);
 }
 
 // --- Export ---
@@ -148,12 +161,17 @@ function classifyLines(lines: string[]): ClassifiedLine[] {
   return lines.map((raw) => {
     const { columns, rest } = splitIndent(raw);
     const base = { raw, columns, level: 0, content: '', contentCol: 0 };
-    if (rest.length === 0) return { ...base, kind: 'blank' as const };
+    // A code fence is dropped like a blank line: chatbots wrap the outline in one.
+    if (rest.length === 0 || FENCE_RE.test(rest)) return { ...base, kind: 'blank' as const };
     if (RULE_RE.test(rest)) return { ...base, kind: 'rule' as const };
 
     const heading = columns <= MAX_HEADING_INDENT ? HEADING_RE.exec(rest) : null;
     if (heading) {
       return { ...base, kind: 'heading' as const, level: heading[1].length, content: heading[2] };
+    }
+    // Only at the left margin: indented, it is more likely a bullet's own text.
+    if (columns === 0 && BOLD_LINE_RE.test(rest)) {
+      return { ...base, kind: 'heading' as const, level: BOLD_SECTION_LEVEL, content: rest.trimEnd() };
     }
     const bullet = BULLET_RE.exec(rest);
     if (bullet) {
@@ -213,15 +231,25 @@ function findRootHeading(lines: ClassifiedLine[]): number {
 }
 
 /** Markdown pass: headings nest, bullets hang off the current heading. */
-function parseMarkdown(lines: ClassifiedLine[], spend: () => boolean): OutlineNode | null {
+function parseMarkdown(
+  lines: ClassifiedLine[],
+  spend: () => boolean,
+  warnings: string[],
+): OutlineNode | null {
   const root: OutlineNode = { label: '', children: [] };
   const rootHeadingIndex = findRootHeading(lines);
   const headings: Array<{ level: number; node: OutlineNode }> = [];
   const bullets: Array<{ columns: number; contentCol: number; node: OutlineNode }> = [];
   let rootLabelStarted = false;
+  let lastStructural = -1;
+  lines.forEach((line, i) => { if (line.kind === 'heading' || line.kind === 'bullet') lastStructural = i; });
+  let afterBlank = false;
+  let signOff = false;
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
+    const blankBefore = afterBlank;
+    afterBlank = line.kind === 'blank';
     if (line.kind === 'blank') continue;
     if (line.kind === 'rule') { bullets.length = 0; continue; }
 
@@ -251,6 +279,18 @@ function parseMarkdown(lines: ClassifiedLine[], spend: () => boolean): OutlineNo
         : root;
       parent.children.push(node);
       bullets.push({ columns: line.columns, contentCol: line.contentCol, node });
+      continue;
+    }
+
+    // A paragraph after a blank line, outdented past the open bullet, ends the
+    // list (as in CommonMark) instead of gluing itself onto the last point.
+    // After the last node it is a chatbot sign-off, left out.
+    if (bullets.length > 0 && blankBefore && line.columns < bullets[bullets.length - 1].contentCol) {
+      bullets.length = 0;
+      if (i > lastStructural) signOff = true;
+    }
+    if (signOff) {
+      warnings.push('Text after the outline was left out.');
       continue;
     }
 
@@ -307,7 +347,7 @@ export function parseOutline(text: string): ParsedOutline | { error: string } {
     !hasStructure && textLines.length > 1 && textLines.some((l) => l.columns > 0) ? 'indent' : 'markdown';
 
   const spend = makeNodeBudget();
-  const root = format === 'indent' ? parseIndented(lines, spend) : parseMarkdown(lines, spend);
+  const root = format === 'indent' ? parseIndented(lines, spend) : parseMarkdown(lines, spend, warnings);
   if (!root) return { error: `The outline has more than ${MAX_MINDMAP_IMPORT_NODES} nodes.` };
   if (root.label.length === 0 && root.children.length === 0) {
     return { error: 'No outline content found (expected "# Heading" and/or "- item" lines).' };
@@ -341,12 +381,19 @@ export function parseOutline(text: string): ParsedOutline | { error: string } {
     }
   }
 
+  // The cap counts every node the import creates, root included (the budget
+  // above only bounds the parsing work): the preview used to accept 2001.
+  const nodeCount = 1 + countNodes(children);
+  if (nodeCount > MAX_MINDMAP_IMPORT_NODES) {
+    return { error: `The outline has more than ${MAX_MINDMAP_IMPORT_NODES} nodes.` };
+  }
+
   return {
     name: outlineNameFromLabel(rootLabel),
     rootLabel,
     children,
     format,
-    nodeCount: 1 + countNodes(children),
+    nodeCount,
     warnings: [...new Set(warnings)],
   };
 }

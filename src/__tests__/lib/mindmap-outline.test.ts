@@ -266,3 +266,109 @@ describe('outlineNameFromLabel', () => {
     expect(outlineNameFromLabel('x'.repeat(300))).toHaveLength(120);
   });
 });
+
+// GUI review: what chatbots actually paste.
+describe('parseOutline — chatbot output', () => {
+  const labels = (nodes: OutlineNode[]) => nodes.map((n) => n.label);
+
+  it('ignores code fences, and leaves a sign-off after the list out (with a warning)', () => {
+    const parsed = ok(parseOutline([
+      '```markdown',
+      '# Sleep',
+      '- Deep sleep',
+      '  - Clears the brain',
+      '- REM',
+      '```',
+      '',
+      'Let me know if you want more detail on any point.',
+      'Happy to help!',
+    ].join('\n')));
+    expect(parsed.rootLabel).toBe('Sleep');
+    expect(labels(parsed.children)).toEqual(['Deep sleep', 'REM']);
+    expect(labels(parsed.children[0].children)).toEqual(['Clears the brain']);
+    expect(parsed.warnings.some((w) => /left out/.test(w))).toBe(true);
+  });
+
+  it('gives prose between two sections to its section, not to the last point', () => {
+    const parsed = ok(parseOutline([
+      '# T', '## Ideas', '- a', '- b', '', 'These show X.', '## Numbers', '- 1',
+    ].join('\n')));
+    const [ideas, numbers] = parsed.children;
+    expect(labels(ideas.children)).toEqual(['a', 'b']);
+    expect(ideas.label).toBe('Ideas\nThese show X.');
+    expect(labels(numbers.children)).toEqual(['1']);
+    expect(parsed.warnings).toHaveLength(0);
+  });
+
+  it('still continues a point with an indented paragraph after a blank line', () => {
+    const parsed = ok(parseOutline('# T\n- a\n\n  more about a\n- b\n'));
+    expect(labels(parsed.children)).toEqual(['a\nmore about a', 'b']);
+  });
+
+  it('reads bold-only lines as sections and a./b. as sub-points', () => {
+    const parsed = ok(parseOutline([
+      '**Introduction**',
+      '1. Background',
+      '   a. History',
+      '   b. Motivation',
+      '2. Scope',
+      '',
+      '**Methods**',
+      '- Survey',
+    ].join('\n')));
+    expect(labels(parsed.children)).toEqual(['**Introduction**', '**Methods**']);
+    const [intro, methods] = parsed.children;
+    expect(labels(intro.children)).toEqual(['Background', 'Scope']);
+    expect(labels(intro.children[0].children)).toEqual(['History', 'Motivation']);
+    expect(labels(methods.children)).toEqual(['Survey']);
+  });
+
+  it('nests bold sections under the # heading they follow', () => {
+    const parsed = ok(parseOutline('# Report\n**Part one**\n- x\n**Part two**\n- y\n'));
+    expect(parsed.rootLabel).toBe('Report');
+    expect(labels(parsed.children)).toEqual(['**Part one**', '**Part two**']);
+    expect(labels(parsed.children[1].children)).toEqual(['y']);
+  });
+
+  it('takes • ◦ ▪ ‣ as bullet markers', () => {
+    const parsed = ok(parseOutline('# Trip\n• Flights\n  ◦ Book\n  ▪ Pay\n‣ Hotel\n'));
+    expect(labels(parsed.children)).toEqual(['Flights', 'Hotel']);
+    expect(labels(parsed.children[0].children)).toEqual(['Book', 'Pay']);
+  });
+
+  // Pasted text is untrusted: the new bold-line and marker patterns must stay
+  // linear on hostile lines, like the indent handling above.
+  it('does not backtrack on long near-miss bold lines', () => {
+    const started = Date.now();
+    for (const line of ['**' + 'a'.repeat(300_000), '**' + 'a*'.repeat(150_000), '__' + '_a'.repeat(150_000) + ' x']) {
+      expect('error' in parseOutline(`# T\n${line}\n- a\n`)).toBe(false);
+    }
+    expect(Date.now() - started).toBeLessThan(1500);
+  });
+
+  it('keeps such lines inside a label through export and import', () => {
+    const rows = [
+      node('root', { label: 'Root\n**bold only**' }),
+      node('a', { parentId: 'root', label: 'x\n**bold only**\n```\n~~~ tilde\na. lettered\n• dot' }),
+    ];
+    const original = mapToOutline(buildTree(rows));
+    const parsed = ok(parseOutline(original));
+    expect(parsed.rootLabel).toBe('Root\n**bold only**');
+    expect(labels(parsed.children)).toEqual(['x\n**bold only**\n```\n~~~ tilde\na. lettered\n• dot']);
+    expect(mapToOutline(buildTree(rowsFromParsed(parsed)))).toBe(original);
+  });
+});
+
+// The cap counts every node the import creates, root included: the preview
+// accepted 2001 and the import then refused it.
+describe('parseOutline — node cap', () => {
+  const withBullets = (n: number) => ['# Root', ...Array.from({ length: n }, (_, i) => `- n${i}`)].join('\n');
+
+  it('accepts exactly MAX_MINDMAP_IMPORT_NODES nodes, root included', () => {
+    expect(ok(parseOutline(withBullets(1999))).nodeCount).toBe(2000);
+  });
+
+  it('refuses one more', () => {
+    expect(parseOutline(withBullets(2000))).toHaveProperty('error');
+  });
+});
