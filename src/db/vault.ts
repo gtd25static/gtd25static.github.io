@@ -299,6 +299,10 @@ export async function enableParanoid(passphrase: string, idleMinutes = DEFAULT_I
   currentSecrets = secrets;
   idleTimeoutMs = idleMinutes * 60_000;
   setFlag(true);
+  // The app's other tabs hold no key: they would go on reading the rows as they
+  // are rewritten below and get ciphertext back (which crashed them). Reload them
+  // now that the flag is up, so they come back at the lock screen.
+  signalOtherTabs({ type: 'reload' });
 
   try {
     await completeEnable();

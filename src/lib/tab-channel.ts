@@ -9,8 +9,8 @@
 // depends on delivery.
 //
 // `reload` = lock, then reload the tab: the vault was re-keyed underneath it (a
-// secondary-passphrase unlock in another tab), so nothing it still holds in memory
-// may outlive that.
+// secondary-passphrase unlock or a re-key in another tab), or Paranoid Mode was
+// turned on or off there, so nothing it still holds in memory may outlive that.
 
 export type TabSignal = { type: 'lock' } | { type: 'wipe' } | { type: 'reload' };
 

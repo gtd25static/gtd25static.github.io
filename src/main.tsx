@@ -27,8 +27,8 @@ window.addEventListener('pagehide', () => flushPendingClipboardClear());
 // A wipe additionally reloads us: it drops this tab's open IndexedDB connection,
 // which is what would otherwise block the deletion, and the boot-time
 // retryPendingWipe below finishes the job if it is still pending. A reload signal
-// means the vault was re-keyed underneath this tab (a secondary-passphrase unlock
-// in another one): nothing it still holds in memory may outlive that.
+// means the vault was re-keyed underneath this tab, or Paranoid Mode was turned on
+// or off in another one: nothing it still holds in memory may outlive that.
 onTabSignal((signal) => {
   if (signal.type === 'wipe' || signal.type === 'reload') {
     try { window.location.reload(); } catch { /* environment without a real location */ }

@@ -32,6 +32,10 @@ vi.mock('../../db/vault-migration', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../db/vault-migration')>();
   return {
     ...actual,
+    encryptAllAtRest: async (...args: Parameters<typeof actual.encryptAllAtRest>) => {
+      hooks.events.push('encrypt pass');
+      await actual.encryptAllAtRest(...args);
+    },
     decryptAllAtRest: async (...args: Parameters<typeof actual.decryptAllAtRest>) => {
       hooks.events.push('decrypt pass');
       await actual.decryptAllAtRest(...args);
@@ -105,6 +109,16 @@ afterEach(() => {
   vault.__resetVaultStateForTests();
   localStorage.removeItem(FLAG);
   hooks.afterFirstDecryptPass = null;
+});
+
+describe('enabling Paranoid Mode', () => {
+  it('reloads the other tabs, into the lock screen, before the first row is encrypted', async () => {
+    // An open tab went on reading the rows as they were rewritten, got ciphertext
+    // without a title back, and crashed.
+    await vault.enableParanoid(PASS);
+
+    expect(hooks.events.slice(0, 2)).toEqual(['signal:reload flag=up', 'encrypt pass']);
+  });
 });
 
 describe('disabling Paranoid Mode', () => {

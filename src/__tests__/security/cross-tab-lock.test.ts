@@ -82,8 +82,8 @@ describe('cross-tab vault lock', () => {
   });
 
   it('tells the other tabs when this one locks', async () => {
-    const other = otherTab().listen();
     await enableParanoid(PASSPHRASE);
+    const other = otherTab().listen(); // after the enable, which reloads the other tabs
 
     lock();
     await settle(() => other.heard.length > 0);
