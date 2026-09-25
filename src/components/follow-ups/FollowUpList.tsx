@@ -146,6 +146,7 @@ export function FollowUpList({ listId, listName }: Props) {
               )}
             </div>
             <DropdownMenu
+              label="List options"
               trigger={
                 <svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor" className="text-zinc-400">
                   <circle cx="10" cy="4" r="1.5" />

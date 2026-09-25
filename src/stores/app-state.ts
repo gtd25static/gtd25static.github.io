@@ -78,7 +78,14 @@ export const useAppState = create<AppState>((set) => ({
   bulkMode: false,
   selectedTaskIds: new Set(),
 
-  selectList: (id) => set({ selectedListId: id, searchQuery: '', bulkMode: false, selectedTaskIds: new Set() }),
+  // The keyboard ring and any half-open form belong to the view being left: kept,
+  // `d` could toggle a task of the previous list, and `n` left a new-task form
+  // that opened in whichever list came next. Callers that focus something in the
+  // new view (search, reveal) set it after this.
+  selectList: (id) => set({
+    selectedListId: id, searchQuery: '', bulkMode: false, selectedTaskIds: new Set(),
+    focusedItemId: null, creatingTask: false, addingSubtaskToTaskId: null, editingItemId: null,
+  }),
   toggleTaskExpanded: (id) =>
     set((state) => {
       const next = new Set(state.expandedTaskIds);

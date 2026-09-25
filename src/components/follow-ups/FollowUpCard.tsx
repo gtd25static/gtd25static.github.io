@@ -17,6 +17,7 @@ import { formatDate, dueDateColor } from '../../lib/date-utils';
 import { LinksList } from '../shared/LinksList';
 import { ExpandableText } from '../shared/ExpandableText';
 import { TaskForm } from '../tasks/TaskForm';
+import { RESOLVE_FOLLOW_UP_QUESTION } from '../../lib/constants';
 
 // Action-chip layout: a 44px tap target on phones (per platform touch guidance),
 // a touch more compact on md+ desktop. Colours are appended per chip.
@@ -63,7 +64,7 @@ export function FollowUpCard({ task, index, dragHandleProps }: Props) {
   }, [showDiscussed]);
 
   async function handleResolve() {
-    if (!await confirmDialog('Resolve this follow-up? It moves to the Resolved section and you can reopen it later.', { confirmLabel: 'Resolve' })) return;
+    if (!await confirmDialog(RESOLVE_FOLLOW_UP_QUESTION, { confirmLabel: 'Resolve' })) return;
     await updateTask(task.id, { archived: true });
   }
 
@@ -248,7 +249,12 @@ export function FollowUpCard({ task, index, dragHandleProps }: Props) {
             Discussed
           </button>
           {showDiscussed && (
-            <DiscussedPopover task={task} align="right" onDone={() => setShowDiscussed(false)} />
+            <DiscussedPopover
+              task={task}
+              align="right"
+              // Back on the chip (Escape, Snooze, Log): the focus was left on <body>.
+              onDone={() => { setShowDiscussed(false); discussedRef.current?.querySelector('button')?.focus(); }}
+            />
           )}
         </div>
       )}
@@ -298,6 +304,7 @@ export function FollowUpCard({ task, index, dragHandleProps }: Props) {
       {/* Hover actions: edit/delete */}
       <div className="flex items-center gap-1 md:opacity-0 md:group-hover:opacity-100 shrink-0">
         <DropdownMenu
+          label="Follow-up options"
           trigger={
             <svg width="18" height="18" viewBox="0 0 20 20" fill="currentColor" className="text-zinc-400">
               <circle cx="10" cy="4" r="1.5" />

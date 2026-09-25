@@ -50,6 +50,7 @@ export function MindmapEditor({ mapId }: { mapId: string }) {
         </h1>
         <span className="shrink-0 text-xs text-zinc-400">{nodes.length} node(s)</span>
         <DropdownMenu
+          label="Export"
           trigger={
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="text-zinc-500 dark:text-zinc-400" aria-label="Export">
               <path d="M12 3v12M7 10l5 5 5-5M4 21h16" />

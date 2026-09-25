@@ -105,6 +105,7 @@ export function InboxCard({ task, index }: Props) {
       {/* "Process to..." dropdown */}
       <div className="shrink-0">
         <DropdownMenu
+          label="Task options"
           trigger={
             <span className="rounded px-2 py-1 text-xs font-medium text-accent-600 bg-accent-50 dark:text-accent-400 dark:bg-accent-900/30">
               Process

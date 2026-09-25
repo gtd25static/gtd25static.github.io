@@ -96,3 +96,6 @@ export const DEFAULT_KEYBOARD_SHORTCUTS: Record<string, string> = {
   help: '?',
   search: '/',
 };
+
+/** Asked before a follow-up is resolved: its card, Attention and the `d` key. */
+export const RESOLVE_FOLLOW_UP_QUESTION = 'Resolve this follow-up? It moves to the Resolved section and you can reopen it later.';

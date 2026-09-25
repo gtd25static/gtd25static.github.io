@@ -237,6 +237,7 @@ function BrowserRow({ icon, name, detail, onOpen, menu }: {
         </span>
       </button>
       <DropdownMenu
+        label="Options"
         trigger={
           <svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor" className="text-zinc-400">
             <path d="M10 6a1.5 1.5 0 110-3 1.5 1.5 0 010 3zM10 11.5a1.5 1.5 0 110-3 1.5 1.5 0 010 3zM10 17a1.5 1.5 0 110-3 1.5 1.5 0 010 3z" />

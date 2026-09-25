@@ -125,8 +125,9 @@ export function AppShell() {
         </div>
 
         {/* Banner is hidden on the Focus view (distraction-free); search wins over the pseudo-list, like the content branch below */}
-        {(searchQuery || selectedListId !== '__focus__') && <TopBanner />}
-        {searchQuery ? <SearchResults /> : selectedListId === '__focus__' ? <FocusView /> : selectedListId === '__insights__' ? <InsightsView /> : selectedListId === '__shared__' ? <SharedFolderView /> : selectedListId === '__mindmaps__' ? <MindmapsView /> : selectedListId === '__special__' ? <SpecialListView /> : <TaskListView />}
+        {(searchQuery.trim() || selectedListId !== '__focus__') && <TopBanner />}
+        {/* Trimmed: a query of only spaces showed an empty search instead of the view. */}
+        {searchQuery.trim() ? <SearchResults /> : selectedListId === '__focus__' ? <FocusView /> : selectedListId === '__insights__' ? <InsightsView /> : selectedListId === '__shared__' ? <SharedFolderView /> : selectedListId === '__mindmaps__' ? <MindmapsView /> : selectedListId === '__special__' ? <SpecialListView /> : <TaskListView />}
       </div>
 
       <SettingsModal />

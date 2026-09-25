@@ -167,6 +167,17 @@ describe('FollowUpCard', () => {
     expect('recurrenceType' in payload).toBe(true); // cleared, not just left out
   });
 
+  // Escape closed the popover and left the focus nowhere (on <body>).
+  it('closing Discussed with Escape puts the focus back on its button', async () => {
+    const { user } = renderCard();
+    const chip = screen.getByRole('button', { name: 'Discussed' });
+    await user.click(chip);
+    expect(screen.getByPlaceholderText('What came of it?')).toHaveFocus();
+    await user.keyboard('{Escape}');
+    expect(screen.queryByPlaceholderText('What came of it?')).not.toBeInTheDocument();
+    expect(chip).toHaveFocus();
+  });
+
   it('shows star button', () => {
     renderCard();
     expect(screen.getByTitle('Star')).toBeInTheDocument();

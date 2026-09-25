@@ -213,6 +213,7 @@ function ListItem({ list, selected, onSelect, highlight, focused, count, allList
       </button>
       <div className="mr-1 md:opacity-0 md:group-hover:opacity-100">
         <DropdownMenu
+          label="List options"
           trigger={
             <svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor" className="text-zinc-400">
               <circle cx="10" cy="4" r="1.5" />
@@ -326,8 +327,10 @@ export function Sidebar() {
   const sharedStorage = useSharedStorage();
   const focusCount = useFocusSet().members.length;
 
-  const filteredLists = searchQuery
-    ? lists.filter((l) => l.name?.toLowerCase().includes(searchQuery.toLowerCase())) // `?.`: see isMergeCandidate
+  // Trimmed: a query of only spaces matched no list name and hid them all.
+  const query = searchQuery.trim();
+  const filteredLists = query
+    ? lists.filter((l) => l.name?.toLowerCase().includes(query.toLowerCase())) // `?.`: see isMergeCandidate
     : lists;
 
   // Only THE Inbox gets the special row; another list named "Inbox" (two
@@ -344,7 +347,7 @@ export function Sidebar() {
   const inboxCount = inboxList ? (taskCounts.get(inboxList.id) ?? 0) : 0;
   // A search that matches an archived list opens the section, otherwise the
   // match would be hidden behind a collapsed header.
-  const showArchived = archivedExpanded || (!!searchQuery && archivedLists.length > 0);
+  const showArchived = archivedExpanded || (!!query && archivedLists.length > 0);
 
   // Handle sidebar list reorder via shared DndContext
   useDndMonitor({
@@ -698,7 +701,7 @@ export function Sidebar() {
                   list={list}
                   selected={selectedListId === list.id}
                   onSelect={() => { selectList(list.id); setSidebarOpen(false); }}
-                  highlight={searchQuery}
+                  highlight={query}
                   focused={focusedItemId === list.id && focusZone === 'sidebar'}
                   count={taskCounts.get(list.id) ?? 0}
                   allLists={lists}
@@ -722,7 +725,7 @@ export function Sidebar() {
                   list={list}
                   selected={selectedListId === list.id}
                   onSelect={() => { selectList(list.id); setSidebarOpen(false); }}
-                  highlight={searchQuery}
+                  highlight={query}
                   focused={focusedItemId === list.id && focusZone === 'sidebar'}
                   count={taskCounts.get(list.id) ?? 0}
                   allLists={lists}
@@ -764,7 +767,7 @@ export function Sidebar() {
                     list={list}
                     selected={selectedListId === list.id}
                     onSelect={() => { selectList(list.id); setSidebarOpen(false); }}
-                    highlight={searchQuery}
+                    highlight={query}
                     count={taskCounts.get(list.id) ?? 0}
                     allLists={lists}
                   />

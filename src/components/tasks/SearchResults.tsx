@@ -114,7 +114,7 @@ function ResultItem({ result, query, onNavigate }: { result: SearchResult; query
 
 export function SearchResults() {
   const { searchQuery, selectList, ensureTaskExpanded, setSearchQuery, setNavigateToTaskId, setFocusedItem, setFocusZone } = useAppState(useShallow(s => ({ searchQuery: s.searchQuery, selectList: s.selectList, ensureTaskExpanded: s.ensureTaskExpanded, setSearchQuery: s.setSearchQuery, setNavigateToTaskId: s.setNavigateToTaskId, setFocusedItem: s.setFocusedItem, setFocusZone: s.setFocusZone })));
-  const { results, isSearching, maxReached } = useSearch(searchQuery);
+  const { results, isSearching, maxReached } = useSearch(searchQuery.trim());
 
   function scrollToResult(targetId: string, fallbackId?: string) {
     let attempts = 0;

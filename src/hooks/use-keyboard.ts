@@ -9,6 +9,7 @@ import { sortTasksForDisplay, sortFollowUpsForDisplay } from '../lib/task-sort';
 import { deleteTasksBatch } from './use-bulk-operations';
 import { toast } from '../components/ui/Toast';
 import { confirmDialog } from '../components/ui/ConfirmDialog';
+import { RESOLVE_FOLLOW_UP_QUESTION } from '../lib/constants';
 import type { ListType } from '../db/models';
 import { isParanoidEnabled, isUnlocked, lock } from '../db/vault';
 
@@ -431,9 +432,10 @@ export function useKeyboard() {
         }
 
         case 'n': {
-          // New task
+          // New task — only in a list: in Focus, Shared, … no form reads the
+          // flag, and it used to open later in whichever list came next.
           e.preventDefault();
-          if (s.selectedListId) {
+          if (s.selectedListId && listTypeRef.current) {
             s.setFocusZone('main');
             s.setCreatingTask(true);
           }
@@ -463,7 +465,10 @@ export function useKeyboard() {
           if (dItem && isActionItem(dItem)) break;
           if (listTypeRef.current === 'follow-ups') {
             const task = await db.tasks.get(s.focusedItemId);
-            if (task) await updateTask(task.id, { archived: !task.archived });
+            if (!task) break;
+            // Resolving asks, as the card's Resolve does; reopening doesn't.
+            if (!task.archived && !await confirmDialog(RESOLVE_FOLLOW_UP_QUESTION, { confirmLabel: 'Resolve' })) break;
+            await updateTask(task.id, { archived: !task.archived });
           } else {
             const task = await db.tasks.get(s.focusedItemId);
             if (task) {
@@ -477,9 +482,9 @@ export function useKeyboard() {
         }
 
         case 'b': {
-          // Toggle blocked
+          // Toggle blocked — follow-ups have no blocked state.
           e.preventDefault();
-          if (s.focusZone !== 'main' || !s.focusedItemId) break;
+          if (s.focusZone !== 'main' || !s.focusedItemId || listTypeRef.current === 'follow-ups') break;
           const item = mainRef.current.find((i) => i.id === s.focusedItemId);
           if (!item || isActionItem(item)) break;
           if (item.type === 'task') {

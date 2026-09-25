@@ -47,6 +47,25 @@ describe('app-state store', () => {
       expect(getState().selectedTaskIds.size).toBe(0);
     });
 
+    // The keyboard ring and a half-open form belonged to the view being left:
+    // `d` could toggle a task of the previous list, and `n` pressed in Focus left
+    // a new-task form that opened later in whichever list came next.
+    it('drops the keyboard focus and any half-open form of the view it leaves', () => {
+      useAppState.setState({ focusedItemId: 't1', creatingTask: true, addingSubtaskToTaskId: 't1', editingItemId: 't1' });
+      getState().selectList('list-2');
+      expect(getState().focusedItemId).toBeNull();
+      expect(getState().creatingTask).toBe(false);
+      expect(getState().addingSubtaskToTaskId).toBeNull();
+      expect(getState().editingItemId).toBeNull();
+    });
+
+    it('keeps what a caller sets up before navigating (search, reveal)', () => {
+      useAppState.setState({ navigateToTaskId: 't1', expandedTaskIds: new Set(['t1']) });
+      getState().selectList('list-2');
+      expect(getState().navigateToTaskId).toBe('t1');
+      expect(getState().expandedTaskIds.has('t1')).toBe(true);
+    });
+
     it('allows selecting null', () => {
       getState().selectList('list-1');
       getState().selectList(null);

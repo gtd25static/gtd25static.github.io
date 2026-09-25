@@ -775,6 +775,10 @@ function ActionButton({ x, y, title, danger, onActivate, children }: {
     <g
       transform={`translate(${x},${y})`}
       className="cursor-pointer"
+      // Named for assistive tech (a <title> is only a tooltip). Not in the tab
+      // order: Tab/Enter/F2/Del on the selected node already do each of these.
+      role="button"
+      aria-label={title}
       onPointerDown={(e) => e.stopPropagation()}
       onClick={(e) => { e.stopPropagation(); onActivate(); }}
     >

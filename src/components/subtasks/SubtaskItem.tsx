@@ -120,6 +120,7 @@ export function SubtaskItem({ subtask }: Props) {
       {/* Mobile dropdown */}
       <div className="md:hidden shrink-0" onClick={(e) => e.stopPropagation()}>
         <DropdownMenu
+          label="Subtask options"
           trigger={
             <svg width="18" height="18" viewBox="0 0 20 20" fill="currentColor" className="text-zinc-400">
               <circle cx="10" cy="4" r="1.5" />

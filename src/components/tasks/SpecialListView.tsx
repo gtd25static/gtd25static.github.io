@@ -5,6 +5,7 @@ import { setTaskStatus, updateTask } from '../../hooks/use-tasks';
 import { confirmDialog } from '../ui/ConfirmDialog';
 import { setSubtaskStatus } from '../../hooks/use-subtasks';
 import { toggleWarning } from '../../hooks/use-warning';
+import { RESOLVE_FOLLOW_UP_QUESTION } from '../../lib/constants';
 
 function timeSince(timestamp: number): string {
   const ms = Date.now() - timestamp;
@@ -30,7 +31,7 @@ function SpecialItemRow({ item }: { item: SpecialItem }) {
     if (item.followUp) {
       // A follow-up has no done state (it used to be set to 'done' here and stay
       // on as an active card): resolve it, as its own card does.
-      if (!await confirmDialog('Resolve this follow-up? It moves to the Resolved section and you can reopen it later.', { confirmLabel: 'Resolve' })) return;
+      if (!await confirmDialog(RESOLVE_FOLLOW_UP_QUESTION, { confirmLabel: 'Resolve' })) return;
       await updateTask(item.id, { archived: true });
       return;
     }

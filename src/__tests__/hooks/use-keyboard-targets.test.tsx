@@ -14,6 +14,7 @@ type NavItem = { id: string; type: 'task' | 'subtask' | 'banner-blocked' | 'crea
 
 let listType: 'tasks' | 'follow-ups' | null = 'tasks';
 let mainItems: NavItem[] = [];
+let taskArchived = false;
 const mockSetTaskStatus = vi.fn();
 const mockUpdateTask = vi.fn();
 
@@ -28,7 +29,7 @@ vi.mock('dexie-react-hooks', () => ({
 }));
 vi.mock('../../db', () => ({
   db: {
-    tasks: { get: async (id: string) => ({ id, listId: 'L1', status: 'todo', archived: false }) },
+    tasks: { get: async (id: string) => ({ id, listId: 'L1', status: 'todo', archived: taskArchived }) },
     subtasks: { get: async () => undefined },
   },
 }));
@@ -46,6 +47,7 @@ vi.mock('../../components/ui/ConfirmDialog', () => ({ confirmDialog: vi.fn(async
 
 import { useKeyboard } from '../../hooks/use-keyboard';
 import { useAppState } from '../../stores/app-state';
+import { confirmDialog } from '../../components/ui/ConfirmDialog';
 
 function Harness() {
   useKeyboard();
@@ -71,6 +73,7 @@ function mount<T extends HTMLElement>(el: T): T {
 beforeEach(() => {
   vi.clearAllMocks();
   listType = 'tasks';
+  taskArchived = false;
   mainItems = [{ id: 'create-task', type: 'create' }, { id: 't1', type: 'task' }];
   useAppState.setState({
     selectedListId: 'L1',
@@ -265,5 +268,58 @@ describe('useKeyboard — Enter on a follow-up', () => {
     render(<Harness />);
     press('Enter');
     expect(useAppState.getState().expandedTaskIds.has('t1')).toBe(true);
+  });
+});
+
+// `d` resolved a follow-up without the question a click on Resolve asks, and
+// `b` marked one "blocked" — a state follow-ups don't have.
+describe('useKeyboard — d and b on a follow-up', () => {
+  beforeEach(() => { listType = 'follow-ups'; });
+
+  it('`d` asks before resolving, and resolves only on yes', async () => {
+    render(<Harness />);
+    press('d');
+    await settle();
+    expect(confirmDialog).toHaveBeenCalledWith(expect.stringMatching(/Resolve this follow-up/), expect.objectContaining({ confirmLabel: 'Resolve' }));
+    expect(mockUpdateTask).not.toHaveBeenCalled();
+
+    vi.mocked(confirmDialog).mockResolvedValueOnce(true);
+    press('d');
+    await settle();
+    expect(mockUpdateTask).toHaveBeenCalledWith('t1', { archived: true });
+  });
+
+  it('`d` reopens a resolved one without asking, as Unresolve does', async () => {
+    taskArchived = true;
+    render(<Harness />);
+    press('d');
+    await settle();
+    expect(confirmDialog).not.toHaveBeenCalled();
+    expect(mockUpdateTask).toHaveBeenCalledWith('t1', { archived: false });
+  });
+
+  it('`b` leaves it alone', async () => {
+    render(<Harness />);
+    press('b');
+    await settle();
+    expect(mockSetTaskStatus).not.toHaveBeenCalled();
+  });
+});
+
+// `n` in Focus or the Shared Folder set a flag no form there reads; the form
+// then opened in whichever list came next.
+describe('useKeyboard — n only where a task can be added', () => {
+  it('does nothing in a view that is not a list', () => {
+    listType = null;
+    useAppState.setState({ selectedListId: '__focus__' });
+    render(<Harness />);
+    press('n');
+    expect(useAppState.getState().creatingTask).toBe(false);
+  });
+
+  it('opens the form in a list', () => {
+    render(<Harness />);
+    press('n');
+    expect(useAppState.getState().creatingTask).toBe(true);
   });
 });

@@ -19,6 +19,21 @@ describe('DropdownMenu', () => {
     expect(screen.getByText('Menu')).toBeInTheDocument();
   });
 
+  // The ⋮ triggers are icon-only: they had no accessible name at all.
+  it('names its trigger, and says whether it is open', async () => {
+    const user = userEvent.setup();
+    render(<DropdownMenu trigger={<svg />} items={items} label="List options" />);
+    const trigger = screen.getByRole('button', { name: 'List options' });
+    expect(trigger).toHaveAttribute('aria-expanded', 'false');
+    await user.click(trigger);
+    expect(trigger).toHaveAttribute('aria-expanded', 'true');
+  });
+
+  it('falls back to a generic name', () => {
+    render(<DropdownMenu trigger={<svg />} items={items} />);
+    expect(screen.getByRole('button', { name: 'More options' })).toBeInTheDocument();
+  });
+
   it('does not show items initially', () => {
     render(<DropdownMenu trigger={<span>Menu</span>} items={items} />);
     expect(screen.queryByText('Edit')).not.toBeInTheDocument();

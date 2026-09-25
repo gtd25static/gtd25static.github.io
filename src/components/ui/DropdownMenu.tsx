@@ -10,6 +10,8 @@ interface MenuItem {
 interface Props {
   trigger: ReactNode;
   items: MenuItem[];
+  /** The trigger's accessible name: triggers are icon-only (⋮, export). */
+  label?: string;
 }
 
 const GUTTER = 8; // keep the menu this far inside the viewport
@@ -34,7 +36,7 @@ function placeMenu(trigger: DOMRect, size: { width: number; height: number }): {
 // menu was clipped by any scrolling ancestor — the sidebar's list rows live in a
 // scrolling <nav>, so for the last lists Rename/Archive/Delete opened out of
 // sight below the viewport (GUI review).
-export function DropdownMenu({ trigger, items }: Props) {
+export function DropdownMenu({ trigger, items, label = 'More options' }: Props) {
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -77,7 +79,7 @@ export function DropdownMenu({ trigger, items }: Props) {
 
   return (
     <div className="relative">
-      <button ref={triggerRef} data-dropdown-trigger onClick={toggle} className="rounded-full p-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-800 min-h-[44px] min-w-[44px] md:min-h-0 md:min-w-0 flex items-center justify-center">
+      <button ref={triggerRef} data-dropdown-trigger onClick={toggle} aria-label={label} aria-haspopup="menu" aria-expanded={open} className="rounded-full p-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-800 min-h-[44px] min-w-[44px] md:min-h-0 md:min-w-0 flex items-center justify-center">
         {trigger}
       </button>
       {open && createPortal(
