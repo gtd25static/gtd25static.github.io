@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import '../setup-component';
 import { resetAppState, makeTask, makeTaskList, makeSubtask, TestDndWrapper } from '../helpers/component-helpers';
@@ -288,6 +288,19 @@ describe('TaskCard', () => {
       expect(screen.queryByText('People')).not.toBeInTheDocument();
     });
 
+    // It moved the task silently, with no way back.
+    it('"Send to list" says where the task went, and Undo puts it back in place', async () => {
+      const { user, task } = renderCard({ title: 'Menu task', order: 4 });
+      await openSubmenu(user, 'Send to list');
+      fireEvent.click(screen.getByText('Personal'));
+      expect(mockMoveTaskToList).toHaveBeenCalledWith(task.id, 'list-2');
+      expect(await screen.findByText('Moved to Personal')).toBeInTheDocument();
+
+      await user.click(screen.getByRole('button', { name: 'Undo' }));
+      await waitFor(() => expect(mockMoveTaskToList).toHaveBeenLastCalledWith(task.id, 'list-1'));
+      await waitFor(() => expect(mockUpdateTask).toHaveBeenCalledWith(task.id, { order: 4 }));
+    });
+
     it('turns the task into a follow-up via "Send to follow-up list"', async () => {
       const { user, task } = renderCard({ title: 'Menu task' });
       await openSubmenu(user, 'Send to follow-up list');
@@ -303,6 +316,29 @@ describe('TaskCard', () => {
       fireEvent.click(screen.getByText('People'));
       expect(mockMoveTaskToList).not.toHaveBeenCalled();
       expect(await screen.findByText("A task with subtasks can't become a follow-up")).toBeInTheDocument();
+    });
+  });
+
+  // Lifting the finger after a long press "clicked" the card, which — now in
+  // selection mode — deselected it again: selection mode with 0 selected.
+  describe('long press on a phone', () => {
+    afterEach(() => vi.useRealTimers());
+
+    it('starts selection with this task selected, and the release does not undo it', () => {
+      vi.useFakeTimers();
+      const { task } = renderCard({ title: 'Press me' });
+      const row = screen.getByText('Press me');
+      fireEvent.touchStart(row);
+      act(() => { vi.advanceTimersByTime(600); });
+      fireEvent.touchEnd(row);
+      fireEvent.click(row);
+      expect(useAppState.getState().bulkMode).toBe(true);
+      expect([...useAppState.getState().selectedTaskIds]).toEqual([task.id]);
+
+      fireEvent.touchStart(row);
+      fireEvent.touchEnd(row);
+      fireEvent.click(row); // a later tap toggles as usual
+      expect(useAppState.getState().selectedTaskIds.size).toBe(0);
     });
   });
 });

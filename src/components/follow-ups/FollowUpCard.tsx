@@ -10,6 +10,7 @@ import { toggleWarning } from '../../hooks/use-warning';
 import { useTaskLists } from '../../hooks/use-task-lists';
 import { PingCooldownBadge } from './PingCooldownBadge';
 import { DiscussedPopover } from './DiscussedPopover';
+import { sendToList } from '../tasks/send-to-list';
 import { DiscussionHistory } from './DiscussionHistory';
 import { ContextMenu, type MenuItem } from '../ui/ContextMenu';
 import { DropdownMenu } from '../ui/DropdownMenu';
@@ -98,7 +99,7 @@ export function FollowUpCard({ task, index, dragHandleProps }: Props) {
         label: 'Send to list',
         children: otherLists.map((l) => ({
           label: l.name,
-          onClick: () => moveTaskToList(task.id, l.id),
+          onClick: () => void sendToList(task, l),
         })),
       });
     }

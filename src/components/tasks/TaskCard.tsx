@@ -18,6 +18,7 @@ import { ContextMenu, type MenuItem } from '../ui/ContextMenu';
 import { DropdownMenu } from '../ui/DropdownMenu';
 import { LinksList } from '../shared/LinksList';
 import { ExpandableText } from '../shared/ExpandableText';
+import { sendToList } from './send-to-list';
 
 interface Props {
   task: Task;
@@ -29,12 +30,17 @@ export function TaskCard({ task, index, dragHandleProps }: Props) {
   const { expandedTaskIds, toggleTaskExpanded, focusedItemId, focusZone, editingItemId, setEditingItemId, bulkMode, selectedTaskIds, toggleTaskSelected, setBulkMode } = useAppState(useShallow(s => ({ expandedTaskIds: s.expandedTaskIds, toggleTaskExpanded: s.toggleTaskExpanded, focusedItemId: s.focusedItemId, focusZone: s.focusZone, editingItemId: s.editingItemId, setEditingItemId: s.setEditingItemId, bulkMode: s.bulkMode, selectedTaskIds: s.selectedTaskIds, toggleTaskSelected: s.toggleTaskSelected, setBulkMode: s.setBulkMode })));
   const isSelected = selectedTaskIds.has(task.id);
   const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Lifting the finger after the long press "clicks" the card, which — now in
+  // selection mode — deselected it again (selection mode with 0 selected).
+  const swallowNextClick = useRef(false);
 
   function handleTouchStart() {
+    swallowNextClick.current = false;
     if (bulkMode) return;
     longPressTimer.current = setTimeout(() => {
       setBulkMode(true);
       toggleTaskSelected(task.id);
+      swallowNextClick.current = true;
     }, 500);
   }
 
@@ -106,7 +112,10 @@ export function TaskCard({ task, index, dragHandleProps }: Props) {
             ? 'bg-zinc-50/70 dark:bg-zinc-800/30'
             : 'bg-white dark:bg-zinc-900/50')
         } hover:shadow-md`}
-        onClick={() => bulkMode ? toggleTaskSelected(task.id) : toggleTaskExpanded(task.id)}
+        onClick={() => {
+          if (swallowNextClick.current) { swallowNextClick.current = false; return; }
+          if (bulkMode) toggleTaskSelected(task.id); else toggleTaskExpanded(task.id);
+        }}
       >
         {/* Expand/collapse chevron + drag handle (hidden in bulk mode) */}
         {!bulkMode && (
@@ -397,7 +406,7 @@ export function TaskCard({ task, index, dragHandleProps }: Props) {
         label: 'Send to list',
         children: otherLists.map((l) => ({
           label: l.name,
-          onClick: () => moveTaskToList(task.id, l.id),
+          onClick: () => void sendToList(task, l),
         })),
       });
     }
