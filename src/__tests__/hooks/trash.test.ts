@@ -1,11 +1,10 @@
 import { db } from '../../db';
 import { resetDb, assertDefined } from '../helpers/db-helpers';
-import { createTaskList } from '../../hooks/use-task-lists';
-import { createTask } from '../../hooks/use-tasks';
+import { createTaskList, deleteTaskList } from '../../hooks/use-task-lists';
+import { createTask, deleteTask } from '../../hooks/use-tasks';
 import { createSubtask } from '../../hooks/use-subtasks';
 import { permanentlyDelete, restoreFromTrash } from '../../hooks/use-trash';
 import type { TrashItem } from '../../hooks/use-trash';
-import { deleteTaskList } from '../../hooks/use-task-lists';
 import { seedListWithEarlierDeletes, loggedIds } from '../helpers/cascade-fixtures';
 
 beforeEach(async () => {
@@ -102,6 +101,20 @@ describe('restoreFromTrash', () => {
 
     expect((await db.tasks.get(task.id))?.deletedAt).toBeUndefined();
     expect((await db.subtasks.get(sub.id))?.deletedAt).toBeUndefined();
+  });
+
+  it('restoring a task brings back only the subtasks its delete took', async () => {
+    const s = await seedListWithEarlierDeletes(); // keep has keepSub (live) and goneSub (deleted earlier)
+    await deleteTask(s.keep.id);
+    const deletedAt = assertDefined((await db.tasks.get(s.keep.id))?.deletedAt);
+    await db.changeLog.clear();
+
+    await restoreFromTrash({ id: s.keep.id, type: 'task', title: s.keep.title, deletedAt });
+
+    expect((await db.tasks.get(s.keep.id))?.deletedAt).toBeUndefined();
+    expect((await db.subtasks.get(s.keepSub.id))?.deletedAt).toBeUndefined();
+    expect((await db.subtasks.get(s.goneSub.id))?.deletedAt).toBe(s.earlier.goneSub);
+    expect(await loggedIds('upsert')).toEqual([s.keep.id, s.keepSub.id].sort());
   });
 
   it('restores a subtask and marks pending', async () => {

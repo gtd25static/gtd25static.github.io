@@ -14,13 +14,17 @@ export async function deleteTasksBatch(ids: string[]) {
 
     await ensureDeviceId();
     await db.transaction('rw', [db.tasks, db.subtasks, db.changeLog], async () => {
+      // Same cascade as deleteTask: live rows only, so the per-task undo
+      // (restoreTask) leaves earlier deletes in the Trash.
       for (const id of ids) {
         const task = await db.tasks.get(id);
-        const taskFT = stampUpdatedFields(task?.fieldTimestamps, ['deletedAt'], now);
+        if (!task || task.deletedAt) continue;
+        const taskFT = stampUpdatedFields(task.fieldTimestamps, ['deletedAt'], now);
         await db.tasks.update(id, { deletedAt: now, updatedAt: now, fieldTimestamps: taskFT });
         batch.push({ entityType: 'task', entityId: id, operation: 'delete' });
         const subtasks = await db.subtasks.where('taskId').equals(id).toArray();
         for (const sub of subtasks) {
+          if (sub.deletedAt) continue;
           const subFT = stampUpdatedFields(sub.fieldTimestamps, ['deletedAt'], now);
           await db.subtasks.update(sub.id, { deletedAt: now, updatedAt: now, fieldTimestamps: subFT });
           batch.push({ entityType: 'subtask', entityId: sub.id, operation: 'delete' });

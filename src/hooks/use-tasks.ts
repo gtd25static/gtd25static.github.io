@@ -9,6 +9,7 @@ import { handleDbError } from '../lib/db-error';
 import { initFieldTimestamps, stampUpdatedFields } from '../sync/field-timestamps';
 import { encryptRow, getActiveAtRestKey } from '../db/vault-middleware';
 import { SYNC_VERSION } from '../sync/version';
+import { undeleteRowInTx, type TaskSideChange } from './use-task-lists';
 
 export function useTasks(listId: string | null) {
   return useLiveQuery(
@@ -188,6 +189,11 @@ export async function removeTaskLink(taskId: string, index: number) {
   }
 }
 
+/**
+ * Soft-delete a task with its live subtasks, all stamped with the task's
+ * deletedAt. Subtasks deleted before keep theirs (and get no new entry), which
+ * is how restoreTask leaves them in the Trash.
+ */
 export async function deleteTask(id: string) {
   try {
     const now = Date.now();
@@ -196,12 +202,14 @@ export async function deleteTask(id: string) {
     await ensureDeviceId();
     await db.transaction('rw', [db.tasks, db.subtasks, db.changeLog], async () => {
       const task = await db.tasks.get(id);
-      const taskFT = stampUpdatedFields(task?.fieldTimestamps, ['deletedAt'], now);
+      if (!task || task.deletedAt) return;
+      const taskFT = stampUpdatedFields(task.fieldTimestamps, ['deletedAt'], now);
       await db.tasks.update(id, { deletedAt: now, updatedAt: now, fieldTimestamps: taskFT });
       batch.push({ entityType: 'task', entityId: id, operation: 'delete' });
 
       const subtasks = await db.subtasks.where('taskId').equals(id).toArray();
       for (const sub of subtasks) {
+        if (sub.deletedAt) continue;
         const subFT = stampUpdatedFields(sub.fieldTimestamps, ['deletedAt'], now);
         await db.subtasks.update(sub.id, { deletedAt: now, updatedAt: now, fieldTimestamps: subFT });
         batch.push({ entityType: 'subtask', entityId: sub.id, operation: 'delete' });
@@ -216,26 +224,22 @@ export async function deleteTask(id: string) {
   }
 }
 
+/**
+ * Undo of deleteTask / bulk delete (toast and Trash): brings back the task and
+ * the subtasks carrying its exact deletedAt — the ones its delete took.
+ */
 export async function restoreTask(id: string) {
   try {
     const now = Date.now();
     await ensureDeviceId();
     await db.transaction('rw', [db.tasks, db.subtasks, db.changeLog], async () => {
-      const existingTask = await db.tasks.get(id);
-      const taskFT = stampUpdatedFields(existingTask?.fieldTimestamps, ['deletedAt'], now);
-      await db.tasks.update(id, { deletedAt: undefined, updatedAt: now, fieldTimestamps: taskFT });
+      const task = await db.tasks.get(id);
+      if (!task?.deletedAt) return;
+      const cascadeAt = task.deletedAt;
+      const batch: TaskSideChange[] = [await undeleteRowInTx('task', task, now)];
       const subs = await db.subtasks.where('taskId').equals(id).toArray();
       for (const sub of subs) {
-        const subFT = stampUpdatedFields(sub.fieldTimestamps, ['deletedAt'], now);
-        await db.subtasks.update(sub.id, { deletedAt: undefined, updatedAt: now, fieldTimestamps: subFT });
-      }
-
-      const batch: Array<{ entityType: 'task' | 'subtask'; entityId: string; operation: 'upsert'; data: Record<string, unknown> }> = [];
-      const task = await db.tasks.get(id);
-      if (task) batch.push({ entityType: 'task', entityId: id, operation: 'upsert', data: task as unknown as Record<string, unknown> });
-      const subtasks = await db.subtasks.where('taskId').equals(id).toArray();
-      for (const sub of subtasks) {
-        batch.push({ entityType: 'subtask', entityId: sub.id, operation: 'upsert', data: sub as unknown as Record<string, unknown> });
+        if (sub.deletedAt === cascadeAt) batch.push(await undeleteRowInTx('subtask', sub, now));
       }
       await recordChangeBatchInTx(batch);
     });

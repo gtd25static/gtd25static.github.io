@@ -7,6 +7,7 @@ import { scheduleSyncDebounced } from '../sync/sync-engine';
 import { handleDbError } from '../lib/db-error';
 import { stampUpdatedFields } from '../sync/field-timestamps';
 import { restoreTaskList } from './use-task-lists';
+import { restoreTask } from './use-tasks';
 
 export interface TrashItem {
   id: string;
@@ -161,27 +162,9 @@ export async function restoreFromTrash(item: TrashItem) {
       case 'list':
         await restoreTaskList(item.id);
         return; // restoreTaskList schedules sync itself
-      case 'task': {
-        await db.transaction('rw', [db.tasks, db.subtasks, db.changeLog], async () => {
-          const existingTask = await db.tasks.get(item.id);
-          const tFT = stampUpdatedFields(existingTask?.fieldTimestamps, ['deletedAt'], now);
-          await db.tasks.update(item.id, { deletedAt: undefined, updatedAt: now, fieldTimestamps: tFT });
-          const taskSubs = await db.subtasks.where('taskId').equals(item.id).toArray();
-          for (const s of taskSubs) {
-            const sFT = stampUpdatedFields(s.fieldTimestamps, ['deletedAt'], now);
-            await db.subtasks.update(s.id, { deletedAt: undefined, updatedAt: now, fieldTimestamps: sFT });
-          }
-          const batch: Array<{ entityType: 'task' | 'subtask'; entityId: string; operation: 'upsert'; data: Record<string, unknown> }> = [];
-          const task = await db.tasks.get(item.id);
-          if (task) batch.push({ entityType: 'task', entityId: item.id, operation: 'upsert', data: task as unknown as Record<string, unknown> });
-          const subs = await db.subtasks.where('taskId').equals(item.id).toArray();
-          for (const s of subs) {
-            batch.push({ entityType: 'subtask', entityId: s.id, operation: 'upsert', data: s as unknown as Record<string, unknown> });
-          }
-          await recordChangeBatchInTx(batch);
-        });
-        break;
-      }
+      case 'task':
+        await restoreTask(item.id);
+        return; // restoreTask schedules sync itself
       case 'subtask': {
         await db.transaction('rw', [db.subtasks, db.changeLog], async () => {
           const existingSub = await db.subtasks.get(item.id);

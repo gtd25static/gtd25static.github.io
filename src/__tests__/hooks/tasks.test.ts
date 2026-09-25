@@ -2,7 +2,8 @@ import { db } from '../../db';
 import { resetDb, assertDefined } from '../helpers/db-helpers';
 import { createTaskList } from '../../hooks/use-task-lists';
 import { createTask, updateTask, setTaskStatus, deleteTask, restoreTask, moveTaskToList, reorderTasks } from '../../hooks/use-tasks';
-import { createSubtask } from '../../hooks/use-subtasks';
+import { createSubtask, deleteSubtask } from '../../hooks/use-subtasks';
+import { tick, loggedIds } from '../helpers/cascade-fixtures';
 
 let listId: string;
 
@@ -88,6 +89,56 @@ describe('restoreTask', () => {
     expect(restored?.deletedAt).toBeUndefined();
     const subs = await db.subtasks.where('taskId').equals(task.id).toArray();
     expect(subs[0].deletedAt).toBeUndefined();
+  });
+});
+
+describe('task delete / restore vs. subtasks deleted earlier', () => {
+  async function seedTaskWithDeletedSubtask() {
+    const task = assertDefined(await createTask(listId, { title: 'Parent' }));
+    const keepSub = assertDefined(await createSubtask(task.id, { title: 'Keep' }));
+    const goneSub = assertDefined(await createSubtask(task.id, { title: 'Deleted earlier' }));
+    await deleteSubtask(goneSub.id);
+    const goneAt = assertDefined((await db.subtasks.get(goneSub.id))?.deletedAt);
+    await tick();
+    return { task, keepSub, goneSub, goneAt };
+  }
+
+  it('deleteTask keeps the deletedAt of subtasks deleted before and logs no delete for them', async () => {
+    const s = await seedTaskWithDeletedSubtask();
+    await db.changeLog.clear();
+
+    await deleteTask(s.task.id);
+
+    const taskDeletedAt = assertDefined((await db.tasks.get(s.task.id))?.deletedAt);
+    expect((await db.subtasks.get(s.keepSub.id))?.deletedAt).toBe(taskDeletedAt);
+    expect((await db.subtasks.get(s.goneSub.id))?.deletedAt).toBe(s.goneAt);
+    expect(await loggedIds('delete')).toEqual([s.task.id, s.keepSub.id].sort());
+  });
+
+  it('restoreTask (undo) brings back only the subtasks the task delete took', async () => {
+    const s = await seedTaskWithDeletedSubtask();
+    await deleteTask(s.task.id);
+    await db.changeLog.clear();
+
+    await restoreTask(s.task.id);
+
+    expect((await db.tasks.get(s.task.id))?.deletedAt).toBeUndefined();
+    expect((await db.subtasks.get(s.keepSub.id))?.deletedAt).toBeUndefined();
+    expect((await db.subtasks.get(s.goneSub.id))?.deletedAt).toBe(s.goneAt);
+    expect(await loggedIds('upsert')).toEqual([s.task.id, s.keepSub.id].sort());
+  });
+
+  it('deleting a task that is already deleted keeps its deletedAt and logs nothing', async () => {
+    const s = await seedTaskWithDeletedSubtask();
+    await deleteTask(s.task.id);
+    const firstAt = (await db.tasks.get(s.task.id))?.deletedAt;
+    await db.changeLog.clear();
+    await tick();
+
+    await deleteTask(s.task.id);
+
+    expect((await db.tasks.get(s.task.id))?.deletedAt).toBe(firstAt);
+    expect(await db.changeLog.count()).toBe(0);
   });
 });
 

@@ -1,8 +1,9 @@
 import { db } from '../../db';
 import { resetDb, assertDefined } from '../helpers/db-helpers';
 import { createTaskList } from '../../hooks/use-task-lists';
-import { createTask, setTaskStatus, updateTask } from '../../hooks/use-tasks';
-import { createSubtask } from '../../hooks/use-subtasks';
+import { createTask, setTaskStatus, updateTask, restoreTask } from '../../hooks/use-tasks';
+import { createSubtask, deleteSubtask } from '../../hooks/use-subtasks';
+import { tick, loggedIds } from '../helpers/cascade-fixtures';
 import { deleteTasksBatch, setTaskStatusBatch, moveTasksToListBatch } from '../../hooks/use-bulk-operations';
 
 let listId: string;
@@ -57,6 +58,38 @@ describe('deleteTasksBatch', () => {
   it('handles empty array gracefully', async () => {
     await deleteTasksBatch([]);
     // Should not throw
+  });
+
+  it('leaves subtasks deleted before alone, so the undo does not bring them back', async () => {
+    const task = assertDefined(await createTask(listId, { title: 'Parent' }));
+    const keepSub = assertDefined(await createSubtask(task.id, { title: 'Keep' }));
+    const goneSub = assertDefined(await createSubtask(task.id, { title: 'Deleted earlier' }));
+    await deleteSubtask(goneSub.id);
+    const goneAt = (await db.subtasks.get(goneSub.id))?.deletedAt;
+    await tick();
+    await db.changeLog.clear();
+
+    await deleteTasksBatch([task.id]);
+    expect((await db.subtasks.get(goneSub.id))?.deletedAt).toBe(goneAt);
+    expect(await loggedIds('delete')).toEqual([task.id, keepSub.id].sort());
+
+    await restoreTask(task.id); // what the bulk-delete toast's Undo runs per task
+    expect((await db.subtasks.get(keepSub.id))?.deletedAt).toBeUndefined();
+    expect((await db.subtasks.get(goneSub.id))?.deletedAt).toBe(goneAt);
+  });
+
+  it('skips tasks that are already deleted', async () => {
+    const gone = assertDefined(await createTask(listId, { title: 'Gone' }));
+    const live = assertDefined(await createTask(listId, { title: 'Live' }));
+    await deleteTasksBatch([gone.id]);
+    const goneAt = (await db.tasks.get(gone.id))?.deletedAt;
+    await tick();
+    await db.changeLog.clear();
+
+    await deleteTasksBatch([gone.id, live.id]);
+
+    expect((await db.tasks.get(gone.id))?.deletedAt).toBe(goneAt);
+    expect(await loggedIds('delete')).toEqual([live.id]);
   });
 });
 
