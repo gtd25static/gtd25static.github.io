@@ -82,11 +82,11 @@ describe('checkPassphrase answers like the lock screen', () => {
     expect(await checkPassphrase('')).toBe('none');
   });
 
-  it('does not trim, because the lock screen does not either', async () => {
+  it('forgives whitespace around the passphrase exactly as the lock screen does', async () => {
     const padded = ` ${SECONDARY} `;
-    expect(await checkPassphrase(padded)).toBe('none');
+    expect(await checkPassphrase(padded)).toBe('secondary');
     lock();
-    expect(await unlockWithPassphrase(padded)).toBe(false);
+    expect(await unlockWithPassphrase(padded)).toBe(true); // the separate workspace, as the Check said
   });
 
   it('follows a change of the main passphrase', async () => {

@@ -439,32 +439,64 @@ export function unlockWithPassphrase(passphrase: string): Promise<boolean> {
   return serializeUnlock(() => doUnlockWithPassphrase(passphrase));
 }
 
-async function doUnlockWithPassphrase(passphrase: string): Promise<boolean> {
+// A passphrase is stored trimmed — enable and every change of passphrase have
+// trimmed it since the first version — but was compared exactly as typed back:
+// a trailing space (phone keyboards add one) read "Incorrect passphrase" and
+// counted toward the attempt wipe. Every check tries it exactly as typed first,
+// then trimmed if that differs, as ONE attempt. As typed first, so a passphrase
+// that does carry surrounding spaces still opens exactly as before.
+function passphraseCandidates(typed: string): string[] {
+  const trimmed = typed.trim();
+  return trimmed && trimmed !== typed ? [typed, trimmed] : [typed];
+}
+
+interface PassphraseMatch { slot: 'slot1' | 'slot2'; kek: CryptoKey; dek: CryptoKey; passphrase: string }
+
+/**
+ * Which passphrase slot `typed` opens, in the lock screen's order: for each of
+ * its candidates (above), slot 1 and then slot 2 — the same work whether or not
+ * slot 2 holds a secondary passphrase. Null when neither opens. With
+ * `errorLabel`, a failure to derive the key is recorded under it and rethrown
+ * as a message the settings toast can show as-is. Pure: no write, no count.
+ */
+async function openPassphraseSlot(vault: Vault, typed: string, errorLabel?: string): Promise<PassphraseMatch | null> {
+  for (const passphrase of passphraseCandidates(typed)) {
+    let kek: CryptoKey;
+    try {
+      kek = await deriveVaultKek(passphrase, vault.passSalt, vault.kdf ?? LEGACY_KDF);
+    } catch (err) {
+      if (!errorLabel) throw err;
+      // E.g. WebAssembly (Argon2id) unavailable. Record the real cause for
+      // diagnostics; surface a message the settings toast can show as-is.
+      recordError(errorLabel, err);
+      throw new Error('Could not derive the key on this device — make sure the app is up to date and try again');
+    }
+    const slot1 = await unwrapDek(kek, vault.dekWrappedByPass, 'slot1').catch(() => null);
+    if (slot1) return { slot: 'slot1', kek, dek: slot1, passphrase };
+    const slot2 = vault.wrappedDek2 ? await unwrapDek(kek, vault.wrappedDek2, 'slot2').catch(() => null) : null;
+    if (slot2) return { slot: 'slot2', kek, dek: slot2, passphrase };
+  }
+  return null;
+}
+
+async function doUnlockWithPassphrase(typed: string): Promise<boolean> {
   const vault = await db.vault.get('vault');
   if (!vault) return false;
   lastUnlockFailure = null;
 
-  const kek = await deriveVaultKek(passphrase, vault.passSalt, vault.kdf ?? LEGACY_KDF);
-  let dek: CryptoKey | null = null;
-  try {
-    dek = await unwrapDek(kek, vault.dekWrappedByPass, 'slot1');
-  } catch { /* not the real passphrase -> try the duress slot below */ }
-
-  // Slot 2: the duress passphrase. Unwraps the real DEK, then re-keys the vault
-  // to decoy content and finishes as a completely normal 'passphrase' unlock.
-  if (!dek && vault.wrappedDek2) {
-    let altDek: CryptoKey | null = null;
-    try {
-      altDek = await unwrapDek(kek, vault.wrappedDek2, 'slot2');
-    } catch { /* neither slot -> genuinely wrong */ }
-    if (altDek) return applySecondaryUnlock(vault, altDek, kek);
-  }
-
-  if (!dek) {
+  const match = await openPassphraseSlot(vault, typed);
+  if (!match) {
     lastUnlockFailure = 'wrong-credential';
     await registerFailedAttempt();
     return false;
   }
+  // Slot 2: the duress passphrase. Unwraps the real DEK, then re-keys the vault
+  // to decoy content and finishes as a completely normal 'passphrase' unlock.
+  if (match.slot === 'slot2') return applySecondaryUnlock(vault, match.dek, match.kek);
+
+  // The passphrase that opened slot 1 — what a re-wrap below must use, not the
+  // stray whitespace around it.
+  const { kek, dek, passphrase } = match;
   if (!(await finishUnlock(vault, dek, 'passphrase'))) {
     // Only a wrong credential counts toward the wipe tripwire (see UnlockFailureReason).
     if (lastUnlockFailure === 'wrong-credential') await registerFailedAttempt();
@@ -577,45 +609,38 @@ export async function setSecondaryPassphrase(duressPassphrase: string): Promise<
 
 export type PassphraseCheck = 'main' | 'secondary' | 'none';
 
-// Derive a candidate's KEK exactly as the lock screen would (this vault's salt +
-// KDF, no trimming) and see whether it opens slot 1. Slot 2 is never consulted
-// here: the callers that may look at it do so themselves. Pure read.
+// Whether a candidate opens slot 1, derived exactly as the lock screen would
+// (this vault's salt + KDF, as typed and then trimmed — openPassphraseSlot).
+// Returns the passphrase that did, which is what a re-wrap must use. The
+// secondary passphrase opens slot 2 and so reads like any wrong one. Pure read.
 async function authenticateMainPassphrase(
   candidate: string,
   errorLabel: string,
-): Promise<{ vault: Vault; kek: CryptoKey; opensMain: boolean }> {
+): Promise<{ vault: Vault; mainPassphrase: string | null }> {
   const vault = await db.vault.get('vault');
   if (!vault) throw new Error('Vault not found');
-  let kek: CryptoKey;
-  try {
-    kek = await deriveVaultKek(candidate, vault.passSalt, vault.kdf ?? LEGACY_KDF);
-  } catch (err) {
-    // E.g. WebAssembly (Argon2id) unavailable. Record the real cause for
-    // diagnostics; surface a message the settings toast can show as-is.
-    recordError(errorLabel, err);
-    throw new Error('Could not derive the key on this device — make sure the app is up to date and try again');
-  }
-  const opensMain = await unwrapDek(kek, vault.dekWrappedByPass, 'slot1').then(() => true, () => false);
-  return { vault, kek, opensMain };
+  const match = await openPassphraseSlot(vault, candidate, errorLabel);
+  return { vault, mainPassphrase: match?.slot === 'slot1' ? match.passphrase : null };
 }
 
 /**
  * Which slot a passphrase would open at the lock screen — slot 1 first, then the
- * duress slot, same derivation, no trimming — WITHOUT unlocking with it: lets the
- * user confirm the duress passphrase works without triggering its re-key. Pure
- * read: no write, no unlock-log entry, no failed-attempt count, no tab signal.
- * It needs the passphrase itself, so it keeps the "no way to query whether duress
- * is set" property: a wrong guess reads 'none' whether or not slot 2 is in use.
+ * duress slot, same derivation and the same leniency about surrounding
+ * whitespace — WITHOUT unlocking with it: lets the user confirm the duress
+ * passphrase works without triggering its re-key. Pure read: no write, no
+ * unlock-log entry, no failed-attempt count, no tab signal. It needs the
+ * passphrase itself, so it keeps the "no way to query whether duress is set"
+ * property: a wrong guess reads 'none' whether or not slot 2 is in use.
  * Requires the vault unlocked, and refuses to answer if it locked mid-check (so
  * the answer can never surface on the lock screen).
  */
 export async function checkPassphrase(candidate: string): Promise<PassphraseCheck> {
   if (!currentDek) throw new Error('Unlock the vault first');
   if (!candidate) return 'none'; // the lock screen ignores an empty field too
-  const { vault, kek, opensMain } = await authenticateMainPassphrase(candidate, 'vault.checkPassphrase');
-  let result: PassphraseCheck = 'none';
-  if (opensMain) result = 'main';
-  else if (vault.wrappedDek2 && await unwrapDek(kek, vault.wrappedDek2, 'slot2').then(() => true, () => false)) result = 'secondary';
+  const vault = await db.vault.get('vault');
+  if (!vault) throw new Error('Vault not found');
+  const match = await openPassphraseSlot(vault, candidate, 'vault.checkPassphrase');
+  const result: PassphraseCheck = !match ? 'none' : match.slot === 'slot1' ? 'main' : 'secondary';
   if (!currentDek) throw new Error('Unlock the vault first');
   return result;
 }
@@ -633,9 +658,9 @@ export async function checkPassphrase(candidate: string): Promise<PassphraseChec
 export async function confirmCurrentPassphrase(candidate: string): Promise<boolean> {
   if (!currentDek) throw new Error('Unlock the vault first');
   if (!candidate) return false;
-  const { opensMain } = await authenticateMainPassphrase(candidate, 'vault.confirmPassphrase');
+  const { mainPassphrase } = await authenticateMainPassphrase(candidate, 'vault.confirmPassphrase');
   if (!currentDek) throw new Error('Unlock the vault first');
-  return opensMain;
+  return mainPassphrase !== null;
 }
 
 /** Remove any duress passphrase by re-randomising slot 2. Requires unlock. */
@@ -962,8 +987,8 @@ export async function changePassphrase(
 export async function rekeyVault(currentPassphrase: string, newPassphrase?: string): Promise<RekeyResult> {
   if (!currentDek) throw new Error('Unlock the vault first');
   if (rekeying) throw new Error('The vault is already being re-keyed');
-  const { vault, opensMain } = await authenticateMainPassphrase(currentPassphrase, 'vault.rekey');
-  if (!opensMain) throw new Error('Incorrect passphrase');
+  const { vault, mainPassphrase } = await authenticateMainPassphrase(currentPassphrase, 'vault.rekey');
+  if (mainPassphrase === null) throw new Error('Incorrect passphrase');
   if (!currentDek) throw new Error('Unlock the vault first');
   if (vault.migrationState !== 'done') {
     throw new Error('Finish the pending encryption change first: lock and unlock once, then try again');
@@ -976,7 +1001,8 @@ export async function rekeyVault(currentPassphrase: string, newPassphrase?: stri
   // Recovered under the OLD key, before the swap; re-wrapped under the new one.
   const ruk = vault.dekWrappedByRuk ? await getRukRaw() : null;
   const newSalt = generateSalt();
-  const newKek = await deriveVaultKek(newPassphrase ?? currentPassphrase, newSalt, kdfParams);
+  // Kept as it opened slot 1 — without whitespace typed around it (see passphraseCandidates).
+  const newKek = await deriveVaultKek(newPassphrase ?? mainPassphrase, newSalt, kdfParams);
 
   // The other tabs hold the old key and would keep showing (and writing) under
   // it: lock them first. This tab stops rendering content (busy) and ends its

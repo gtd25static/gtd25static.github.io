@@ -61,8 +61,8 @@ describe('confirmCurrentPassphrase', () => {
     expect(await confirmCurrentPassphrase('')).toBe(false);
   });
 
-  it('does not trim, because the lock screen does not either', async () => {
-    expect(await confirmCurrentPassphrase(` ${REAL} `)).toBe(false);
+  it('forgives whitespace around the passphrase exactly as the lock screen does', async () => {
+    expect(await confirmCurrentPassphrase(` ${REAL} `)).toBe(true);
   });
 
   it('changes nothing, counts nothing, logs nothing, signals nothing', async () => {
