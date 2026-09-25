@@ -5,6 +5,7 @@ import { createTask, setTaskStatus, updateTask, restoreTask } from '../../hooks/
 import { createSubtask, deleteSubtask } from '../../hooks/use-subtasks';
 import { tick, loggedIds } from '../helpers/cascade-fixtures';
 import { deleteTasksBatch, setTaskStatusBatch, moveTasksToListBatch } from '../../hooks/use-bulk-operations';
+import { checkRecurringTasks } from '../../hooks/use-recurring';
 
 let listId: string;
 
@@ -136,6 +137,43 @@ describe('setTaskStatusBatch', () => {
 
   it('handles empty array gracefully', async () => {
     await setTaskStatusBatch([], 'done');
+  });
+
+  // Bulk "Done" skipped the recurrence bookkeeping single completion does, so
+  // an overdue time-based recurring task kept its past nextOccurrence and the
+  // recurring check flipped it straight back to todo (within 60 s).
+  it('does the recurrence bookkeeping like a single completion', async () => {
+    const HOUR = 60 * 60 * 1000;
+    const overdue = Date.now() - 2 * HOUR;
+    const timeBased = assertDefined(await createTask(listId, {
+      title: 'Water plants', recurrenceType: 'time-based', recurrenceInterval: 1, recurrenceUnit: 'days', nextOccurrence: overdue,
+    }));
+    const dateBased = assertDefined(await createTask(listId, {
+      title: 'Pay rent', recurrenceType: 'date-based', recurrenceInterval: 1, recurrenceUnit: 'months', nextOccurrence: Date.now() + 10 * 24 * HOUR,
+    }));
+    const single = assertDefined(await createTask(listId, {
+      title: 'Single', recurrenceType: 'time-based', recurrenceInterval: 1, recurrenceUnit: 'days', nextOccurrence: overdue,
+    }));
+
+    const before = Date.now();
+    await setTaskStatusBatch([timeBased.id, dateBased.id], 'done');
+    await setTaskStatus(single.id, 'done');
+
+    const bulkTime = assertDefined(await db.tasks.get(timeBased.id));
+    const singleTime = assertDefined(await db.tasks.get(single.id));
+    expect(bulkTime.status).toBe('done');
+    expect(bulkTime.lastCompletedAt).toBeGreaterThanOrEqual(before);
+    expect(bulkTime.nextOccurrence).toBeGreaterThan(Date.now() + 23 * HOUR);
+    expect(bulkTime.nextOccurrence! - singleTime.nextOccurrence!).toBeLessThan(1000);
+    expect(bulkTime.fieldTimestamps?.nextOccurrence).toBe(bulkTime.updatedAt);
+
+    const bulkDate = assertDefined(await db.tasks.get(dateBased.id));
+    expect(bulkDate.lastCompletedAt).toBeGreaterThanOrEqual(before);
+    expect(bulkDate.nextOccurrence).toBe(dateBased.nextOccurrence); // date-based keeps its schedule
+
+    // And the recurring check leaves it done instead of resetting it.
+    await checkRecurringTasks();
+    expect((await db.tasks.get(timeBased.id))?.status).toBe('done');
   });
 });
 

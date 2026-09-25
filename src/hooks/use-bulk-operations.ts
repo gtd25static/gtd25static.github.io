@@ -4,7 +4,7 @@ import { recordChangeBatchInTx, ensureDeviceId } from '../sync/change-log';
 import { scheduleSyncDebounced } from '../sync/sync-engine';
 import { handleDbError } from '../lib/db-error';
 import { stampUpdatedFields } from '../sync/field-timestamps';
-import { crossTypeUpdates } from './use-tasks';
+import { crossTypeUpdates, statusChangeUpdates } from './use-tasks';
 
 export async function deleteTasksBatch(ids: string[]) {
   if (ids.length === 0) return;
@@ -48,17 +48,7 @@ export async function setTaskStatusBatch(ids: string[], status: TaskStatus) {
       for (const id of ids) {
         const task = await db.tasks.get(id);
         if (!task) continue;
-        const updates: Partial<Task> = { status, updatedAt: now };
-        if (status === 'blocked' && task.status !== 'blocked') {
-          updates.blockedAt = now;
-        } else if (status !== 'blocked' && task.status === 'blocked') {
-          updates.blockedAt = undefined;
-        }
-        if (status === 'done') {
-          updates.completedAt = now;
-        } else if (task.status === 'done') {
-          updates.completedAt = undefined;
-        }
+        const updates: Partial<Task> = { ...statusChangeUpdates(task, status, now), updatedAt: now };
         updates.fieldTimestamps = stampUpdatedFields(task.fieldTimestamps, Object.keys(updates), now);
         await db.tasks.update(id, updates);
         const updated = await db.tasks.get(id);

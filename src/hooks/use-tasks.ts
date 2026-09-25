@@ -133,34 +133,42 @@ export async function updateTask(id: string, updates: Partial<Task>) {
   }
 }
 
+/**
+ * The fields a status change sets on a task: status, blockedAt, completedAt and
+ * the recurrence bookkeeping. Shared by single and bulk status changes.
+ */
+export function statusChangeUpdates(task: Task | undefined, status: TaskStatus, now: number): Partial<Task> {
+  const updates: Partial<Task> = { status };
+
+  // Track blockedAt
+  if (status === 'blocked' && task?.status !== 'blocked') {
+    updates.blockedAt = now;
+  } else if (status !== 'blocked' && task?.status === 'blocked') {
+    updates.blockedAt = undefined;
+  }
+
+  // Track completedAt
+  if (status === 'done') {
+    updates.completedAt = now;
+  } else if (task?.status === 'done') {
+    updates.completedAt = undefined;
+  }
+
+  // Recurrence: when marking a recurring task done
+  if (status === 'done' && task?.recurrenceType && task.recurrenceInterval && task.recurrenceUnit) {
+    updates.lastCompletedAt = now;
+    if (task.recurrenceType === 'time-based') {
+      updates.nextOccurrence = computeNextOccurrence(now, task.recurrenceInterval, task.recurrenceUnit);
+    }
+  }
+
+  return updates;
+}
+
 export async function setTaskStatus(id: string, status: TaskStatus) {
   try {
     const task = await db.tasks.get(id);
-    const updates: Partial<Task> = { status };
-
-    // Track blockedAt
-    if (status === 'blocked' && task?.status !== 'blocked') {
-      updates.blockedAt = Date.now();
-    } else if (status !== 'blocked' && task?.status === 'blocked') {
-      updates.blockedAt = undefined;
-    }
-
-    // Track completedAt
-    if (status === 'done') {
-      updates.completedAt = Date.now();
-    } else if (task?.status === 'done') {
-      updates.completedAt = undefined;
-    }
-
-    // Recurrence: when marking a recurring task done
-    if (status === 'done' && task?.recurrenceType && task.recurrenceInterval && task.recurrenceUnit) {
-      updates.lastCompletedAt = Date.now();
-      if (task.recurrenceType === 'time-based') {
-        updates.nextOccurrence = computeNextOccurrence(Date.now(), task.recurrenceInterval, task.recurrenceUnit);
-      }
-    }
-
-    await updateTask(id, updates);
+    await updateTask(id, statusChangeUpdates(task, status, Date.now()));
   } catch (error) {
     handleDbError(error, 'set task status');
   }
