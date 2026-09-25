@@ -5,9 +5,9 @@ import { purgeOldTrashItems } from '../db/purge';
 import { recordChangeInTx, recordChangeBatchInTx, ensureDeviceId } from '../sync/change-log';
 import { scheduleSyncDebounced } from '../sync/sync-engine';
 import { handleDbError } from '../lib/db-error';
-import { stampUpdatedFields } from '../sync/field-timestamps';
 import { restoreTaskList } from './use-task-lists';
 import { restoreTask } from './use-tasks';
+import { restoreSubtask } from './use-subtasks';
 
 export interface TrashItem {
   id: string;
@@ -54,16 +54,23 @@ export function useTrash() {
   }, [], []);
 }
 
+/**
+ * "Delete forever" from the Trash. Only tombstones are hard-deleted: the item
+ * itself must still be deleted (a sync may have restored it since the Trash
+ * rendered), and a live row under it — say a task restored while its list sat
+ * in the Trash — survives; cleanOrphans rehomes it at the next startup.
+ */
 export async function permanentlyDelete(item: TrashItem) {
   try {
     await ensureDeviceId();
     switch (item.type) {
       case 'list': {
-        const listTasks = await db.tasks.where('listId').equals(item.id).toArray();
+        if (!(await db.taskLists.get(item.id))?.deletedAt) break;
+        const listTasks = (await db.tasks.where('listId').equals(item.id).toArray()).filter((t) => t.deletedAt);
         const listSubtaskIds: string[] = [];
         for (const t of listTasks) {
           const subs = await db.subtasks.where('taskId').equals(t.id).toArray();
-          listSubtaskIds.push(...subs.map((s) => s.id));
+          listSubtaskIds.push(...subs.filter((s) => s.deletedAt).map((s) => s.id));
         }
         await db.transaction('rw', [db.taskLists, db.tasks, db.subtasks, db.changeLog], async () => {
           for (const subId of listSubtaskIds) await db.subtasks.delete(subId);
@@ -78,9 +85,10 @@ export async function permanentlyDelete(item: TrashItem) {
         break;
       }
       case 'task': {
-        const subtasks = await db.subtasks.where('taskId').equals(item.id).toArray();
+        if (!(await db.tasks.get(item.id))?.deletedAt) break;
+        const subtasks = (await db.subtasks.where('taskId').equals(item.id).toArray()).filter((s) => s.deletedAt);
         await db.transaction('rw', [db.tasks, db.subtasks, db.changeLog], async () => {
-          await db.subtasks.where('taskId').equals(item.id).delete();
+          await db.subtasks.bulkDelete(subtasks.map((s) => s.id));
           await db.tasks.delete(item.id);
           const batch = subtasks.map((s) => ({
             entityType: 'subtask' as const,
@@ -93,6 +101,7 @@ export async function permanentlyDelete(item: TrashItem) {
         break;
       }
       case 'subtask':
+        if (!(await db.subtasks.get(item.id))?.deletedAt) break;
         await db.transaction('rw', [db.subtasks, db.changeLog], async () => {
           await db.subtasks.delete(item.id);
           await recordChangeInTx('subtask', item.id, 'delete');
@@ -156,7 +165,6 @@ export async function permanentlyDelete(item: TrashItem) {
 
 export async function restoreFromTrash(item: TrashItem) {
   try {
-    const now = Date.now();
     await ensureDeviceId();
     switch (item.type) {
       case 'list':
@@ -165,18 +173,9 @@ export async function restoreFromTrash(item: TrashItem) {
       case 'task':
         await restoreTask(item.id);
         return; // restoreTask schedules sync itself
-      case 'subtask': {
-        await db.transaction('rw', [db.subtasks, db.changeLog], async () => {
-          const existingSub = await db.subtasks.get(item.id);
-          const sFT = stampUpdatedFields(existingSub?.fieldTimestamps, ['deletedAt'], now);
-          await db.subtasks.update(item.id, { deletedAt: undefined, updatedAt: now, fieldTimestamps: sFT });
-          const sub = await db.subtasks.get(item.id);
-          if (sub) {
-            await recordChangeInTx('subtask', item.id, 'upsert', sub as unknown as Record<string, unknown>);
-          }
-        });
-        break;
-      }
+      case 'subtask':
+        await restoreSubtask(item.id);
+        return; // restoreSubtask schedules sync itself
       case 'mindmap': {
         const { restoreMindmap } = await import('./use-mindmaps');
         await restoreMindmap(item.id);

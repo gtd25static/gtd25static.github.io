@@ -7,6 +7,7 @@ import { scheduleSyncDebounced } from '../sync/sync-engine';
 import { computeNextOccurrence } from './use-recurring';
 import { handleDbError } from '../lib/db-error';
 import { initFieldTimestamps, stampUpdatedFields } from '../sync/field-timestamps';
+import { undeleteRowInTx, type TaskSideChange } from './use-task-lists';
 
 export function useSubtasks(taskId: string | undefined) {
   return useLiveQuery(
@@ -178,18 +179,24 @@ export async function deleteSubtask(id: string) {
   }
 }
 
+/**
+ * Undo of deleteSubtask (toast and Trash). A deleted parent task or list would
+ * keep the subtask out of sight, so those rows come back too — just the rows,
+ * not their other children.
+ */
 export async function restoreSubtask(id: string) {
   try {
     const now = Date.now();
     await ensureDeviceId();
-    await db.transaction('rw', [db.subtasks, db.changeLog], async () => {
-      const existing = await db.subtasks.get(id);
-      const ft = stampUpdatedFields(existing?.fieldTimestamps, ['deletedAt'], now);
-      await db.subtasks.update(id, { deletedAt: undefined, updatedAt: now, fieldTimestamps: ft });
-      const updated = await db.subtasks.get(id);
-      if (updated) {
-        await recordChangeInTx('subtask', id, 'upsert', updated as unknown as Record<string, unknown>);
-      }
+    await db.transaction('rw', [db.taskLists, db.tasks, db.subtasks, db.changeLog], async () => {
+      const sub = await db.subtasks.get(id);
+      if (!sub?.deletedAt) return;
+      const batch: TaskSideChange[] = [await undeleteRowInTx('subtask', sub, now)];
+      const task = await db.tasks.get(sub.taskId);
+      if (task?.deletedAt) batch.push(await undeleteRowInTx('task', task, now));
+      const list = task ? await db.taskLists.get(task.listId) : undefined;
+      if (list?.deletedAt) batch.push(await undeleteRowInTx('taskList', list, now));
+      await recordChangeBatchInTx(batch);
     });
     scheduleSyncDebounced();
   } catch (error) {

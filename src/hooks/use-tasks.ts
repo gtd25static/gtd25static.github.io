@@ -226,17 +226,22 @@ export async function deleteTask(id: string) {
 
 /**
  * Undo of deleteTask / bulk delete (toast and Trash): brings back the task and
- * the subtasks carrying its exact deletedAt — the ones its delete took.
+ * the subtasks carrying its exact deletedAt — the ones its delete took. A task
+ * whose list is deleted would come back out of sight, so the list row comes
+ * back too (just the row, not its other tasks).
  */
 export async function restoreTask(id: string) {
   try {
     const now = Date.now();
     await ensureDeviceId();
-    await db.transaction('rw', [db.tasks, db.subtasks, db.changeLog], async () => {
+    await db.transaction('rw', [db.taskLists, db.tasks, db.subtasks, db.changeLog], async () => {
       const task = await db.tasks.get(id);
       if (!task?.deletedAt) return;
       const cascadeAt = task.deletedAt;
-      const batch: TaskSideChange[] = [await undeleteRowInTx('task', task, now)];
+      const batch: TaskSideChange[] = [];
+      const list = await db.taskLists.get(task.listId);
+      if (list?.deletedAt) batch.push(await undeleteRowInTx('taskList', list, now));
+      batch.push(await undeleteRowInTx('task', task, now));
       const subs = await db.subtasks.where('taskId').equals(id).toArray();
       for (const sub of subs) {
         if (sub.deletedAt === cascadeAt) batch.push(await undeleteRowInTx('subtask', sub, now));
