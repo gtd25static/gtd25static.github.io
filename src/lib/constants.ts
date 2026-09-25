@@ -46,6 +46,28 @@ export function isInboxList(list: { name: string; type: string }): boolean {
   return list.name === INBOX_LIST_NAME && list.type === 'tasks';
 }
 
+/**
+ * The one list that acts as the Inbox: the oldest live "Inbox" task list. More
+ * than one can exist — two devices that each captured something before syncing
+ * each create one — and the others are ordinary lists, so their tasks stay
+ * reachable (they used to vanish from the sidebar along with the special one).
+ */
+export function pickInboxList<T extends { id: string; name: string; type: string; createdAt: number; deletedAt?: number; archivedAt?: number }>(
+  lists: T[],
+): T | undefined {
+  let inbox: T | undefined;
+  for (const list of lists) {
+    if (!isInboxList(list) || list.deletedAt || list.archivedAt) continue;
+    if (!inbox || list.createdAt < inbox.createdAt || (list.createdAt === inbox.createdAt && list.id < inbox.id)) inbox = list;
+  }
+  return inbox;
+}
+
+/** "Inbox" is the app's own list: a list created or renamed to it would be taken over as the Inbox. */
+export function isReservedListName(name: string): boolean {
+  return name.trim().toLowerCase() === INBOX_LIST_NAME.toLowerCase();
+}
+
 export const PING_COOLDOWN_MS: Record<string, number> = {
   // Current presets surfaced in the UI
   '20h': 20 * 60 * 60 * 1000,

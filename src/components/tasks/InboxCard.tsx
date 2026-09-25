@@ -8,7 +8,6 @@ import { DropdownMenu } from '../ui/DropdownMenu';
 import { ContextMenu, type MenuItem } from '../ui/ContextMenu';
 import { LinksList } from '../shared/LinksList';
 import { ExpandableText } from '../shared/ExpandableText';
-import { isInboxList } from '../../lib/constants';
 
 interface Props {
   task: Task;
@@ -17,7 +16,8 @@ interface Props {
 
 export function InboxCard({ task, index }: Props) {
   const lists = useTaskLists();
-  const targetLists = lists.filter((l) => !isInboxList(l) && !l.archivedAt);
+  // Any other live list — including a second "Inbox" (see pickInboxList).
+  const targetLists = lists.filter((l) => l.id !== task.listId && !l.archivedAt);
   const cardRef = useRef<HTMLDivElement>(null);
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null);
 

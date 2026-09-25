@@ -24,7 +24,7 @@ import type { DragItemData } from './DndProvider';
 import { LIST_DROP_ID_PREFIX } from './dnd-collision';
 import { SyncIndicator } from './SyncIndicator';
 import { PomodoroBar } from '../pomodoro/PomodoroBar';
-import { GIT_COMMIT, MAX_LIST_NAME_LENGTH, isInboxList } from '../../lib/constants';
+import { GIT_COMMIT, MAX_LIST_NAME_LENGTH, pickInboxList, isReservedListName } from '../../lib/constants';
 import { moveTaskToList } from '../../hooks/use-tasks';
 import { useSpecialListContext } from '../../hooks/use-special-list';
 import { useFocusSet } from '../../hooks/use-focus-mode';
@@ -93,7 +93,9 @@ function ListItem({ list, selected, onSelect, highlight, focused, count, allList
   });
 
   const handleSave = () => {
-    if (editName.trim() && editName.trim() !== list.name) {
+    if (isReservedListName(editName) && editName.trim() !== list.name) {
+      toast('“Inbox” is reserved for captured items — pick another name', 'error');
+    } else if (editName.trim() && editName.trim() !== list.name) {
       updateTaskList(list.id, { name: editName.trim().slice(0, MAX_LIST_NAME_LENGTH) });
     }
     setEditingId(null);
@@ -328,9 +330,12 @@ export function Sidebar() {
     ? lists.filter((l) => l.name?.toLowerCase().includes(searchQuery.toLowerCase())) // `?.`: see isMergeCandidate
     : lists;
 
-  const inboxList = filteredLists.find((l) => isInboxList(l));
+  // Only THE Inbox gets the special row; another list named "Inbox" (two
+  // devices each made one before syncing) is shown like any other list.
+  const theInbox = pickInboxList(lists);
+  const inboxList = theInbox && filteredLists.some((l) => l.id === theInbox.id) ? theInbox : undefined;
   const activeLists = filteredLists.filter((l) => !l.archivedAt);
-  const taskLists = activeLists.filter((l) => l.type === 'tasks' && !isInboxList(l));
+  const taskLists = activeLists.filter((l) => l.type === 'tasks' && l.id !== theInbox?.id);
   const followUpLists = activeLists.filter((l) => l.type === 'follow-ups');
   // Both types share one section at the end, newest archive first.
   const archivedLists = filteredLists
@@ -363,13 +368,25 @@ export function Sidebar() {
     },
   });
 
+  // A double Enter / double click submitted twice and created the list twice.
+  const createInFlight = useRef(false);
+
   async function handleCreate() {
-    if (!newName.trim()) return;
-    const list = await createTaskList(newName.trim().slice(0, MAX_LIST_NAME_LENGTH), newType);
-    selectList(list.id);
-    setNewName('');
-    setNewType('tasks');
-    setCreating(false);
+    if (!newName.trim() || createInFlight.current) return;
+    if (isReservedListName(newName)) {
+      toast('“Inbox” is reserved for captured items — pick another name', 'error');
+      return;
+    }
+    createInFlight.current = true;
+    try {
+      const list = await createTaskList(newName.trim().slice(0, MAX_LIST_NAME_LENGTH), newType);
+      selectList(list.id);
+      setNewName('');
+      setNewType('tasks');
+      setCreating(false);
+    } finally {
+      createInFlight.current = false;
+    }
   }
 
   return (

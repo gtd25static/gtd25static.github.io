@@ -4,7 +4,7 @@ import type { TaskList, Task, Subtask, ListType } from '../db/models';
 import { newId } from '../lib/id';
 import { recordChangeInTx, recordChangeBatchInTx, ensureDeviceId } from '../sync/change-log';
 import { scheduleSyncDebounced } from '../sync/sync-engine';
-import { INBOX_LIST_NAME, ARCHIVED_LIST_RETENTION_MS } from '../lib/constants';
+import { INBOX_LIST_NAME, ARCHIVED_LIST_RETENTION_MS, pickInboxList } from '../lib/constants';
 import { handleDbError } from '../lib/db-error';
 import { initFieldTimestamps, stampUpdatedFields } from '../sync/field-timestamps';
 
@@ -254,8 +254,7 @@ export async function reorderTaskLists(orderedIds: string[]) {
 }
 
 export async function getOrCreateInbox(): Promise<string> {
-  const all = await db.taskLists.toArray();
-  const inbox = all.find((l) => !l.deletedAt && !l.archivedAt && l.name === INBOX_LIST_NAME && l.type === 'tasks');
+  const inbox = pickInboxList(await db.taskLists.toArray());
   if (inbox) return inbox.id;
   const list = await createTaskList(INBOX_LIST_NAME, 'tasks');
   return list.id;

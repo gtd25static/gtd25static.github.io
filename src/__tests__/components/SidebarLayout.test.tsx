@@ -11,10 +11,14 @@ import { DndProvider } from '../../components/layout/DndProvider';
 import { Sidebar } from '../../components/layout/Sidebar';
 import { useTaskLists } from '../../hooks/use-task-lists';
 import { useAppState } from '../../stores/app-state';
+import { db } from '../../db';
+import { resetDb } from '../helpers/db-helpers';
+import { toast } from '../../components/ui/Toast';
 import type { TaskList } from '../../db/models';
 
 vi.mock('../../components/pomodoro/PomodoroBar', () => ({ PomodoroBar: () => null }));
 vi.mock('../../components/layout/SyncIndicator', () => ({ SyncIndicator: () => null }));
+vi.mock('../../components/ui/Toast', () => ({ toast: vi.fn() }));
 
 vi.mock('../../hooks/use-task-lists', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../hooks/use-task-lists')>();
@@ -31,7 +35,9 @@ function renderSidebar() {
   return renderWithUser(<DndProvider><Sidebar /></DndProvider>);
 }
 
-beforeEach(() => {
+beforeEach(async () => {
+  await resetDb();
+  vi.mocked(toast).mockClear();
   resetAppState();
   resetFactories();
   vi.mocked(useTaskLists).mockReturnValue(lists);
@@ -87,5 +93,37 @@ describe('Sidebar compact layout', () => {
     expect(scrollIntoView).toHaveBeenCalledWith({ block: 'nearest' });
     const target = scrollIntoView.mock.contexts[0] as HTMLElement;
     expect(target.getAttribute('data-focus-id')).toBe('l2');
+  });
+
+  it('a second list named "Inbox" stays reachable under Lists', () => {
+    vi.mocked(useTaskLists).mockReturnValue([
+      makeTaskList({ id: 'in1', name: 'Inbox', createdAt: 1 }),
+      makeTaskList({ id: 'in2', name: 'Inbox', createdAt: 2 }),
+      ...lists,
+    ]);
+    renderSidebar();
+    const listsNav = screen.getByRole('navigation');
+    expect(within(listsNav).getByText('Inbox')).toBeInTheDocument();
+    expect(listsNav.querySelector('[data-focus-id="in2"]')).not.toBeNull();
+    expect(listsNav.querySelector('[data-focus-id="in1"]')).toBeNull();
+  });
+
+  it('refuses to create a list called "Inbox"', async () => {
+    const { user } = renderSidebar();
+    await user.click(screen.getByRole('button', { name: 'Create new list' }));
+    await user.type(screen.getByPlaceholderText('List name'), ' inbox {Enter}');
+    expect(await db.taskLists.count()).toBe(0);
+    expect(toast).toHaveBeenCalledWith(expect.stringMatching(/reserved/i), 'error');
+  });
+
+  it('a double Enter on the new-list form creates one list', async () => {
+    const { user } = renderSidebar();
+    await user.click(screen.getByRole('button', { name: 'Create new list' }));
+    await user.type(screen.getByPlaceholderText('List name'), 'Once');
+    const input = screen.getByPlaceholderText('List name');
+    input.closest('form')!.requestSubmit();
+    input.closest('form')!.requestSubmit();
+    await new Promise((r) => setTimeout(r, 50));
+    expect((await db.taskLists.toArray()).filter((l) => l.name === 'Once')).toHaveLength(1);
   });
 });
