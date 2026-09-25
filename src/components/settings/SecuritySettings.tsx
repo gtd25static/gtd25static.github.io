@@ -33,6 +33,7 @@ import { identityFingerprint } from '../../sync/remote-unlock-crypto';
 import { panicWipe } from '../../lib/panic-wipe';
 import { exportToZip } from '../../db/export-import';
 import { recordError } from '../../lib/diagnostics';
+import { deviceActivity } from '../../lib/device-activity';
 import { clearUnlockLog } from '../../lib/unlock-audit';
 import { clampClipboardClearSeconds, DEFAULT_CLIPBOARD_CLEAR_SECONDS } from '../../lib/clipboard-hygiene';
 import { checkSecretStrength } from '../../lib/password-strength';
@@ -1239,6 +1240,14 @@ function ApproverDevicesSection() {
                   <p className={`text-[11px] ${m.lastWipeAck ? 'text-emerald-600 dark:text-emerald-400' : 'text-zinc-400 dark:text-zinc-500'}`}>
                     {wipeStatus(m)}
                   </p>
+                  {!m.lastWipeAck && (() => {
+                    const activity = deviceActivity(m.lastSeenAt);
+                    return activity && (
+                      <p data-device-activity className={`text-[11px] ${activity.inactive ? 'text-amber-600 dark:text-amber-400' : 'text-zinc-400 dark:text-zinc-500'}`}>
+                        {activity.text}
+                      </p>
+                    );
+                  })()}
                 </div>
                 <div className="flex shrink-0 flex-wrap justify-end gap-1">
                   <Button size="sm" variant="danger" onClick={() => wipe(m.deviceId, m.name, !!m.lastWipeCommand)} disabled={busy}>

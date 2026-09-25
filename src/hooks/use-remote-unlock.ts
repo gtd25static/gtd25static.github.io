@@ -8,7 +8,7 @@ import { recordError } from '../lib/diagnostics';
 import { toast } from '../components/ui/Toast';
 import {
   getMailboxPat, getRepo, requestRemoteUnlock, pollRemoteUnlock, pollRemoteCommands, cancelRemoteUnlock,
-  expirePendingUnlock, hasPendingUnlock,
+  expirePendingUnlock, hasPendingUnlock, refreshRegistryHeartbeat,
   pollApproverInbox, listApprovedDevices, readPendingApproval, approveRemoteUnlock, publishOwnRegistryEntry,
 } from '../sync/remote-unlock';
 
@@ -172,6 +172,9 @@ export function useRemoteWipeCommands() {
       }
       const w = await pollRemoteCommands(ctx.pat, ctx.repo, ctx.deviceId, etag.current);
       etag.current = w.etag;
+      // While unlocked, refresh the registry entry at most daily, so the trusted
+      // devices can show when this one was last seen (a no-op while locked).
+      if (!w.wiped) await refreshRegistryHeartbeat().catch((err) => recordError('remoteUnlock.heartbeat', err));
     } catch {
       // Transient DB/network errors are retried on the next cadence.
     } finally {

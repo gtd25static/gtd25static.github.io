@@ -16,7 +16,7 @@ import {
 import { encryptBlob, decryptBlob } from './crypto';
 import { importKekFromBytes } from '../db/vault-crypto';
 import { isParanoidFlagSet } from '../db/paranoid-flag';
-import { wrapDekWithRuk, unlockWithRemoteKey, clearRemoteUnlock, getVaultSecrets, getRukRaw } from '../db/vault';
+import { wrapDekWithRuk, unlockWithRemoteKey, clearRemoteUnlock, getVaultSecrets, getRukRaw, isRemoteUnlockEnrolled, isUnlocked } from '../db/vault';
 export { isRemoteUnlockEnrolled } from '../db/vault'; // re-exported so the UI imports it from one place
 import { getCachedSalt } from './crypto';
 import { deriveRegistryMacKey } from './remote-unlock-crypto';
@@ -201,7 +201,12 @@ export interface ManagedDevice {
   name: string;
   lastWipeCommand?: { nonce: string; sentAt: number };
   lastWipeAck?: { commandNonce: string; wipedAt: number; verifiedAt: number };
+  /** Its registry entry's last refresh (see refreshRegistryHeartbeat); absent until first read. */
+  lastSeenAt?: number;
 }
+
+/** A protected device refreshes its registry entry at most this often, while unlocked. */
+export const REGISTRY_HEARTBEAT_MS = 24 * 60 * 60 * 1000;
 
 export interface WipeCommandReceipt {
   nonce: string;
@@ -503,6 +508,7 @@ export async function listApprovedDevices(): Promise<ManagedDevice[]> {
     name: v.name,
     lastWipeCommand: v.lastWipeCommand,
     lastWipeAck: v.lastWipeAck,
+    lastSeenAt: v.lastSeenAt,
   }));
 }
 
@@ -593,14 +599,25 @@ async function removeRegistryEntry(pat: string, repo: string, deviceId: string):
  *  Raw keys avoid false drops if an entry's MAC is transiently unverifiable. `present` is
  *  false when the file is absent OR unreadable (e.g. a GitHub 5xx) so a transient backend
  *  failure can never be misread as a mass decommission. */
-async function readRegistryKeys(pat: string, repo: string): Promise<{ present: boolean; ids: Set<string> }> {
+/**
+ * Which devices the registry lists, and — for the entries whose MAC verifies
+ * (so a backend writer can't fake one) — when each was last refreshed.
+ */
+async function readRegistryKeys(pat: string, repo: string, macKey: CryptoKey | null): Promise<{ present: boolean; ids: Set<string>; seenAt: Map<string, number> }> {
+  const seenAt = new Map<string, number>();
   try {
     const file = await getFile(pat, repo, REGISTRY_PATH);
-    if (!file) return { present: false, ids: new Set<string>() };
-    return { present: true, ids: new Set(Object.keys(safeParseRegistry(file.data))) };
+    if (!file) return { present: false, ids: new Set<string>(), seenAt };
+    const reg = safeParseRegistry(file.data);
+    if (macKey) {
+      for (const e of Object.values(reg)) {
+        if (Number.isFinite(e?.updatedAt) && await isAuthenticEntry(e, macKey)) seenAt.set(e.deviceId, e.updatedAt);
+      }
+    }
+    return { present: true, ids: new Set(Object.keys(reg)), seenAt };
   } catch (err) {
     recordError('remoteUnlock.readRegistryKeys', err);
-    return { present: false, ids: new Set<string>() };
+    return { present: false, ids: new Set<string>(), seenAt };
   }
 }
 
@@ -728,11 +745,11 @@ type LifecycleDecision =
  * Network reads happen here; the resulting decisions are applied atomically (and without
  * resurrecting concurrently-removed devices) via mutateRemoteApproverFor.
  */
-export async function refreshManagedDeviceWipeStatuses(pat: string, repo: string): Promise<ManagedDevice[]> {
+export async function refreshManagedDeviceWipeStatuses(pat: string, repo: string, macKey?: CryptoKey): Promise<ManagedDevice[]> {
   if (isParanoidFlagSet()) return [];
   const local = await db.localSettings.get('local');
   const snapshot = local?.remoteApproverFor ?? {};
-  const registry = await readRegistryKeys(pat, repo);
+  const registry = await readRegistryKeys(pat, repo, macKey ?? await getRegistryMacKey().catch(() => null));
 
   const decisions: Record<string, LifecycleDecision> = {};
   for (const deviceId of Object.keys(snapshot)) {
@@ -769,6 +786,14 @@ export async function refreshManagedDeviceWipeStatuses(pat: string, repo: string
 
   await mutateRemoteApproverFor((cur) => {
     let changed = false;
+    // "Last seen": only ever moves forward (entries are MAC-verified above).
+    for (const [deviceId, seen] of registry.seenAt) {
+      const entry = cur[deviceId];
+      if (entry && seen > (entry.lastSeenAt ?? 0)) {
+        cur[deviceId] = { ...entry, lastSeenAt: seen };
+        changed = true;
+      }
+    }
     for (const [deviceId, decision] of Object.entries(decisions)) {
       const entry = cur[deviceId];
       if (!entry) continue; // concurrently purged/forgotten — do not resurrect
@@ -1073,6 +1098,51 @@ export async function publishOwnRegistryEntry(): Promise<boolean> {
   const entry = await buildRegistryEntry(deviceId, await getDeviceName(), publicIdentityOf(identity), isParanoidFlagSet(), macKey);
   await publishRegistryEntry(pat, repo, entry);
   return true;
+}
+
+let heartbeatBaseline: number | null = null;
+// After a failed attempt (offline, GitHub error) wait before the next one: each
+// attempt derives the registry key (PBKDF2), too costly for the 12 s poll.
+const HEARTBEAT_RETRY_MS = 15 * 60 * 1000;
+let heartbeatNotBefore = 0;
+export function __resetHeartbeatForTests(): void { heartbeatBaseline = null; heartbeatNotBefore = 0; }
+
+/**
+ * Protected device (Paranoid, enrolled, UNLOCKED): refresh its own registry entry
+ * when the last refresh is over REGISTRY_HEARTBEAT_MS old, so its trusted devices
+ * can show when it was last seen. Nothing else is signalled — deliberately (user
+ * decision, "option 1"): a device wiped by the secondary passphrase just goes
+ * silent, and its trusted devices see "no activity since …", which could as well
+ * be a device left in a drawer; nothing in the repo tells a coercer a wipe
+ * happened. Locked, there is no MAC key, so no refresh. The first call of a
+ * session reads the entry's own (MAC-verified) time as the baseline.
+ */
+export async function refreshRegistryHeartbeat(now: number = Date.now(), macKey?: CryptoKey): Promise<boolean> {
+  if (now < heartbeatNotBefore) return false;
+  if (!isParanoidFlagSet() || !isUnlocked() || !(await isRemoteUnlockEnrolled())) return false;
+  if (heartbeatBaseline !== null && now - heartbeatBaseline < REGISTRY_HEARTBEAT_MS) return false;
+  const local = await db.localSettings.get('local');
+  const pat = await getActivePat();
+  const repo = local?.githubRepo;
+  const deviceId = local?.deviceId;
+  if (!pat || !repo || !deviceId) return false;
+  try {
+    const key = macKey ?? await getRegistryMacKey();
+    if (!key) return false;
+    if (heartbeatBaseline === null) {
+      const own = (await readAuthenticRegistry(pat, repo, key)).find((e) => e.deviceId === deviceId);
+      heartbeatBaseline = own?.updatedAt ?? 0;
+      if (now - heartbeatBaseline < REGISTRY_HEARTBEAT_MS) return false;
+    }
+    const identity = await ensureDeviceIdentity();
+    const entry = await buildRegistryEntry(deviceId, await getDeviceName(), publicIdentityOf(identity), true, key);
+    await publishRegistryEntry(pat, repo, entry);
+    heartbeatBaseline = now;
+    return true;
+  } catch (err) {
+    heartbeatNotBefore = now + HEARTBEAT_RETRY_MS;
+    throw err;
+  }
 }
 
 /** Gather everything needed to enroll approvers (requires unlocked vault + a prior sync). */

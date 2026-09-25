@@ -325,6 +325,9 @@ export interface LocalSettings {
     name: string;
     lastWipeCommand?: { nonce: string; sentAt: number };
     lastWipeAck?: { commandNonce: string; wipedAt: number; verifiedAt: number };
+    // When the protected device last refreshed its (MAC-verified) registry entry,
+    // i.e. was last unlocked with sync — shown as "last seen" / "no activity since".
+    lastSeenAt?: number;
     // Timestamp of the invite this RUK came from. A re-issued invite (the
     // protected device rotated its key after removing another approver) is only
     // accepted when it is NEWER, so a replayed old invite cannot push this

@@ -1001,3 +1001,76 @@ describe('remote unlock: removing one approver', () => {
     expect(await vault.unlockWithRemoteKey(goodRuk)).toBe(true);
   });
 });
+
+// Option 1 (user decision): a device wiped by its secondary passphrase sends no
+// signal. Its trusted devices infer it from silence: while unlocked, a protected
+// device refreshes its registry entry at most daily, and they show "last seen".
+describe('remote unlock: activity heartbeat and "last seen"', () => {
+  const DAY = 24 * 60 * 60 * 1000;
+  const ownEntry = () => JSON.parse(files[ru.REGISTRY_PATH].data)[LAP];
+  const registrySha = () => files[ru.REGISTRY_PATH]?.sha;
+
+  beforeEach(() => ru.__resetHeartbeatForTests());
+
+  it('refreshes the entry once the last refresh is a day old, and not before', async () => {
+    await enrollPair();
+    await actAsLaptop();
+    const enrolledAt = ownEntry().updatedAt;
+    const shaBefore = registrySha();
+
+    expect(await ru.refreshRegistryHeartbeat(enrolledAt + 60 * 60 * 1000, macKey)).toBe(false);
+    expect(registrySha()).toBe(shaBefore);
+
+    expect(await ru.refreshRegistryHeartbeat(enrolledAt + ru.REGISTRY_HEARTBEAT_MS + 1, macKey)).toBe(true);
+    expect(registrySha()).not.toBe(shaBefore);
+    expect(ownEntry().paranoid).toBe(true);
+    expect(await ru.isAuthenticEntry(ownEntry(), macKey)).toBe(true);
+
+    // The next one is a day after that refresh.
+    const shaAfter = registrySha();
+    expect(await ru.refreshRegistryHeartbeat(enrolledAt + ru.REGISTRY_HEARTBEAT_MS + 2 * 60 * 60 * 1000, macKey)).toBe(false);
+    expect(registrySha()).toBe(shaAfter);
+  });
+
+  it('stays silent while locked', async () => {
+    await enrollPair();
+    await actAsLaptop();
+    vault.lock();
+    const shaBefore = registrySha();
+    expect(await ru.refreshRegistryHeartbeat(Date.now() + 3 * DAY, macKey)).toBe(false);
+    expect(registrySha()).toBe(shaBefore);
+  });
+
+  it('is only for an enrolled Paranoid device', async () => {
+    await enrollPair(); // ends acting as the (non-Paranoid) phone
+    const shaBefore = registrySha();
+    expect(await ru.refreshRegistryHeartbeat(Date.now() + 3 * DAY, macKey)).toBe(false);
+    expect(registrySha()).toBe(shaBefore);
+  });
+
+  it('waits 15 minutes after a failure before trying again', async () => {
+    await enrollPair();
+    await actAsLaptop();
+    const t = Date.now() + 3 * DAY;
+    failGetPaths.add(ru.REGISTRY_PATH);
+    await expect(ru.refreshRegistryHeartbeat(t, macKey)).rejects.toThrow();
+    failGetPaths.clear();
+    expect(await ru.refreshRegistryHeartbeat(t + 60_000, macKey)).toBe(false);
+    expect(await ru.refreshRegistryHeartbeat(t + 16 * 60_000, macKey)).toBe(true);
+  });
+
+  it('a trusted device keeps when it was last seen, from its authentic entry only', async () => {
+    await enrollPair(); // acting as the phone
+    const seenAt = ownEntry().updatedAt;
+    let managed = await ru.refreshManagedDeviceWipeStatuses(PAT, REPO, macKey);
+    expect(managed.find((m) => m.deviceId === LAP)?.lastSeenAt).toBe(seenAt);
+
+    // A newer time written by someone without the registry key is ignored.
+    const reg = JSON.parse(files[ru.REGISTRY_PATH].data);
+    reg[LAP] = { ...reg[LAP], updatedAt: seenAt + 5 * DAY };
+    files[ru.REGISTRY_PATH] = { data: JSON.stringify(reg), sha: 'forged' };
+    managed = await ru.refreshManagedDeviceWipeStatuses(PAT, REPO, macKey);
+    expect(managed.find((m) => m.deviceId === LAP)?.lastSeenAt).toBe(seenAt);
+    expect((await ru.listApprovedDevices()).find((m) => m.deviceId === LAP)?.lastSeenAt).toBe(seenAt);
+  });
+});
