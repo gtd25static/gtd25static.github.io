@@ -49,11 +49,11 @@ export async function createTask(page: Page, title: string): Promise<void> {
 }
 
 /** Open a sidebar list by (part of) its name, or by position under "Lists". */
-export async function openList(page: Page, which: string | number): Promise<void> {
+export async function openList(page: Page, which: string | number, { timeout }: { timeout?: number } = {}): Promise<void> {
   const lists = page.locator('aside nav [data-focus-id]');
   const item = typeof which === 'number' ? lists.nth(which) : lists.filter({ hasText: which });
   await item.locator(':scope > button').click();
-  await expect(page.getByRole('button', { name: 'Add a task' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Add a task' })).toBeVisible({ timeout });
 }
 
 // React renders the settings <dialog> and opens it from an effect, so give it a

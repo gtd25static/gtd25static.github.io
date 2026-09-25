@@ -40,6 +40,13 @@ async function seedManyTasks(page: Page): Promise<void> {
   }, { list: LIST, count: COUNT, marker: MARKER });
 }
 
+// Opening a list of COUNT tasks renders every card at once: ~8-11 s without
+// Paranoid Mode and ~15-19 s with it on this machine — right at the helper's
+// generic 20 s, so any CPU pressure from the rest of the suite failed these
+// recovery tests on timing alone. They check that the vault comes back intact,
+// not how fast a huge list renders (that's a performance item of its own).
+const BIG_LIST_OPEN_MS = 60_000;
+
 async function vaultState(page: Page): Promise<string | null> {
   return page.evaluate(async () => {
     const settle = <T>(request: IDBRequest<T>) => new Promise<T>((resolve, reject) => {
@@ -78,7 +85,7 @@ test('an enable killed mid-encryption comes back at the lock screen and finishes
   expect(await unlock(reopened, MAIN_PASSPHRASE), 'the passphrase chosen for the interrupted enable unlocks').toBe(true);
   await expect.poll(() => vaultState(reopened), { timeout: 60_000 }).toBe('done');
   await closeSettings(reopened);
-  await openList(reopened, LIST);
+  await openList(reopened, LIST, { timeout: BIG_LIST_OPEN_MS });
   await expect(taskCards(reopened).filter({ hasText: `${MARKER} 0` }).first()).toBeVisible();
   await expect(taskCards(reopened).filter({ hasText: `${MARKER} ${COUNT - 1}` }).first()).toBeVisible();
   await expect(taskCards(reopened)).toHaveCount(COUNT);
@@ -95,7 +102,7 @@ test('a vault saved just before the tab died (flag never written) still comes ba
   await expect(lockHeading(page)).toBeVisible();
   expect(await unlock(page, MAIN_PASSPHRASE)).toBe(true);
   await closeSettings(page);
-  await openList(page, LIST);
+  await openList(page, LIST, { timeout: BIG_LIST_OPEN_MS });
   await expect(taskCards(page).filter({ hasText: `${MARKER} 7` }).first()).toBeVisible();
 });
 
@@ -107,6 +114,6 @@ test('a flag left behind by a disable that already deleted the vault does not st
   await page.reload();
   await expect(appShell(page)).toBeVisible();
   await expect(lockHeading(page)).toBeHidden();
-  await openList(page, LIST);
+  await openList(page, LIST, { timeout: BIG_LIST_OPEN_MS });
   await expect(taskCards(page).filter({ hasText: `${MARKER} 7` }).first()).toBeVisible();
 });
