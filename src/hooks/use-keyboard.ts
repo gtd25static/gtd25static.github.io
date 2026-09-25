@@ -230,13 +230,10 @@ export function useKeyboard() {
         return; // Let QuickCapture handle its own keys
       }
 
-      if (s.settingsOpen || s.trashOpen) {
-        if (e.key === 'Escape') {
-          s.setSettingsOpen(false);
-          s.setTrashOpen(false);
-        }
-        return;
-      }
+      // Settings and Trash are modal <dialog>s: every key is theirs, and Escape
+      // closes them natively — only the topmost dialog, so a confirm or export
+      // dialog opened from Settings no longer takes Settings down with it.
+      if (s.settingsOpen || s.trashOpen) return;
 
       const target = e.target as HTMLElement;
       const inInput =

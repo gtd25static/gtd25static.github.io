@@ -206,6 +206,18 @@ describe('useKeyboard — an open modal owns the keyboard', () => {
     expect(press(' ', btn).defaultPrevented).toBe(false);
   });
 
+  it.each(['settingsOpen', 'trashOpen'] as const)(
+    'Escape with %s leaves closing to the topmost <dialog> (a confirm over Settings must not take Settings down too)',
+    (flag) => {
+      useAppState.setState({ [flag]: true });
+      render(<Harness />);
+      openNativeDialog(); // Settings/Trash itself
+      const e = press('Escape');
+      expect(e.defaultPrevented).toBe(false);
+      expect(useAppState.getState()[flag]).toBe(true); // the native cancel → Modal onClose closes it
+    },
+  );
+
   it('`?` still closes the help overlay', () => {
     useAppState.setState({ helpOpen: true });
     render(<Harness />);
