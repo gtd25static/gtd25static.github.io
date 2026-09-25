@@ -36,6 +36,27 @@ describe('Modal', () => {
     expect(screen.getByRole('dialog')).toBeInTheDocument();
   });
 
+  // A Modal rendered inside another (Settings → Export backup) sits in its
+  // React tree, and React dispatches the inner <dialog>'s cancel/close to the
+  // outer dialog's onCancel/onClose too — so one Escape on the Export dialog
+  // closed Settings as well.
+  it('a nested Modal\'s Escape (cancel) and close only close that Modal', () => {
+    const outer = vi.fn();
+    const inner = vi.fn();
+    render(
+      <Modal open onClose={outer} title="Settings">
+        <Modal open onClose={inner} title="Export backup">x</Modal>
+      </Modal>,
+    );
+    const innerDialog = screen.getAllByRole('dialog')[1];
+    innerDialog.dispatchEvent(new Event('cancel', { cancelable: true }));
+    expect(inner).toHaveBeenCalledTimes(1);
+    expect(outer).not.toHaveBeenCalled();
+    innerDialog.dispatchEvent(new Event('close'));
+    expect(inner).toHaveBeenCalledTimes(2);
+    expect(outer).not.toHaveBeenCalled();
+  });
+
   // Browsers run the "dialog focusing steps" inside showModal(): focus the first
   // [autofocus] descendant, else the first focusable one. React never writes the
   // autofocus attribute (autoFocus is a .focus() call at mount — a no-op while

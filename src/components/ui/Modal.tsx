@@ -30,8 +30,12 @@ export function Modal({ open, onClose, title, children }: Props) {
   return (
     <dialog
       ref={dialogRef}
-      onClose={onClose}
+      // cancel/close don't bubble in the DOM, but React delivers a nested
+      // Modal's (Settings → Export backup) to this one's handlers as well:
+      // react only to our own dialog, or one Escape closes both.
+      onClose={(e) => { if (e.target === e.currentTarget) onClose(); }}
       onCancel={(e) => {
+        if (e.target !== e.currentTarget) return;
         // Prevent Escape from closing the dialog when a native date picker is open.
         // The date picker popup consumes Escape to close itself, but some browsers
         // also fire a cancel event on the dialog.
