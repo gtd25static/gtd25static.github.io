@@ -12,7 +12,7 @@ export function FocusView() {
   const { members, completedTodayCount, state } = useFocusSet();
 
   return (
-    <div className="flex-1 overflow-y-auto px-4 py-6">
+    <div className="flex-1 overflow-y-auto px-4 pt-6 pb-24">
       <div className="mx-auto w-full max-w-xl">
         <div className="mb-5 px-1">
           <h1 className="text-lg font-medium text-zinc-800 dark:text-zinc-100">Focus</h1>

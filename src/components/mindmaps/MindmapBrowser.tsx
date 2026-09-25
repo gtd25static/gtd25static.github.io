@@ -142,7 +142,7 @@ export function MindmapBrowser() {
       </div>
 
       {/* Rows */}
-      <div className="flex-1 overflow-y-auto px-4 pb-6 pt-3 scrollbar-thin">
+      <div className="flex-1 overflow-y-auto px-4 pb-24 pt-3 scrollbar-thin">
         {shownFolders.length === 0 && shownMaps.length === 0 ? (
           <div className="flex h-full flex-col items-center justify-center text-center text-zinc-400">
             <p className="text-sm">Nothing here yet.</p>

@@ -30,6 +30,7 @@ import { DndProvider } from './DndProvider';
 export function AppShell() {
   const { sidebarOpen, setSidebarOpen, setSettingsOpen, searchQuery, selectedListId, selectList, quickCaptureOpen, setQuickCaptureOpen, redacted } = useAppState(useShallow(s => ({ sidebarOpen: s.sidebarOpen, setSidebarOpen: s.setSidebarOpen, setSettingsOpen: s.setSettingsOpen, searchQuery: s.searchQuery, selectedListId: s.selectedListId, selectList: s.selectList, quickCaptureOpen: s.quickCaptureOpen, setQuickCaptureOpen: s.setQuickCaptureOpen, redacted: s.redacted })));
   const lists = useTaskLists();
+  const bulkMode = useAppState((s) => s.bulkMode);
   const { warningCount, blockedCount } = useSpecialListContext();
 
   // Swipe to open/close sidebar on mobile (skips surfaces that own their own
@@ -134,8 +135,10 @@ export function AppShell() {
       <PomodoroSettingsModal />
       <HelpOverlay />
 
-      {/* Mobile quick capture FAB */}
-      <button
+      {/* Quick capture FAB. Hidden while selecting: on phones the bulk bar sits
+          under it, and a tap on its Cancel opened Quick capture instead. The
+          views keep pb-24 at the bottom so it doesn't cover their last items. */}
+      {!bulkMode && <button
         onClick={() => setQuickCaptureOpen(!quickCaptureOpen)}
         className="fixed bottom-6 right-6 z-[92] flex h-14 w-14 md:h-12 md:w-12 items-center justify-center rounded-full bg-accent-600 text-white shadow-lg hover:bg-accent-700 active:scale-95 transition-transform"
         aria-label="Quick capture"
@@ -144,7 +147,7 @@ export function AppShell() {
         <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
           <path d="M12 5v14M5 12h14" />
         </svg>
-      </button>
+      </button>}
 
       <QuickCapture />
       <FocusNudgeToast />

@@ -132,7 +132,7 @@ export function ToastContainer() {
         role="status"
         aria-live="polite"
         popover={SUPPORTS_POPOVER ? 'manual' : undefined}
-        className="fixed top-auto left-auto bottom-4 right-4 z-[100] m-0 flex max-w-[calc(100vw-2rem)] flex-col gap-2 border-0 bg-transparent p-0 overflow-visible"
+        className="fixed top-auto left-auto bottom-24 right-4 z-[100] m-0 flex max-w-[calc(100vw-2rem)] flex-col gap-2 border-0 bg-transparent p-0 overflow-visible"
       >
         {toasts.map((t) => (
           <div

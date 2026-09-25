@@ -113,7 +113,7 @@ export function FollowUpList({ listId, listName }: Props) {
 
   return (
     <div className="flex flex-1 flex-col overflow-hidden">
-      <div className="flex-1 overflow-y-auto scrollbar-thin">
+      <div className="flex-1 overflow-y-auto pb-24 scrollbar-thin">
         <div className="mx-auto w-full max-w-2xl lg:max-w-3xl xl:max-w-4xl px-4 py-4">
           {/* Header */}
           <div className="mb-1 flex items-center justify-between gap-2">
