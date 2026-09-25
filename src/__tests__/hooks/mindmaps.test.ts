@@ -26,6 +26,7 @@ import {
 import { restoreFromTrash, permanentlyDelete } from '../../hooks/use-trash';
 import { useMindmapUi } from '../../stores/mindmap-ui';
 import { tick, loggedIds } from '../helpers/cascade-fixtures';
+import { applyRemoteEntries } from '../../sync/change-log';
 
 beforeEach(async () => {
   await resetDb();
@@ -405,6 +406,26 @@ describe('mindmap delete / restore vs. rows deleted earlier', () => {
     expect(await loggedIds('upsert')).toEqual(
       [s.top.id, s.sub.id, s.inner.id, s.innerRoot.id, s.kept.id, s.sibling.id, siblingRoot.id].sort(),
     );
+  });
+});
+
+describe('mindmap restore on a device that got the deletes through sync', () => {
+  it('restores the same set there', async () => {
+    const s = await seedMindmapTree();
+    await deleteMindmapFolder(s.top.id);
+    const aEntries = await db.changeLog.toArray();
+
+    await resetDb(); // device B: remote deletes stamp deletedAt with the entry timestamp
+    await applyRemoteEntries(aEntries);
+    await restoreMindmapFolder(s.top.id);
+
+    for (const f of [s.top, s.sub]) expect((await db.mindmapFolders.get(f.id))?.deletedAt).toBeUndefined();
+    for (const m of [s.inner, s.sibling]) expect((await db.mindmaps.get(m.id))?.deletedAt).toBeUndefined();
+    expect((await db.mindmapNodes.get(s.kept.id))?.deletedAt).toBeUndefined();
+    expect((await db.mindmapNodes.get(s.goneNode.id))?.deletedAt).toBeTruthy();
+    expect((await db.mindmaps.get(s.goneMap.id))?.deletedAt).toBeTruthy();
+    expect((await db.mindmapFolders.get(s.goneFolder.id))?.deletedAt).toBeTruthy();
+    expect((await db.mindmaps.get(s.goneFolderMap.id))?.deletedAt).toBeTruthy();
   });
 });
 
