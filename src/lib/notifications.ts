@@ -23,14 +23,54 @@ export async function closeAllNotifications(): Promise<void> {
   } catch { /* no service worker or notifications in this context */ }
 }
 
+const TIMER_NOTIFICATION_TAG = 'gtd25-pomodoro';
+const TIMER_NOTIFICATION_MS = 3000;
+
+/**
+ * Brief "Pomodoro Complete" notification, closed again after 3s. Shown through
+ * the service worker when there is one, like nudges: Android Chrome rejects
+ * `new Notification()` outright ("Illegal constructor"), and a SW notification
+ * is also one closeAllNotifications() can reach on lock/wipe. Never throws.
+ */
 export function showTimerNotification(): void {
   if (!('Notification' in window) || Notification.permission !== 'granted') return;
-  const n = new Notification('Pomodoro Complete', {
+  const title = 'Pomodoro Complete';
+  const options: NotificationOptions = {
     body: 'Your timer has finished!',
     icon: '/favicon.ico',
     silent: true, // we play our own bell
-  });
-  setTimeout(() => n.close(), 3000);
+    tag: TIMER_NOTIFICATION_TAG,
+  };
+
+  const showWindowNotification = () => {
+    try {
+      const n = new Notification(title, options);
+      setTimeout(() => n.close(), TIMER_NOTIFICATION_MS);
+    } catch {
+      // Not constructible here (Android Chrome without a SW registration).
+    }
+  };
+
+  const serviceWorker = navigator.serviceWorker;
+  if (serviceWorker && typeof serviceWorker.getRegistration === 'function') {
+    void serviceWorker.getRegistration()
+      .then(async (registration) => {
+        if (!registration || typeof registration.showNotification !== 'function') {
+          showWindowNotification();
+          return;
+        }
+        await registration.showNotification(title, options);
+        setTimeout(() => {
+          void registration.getNotifications({ tag: TIMER_NOTIFICATION_TAG })
+            .then((shown) => { for (const n of shown) n.close(); })
+            .catch(() => { /* best-effort */ });
+        }, TIMER_NOTIFICATION_MS);
+      })
+      .catch(showWindowNotification);
+    return;
+  }
+
+  showWindowNotification();
 }
 
 function appOpenUrl(): string {

@@ -5,6 +5,7 @@ import { showTimerNotification, requestNotificationPermission } from '../lib/not
 import { TICK_SOUND_CODE, BELL_SOUND_CODE } from '../lib/pomodoro-sounds';
 import { updateMediaSession, clearMediaSession, registerMediaSessionHandlers } from '../lib/media-session';
 import { loadPomodoroSettings, startAmbientFromActivePreset } from '../lib/pomodoro-audio';
+import { recordError } from '../lib/diagnostics';
 
 export function usePomodoroClock() {
   const prevTimerRunning = useRef(false);
@@ -123,13 +124,19 @@ export function usePomodoroClock() {
 }
 
 async function handleCompletion() {
-  audioEngine.stopTicking();
-  const settings = await loadPomodoroSettings();
-  if (settings?.bellEnabled) {
-    audioEngine.playBell(BELL_SOUND_CODE);
+  try {
+    audioEngine.stopTicking();
+    const settings = await loadPomodoroSettings();
+    if (settings?.bellEnabled) {
+      audioEngine.playBell(BELL_SOUND_CODE);
+    }
+    showTimerNotification();
+    updateMediaSession({ title: 'Pomodoro Complete', playing: false });
+  } catch (err) {
+    recordError('pomodoro.completion', err);
+  } finally {
+    // Stop ambient on completion — even if a step above failed; otherwise the
+    // Stop button stays up and the next session won't restart ambient.
+    usePomodoroStore.setState({ ambientPlaying: false });
   }
-  showTimerNotification();
-  updateMediaSession({ title: 'Pomodoro Complete', playing: false });
-  // Stop ambient on completion
-  usePomodoroStore.setState({ ambientPlaying: false });
 }
