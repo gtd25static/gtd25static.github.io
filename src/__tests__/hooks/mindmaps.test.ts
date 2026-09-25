@@ -250,6 +250,35 @@ describe('folders', () => {
   });
 });
 
+describe('renaming a map', () => {
+  // The map is created with its root node labelled by its name; renaming it
+  // left the root (and so the exported outline's "# " title) on the old name.
+  it('renames the root node too while it still carries the map\'s name', async () => {
+    const map = assertDefined(await createMindmap('Plan'));
+    const root = await rootOf(map.id);
+
+    await renameMindmap(map.id, 'Launch plan');
+
+    const renamed = assertDefined(await db.mindmapNodes.get(root.id));
+    expect(renamed.label).toBe('Launch plan');
+    expect(renamed.fieldTimestamps?.label).toBe(renamed.updatedAt);
+    expect(await loggedIds('upsert')).toContain(root.id);
+    const exported = assertDefined(await exportMindmapOutline(map.id) ?? undefined, 'export');
+    expect(exported.content.startsWith('# Launch plan\n')).toBe(true);
+  });
+
+  it('leaves a root node the user relabelled alone', async () => {
+    const map = assertDefined(await createMindmap('Plan'));
+    const root = await rootOf(map.id);
+    await updateMindmapNodeLabel(root.id, 'Central idea');
+
+    await renameMindmap(map.id, 'Launch plan');
+
+    expect((await db.mindmapNodes.get(root.id))?.label).toBe('Central idea');
+    expect((await db.mindmaps.get(map.id))?.name).toBe('Launch plan');
+  });
+});
+
 describe('map lifecycle', () => {
   it('rename, move to folder, delete cascades nodes, restore brings them back', async () => {
     const map = assertDefined(await createMindmap('M'));

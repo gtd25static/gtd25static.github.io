@@ -39,9 +39,13 @@ export function MindmapBrowser() {
   const folders = useMindmapFolders();
   const maps = useMindmaps();
   const nodeCounts = useMindmapNodeCounts();
-  const { setOpenMindmapId } = useAppState(useShallow((s) => ({ setOpenMindmapId: s.setOpenMindmapId })));
-
-  const [currentFolderId, setCurrentFolderId] = useState<string | undefined>(undefined);
+  // The folder lives in app state: opening a map unmounts the browser, and "Back"
+  // used to land at the top level instead of the folder the map was opened from.
+  const { setOpenMindmapId, currentFolderId, setCurrentFolderId } = useAppState(useShallow((s) => ({
+    setOpenMindmapId: s.setOpenMindmapId,
+    currentFolderId: s.mindmapFolderId,
+    setCurrentFolderId: s.setMindmapFolderId,
+  })));
   const [nameDialog, setNameDialog] = useState<NameDialog | null>(null);
   const [moveDialog, setMoveDialog] = useState<MoveDialog | null>(null);
   const [importOpen, setImportOpen] = useState(false);

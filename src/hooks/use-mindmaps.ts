@@ -440,7 +440,19 @@ export async function renameMindmap(id: string, name: string): Promise<void> {
       updatedAt: now,
       fieldTimestamps: stampUpdatedFields(existing.fieldTimestamps, ['name'], now),
     };
-    await putMindmapRows([{ table: 'mindmaps', entityType: 'mindmap', row: updated }]);
+    const writes: MindmapWrite[] = [{ table: 'mindmaps', entityType: 'mindmap', row: updated }];
+    // The root node is created labelled with the map's name. While it still is,
+    // the rename carries over (it is also the exported outline's "# " title); a
+    // root the user relabelled is left alone.
+    const root = (await db.mindmapNodes.where('mapId').equals(id).toArray()).find((n) => !n.parentId && !n.deletedAt);
+    if (root && root.label === existing.name && root.label !== clean) {
+      writes.push({
+        table: 'mindmapNodes',
+        entityType: 'mindmapNode',
+        row: { ...root, label: clean, updatedAt: now, fieldTimestamps: stampUpdatedFields(root.fieldTimestamps, ['label'], now) },
+      });
+    }
+    await putMindmapRows(writes);
   } catch (error) {
     handleDbError(error, 'rename mindmap');
   }

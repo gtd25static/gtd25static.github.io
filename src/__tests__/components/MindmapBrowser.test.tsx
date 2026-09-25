@@ -43,7 +43,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockUseFolders.mockReturnValue([]);
   mockUseMaps.mockReturnValue([]);
-  useAppState.setState({ openMindmapId: null });
+  useAppState.setState({ openMindmapId: null, mindmapFolderId: undefined });
 });
 
 describe('MindmapBrowser', () => {
@@ -76,6 +76,24 @@ describe('MindmapBrowser', () => {
     // Breadcrumb back to top
     await user.click(screen.getByRole('button', { name: 'Mindmaps' }));
     expect(screen.getByText('Outside')).toBeInTheDocument();
+  });
+
+  // Opening a map unmounts the browser; its folder was local state, so "Back"
+  // from a map inside a folder landed at the top level.
+  it('comes back in the folder it was showing', async () => {
+    const user = userEvent.setup();
+    mockUseFolders.mockReturnValue([makeFolder({ id: 'f1', name: 'Ideas' })]);
+    mockUseMaps.mockReturnValue([
+      makeMap({ id: 'm1', name: 'Inside', folderId: 'f1' }),
+      makeMap({ id: 'm2', name: 'Outside' }),
+    ]);
+    const { unmount } = render(<MindmapBrowser />);
+    await user.click(screen.getByText('Ideas'));
+    unmount();
+
+    render(<MindmapBrowser />);
+    expect(screen.getByText('Inside')).toBeInTheDocument();
+    expect(screen.queryByText('Outside')).not.toBeInTheDocument();
   });
 
   it('creates a map via the New map modal and opens it', async () => {

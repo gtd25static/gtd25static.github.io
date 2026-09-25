@@ -639,10 +639,13 @@ export function Sidebar() {
         {/* Mindmaps */}
         <button
           onClick={() => {
-            // Clicking again while already in the section pops back to the browser
+            // Clicking again while already in the section pops back to the browser.
+            // The section opens at the top level, as it did when the folder was
+            // the browser's own state.
             if (selectedListId === '__mindmaps__') {
               useAppState.getState().setOpenMindmapId(null);
             }
+            useAppState.getState().setMindmapFolderId(undefined);
             selectList('__mindmaps__');
             setSidebarOpen(false);
           }}

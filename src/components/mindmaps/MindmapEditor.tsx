@@ -12,7 +12,10 @@ import { copyMindmapPng, downloadMindmapPng, downloadMindmapSvg } from './image-
 export function MindmapEditor({ mapId }: { mapId: string }) {
   const map = useMindmap(mapId);
   const nodes = useMindmapNodes(mapId);
-  const { setOpenMindmapId } = useAppState(useShallow((s) => ({ setOpenMindmapId: s.setOpenMindmapId })));
+  const { setOpenMindmapId, setMindmapFolderId } = useAppState(useShallow((s) => ({
+    setOpenMindmapId: s.setOpenMindmapId,
+    setMindmapFolderId: s.setMindmapFolderId,
+  })));
   const selectedNodeId = useMindmapUi((s) => s.selectedNodeId);
   const selectedNode = selectedNodeId ? nodes.find((n) => n.id === selectedNodeId) : undefined;
 
@@ -33,7 +36,8 @@ export function MindmapEditor({ mapId }: { mapId: string }) {
     <div className="flex flex-1 flex-col overflow-hidden">
       <div className="flex items-center gap-2 border-b border-zinc-200 px-3 py-2 dark:border-zinc-800">
         <button
-          onClick={() => setOpenMindmapId(null)}
+          // Back to the folder the map lives in, however it was opened (browser, search).
+          onClick={() => { setMindmapFolderId(map.folderId); setOpenMindmapId(null); }}
           aria-label="Back to mindmaps"
           className="flex h-10 w-10 md:h-8 md:w-8 shrink-0 items-center justify-center rounded-full text-zinc-500 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800"
         >
