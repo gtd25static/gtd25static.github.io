@@ -285,6 +285,9 @@ describe('secondary unlock and other tabs', () => {
     vi.spyOn(db.subtasks, 'toArray').mockImplementationOnce((() => { lock(); return readSubtasks(); }) as never);
 
     expect(await unlockWithPassphrase(SECONDARY)).toBe(true);
+    // The lock waited for the re-init, then happened; the vault opens as usual.
+    expect(isUnlocked()).toBe(false);
+    expect(await unlockWithPassphrase(SECONDARY)).toBe(true);
     const [sub] = await db.subtasks.toArray();
     expect((sub as { _decryptError?: boolean })._decryptError).toBeUndefined();
     expect(sub.title).not.toContain('WHISTLEBLOWER');

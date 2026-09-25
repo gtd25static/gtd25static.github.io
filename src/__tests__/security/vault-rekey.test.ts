@@ -328,14 +328,18 @@ describe('rekeyVault is atomic', () => {
     expect(await checkPassphrase(SECONDARY)).toBe('secondary');
   });
 
-  it('ignores a lock arriving while the swap is in flight', async () => {
+  it('a lock arriving while the swap is in flight waits for the swap, then locks', async () => {
+    // Locking mid-transaction would drop the key the swap is writing with, so it
+    // can't happen then — but it used to be dropped altogether, leaving the vault
+    // unlocked after the user (or the idle timer, or another tab) asked to lock.
     const realPut = db.vault.put.bind(db.vault);
     vi.spyOn(db.vault, 'put').mockImplementationOnce((row) => {
       lock(); // idle timer, hotkey or another tab, mid-transaction
       return realPut(row);
     });
     await rekeyVault(REAL);
-    expect(isUnlocked()).toBe(true);
+    expect(isUnlocked()).toBe(false);
+    expect(await unlockWithPassphrase(REAL)).toBe(true);
     expect((await db.tasks.get('t1'))?.title).toBe(TITLE);
   });
 });

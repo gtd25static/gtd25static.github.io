@@ -55,6 +55,10 @@ let kdfParams: KdfParams = DEFAULT_ARGON2;
 // the key halfway through the read. Such a signal is not for this tab: at a
 // secondary unlock it is still at its lock screen, and a re-key shows nothing.
 let rekeying = false;
+// A lock asked for while `rekeying` (idle timer, hotkey, another tab): it can't
+// drop the key mid-swap, so it runs as soon as the swap ends. It used to be
+// dropped altogether, leaving the vault unlocked after a lock was asked for.
+let lockDeferredByRekey = false;
 
 // --- Reactive snapshot for React (useSyncExternalStore) ---
 // `busy`: the vault is being rewritten under another key; the app must not
@@ -223,12 +227,20 @@ export async function setVaultSecrets(patch: VaultSecrets): Promise<void> {
 
 /** Drop the keys held by THIS tab. */
 function lockThisTab(): void {
-  if (rekeying) return;
+  if (rekeying) { lockDeferredByRekey = true; return; }
   currentDek = null;
   currentSecrets = null;
   if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
   clearEncryptionKey(); // drop the sync key too
   emit();
+}
+
+/** End of a re-key window: honour a lock that arrived during it. */
+function endRekeyWindow(): void {
+  rekeying = false;
+  if (!lockDeferredByRekey) return;
+  lockDeferredByRekey = false;
+  lockThisTab();
 }
 
 export function lock(): void {
@@ -541,6 +553,8 @@ async function applySecondaryUnlock(vault: Vault, realDek: CryptoKey, secondaryK
     const newDek = await reinitVaultWithPlaceholders(vault, realDek, secondaryKek);
     currentDek = null;
     rekeying = false; // from here on, locks behave as during any other unlock
+    const lockAskedMeanwhile = lockDeferredByRekey;
+    lockDeferredByRekey = false;
     // The other tabs locked before the re-key, but their memory still holds what
     // they showed and fetched under the real key. Reload them now that the swap is
     // on disk, so they come back up knowing only the placeholder vault.
@@ -548,7 +562,9 @@ async function applySecondaryUnlock(vault: Vault, realDek: CryptoKey, secondaryK
     setKeyFlag(false); // PRF security keys were dropped in the re-key
     const rekeyed = await db.vault.get('vault');
     if (!rekeyed) { lastUnlockFailure = 'corrupt-vault'; return false; }
-    return await finishUnlock(rekeyed, newDek, 'passphrase');
+    const unlocked = await finishUnlock(rekeyed, newDek, 'passphrase');
+    if (unlocked && lockAskedMeanwhile) lockThisTab();
+    return unlocked;
   } catch (err) {
     // Roll back any in-memory key; the transaction already rolled back on disk.
     currentDek = null;
@@ -559,6 +575,7 @@ async function applySecondaryUnlock(vault: Vault, realDek: CryptoKey, secondaryK
     return false;
   } finally {
     rekeying = false;
+    lockDeferredByRekey = false; // a failed unlock leaves the vault locked anyway
   }
 }
 
@@ -1025,9 +1042,9 @@ export async function rekeyVault(currentPassphrase: string, newPassphrase?: stri
     return result;
   } finally {
     // On failure the transaction rolled back and currentDek still is the old key.
-    rekeying = false;
     if (ruk) ruk.fill(0);
     resetIdleTimer();
+    endRekeyWindow();
     emit();
   }
 }
@@ -1074,6 +1091,7 @@ export function __resetVaultStateForTests(): void {
   currentSecrets = null;
   lastUnlockFailure = null;
   rekeying = false;
+  lockDeferredByRekey = false;
   if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
   idleTimeoutMs = DEFAULT_IDLE_MINUTES * 60_000;
   emit();
