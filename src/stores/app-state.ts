@@ -60,7 +60,9 @@ export const useAppState = create<AppState>((set) => ({
   editingItemId: null,
   addingSubtaskToTaskId: null,
   creatingTask: false,
-  sidebarOpen: true,
+  // Only matters below md (the drawer); on phones the app opens on the Focus view,
+  // not behind the drawer. Desktop always shows the sidebar.
+  sidebarOpen: typeof window === 'undefined' || window.innerWidth >= 768,
   settingsOpen: false,
   helpOpen: false,
   trashOpen: false,

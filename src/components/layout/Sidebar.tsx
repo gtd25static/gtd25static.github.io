@@ -381,6 +381,7 @@ export function Sidebar() {
     try {
       const list = await createTaskList(newName.trim().slice(0, MAX_LIST_NAME_LENGTH), newType);
       selectList(list.id);
+      setSidebarOpen(false); // on a phone, show the new list (as picking a list does)
       setNewName('');
       setNewType('tasks');
       setCreating(false);
