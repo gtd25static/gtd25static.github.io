@@ -1173,67 +1173,56 @@ async function runSync(manual = false, pushLimit?: number): Promise<number> {
       }
 
       // Append our entries to the remote changelog
-      const updatedChangelog = [...remoteToWrite, ...entriesToPush];
-      const content = JSON.stringify(updatedChangelog);
+      let content = JSON.stringify([...remoteToWrite, ...entriesToPush]);
 
       let retries = 0;
       let pushed = false;
       let currentSha = changelogSha;
+      const appliedForeignIds = new Set(remoteEntries.map((e) => e.id));
 
+      // Every attempt writes the content rebuilt from the changelog it last read,
+      // paired with that read's sha. On a 409 both are refreshed together; any
+      // other failure aborts the sync (entries stay pending for the next run).
+      // Re-sending the original content with a fresher sha — what a failed
+      // retry used to fall back to — overwrote other devices' entries.
       while (!pushed && retries < MAX_RETRIES) {
         try {
-          const newSha = await putFile(creds.pat, creds.repo, CHANGELOG_FILE, content, currentSha, signal);
-          currentSha = newSha;
+          currentSha = await putFile(creds.pat, creds.repo, CHANGELOG_FILE, content, currentSha, signal);
           pushed = true;
         } catch (err) {
-          if (err instanceof Error && err.message === 'CONFLICT') {
-            retries++;
-            if (retries >= MAX_RETRIES) {
-              recordSyncMessage('conflict', `Exceeded ${MAX_RETRIES} retries while pushing changelog`);
-              toast('Sync conflict — will retry later', 'error');
-              reportError('Sync conflict', { category: 'conflict', message: `Exceeded ${MAX_RETRIES} retries while pushing changelog` }, 0.8);
-              return -1;
-            }
-            // Re-fetch changelog and merge
-            const fresh = await getFile(creds.pat, creds.repo, CHANGELOG_FILE, signal);
-            if (fresh) {
-              const freshParsed = safeParseJson<ChangeEntry[]>(fresh.data, 'remote changelog (conflict retry)');
-              const freshEntries = freshParsed.ok ? freshParsed.value : [];
-              currentSha = fresh.sha;
-              // Apply any new foreign entries (decrypt them)
-              let newForeign = freshEntries.filter(
-                (e) => e.deviceId !== creds.deviceId && !remoteEntries.some((r) => r.id === e.id),
-              );
-              newForeign = await decryptChangeEntries(encKey, newForeign);
-              if (newForeign.length > 0) {
-                await applyRemoteEntries(newForeign);
-              }
-              // Rebuild: fresh remote + our pending encrypted (deduplicated)
-              const pendingIds = new Set(entriesToPush.map((e) => e.id));
-              let freshToWrite = freshEntries.filter((e) => !pendingIds.has(e.id));
-              // Re-encrypt plaintext entries during first-time encryption
-              if (!remoteSalt) {
-                freshToWrite = await encryptChangeEntries(encKey, freshToWrite);
-              }
-              const merged = [
-                ...freshToWrite,
-                ...entriesToPush,
-              ];
-              const retryContent = JSON.stringify(merged);
-              try {
-                const retrySha = await putFile(creds.pat, creds.repo, CHANGELOG_FILE, retryContent, currentSha, signal);
-                currentSha = retrySha;
-                remoteToWrite = freshToWrite;
-                pushed = true;
-              } catch {
-                // Will loop and retry
-              }
-            }
-            // Backoff with jitter to avoid thundering herd
-            await new Promise((r) => setTimeout(r, 500 * retries + Math.random() * 500));
-          } else {
-            throw err;
+          if (!(err instanceof Error && err.message === 'CONFLICT')) throw err;
+          retries++;
+          if (retries >= MAX_RETRIES) {
+            recordSyncMessage('conflict', `Exceeded ${MAX_RETRIES} retries while pushing changelog`);
+            toast('Sync conflict — will retry later', 'error');
+            reportError('Sync conflict', { category: 'conflict', message: `Exceeded ${MAX_RETRIES} retries while pushing changelog` }, 0.8);
+            return -1;
           }
+          // Re-fetch changelog and merge
+          const fresh = await getFile(creds.pat, creds.repo, CHANGELOG_FILE, signal);
+          const freshParsed = fresh
+            ? safeParseJson<ChangeEntry[]>(fresh.data, 'remote changelog (conflict retry)')
+            : { ok: true as const, value: [] as ChangeEntry[] };
+          const freshEntries = freshParsed.ok ? freshParsed.value : [];
+          currentSha = fresh?.sha;
+          // Apply any new foreign entries (decrypt them)
+          let newForeign = freshEntries.filter((e) => e.deviceId !== creds.deviceId && !appliedForeignIds.has(e.id));
+          newForeign = await decryptChangeEntries(encKey, newForeign);
+          if (newForeign.length > 0) {
+            await applyRemoteEntries(newForeign);
+            for (const e of newForeign) appliedForeignIds.add(e.id);
+          }
+          // Rebuild: fresh remote + our pending encrypted (deduplicated)
+          const pendingIds = new Set(entriesToPush.map((e) => e.id));
+          let freshToWrite = freshEntries.filter((e) => !pendingIds.has(e.id));
+          // Re-encrypt plaintext entries during first-time encryption
+          if (!remoteSalt) {
+            freshToWrite = await encryptChangeEntries(encKey, freshToWrite);
+          }
+          remoteToWrite = freshToWrite;
+          content = JSON.stringify([...freshToWrite, ...entriesToPush]);
+          // Backoff with jitter to avoid thundering herd
+          await new Promise((r) => setTimeout(r, 500 * retries + Math.random() * 500));
         }
       }
 

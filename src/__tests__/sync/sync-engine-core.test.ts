@@ -425,6 +425,53 @@ describe('syncNow — 409 conflict retry', () => {
     expect(result).toBe(-1);
     expect(mockToast).toHaveBeenCalledWith('Sync conflict — will retry later', 'error');
   });
+  it('never re-PUTs the stale changelog over a fresher one when the retry itself fails', async () => {
+    await setupWithEncryption();
+    await db.syncMeta.update('sync-meta', { lastPulledAt: Date.now() - 60_000 });
+    const snapshotContent = await makeEncryptedSnapshot();
+    const now = Date.now();
+    await db.changeLog.add({
+      id: 'pending-1', deviceId: 'device-A', timestamp: now,
+      entityType: 'task', entityId: 'task-1', operation: 'upsert',
+      data: { id: 'task-1', listId: 'list-1', title: 'Mine', status: 'todo', order: 0, createdAt: now, updatedAt: now },
+    });
+    // Another device's entry lands between our read and our write.
+    const foreign: ChangeEntry = {
+      id: 'foreign-1', deviceId: 'device-B', timestamp: now,
+      entityType: 'task', entityId: 'task-2', operation: 'upsert',
+      data: { id: 'task-2', listId: 'list-1', title: 'Theirs', status: 'todo', order: 1, createdAt: now, updatedAt: now },
+    };
+    let changelogReads = 0;
+    mockGetFile.mockImplementation((_p: string, _r: string, path: string) => {
+      if (path === CHANGELOG_FILE) {
+        changelogReads++;
+        return Promise.resolve(changelogReads === 1
+          ? { data: '[]', sha: 'cl-sha-1' }
+          : { data: JSON.stringify([foreign]), sha: 'cl-sha-2' });
+      }
+      if (path === SNAPSHOT_FILE) return Promise.resolve({ data: snapshotContent, sha: 'snap-sha' });
+      return Promise.resolve(null);
+    });
+    // 409 on the first write; the retry then fails with a server error.
+    const changelogPuts: Array<{ content: string; sha?: string }> = [];
+    mockPutFile.mockImplementation((_p: string, _r: string, path: string, content: string, sha?: string) => {
+      if (path !== CHANGELOG_FILE) return Promise.resolve('sha');
+      changelogPuts.push({ content, sha });
+      if (changelogPuts.length === 1) return Promise.reject(new Error('CONFLICT'));
+      if (changelogPuts.length === 2) return Promise.reject(new Error('GitHub API error: 502'));
+      return Promise.resolve('cl-sha-3');
+    });
+
+    const result = await syncNow();
+
+    // Every write made against the fresh sha must still carry the other device's entry.
+    for (const put of changelogPuts.filter((p) => p.sha === 'cl-sha-2')) {
+      expect((JSON.parse(put.content) as ChangeEntry[]).map((e) => e.id)).toContain('foreign-1');
+    }
+    // The failed push is reported and our entry stays pending for the next sync.
+    expect(result).toBe(-1);
+    expect(await db.changeLog.get('pending-1')).toBeDefined();
+  }, 10_000);
 });
 
 describe('syncNow — errors', () => {
