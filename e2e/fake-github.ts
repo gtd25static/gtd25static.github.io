@@ -21,6 +21,9 @@ interface FakeResponse {
 }
 
 const DEFAULT_BRANCH = 'main';
+// Real GitHub inlines file content in Contents API JSON only up to 1 MB; bigger
+// files come back with `content: ""` and `encoding: "none"`.
+const CONTENTS_INLINE_LIMIT = 1024 * 1024;
 const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
 
 // The headers real api.github.com sends on every response, so CORS and the
@@ -52,6 +55,8 @@ export class FakeGitHub {
   held = 0;
   /** `${branch}:${path}` -> file bytes + blob sha. */
   private readonly files = new Map<string, { bytes: Buffer; sha: string }>();
+  /** Every blob ever written, by sha (the Git Data API serves old ones too). */
+  private readonly blobs = new Map<string, Buffer>();
   private holdGate: Promise<void> | null = null;
 
   constructor(
@@ -145,6 +150,16 @@ export class FakeGitHub {
     if (url.pathname === repoPrefix && method === 'GET') {
       return json(200, { full_name: this.fullName, private: true, default_branch: DEFAULT_BRANCH });
     }
+    const blobPrefix = `${repoPrefix}/git/blobs/`;
+    if (url.pathname.startsWith(blobPrefix) && method === 'GET') {
+      const blobSha = url.pathname.slice(blobPrefix.length);
+      const bytes = this.blobs.get(blobSha);
+      if (!bytes) return json(404, { message: 'Not Found' });
+      if (headers.accept?.includes('application/vnd.github.raw')) {
+        return { status: 200, headers: { 'Content-Type': 'application/vnd.github.raw' }, body: bytes };
+      }
+      return json(200, { sha: blobSha, size: bytes.length, encoding: 'base64', content: bytes.toString('base64') });
+    }
     const contentsPrefix = `${repoPrefix}/contents/`;
     if (!url.pathname.startsWith(contentsPrefix)) return this.unhandledRoute(method, url);
 
@@ -159,9 +174,10 @@ export class FakeGitHub {
       if (headers.accept?.includes('application/vnd.github.raw')) {
         return { status: 200, headers: { ETag: etag, 'Content-Type': 'application/vnd.github.raw' }, body: file.bytes };
       }
+      const inline = file.bytes.length <= CONTENTS_INLINE_LIMIT;
       return json(200, {
-        type: 'file', encoding: 'base64', name, path, size: file.bytes.length, sha: file.sha,
-        content: file.bytes.toString('base64'),
+        type: 'file', encoding: inline ? 'base64' : 'none', name, path, size: file.bytes.length, sha: file.sha,
+        content: inline ? file.bytes.toString('base64') : '',
       }, { ETag: etag });
     }
 
@@ -191,6 +207,7 @@ export class FakeGitHub {
       const bytes = Buffer.from(body.content, 'base64');
       const sha = gitBlobSha(bytes);
       this.files.set(key, { bytes, sha });
+      this.blobs.set(sha, bytes);
       return json(existing ? 200 : 201, {
         content: { name, path, sha, size: bytes.length },
         commit: { sha: gitBlobSha(Buffer.from(`commit ${key} ${sha} ${Date.now()}`)) },

@@ -122,21 +122,41 @@ export async function getFile(
   const resp = await githubFetch(pat, repo, path, undefined, signal);
   if (resp.status === 404) return null;
   if (!resp.ok) throw new Error(`GitHub API error: ${resp.status}`);
+  return decodeContentsResponse(pat, repo, path, await resp.json(), signal);
+}
 
-  const json = await resp.json();
-
+// The Contents API only inlines files up to 1 MB. Above that it answers with
+// `content: ""` and `encoding: "none"` — decoding that as base64 silently yields
+// an empty file, which the sync engine then read as an empty/corrupt snapshot
+// (~900 tasks is enough to get there). The bytes come from the git blob of the
+// SAME sha, so content and sha can't drift apart between the two requests.
+async function decodeContentsResponse(
+  pat: string,
+  repo: string,
+  path: string,
+  json: unknown,
+  signal?: AbortSignal,
+): Promise<{ data: string; sha: string }> {
+  const file = json as { content?: unknown; sha?: unknown; encoding?: unknown; size?: unknown } | null;
   // Validate response shape — GitHub may return HTML error pages or malformed JSON
-  if (!json || typeof json.content !== 'string' || typeof json.sha !== 'string') {
+  if (!file || typeof file.content !== 'string' || typeof file.sha !== 'string') {
     throw new Error(`Malformed GitHub response for ${path}: missing content or sha`);
   }
-
+  const notInlined = file.encoding === 'none' || (file.content === '' && typeof file.size === 'number' && file.size > 0);
+  if (notInlined) {
+    const resp = await apiFetch(pat, gitUrl(repo, `git/blobs/${file.sha}`), {
+      headers: { Accept: 'application/vnd.github.raw' },
+    }, signal);
+    if (!resp.ok) throw new Error(`GitHub API error: ${resp.status} (blob for ${path})`);
+    return { data: new TextDecoder().decode(await resp.arrayBuffer()), sha: file.sha };
+  }
   let data: string;
   try {
-    data = base64ToUtf8(json.content);
+    data = base64ToUtf8(file.content);
   } catch (err) {
     throw new Error(`Failed to decode base64 content for ${path}: ${err instanceof Error ? err.message : err}`);
   }
-  return { data, sha: json.sha };
+  return { data, sha: file.sha };
 }
 
 // Conditional GET for cheap polling: pass the previous ETag as `If-None-Match`.
@@ -162,17 +182,8 @@ export async function getFileConditional(
   if (!resp.ok) throw new Error(`GitHub API error: ${resp.status}`);
 
   const newEtag = resp.headers.get('ETag');
-  const json = await resp.json();
-  if (!json || typeof json.content !== 'string' || typeof json.sha !== 'string') {
-    throw new Error(`Malformed GitHub response for ${path}: missing content or sha`);
-  }
-  let data: string;
-  try {
-    data = base64ToUtf8(json.content);
-  } catch (err) {
-    throw new Error(`Failed to decode base64 content for ${path}: ${err instanceof Error ? err.message : err}`);
-  }
-  return { status: 'ok', data, sha: json.sha, etag: newEtag };
+  const { data, sha } = await decodeContentsResponse(pat, repo, path, await resp.json(), signal);
+  return { status: 'ok', data, sha, etag: newEtag };
 }
 
 export async function putFile(
