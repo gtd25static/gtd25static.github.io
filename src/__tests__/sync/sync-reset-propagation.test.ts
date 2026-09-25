@@ -27,9 +27,10 @@ vi.mock('../../sync/shared-blobs', async () => ({
 vi.mock('../../sync/history-compaction', () => ({ maybeSquashDefaultBranch: vi.fn(() => Promise.resolve()) }));
 
 import { getFile, putFile, deleteFile } from '../../sync/github-api';
-import { syncNow, importData, wipeAllData, contentReplacedByLinking, SNAPSHOT_FILE, CHANGELOG_FILE } from '../../sync/sync-engine';
+import { syncNow, importData, wipeAllData, forcePush, contentReplacedByLinking, SNAPSHOT_FILE, CHANGELOG_FILE } from '../../sync/sync-engine';
 import { cacheEncryptionKey, clearEncryptionKey, deriveKey, generateSalt, createVerifier, encryptSyncData, decryptSyncData } from '../../sync/crypto';
 import { toast } from '../../components/ui/Toast';
+import { SYNC_VERSION } from '../../sync/version';
 
 let testKey: CryptoKey;
 let testSalt: string;
@@ -259,5 +260,23 @@ describe('contentReplacedByLinking', () => {
     await db.taskLists.add(list('l', 'Mine'));
     (getFile as Mock).mockRejectedValueOnce(new Error('GitHub API error: 401'));
     expect(await contentReplacedByLinking('pat', 'repo')).toEqual({ lists: 1, tasks: 0, maps: 0 });
+  });
+});
+
+describe('force push keeps its pre-overwrite backup current', () => {
+  it('the second force push backs up what the first one wrote (the backup PUT had no sha)', async () => {
+    // Current format, so both force pushes back up to the same versioned file.
+    await setRemoteSnapshot({ syncVersion: SYNC_VERSION, taskLists: [list('v1', 'First')] });
+    remote.set(CHANGELOG_FILE, { data: '[]', sha: `sha-${++shaCounter}` });
+    await db.taskLists.add(list('v2', 'Second'));
+    await forcePush();
+    const backupName = [...remote.keys()].find((k) => k.endsWith('.backup.json'))!;
+    expect(backupName).toBeDefined();
+
+    await db.taskLists.add(list('v3', 'Third'));
+    const snapshotBeforeSecondPush = remote.get(SNAPSHOT_FILE)!.data;
+    await forcePush();
+
+    expect(remote.get(backupName)!.data).toBe(snapshotBeforeSecondPush);
   });
 });

@@ -740,7 +740,11 @@ async function backupRemoteSnapshot(
 ) {
   try {
     const backupFile = `gtd25-snapshot-v${fromVersion}.backup.json`;
-    await putFile(pat, repo, backupFile, snapshotData);
+    // Replacing an existing backup needs its sha: without it every write after
+    // the first was rejected (and swallowed below), so the "pre-overwrite"
+    // backup kept whatever the FIRST force push / wipe had overwritten.
+    const existing = await getFile(pat, repo, backupFile);
+    await putFile(pat, repo, backupFile, snapshotData, existing?.sha);
     await pruneRemoteBackups(pat, repo);
   } catch (err) {
     console.warn('Failed to create remote backup:', err);
