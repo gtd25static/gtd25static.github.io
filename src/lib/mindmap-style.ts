@@ -104,11 +104,6 @@ export function resolveNodeStyle(
   };
 }
 
-/** True when the node has any formatting of its own (used to enable "Reset"). */
-export function hasCustomStyle(node: StyledNode): boolean {
-  return !!(node.shape || node.palette || node.colorBg || node.colorFg || node.colorBorder);
-}
-
 /** How wide the label may get before wrapping, per shape. */
 export const SHAPE_TEXT_MAX_WIDTH: Record<MindmapNodeShape, number> = {
   rect: 240,

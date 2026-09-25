@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { computeNudge, pickWeightedByAge, shouldNudgeNow, NUDGE_DEFAULTS } from '../../lib/nudges';
+import { computeNudge, shouldNudgeNow, NUDGE_DEFAULTS } from '../../lib/nudges';
 import type { Subtask, Task, TaskList } from '../../db/models';
 
 const DAY = 24 * 60 * 60 * 1000;
@@ -206,37 +206,6 @@ describe('computeNudge — fallback gating', () => {
     expect(nudge.taskId).toBe('plain');
     expect(nudge.title).toBe('A gentle nudge');
     expect(nudge.body).toContain('Read book');
-  });
-});
-
-describe('pickWeightedByAge', () => {
-  it('returns null for an empty list', () => {
-    expect(pickWeightedByAge([], NOW)).toBeNull();
-  });
-
-  it('favours older tasks: most of the probability mass goes to the oldest', () => {
-    const old = makeTask({ id: 'old', createdAt: NOW - 10 * DAY });   // weight ~10d
-    const recent = makeTask({ id: 'recent', createdAt: NOW - 1 * DAY }); // weight ~1d
-    const tasks = [old, recent];
-
-    // total weight ≈ 11d; old occupies ~10/11 (≈0.909). r = rng()*total.
-    expect(pickWeightedByAge(tasks, NOW, () => 0.5)!.id).toBe('old');   // r ≈ 5.5d < 10d
-    expect(pickWeightedByAge(tasks, NOW, () => 0.99)!.id).toBe('recent'); // r ≈ 10.9d > 10d
-
-    // Sample across the unit interval: the older task should win the large majority.
-    let oldWins = 0;
-    const N = 100;
-    for (let i = 0; i < N; i++) {
-      if (pickWeightedByAge(tasks, NOW, () => (i + 0.5) / N)!.id === 'old') oldWins++;
-    }
-    expect(oldWins).toBeGreaterThan(85);
-  });
-
-  it('gives brand-new tasks a small but non-zero chance (age floor)', () => {
-    const old = makeTask({ id: 'old', createdAt: NOW - 100 * DAY });
-    const brandNew = makeTask({ id: 'new', createdAt: NOW }); // floored to 1h weight
-    // rng()→1 lands in the very top slice, which belongs to the new task.
-    expect(pickWeightedByAge([old, brandNew], NOW, () => 0.999999)!.id).toBe('new');
   });
 });
 

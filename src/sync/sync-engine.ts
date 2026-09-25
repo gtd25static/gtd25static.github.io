@@ -408,19 +408,6 @@ export function endSyncSession(): void {
   probeSnapshotEtag = null;
 }
 
-// --- Dirty flag ---
-function setDirtyFlag(value: boolean) {
-  if (value) {
-    localStorage.setItem('gtd25-sync-dirty', '1');
-  } else {
-    localStorage.removeItem('gtd25-sync-dirty');
-  }
-}
-
-export function hasDirtyFlag(): boolean {
-  return localStorage.getItem('gtd25-sync-dirty') === '1';
-}
-
 // --- Scheduler functions ---
 
 function clearSchedulerTimer() {
@@ -890,7 +877,6 @@ async function runSync(manual = false, pushLimit?: number): Promise<number> {
     return -1;
   }
 
-  setDirtyFlag(true);
 
   try {
     const creds = await getCredentials();
@@ -923,7 +909,6 @@ async function runSync(manual = false, pushLimit?: number): Promise<number> {
         pendingChanges: false,
       });
       lastSyncCompletedAt = Date.now();
-      setDirtyFlag(false);
       reportProgress('done', 'Sync complete', 1.0);
       toast('Migrated sync data to new format', 'success');
       return 0;
@@ -1001,7 +986,6 @@ async function runSync(manual = false, pushLimit?: number): Promise<number> {
         pendingChanges: false,
       });
       lastSyncCompletedAt = Date.now();
-      setDirtyFlag(false);
       reportProgress('done', 'Sync complete', 1.0);
       if (manual) toast('Initial sync complete', 'success');
       return 0;
@@ -1070,7 +1054,6 @@ async function runSync(manual = false, pushLimit?: number): Promise<number> {
         pendingChanges: false,
       });
       lastSyncCompletedAt = Date.now();
-      setDirtyFlag(false);
       reportProgress('done', 'Sync complete', 1.0);
       if (manual) toast('Synced from remote', 'success');
       return 0;
@@ -1411,7 +1394,6 @@ async function runSync(manual = false, pushLimit?: number): Promise<number> {
     consecutiveErrors = 0;
 
     lastSyncCompletedAt = Date.now();
-    setDirtyFlag(false);
     // Accumulate counts across batch cycle so the final done report includes totals
     if (batchAccum) {
       batchAccum.pulled += newlyPulledCount + pulledFromSnapshot;
@@ -1858,7 +1840,6 @@ export async function forcePull() {
       lastWipeSeenAt: snapshot.wipedAt,
     });
     lastSyncCompletedAt = Date.now();
-    setDirtyFlag(false);
     reportProgress('done', 'Sync complete', 1.0);
     notifySyncSuccess();
     toast('Force pull complete', 'success');

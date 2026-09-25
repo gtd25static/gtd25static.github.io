@@ -3,7 +3,7 @@ vi.setConfig({ testTimeout: 20_000 }); // publishOwnRegistryEntry/getRegistryMac
 import { db } from '../../db';
 import { resetDb } from '../helpers/db-helpers';
 import {
-  ensureDeviceIdentity, getPublicIdentity, getMailboxPat, setDeviceName, getDeviceName,
+  ensureDeviceIdentity, getMailboxPat, setDeviceName, getDeviceName,
   buildRegistryEntry, isAuthenticEntry, publishRegistryEntry, readAuthenticRegistry,
   publishOwnRegistryEntry, getRegistryMacKey,
   REGISTRY_PATH, unlockReqPath, cmdPath,
@@ -40,8 +40,7 @@ describe('remote-unlock: device identity', () => {
     const a = await ensureDeviceIdentity();
     const b = await ensureDeviceIdentity();
     expect(a.ecdhPub.x).toBe(b.ecdhPub.x);
-    const pub = await getPublicIdentity();
-    expect(pub?.ecdsaPub).toEqual(a.ecdsaPub);
+    expect((await db.localSettings.get('local'))?.deviceIdentity?.ecdsaPub).toEqual(a.ecdsaPub);
     expect((await db.localSettings.get('local'))?.deviceIdentity?.ecdhPriv?.d).toBeTruthy();
   });
 

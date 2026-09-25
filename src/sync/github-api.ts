@@ -404,9 +404,3 @@ export async function createBlobBase64(pat: string, repo: string, base64: string
   return json.sha;
 }
 
-// Legacy compat exports
-export const getFileContent = (pat: string, repo: string) =>
-  getFile(pat, repo, 'gtd25-data.json');
-
-export const putFileContent = (pat: string, repo: string, content: string, sha?: string) =>
-  putFile(pat, repo, 'gtd25-data.json', content, sha);

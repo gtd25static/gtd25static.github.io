@@ -1,7 +1,6 @@
 import { db } from '../../db';
 import { resetDb } from '../helpers/db-helpers';
 import {
-  recordChange,
   recordChangeBatch,
   getPendingEntries,
   clearPendingEntries,
@@ -16,33 +15,6 @@ import { SYNC_VERSION } from '../../sync/version';
 
 beforeEach(async () => {
   await resetDb();
-});
-
-describe('recordChange', () => {
-  it('adds entry with correct fields', async () => {
-    await recordChange('task', 'task-1', 'upsert', { id: 'task-1', title: 'Test' });
-    const entries = await db.changeLog.toArray();
-    expect(entries).toHaveLength(1);
-    expect(entries[0].entityType).toBe('task');
-    expect(entries[0].entityId).toBe('task-1');
-    expect(entries[0].operation).toBe('upsert');
-    expect(entries[0].data).toEqual({ id: 'task-1', title: 'Test' });
-    expect(entries[0].timestamp).toBeGreaterThan(0);
-    expect(entries[0].id).toBeTruthy();
-  });
-
-  it('uses deviceId from localSettings', async () => {
-    await db.localSettings.update('local', { deviceId: 'my-device-42' });
-    await recordChange('taskList', 'list-1', 'upsert');
-    const entries = await db.changeLog.toArray();
-    expect(entries[0].deviceId).toBe('my-device-42');
-  });
-
-  it('includes v: SYNC_VERSION in entries', async () => {
-    await recordChange('task', 'task-1', 'upsert', { id: 'task-1', title: 'Test' });
-    const entries = await db.changeLog.toArray();
-    expect(entries[0].v).toBe(SYNC_VERSION);
-  });
 });
 
 describe('recordChangeBatch', () => {

@@ -41,16 +41,6 @@ export function isWebAuthnSupported(): boolean {
     && !!navigator.credentials;
 }
 
-/** True when a platform (built-in biometric) authenticator is present. */
-export async function isPlatformAuthenticatorAvailable(): Promise<boolean> {
-  if (!isWebAuthnSupported()) return false;
-  try {
-    return await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable();
-  } catch {
-    return false;
-  }
-}
-
 export interface PrfRegistration {
   credentialId: string;  // base64 rawId, stored for allowCredentials on unlock
   prfOutput: Uint8Array; // 32-byte secret used to derive the KEK

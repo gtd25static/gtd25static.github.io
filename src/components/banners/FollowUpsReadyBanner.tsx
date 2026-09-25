@@ -4,7 +4,7 @@ import { useShallow } from 'zustand/react/shallow';
 
 /**
  * Surfaces follow-up topics that are awake (not snoozed, not resolved) so they
- * don't slip between weekly reviews. Mirrors the DueSoonBanner pattern.
+ * don't slip between weekly reviews.
  */
 export function FollowUpsReadyBanner() {
   const items = useReadyFollowUps();

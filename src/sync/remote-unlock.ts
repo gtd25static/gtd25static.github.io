@@ -40,11 +40,6 @@ export async function ensureDeviceIdentity(): Promise<DeviceIdentity> {
   return identity;
 }
 
-export async function getPublicIdentity(): Promise<PublicIdentity | null> {
-  const local = await db.localSettings.get('local');
-  return local?.deviceIdentity ? publicIdentityOf(local.deviceIdentity) : null;
-}
-
 function defaultDeviceName(): string {
   const ua = typeof navigator !== 'undefined' ? navigator.userAgent : '';
   if (/Android/i.test(ua)) return 'Android phone';

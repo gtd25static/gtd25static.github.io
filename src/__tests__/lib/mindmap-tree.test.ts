@@ -1,4 +1,4 @@
-import { buildTree, descendantIds, isDescendant } from '../../lib/mindmap-tree';
+import { buildTree, descendantIds } from '../../lib/mindmap-tree';
 import type { MindmapNode } from '../../db/models';
 
 function node(id: string, overrides: Partial<MindmapNode> = {}): MindmapNode {
@@ -105,7 +105,7 @@ describe('buildTree', () => {
   });
 });
 
-describe('descendantIds / isDescendant', () => {
+describe('descendantIds', () => {
   const tree = buildTree([
     node('root'),
     node('a', { parentId: 'root' }),
@@ -118,11 +118,5 @@ describe('descendantIds / isDescendant', () => {
     expect(descendantIds(tree, 'a')).toEqual(new Set(['a1', 'a1x']));
     expect(descendantIds(tree, 'b')).toEqual(new Set());
     expect(descendantIds(tree, 'missing')).toEqual(new Set());
-  });
-
-  it('isDescendant matches', () => {
-    expect(isDescendant(tree, 'a', 'a1x')).toBe(true);
-    expect(isDescendant(tree, 'a', 'b')).toBe(false);
-    expect(isDescendant(tree, 'a1x', 'a')).toBe(false);
   });
 });

@@ -1,4 +1,4 @@
-import { daysUntil, isDueSoon, dueDateColor, formatDate, toInputDate, fromInputDate, formatTimeRemaining, formatTimeAgo } from '../../lib/date-utils';
+import { daysUntil, dueDateColor, formatDate, toInputDate, fromInputDate, formatTimeRemaining, formatTimeAgo } from '../../lib/date-utils';
 
 const PINNED = new Date('2026-03-08T12:00:00').getTime();
 
@@ -53,22 +53,6 @@ describe('daysUntil', () => {
     const lateNight = new Date('2026-03-09T23:59:59').getTime();
     expect(daysUntil(earlyMorning)).toBe(1);
     expect(daysUntil(lateNight)).toBe(1);
-  });
-});
-
-describe('isDueSoon', () => {
-  it('returns false for undefined', () => {
-    expect(isDueSoon(undefined)).toBe(false);
-  });
-
-  it('returns true for dates within 14 days', () => {
-    const soon = new Date('2026-03-22T00:00:00').getTime(); // 14 days
-    expect(isDueSoon(soon)).toBe(true);
-  });
-
-  it('returns false for dates beyond 14 days', () => {
-    const far = new Date('2026-03-23T00:00:00').getTime(); // 15 days
-    expect(isDueSoon(far)).toBe(false);
   });
 });
 

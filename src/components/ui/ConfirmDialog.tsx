@@ -42,6 +42,9 @@ export function ConfirmDialogContainer() {
     return () => { showConfirmFn = null; };
   }, [show]);
 
+  // No autoFocus: React runs it before showModal(), when it can't take effect,
+  // and showModal() already focuses the first control — the field of a typed
+  // confirmation, else Cancel, so Enter never confirms a delete by accident.
   useEffect(() => {
     const el = dialogRef.current;
     if (!el) return;
@@ -88,7 +91,6 @@ export function ConfirmDialogContainer() {
               value={typed}
               onChange={(e) => setTyped(e.target.value)}
               placeholder={`Type "${request.typeToConfirm}" to confirm`}
-              autoFocus
               autoComplete="off"
               autoCapitalize="none"
               spellCheck={false}
@@ -104,7 +106,6 @@ export function ConfirmDialogContainer() {
             size="sm"
             type="submit"
             disabled={!typedMatches}
-            autoFocus={!request.typeToConfirm}
           >
             {request.confirmLabel || 'Confirm'}
           </Button>

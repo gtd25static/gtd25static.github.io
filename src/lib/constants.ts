@@ -5,15 +5,11 @@ export const GIT_COMMIT: string = typeof __GIT_COMMIT__ !== 'undefined' ? __GIT_
 
 export const DUE_SOON_DAYS = 14;
 export const SORT_DUE_SOON_DAYS = 7;
-export const SOFT_DELETE_CLEANUP_DAYS = 30;
-
 // Archived lists are soft-deleted into the Trash once they have been archived
 // this long; the usual 30-day trash purge then hard-deletes them. So the real
 // point of no return is 12 months + 30 days after archiving.
 export const ARCHIVED_LIST_RETENTION_DAYS = 365;
 export const ARCHIVED_LIST_RETENTION_MS = ARCHIVED_LIST_RETENTION_DAYS * 24 * 60 * 60 * 1000;
-export const DEFAULT_SYNC_INTERVAL_MS = 300_000;
-
 // Failed passphrase attempts before the panic wipe trips. 0 disables it.
 // Lives here, not in db/vault, so vault-reinit can read it without
 // importing the stateful vault module (an import cycle).

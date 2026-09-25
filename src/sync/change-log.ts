@@ -14,25 +14,6 @@ async function getDeviceId(): Promise<string> {
   return local?.deviceId ?? 'unknown';
 }
 
-export async function recordChange(
-  entityType: ChangeEntry['entityType'],
-  entityId: string,
-  operation: ChangeEntry['operation'],
-  data?: Record<string, unknown>,
-) {
-  const deviceId = await getDeviceId();
-  await db.changeLog.add({
-    id: newId(),
-    deviceId,
-    timestamp: Date.now(),
-    entityType,
-    entityId,
-    operation,
-    data,
-    v: SYNC_VERSION,
-  });
-}
-
 // Cached deviceId to avoid reading db.localSettings inside transactions
 let cachedDeviceId: string | null = null;
 

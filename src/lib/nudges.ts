@@ -32,32 +32,11 @@ export const NUDGE_DEFAULTS = {
   windowEnd: 18,
 } as const;
 
-// Floor so brand-new tasks keep a tiny (non-zero) chance of being picked.
-const MIN_AGE_WEIGHT_MS = 60 * 60 * 1000;
 const MAX_TITLE_LEN = 60;
 
 function truncate(title: string): string {
   const t = title.trim();
   return t.length > MAX_TITLE_LEN ? `${t.slice(0, MAX_TITLE_LEN - 1)}…` : t;
-}
-
-/**
- * Pick a single task at random, weighted linearly by age (now - createdAt) so the
- * older a task is the more likely it is to be picked — but no task is guaranteed.
- * Returns null for an empty list. `rng` is injectable for deterministic tests.
- */
-export function pickWeightedByAge(tasks: Task[], now: number, rng: () => number = Math.random): Task | null {
-  if (tasks.length === 0) return null;
-
-  const weights = tasks.map((t) => Math.max(now - t.createdAt, MIN_AGE_WEIGHT_MS));
-  const total = weights.reduce((sum, w) => sum + w, 0);
-
-  let r = rng() * total;
-  for (let i = 0; i < tasks.length; i++) {
-    r -= weights[i];
-    if (r < 0) return tasks[i];
-  }
-  return tasks[tasks.length - 1]; // float-rounding safety net
 }
 
 /**

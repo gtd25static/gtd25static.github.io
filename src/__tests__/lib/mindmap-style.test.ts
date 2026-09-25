@@ -3,7 +3,6 @@ import {
   PALETTES,
   SHAPE_TEXT_MAX_WIDTH,
   diamondPoints,
-  hasCustomStyle,
   isHexColor,
   isNodeShape,
   isPaletteId,
@@ -80,12 +79,6 @@ describe('resolveNodeStyle', () => {
     // A null in the preview means "as if it were unset"
     expect(resolveNodeStyle(node, { preview: { palette: null, colorFg: null } }).fg)
       .toBe('var(--mm-default-fg)');
-  });
-
-  it('knows whether a node carries any formatting', () => {
-    expect(hasCustomStyle({})).toBe(false);
-    expect(hasCustomStyle({ shape: 'circle' })).toBe(true);
-    expect(hasCustomStyle({ colorBorder: '#000000' })).toBe(true);
   });
 });
 

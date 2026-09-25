@@ -12,7 +12,6 @@ import { isInboxList } from './constants';
  * cross-device trim) is topped up continuously (see use-focus-mode).
  */
 
-export const FOCUS_LIST_ID = '__focus__';
 export const FOCUS_SET_SIZE = 3;
 export const FOCUS_URGENT_CAP = 2;
 // Due within this many days claims an urgent slot. Deliberately tighter than the

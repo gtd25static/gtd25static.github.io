@@ -24,13 +24,6 @@ export function useTasks(listId: string | null) {
   );
 }
 
-export function useTask(taskId: string | undefined) {
-  return useLiveQuery(
-    () => (taskId ? db.tasks.get(taskId) : undefined),
-    [taskId],
-  );
-}
-
 export async function createTask(
   listId: string,
   data: {
@@ -174,29 +167,6 @@ export async function setTaskStatus(id: string, status: TaskStatus) {
     await updateTask(id, statusChangeUpdates(task, status, Date.now()));
   } catch (error) {
     handleDbError(error, 'set task status');
-  }
-}
-
-export async function addTaskLink(taskId: string, url: string, title?: string) {
-  try {
-    const task = await db.tasks.get(taskId);
-    if (!task) return;
-    const links: TaskLink[] = [...(task.links ?? []), { url, title }];
-    await updateTask(taskId, { links });
-  } catch (error) {
-    handleDbError(error, 'add task link');
-  }
-}
-
-export async function removeTaskLink(taskId: string, index: number) {
-  try {
-    const task = await db.tasks.get(taskId);
-    if (!task) return;
-    const links = [...(task.links ?? [])];
-    links.splice(index, 1);
-    await updateTask(taskId, { links: links.length > 0 ? links : undefined });
-  } catch (error) {
-    handleDbError(error, 'remove task link');
   }
 }
 

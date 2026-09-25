@@ -152,29 +152,6 @@ export async function setSubtaskStatus(id: string, status: SubtaskStatus) {
   }
 }
 
-export async function addSubtaskLink(subtaskId: string, url: string, title?: string) {
-  try {
-    const subtask = await db.subtasks.get(subtaskId);
-    if (!subtask) return;
-    const links: TaskLink[] = [...(subtask.links ?? []), { url, title }];
-    await updateSubtask(subtaskId, { links });
-  } catch (error) {
-    handleDbError(error, 'add subtask link');
-  }
-}
-
-export async function removeSubtaskLink(subtaskId: string, index: number) {
-  try {
-    const subtask = await db.subtasks.get(subtaskId);
-    if (!subtask) return;
-    const links = [...(subtask.links ?? [])];
-    links.splice(index, 1);
-    await updateSubtask(subtaskId, { links: links.length > 0 ? links : undefined });
-  } catch (error) {
-    handleDbError(error, 'remove subtask link');
-  }
-}
-
 export async function deleteSubtask(id: string) {
   try {
     const now = Date.now();

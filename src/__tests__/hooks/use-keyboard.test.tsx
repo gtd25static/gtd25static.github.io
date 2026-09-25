@@ -13,7 +13,6 @@ vi.mock('dexie-react-hooks', () => ({ useLiveQuery: () => [] }));
 vi.mock('../../db', () => ({ db: {} }));
 vi.mock('../../hooks/use-tasks', () => ({ setTaskStatus: vi.fn(), updateTask: vi.fn(), restoreTask: vi.fn() }));
 vi.mock('../../hooks/use-subtasks', () => ({ setSubtaskStatus: vi.fn() }));
-vi.mock('../../hooks/use-follow-ups', () => ({ isInCooldown: vi.fn(() => false) }));
 vi.mock('../../hooks/use-bulk-operations', () => ({ deleteTasksBatch: vi.fn() }));
 vi.mock('../../lib/task-sort', () => ({ sortTasksForDisplay: () => [], sortFollowUpsForDisplay: () => [] }));
 vi.mock('../../components/ui/Toast', () => ({ toast: vi.fn() }));

@@ -10,7 +10,7 @@
 import { act, render } from '@testing-library/react';
 import '../setup-component';
 
-type NavItem = { id: string; type: 'task' | 'subtask' | 'banner-blocked' | 'create' | 'add-subtask'; taskId?: string };
+type NavItem = { id: string; type: 'task' | 'subtask' | 'create' | 'add-subtask'; taskId?: string };
 
 let listType: 'tasks' | 'follow-ups' | null = 'tasks';
 let mainItems: NavItem[] = [];
@@ -39,7 +39,6 @@ vi.mock('../../hooks/use-tasks', () => ({
   restoreTask: vi.fn(),
 }));
 vi.mock('../../hooks/use-subtasks', () => ({ setSubtaskStatus: vi.fn() }));
-vi.mock('../../hooks/use-follow-ups', () => ({ isInCooldown: vi.fn(() => false) }));
 vi.mock('../../hooks/use-bulk-operations', () => ({ deleteTasksBatch: vi.fn() }));
 vi.mock('../../lib/task-sort', () => ({ sortTasksForDisplay: () => [], sortFollowUpsForDisplay: () => [] }));
 vi.mock('../../components/ui/Toast', () => ({ toast: vi.fn() }));

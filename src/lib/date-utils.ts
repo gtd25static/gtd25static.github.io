@@ -10,11 +10,6 @@ export function daysUntil(timestamp: number): number {
   return Math.round((target.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
 }
 
-export function isDueSoon(timestamp: number | undefined): boolean {
-  if (!timestamp) return false;
-  return daysUntil(timestamp) <= DUE_SOON_DAYS;
-}
-
 export function dueDateColor(timestamp: number): string {
   const days = daysUntil(timestamp);
   if (days < 0) return 'text-red-500';

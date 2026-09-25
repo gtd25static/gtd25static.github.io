@@ -110,6 +110,3 @@ export function descendantIds(tree: MindmapTree, id: string): Set<string> {
   return result;
 }
 
-export function isDescendant(tree: MindmapTree, ancestorId: string, maybeDescendantId: string): boolean {
-  return descendantIds(tree, ancestorId).has(maybeDescendantId);
-}

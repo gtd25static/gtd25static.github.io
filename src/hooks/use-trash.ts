@@ -170,7 +170,6 @@ export async function permanentlyDelete(item: TrashItem) {
 
 export async function restoreFromTrash(item: TrashItem) {
   try {
-    await ensureDeviceId();
     switch (item.type) {
       case 'list':
         await restoreTaskList(item.id);
@@ -192,7 +191,6 @@ export async function restoreFromTrash(item: TrashItem) {
         return;
       }
     }
-    scheduleSyncDebounced();
   } catch (error) {
     handleDbError(error, 'restore from trash');
   }

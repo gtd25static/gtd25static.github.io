@@ -51,11 +51,6 @@ export function failedEntriesSinceLastSuccess(log: UnlockLogEntry[]): UnlockLogE
   return failed.reverse();
 }
 
-/** Failed attempts since the most recent successful unlock (for the returning-user alert). */
-export function failedSinceLastSuccess(log: UnlockLogEntry[]): number {
-  return failedEntriesSinceLastSuccess(log).length;
-}
-
 /** The most recent successful unlock strictly before the last entry (i.e. the previous session). */
 export function previousSuccess(log: UnlockLogEntry[]): UnlockLogEntry | null {
   const successes = log.filter((e) => e.ok);

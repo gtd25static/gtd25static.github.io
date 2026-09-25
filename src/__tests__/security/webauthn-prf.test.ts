@@ -1,7 +1,7 @@
 import { vi } from 'vitest';
 vi.setConfig({ testTimeout: 20_000 });
 import {
-  isWebAuthnSupported, isPlatformAuthenticatorAvailable,
+  isWebAuthnSupported,
   registerPrfCredential, getPrfOutput, PrfUnsupportedError,
 } from '../../sync/webauthn-prf';
 import {
@@ -20,15 +20,13 @@ beforeEach(() => installWebAuthnMock());
 afterEach(() => uninstallWebAuthnMock());
 
 describe('webauthn-prf', () => {
-  it('reports support and platform availability when present', async () => {
+  it('reports support when present', () => {
     expect(isWebAuthnSupported()).toBe(true);
-    expect(await isPlatformAuthenticatorAvailable()).toBe(true);
   });
 
-  it('reports unsupported when WebAuthn is absent', async () => {
+  it('reports unsupported when WebAuthn is absent', () => {
     uninstallWebAuthnMock();
     expect(isWebAuthnSupported()).toBe(false);
-    expect(await isPlatformAuthenticatorAvailable()).toBe(false);
   });
 
   it('registers a credential and returns the salt-derived PRF output', async () => {

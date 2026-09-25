@@ -15,12 +15,12 @@ import { isParanoidEnabled, isUnlocked, lock } from '../db/vault';
 
 interface NavItem {
   id: string;
-  type: 'task' | 'subtask' | 'banner-blocked' | 'create' | 'add-subtask';
+  type: 'task' | 'subtask' | 'create' | 'add-subtask';
   taskId?: string;
 }
 
 function isActionItem(item: NavItem): boolean {
-  return item.type === 'banner-blocked' || item.type === 'create' || item.type === 'add-subtask';
+  return item.type === 'create' || item.type === 'add-subtask';
 }
 
 // Controls whose native Enter/Space behaviour (press, follow, toggle) must win
@@ -80,43 +80,6 @@ export function useKeyboard() {
       if (!selectedListId) return [];
 
       const items: NavItem[] = [];
-
-      // Blocked banner items (up to 5) — use indexed queries
-      const [blockedTasks, blockedSubs] = await Promise.all([
-        db.tasks.where('status').equals('blocked').toArray(),
-        db.subtasks.where('status').equals('blocked').toArray(),
-      ]);
-
-      // Build set of task IDs that have blocked subtasks
-      const tasksWithBlockedSubs = new Set<string>();
-      for (const s of blockedSubs) {
-        if (!s.deletedAt) tasksWithBlockedSubs.add(s.taskId);
-      }
-
-      // Directly blocked tasks
-      const blockedTaskIds = new Set<string>();
-      let blockedCount = 0;
-      for (const t of blockedTasks) {
-        if (blockedCount >= 5) break;
-        if (t.deletedAt || t.status === 'done' || t.archived) continue;
-        items.push({ id: `banner-blocked-${t.id}`, type: 'banner-blocked', taskId: t.id });
-        blockedTaskIds.add(t.id);
-        blockedCount++;
-      }
-
-      // Tasks with blocked subtasks (not already listed)
-      if (blockedCount < 5 && tasksWithBlockedSubs.size > 0) {
-        const parentIds = [...tasksWithBlockedSubs].filter((id) => !blockedTaskIds.has(id));
-        if (parentIds.length > 0) {
-          const parents = await db.tasks.bulkGet(parentIds);
-          for (const t of parents) {
-            if (blockedCount >= 5) break;
-            if (!t || t.deletedAt || t.status === 'done' || t.archived) continue;
-            items.push({ id: `banner-blocked-${t.id}`, type: 'banner-blocked', taskId: t.id });
-            blockedCount++;
-          }
-        }
-      }
 
       // Create task/follow-up button
       items.push({ id: 'create-task', type: 'create' });
@@ -253,7 +216,6 @@ export function useKeyboard() {
           // Also close any open form/overlay in one press
           if (s.creatingTask) s.setCreatingTask(false);
           if (s.addingSubtaskToTaskId) s.setAddingSubtaskToTaskId(null);
-          if (s.helpOpen) s.setHelpOpen(false);
           if (s.searchQuery) s.setSearchQuery('');
         }
         // Ctrl/Cmd+Enter submits the closest form
@@ -350,13 +312,7 @@ export function useKeyboard() {
           e.preventDefault();
           if (s.focusZone === 'sidebar') {
             s.setFocusZone('main');
-            // Skip banner items — land on first content item (create or task)
-            const contentItem = mainRef.current.find((i) => i.type !== 'banner-blocked');
-            if (contentItem) {
-              s.setFocusedItem(contentItem.id);
-            } else if (mainRef.current.length > 0) {
-              s.setFocusedItem(mainRef.current[0].id);
-            }
+            if (mainRef.current.length > 0) s.setFocusedItem(mainRef.current[0].id);
           }
           break;
         }
@@ -375,15 +331,7 @@ export function useKeyboard() {
           } else if (s.focusZone === 'main' && s.focusedItemId) {
             const item = mainRef.current.find((i) => i.id === s.focusedItemId);
             if (!item) break;
-            if (item.type === 'banner-blocked') {
-              // Navigate to blocked task
-              const task = await db.tasks.get(item.taskId!);
-              if (task) {
-                s.selectList(task.listId);
-                s.ensureTaskExpanded(task.id);
-                s.setFocusedItem(task.id);
-              }
-            } else if (item.type === 'create') {
+            if (item.type === 'create') {
               s.setCreatingTask(true);
             } else if (item.type === 'add-subtask') {
               s.ensureTaskExpanded(item.taskId!);
@@ -534,10 +482,9 @@ export function useKeyboard() {
 
         case 'Escape': {
           e.preventDefault();
+          // (The help overlay is a modal: its Escape never gets here.)
           if (s.bulkMode) {
             s.clearSelection();
-          } else if (s.helpOpen) {
-            s.setHelpOpen(false);
           } else if (s.searchQuery) {
             s.setSearchQuery('');
           } else if (s.creatingTask) {

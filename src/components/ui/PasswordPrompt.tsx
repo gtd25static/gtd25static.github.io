@@ -38,6 +38,8 @@ export function PasswordPromptContainer() {
     return () => { showPromptFn = null; };
   }, [show]);
 
+  // showModal() focuses the password field, its first control (an autoFocus
+  // here would run before the dialog opens, when it can't take effect).
   useEffect(() => {
     const el = dialogRef.current;
     if (!el) return;
@@ -80,7 +82,6 @@ export function PasswordPromptContainer() {
           value={value}
           onChange={(e) => setValue(e.target.value)}
           placeholder={request.placeholder ?? 'Password'}
-          autoFocus
         />
         <div className="mt-4 flex justify-end gap-2">
           <Button variant="secondary" size="sm" type="button" onClick={handleCancel}>

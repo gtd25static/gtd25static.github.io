@@ -4,7 +4,6 @@ import {
   MAX_UNLOCK_LOG,
   recordUnlockAttempt,
   clearUnlockLog,
-  failedSinceLastSuccess,
   failedEntriesSinceLastSuccess,
   previousSuccess,
   type UnlockLogEntry,
@@ -55,15 +54,6 @@ describe('recordUnlockAttempt', () => {
   });
 });
 
-describe('failedSinceLastSuccess', () => {
-  it('counts trailing failures back to the last success', () => {
-    expect(failedSinceLastSuccess([ok(1), fail(2), fail(3)])).toBe(2);
-    expect(failedSinceLastSuccess([ok(1), ok(2)])).toBe(0);
-    expect(failedSinceLastSuccess([fail(1), fail(2)])).toBe(2); // never any success
-    expect(failedSinceLastSuccess([])).toBe(0);
-  });
-});
-
 describe('failedEntriesSinceLastSuccess', () => {
   it('returns the trailing failures themselves, oldest first', () => {
     const log = [ok(1), fail(20), fail(30)];
@@ -75,12 +65,11 @@ describe('failedEntriesSinceLastSuccess', () => {
     expect(failedEntriesSinceLastSuccess([ok(1), fail(20), keyFail])).toEqual([fail(20), keyFail]);
   });
 
-  it('is empty when the log ends on a success, and agrees with the count helper', () => {
-    const cases: UnlockLogEntry[][] = [[ok(1), ok(2)], [], [fail(1), fail(2)], [ok(1), fail(2), fail(3)]];
-    for (const log of cases) {
-      expect(failedEntriesSinceLastSuccess(log).length).toBe(failedSinceLastSuccess(log));
-    }
+  it('is empty when the log ends on a success, and counts back to the last one', () => {
     expect(failedEntriesSinceLastSuccess([ok(1), ok(2)])).toEqual([]);
+    expect(failedEntriesSinceLastSuccess([])).toEqual([]);
+    expect(failedEntriesSinceLastSuccess([fail(1), fail(2)])).toHaveLength(2); // never any success
+    expect(failedEntriesSinceLastSuccess([ok(1), fail(2), fail(3)])).toHaveLength(2);
   });
 });
 
