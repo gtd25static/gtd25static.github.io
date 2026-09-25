@@ -1,6 +1,7 @@
-import type { Task } from '../db/models';
-import { endOfDayMs } from './attention';
+import type { Task, TaskList } from '../db/models';
+import { endOfDayMs, taskListIds } from './attention';
 import { eligibleForFocus, pickWeighted } from './focus-pick';
+import { isInboxList } from './constants';
 
 /**
  * Focus Mode: a strict 2-3 task commitment device. Tasks with `focusedAt` set
@@ -17,6 +18,17 @@ export const FOCUS_URGENT_CAP = 2;
 // Due within this many days claims an urgent slot. Deliberately tighter than the
 // badge threshold (DUE_SOON_DAYS = 14): only genuinely approaching deadlines.
 export const FOCUS_DUE_SOON_DAYS = 7;
+
+/**
+ * The lists Focus picks from: the task lists that ask for attention, minus the
+ * Inbox — its items are raw captures still to be processed, not next actions.
+ * Every "Inbox" list counts (a second one can arrive from another device).
+ */
+export function focusListIds(lists: TaskList[]): Set<string> {
+  const ids = taskListIds(lists);
+  for (const list of lists) if (isInboxList(list)) ids.delete(list.id);
+  return ids;
+}
 
 /** Local-calendar day key ('YYYY-MM-DD') used to gate the once-daily refill. */
 export function localDayKey(now: number): string {

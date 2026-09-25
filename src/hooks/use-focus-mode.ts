@@ -2,11 +2,11 @@ import { useEffect } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../db';
 import type { Task } from '../db/models';
-import { taskListIds } from '../lib/attention';
 import { eligibleForFocus } from '../lib/focus-pick';
 import {
   FOCUS_SET_SIZE,
   focusCompletedToday,
+  focusListIds,
   focusMembers,
   focusOverflow,
   localDayKey,
@@ -36,7 +36,7 @@ export async function maybeRefillFocus(now: number = Date.now()): Promise<void> 
   if (!local || local.lastFocusRefillDay === todayKey) return;
 
   const [tasks, lists] = await Promise.all([db.tasks.toArray(), db.taskLists.toArray()]);
-  const allowed = taskListIds(lists);
+  const allowed = focusListIds(lists);
 
   const members = focusMembers(tasks, allowed);
   const keep = members.slice(0, FOCUS_SET_SIZE);
@@ -81,7 +81,7 @@ export async function maintainFocusSet(now: number = Date.now()): Promise<void> 
     if (!local || local.lastFocusRefillDay !== localDayKey(now)) return;
 
     const [tasks, lists] = await Promise.all([db.tasks.toArray(), db.taskLists.toArray()]);
-    const allowed = taskListIds(lists);
+    const allowed = focusListIds(lists);
     const members = focusMembers(tasks, allowed);
     const keep = members.slice(0, FOCUS_SET_SIZE);
     const overflow = focusOverflow(members);
@@ -183,7 +183,7 @@ export function useFocusSet(): {
   }
 
   const now = Date.now();
-  const allowed = taskListIds(data.lists);
+  const allowed = focusListIds(data.lists);
   const members = focusMembers(data.tasks, allowed).slice(0, FOCUS_SET_SIZE);
   const eligibleCount = eligibleForFocus(data.tasks, allowed).length;
 

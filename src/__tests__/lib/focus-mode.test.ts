@@ -3,12 +3,13 @@ import {
   FOCUS_SET_SIZE,
   focusCompletedToday,
   focusMembers,
+  focusListIds,
   focusOverflow,
   localDayKey,
   selectFocusRefill,
   urgencyRank,
 } from '../../lib/focus-mode';
-import type { Task } from '../../db/models';
+import type { Task, TaskList } from '../../db/models';
 
 const DAY = 24 * 60 * 60 * 1000;
 const NOW = new Date(2026, 5, 3, 12, 0, 0, 0).getTime();
@@ -250,5 +251,23 @@ describe('focusCompletedToday', () => {
     const atMidnight = makeTask({ id: 'at', focusedAt: NOW - DAY, status: 'done', completedAt: midnight });
     const justBefore = makeTask({ id: 'before', focusedAt: NOW - DAY, status: 'done', completedAt: midnight - 1 });
     expect(focusCompletedToday([atMidnight, justBefore], NOW).map((t) => t.id)).toEqual(['at']);
+  });
+});
+
+describe('focusListIds', () => {
+  const list = (id: string, name: string, extra: Partial<TaskList> = {}): TaskList =>
+    ({ id, name, type: 'tasks', order: 0, createdAt: NOW, updatedAt: NOW, ...extra });
+
+  // The Inbox holds raw captures to process, not next actions.
+  it('is every live task list except the Inbox', () => {
+    const ids = focusListIds([
+      list('work', 'Work'),
+      list('inbox', 'Inbox'),
+      list('inbox-2', 'Inbox', { createdAt: NOW + 1 }), // a second one from another device
+      list('people', 'People', { type: 'follow-ups' }),
+      list('old', 'Old', { archivedAt: NOW }),
+      list('gone', 'Gone', { deletedAt: NOW }),
+    ]);
+    expect([...ids]).toEqual(['work']);
   });
 });

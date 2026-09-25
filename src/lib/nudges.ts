@@ -1,6 +1,6 @@
 import type { NudgeDayOverride, Subtask, Task, TaskList } from '../db/models';
 import { collectDueItems, taskListIds } from './attention';
-import { FOCUS_SET_SIZE, focusMembers } from './focus-mode';
+import { FOCUS_SET_SIZE, focusListIds, focusMembers } from './focus-mode';
 import { eligibleForFocus, pickWeighted } from './focus-pick';
 
 export interface NudgeContent {
@@ -100,7 +100,7 @@ export function computeNudge(
 
   // Keep all the app's pressure pointing at the same tasks: Focus Mode set
   // members win within each ladder rung (stable partition preserves dueDate order).
-  const focusIds = new Set(focusMembers(tasks, allowedListIds).slice(0, FOCUS_SET_SIZE).map((t) => t.id));
+  const focusIds = new Set(focusMembers(tasks, focusListIds(lists)).slice(0, FOCUS_SET_SIZE).map((t) => t.id));
   const preferFocus = <T extends { taskId: string }>(items: T[]): T[] =>
     focusIds.size === 0
       ? items

@@ -1,11 +1,11 @@
 import { db } from '../../db';
 import { resetDb, assertDefined } from '../helpers/db-helpers';
-import { createTaskList } from '../../hooks/use-task-lists';
+import { createTaskList, getOrCreateInbox } from '../../hooks/use-task-lists';
 import { createTask, updateTask, setTaskStatus, deleteTask, moveTaskToList } from '../../hooks/use-tasks';
 import { maybeRefillFocus, maintainFocusSet } from '../../hooks/use-focus-mode';
 import { checkRecurringTasks } from '../../hooks/use-recurring';
 import { updateLocalSettings } from '../../hooks/use-settings';
-import { localDayKey, FOCUS_SET_SIZE } from '../../lib/focus-mode';
+import { localDayKey, FOCUS_SET_SIZE, focusMembers, focusListIds } from '../../lib/focus-mode';
 
 const DAY = 24 * 60 * 60 * 1000;
 
@@ -135,6 +135,19 @@ describe('maybeRefillFocus', () => {
     expect(focusedIds).toContain(plain.id);
   });
 
+  // The Inbox holds raw captures still to be processed, not next actions:
+  // Focus used to pick them like any other task.
+  it('never picks from the Inbox', async () => {
+    const inboxId = await getOrCreateInbox();
+    for (let i = 0; i < 5; i++) await createTask(inboxId, { title: `Capture ${i}` });
+    await createTask(listId, { title: 'Real task' });
+
+    await maybeRefillFocus(Date.now());
+
+    const focused = await focusedTasks();
+    expect(focused.map((t) => t.title)).toEqual(['Real task']);
+  });
+
   it('fills fewer slots when fewer tasks are eligible', async () => {
     await createTask(listId, { title: 'Only one' });
     await maybeRefillFocus(Date.now());
@@ -155,6 +168,23 @@ describe('maintainFocusSet', () => {
     await maybeRefillFocus(now);
     return focusedTasks();
   }
+
+  // Members picked from the Inbox before this rule leave the set at once and
+  // are replaced by real tasks (the daily refresh clears their focusedAt).
+  it('replaces a member that sits in the Inbox the same tick', async () => {
+    const now = Date.now();
+    const capture = assertDefined(await createTask(await getOrCreateInbox(), { title: 'Old capture' }));
+    for (let i = 0; i < 4; i++) await createTask(listId, { title: `Task ${i}` });
+    await updateLocalSettings({ lastFocusRefillDay: localDayKey(now) });
+    await updateTask(capture.id, { focusedAt: now - 1000 });
+
+    await maintainFocusSet(now);
+
+    // What Focus shows (useFocusSet reads the members the same way).
+    const shown = focusMembers(await db.tasks.toArray(), focusListIds(await db.taskLists.toArray()));
+    expect(shown.map((t) => t.title)).not.toContain('Old capture');
+    expect(shown).toHaveLength(FOCUS_SET_SIZE);
+  });
 
   it('is gated until the daily refresh has stamped today', async () => {
     for (let i = 0; i < 5; i++) {
