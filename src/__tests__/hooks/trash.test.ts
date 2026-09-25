@@ -5,6 +5,8 @@ import { createTask } from '../../hooks/use-tasks';
 import { createSubtask } from '../../hooks/use-subtasks';
 import { permanentlyDelete, restoreFromTrash } from '../../hooks/use-trash';
 import type { TrashItem } from '../../hooks/use-trash';
+import { deleteTaskList } from '../../hooks/use-task-lists';
+import { seedListWithEarlierDeletes, loggedIds } from '../helpers/cascade-fixtures';
 
 beforeEach(async () => {
   await resetDb();
@@ -67,6 +69,23 @@ describe('restoreFromTrash', () => {
     expect((await db.taskLists.get(list.id))?.deletedAt).toBeUndefined();
     expect((await db.tasks.get(task.id))?.deletedAt).toBeUndefined();
     expect((await db.subtasks.get(sub.id))?.deletedAt).toBeUndefined();
+  });
+
+  it('restoring a list brings back only what the list delete took', async () => {
+    const s = await seedListWithEarlierDeletes();
+    await deleteTaskList(s.list.id);
+    const deletedAt = assertDefined((await db.taskLists.get(s.list.id))?.deletedAt);
+    await db.changeLog.clear();
+
+    await restoreFromTrash({ id: s.list.id, type: 'list', title: s.list.name, deletedAt });
+
+    expect((await db.taskLists.get(s.list.id))?.deletedAt).toBeUndefined();
+    expect((await db.tasks.get(s.keep.id))?.deletedAt).toBeUndefined();
+    expect((await db.subtasks.get(s.keepSub.id))?.deletedAt).toBeUndefined();
+    expect((await db.tasks.get(s.gone.id))?.deletedAt).toBe(s.earlier.gone);
+    expect((await db.subtasks.get(s.goneChild.id))?.deletedAt).toBe(s.earlier.goneChild);
+    expect((await db.subtasks.get(s.goneSub.id))?.deletedAt).toBe(s.earlier.goneSub);
+    expect(await loggedIds('upsert')).toEqual([s.list.id, s.keep.id, s.keepSub.id].sort());
   });
 
   it('restores a task with cascading restore', async () => {

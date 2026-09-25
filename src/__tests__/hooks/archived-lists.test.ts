@@ -15,6 +15,7 @@ import { expireArchivedLists } from '../../db/purge';
 import { taskListIds } from '../../lib/attention';
 import { ARCHIVED_LIST_RETENTION_MS } from '../../lib/constants';
 import type { TaskList } from '../../db/models';
+import { seedListWithEarlierDeletes } from '../helpers/cascade-fixtures';
 
 const DAY = 24 * 60 * 60 * 1000;
 
@@ -100,6 +101,23 @@ describe('expireArchivedLists', () => {
     expect((await db.taskLists.get(list.id))?.deletedAt).toBeGreaterThan(0);
     expect((await db.tasks.get(task.id))?.deletedAt).toBeGreaterThan(0);
     expect((await db.subtasks.get(sub.id))?.deletedAt).toBeGreaterThan(0);
+  });
+
+  it('leaves children deleted earlier out of the expiry, so restoring the list does not bring them back', async () => {
+    const now = Date.now();
+    const s = await seedListWithEarlierDeletes();
+    await db.taskLists.update(s.list.id, { archivedAt: now - ARCHIVED_LIST_RETENTION_MS - DAY });
+
+    await expireArchivedLists(now);
+    expect((await db.tasks.get(s.gone.id))?.deletedAt).toBe(s.earlier.gone);
+    expect((await db.subtasks.get(s.goneSub.id))?.deletedAt).toBe(s.earlier.goneSub);
+
+    await restoreTaskList(s.list.id);
+    expect((await db.tasks.get(s.keep.id))?.deletedAt).toBeUndefined();
+    expect((await db.subtasks.get(s.keepSub.id))?.deletedAt).toBeUndefined();
+    expect((await db.tasks.get(s.gone.id))?.deletedAt).toBe(s.earlier.gone);
+    expect((await db.subtasks.get(s.goneChild.id))?.deletedAt).toBe(s.earlier.goneChild);
+    expect((await db.subtasks.get(s.goneSub.id))?.deletedAt).toBe(s.earlier.goneSub);
   });
 
   it('records the deletion in the changelog so other devices drop it too', async () => {

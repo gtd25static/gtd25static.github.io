@@ -3,6 +3,7 @@ import { resetDb, assertDefined } from '../helpers/db-helpers';
 import { createTaskList, deleteTaskList, updateTaskList, restoreTaskList, reorderTaskLists } from '../../hooks/use-task-lists';
 import { createTask } from '../../hooks/use-tasks';
 import { createSubtask } from '../../hooks/use-subtasks';
+import { seedListWithEarlierDeletes, loggedIds } from '../helpers/cascade-fixtures';
 
 beforeEach(async () => {
   await resetDb();
@@ -77,6 +78,70 @@ describe('restoreTaskList', () => {
     expect(tasks[0].deletedAt).toBeUndefined();
     const subtasks = await db.subtasks.where('taskId').equals(task.id).toArray();
     expect(subtasks[0].deletedAt).toBeUndefined();
+  });
+});
+
+describe('list delete / restore vs. children deleted earlier', () => {
+  it('deleteTaskList keeps the deletedAt of children deleted before and logs no delete for them', async () => {
+    const s = await seedListWithEarlierDeletes();
+    await db.changeLog.clear();
+
+    await deleteTaskList(s.list.id);
+
+    const listDeletedAt = assertDefined((await db.taskLists.get(s.list.id))?.deletedAt);
+    expect((await db.tasks.get(s.keep.id))?.deletedAt).toBe(listDeletedAt);
+    expect((await db.subtasks.get(s.keepSub.id))?.deletedAt).toBe(listDeletedAt);
+    expect((await db.tasks.get(s.gone.id))?.deletedAt).toBe(s.earlier.gone);
+    expect((await db.subtasks.get(s.goneChild.id))?.deletedAt).toBe(s.earlier.goneChild);
+    expect((await db.subtasks.get(s.goneSub.id))?.deletedAt).toBe(s.earlier.goneSub);
+    expect(await loggedIds('delete')).toEqual([s.list.id, s.keep.id, s.keepSub.id].sort());
+  });
+
+  it('restoreTaskList (undo) brings back only what the list delete took', async () => {
+    const s = await seedListWithEarlierDeletes();
+    await deleteTaskList(s.list.id);
+    await db.changeLog.clear();
+
+    await restoreTaskList(s.list.id);
+
+    expect((await db.taskLists.get(s.list.id))?.deletedAt).toBeUndefined();
+    expect((await db.tasks.get(s.keep.id))?.deletedAt).toBeUndefined();
+    expect((await db.subtasks.get(s.keepSub.id))?.deletedAt).toBeUndefined();
+    expect((await db.tasks.get(s.gone.id))?.deletedAt).toBe(s.earlier.gone);
+    expect((await db.subtasks.get(s.goneChild.id))?.deletedAt).toBe(s.earlier.goneChild);
+    expect((await db.subtasks.get(s.goneSub.id))?.deletedAt).toBe(s.earlier.goneSub);
+    // Upserts for exactly the rows that came back, so other devices converge.
+    expect(await loggedIds('upsert')).toEqual([s.list.id, s.keep.id, s.keepSub.id].sort());
+  });
+
+  it('restores the same set on a device that got the deletes through sync', async () => {
+    const s = await seedListWithEarlierDeletes();
+    await deleteTaskList(s.list.id);
+    // A remote device stamps deletedAt with each entry's timestamp: all of the
+    // list delete's entries share one, the earlier deletes keep theirs.
+    const entries = await db.changeLog.toArray();
+    for (const e of entries.filter((x) => x.operation === 'delete')) {
+      const table = e.entityType === 'taskList' ? db.taskLists : e.entityType === 'task' ? db.tasks : db.subtasks;
+      await table.update(e.entityId, { deletedAt: e.timestamp });
+    }
+
+    await restoreTaskList(s.list.id);
+
+    expect((await db.tasks.get(s.keep.id))?.deletedAt).toBeUndefined();
+    expect((await db.subtasks.get(s.keepSub.id))?.deletedAt).toBeUndefined();
+    expect((await db.tasks.get(s.gone.id))?.deletedAt).toBeTruthy();
+    expect((await db.subtasks.get(s.goneChild.id))?.deletedAt).toBeTruthy();
+    expect((await db.subtasks.get(s.goneSub.id))?.deletedAt).toBeTruthy();
+  });
+
+  it('restoreTaskList on a list that is not deleted changes nothing', async () => {
+    const s = await seedListWithEarlierDeletes();
+    await db.changeLog.clear();
+
+    await restoreTaskList(s.list.id);
+
+    expect((await db.tasks.get(s.gone.id))?.deletedAt).toBe(s.earlier.gone);
+    expect(await db.changeLog.count()).toBe(0);
   });
 });
 

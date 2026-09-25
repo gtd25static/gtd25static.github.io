@@ -6,7 +6,7 @@ import { recordChangeInTx, recordChangeBatchInTx, ensureDeviceId } from '../sync
 import { scheduleSyncDebounced } from '../sync/sync-engine';
 import { handleDbError } from '../lib/db-error';
 import { stampUpdatedFields } from '../sync/field-timestamps';
-import { archivedAtAfterRestore } from './use-task-lists';
+import { restoreTaskList } from './use-task-lists';
 
 export interface TrashItem {
   id: string;
@@ -158,39 +158,9 @@ export async function restoreFromTrash(item: TrashItem) {
     const now = Date.now();
     await ensureDeviceId();
     switch (item.type) {
-      case 'list': {
-        await db.transaction('rw', [db.taskLists, db.tasks, db.subtasks, db.changeLog], async () => {
-          const existingList = await db.taskLists.get(item.id);
-          const archivedAt = archivedAtAfterRestore(existingList?.archivedAt, now);
-          const changed = archivedAt === existingList?.archivedAt ? ['deletedAt'] : ['deletedAt', 'archivedAt'];
-          const listFT = stampUpdatedFields(existingList?.fieldTimestamps, changed, now);
-          await db.taskLists.update(item.id, { deletedAt: undefined, archivedAt, updatedAt: now, fieldTimestamps: listFT });
-          const tasks = await db.tasks.where('listId').equals(item.id).toArray();
-          for (const t of tasks) {
-            const tFT = stampUpdatedFields(t.fieldTimestamps, ['deletedAt'], now);
-            await db.tasks.update(t.id, { deletedAt: undefined, updatedAt: now, fieldTimestamps: tFT });
-            const subs = await db.subtasks.where('taskId').equals(t.id).toArray();
-            for (const s of subs) {
-              const sFT = stampUpdatedFields(s.fieldTimestamps, ['deletedAt'], now);
-              await db.subtasks.update(s.id, { deletedAt: undefined, updatedAt: now, fieldTimestamps: sFT });
-            }
-          }
-          // Record upserts for restored entities
-          const batch: Array<{ entityType: 'taskList' | 'task' | 'subtask'; entityId: string; operation: 'upsert'; data: Record<string, unknown> }> = [];
-          const list = await db.taskLists.get(item.id);
-          if (list) batch.push({ entityType: 'taskList', entityId: item.id, operation: 'upsert', data: list as unknown as Record<string, unknown> });
-          const updatedTasks = await db.tasks.where('listId').equals(item.id).toArray();
-          for (const t of updatedTasks) {
-            batch.push({ entityType: 'task', entityId: t.id, operation: 'upsert', data: t as unknown as Record<string, unknown> });
-            const subs = await db.subtasks.where('taskId').equals(t.id).toArray();
-            for (const s of subs) {
-              batch.push({ entityType: 'subtask', entityId: s.id, operation: 'upsert', data: s as unknown as Record<string, unknown> });
-            }
-          }
-          await recordChangeBatchInTx(batch);
-        });
-        break;
-      }
+      case 'list':
+        await restoreTaskList(item.id);
+        return; // restoreTaskList schedules sync itself
       case 'task': {
         await db.transaction('rw', [db.tasks, db.subtasks, db.changeLog], async () => {
           const existingTask = await db.tasks.get(item.id);
