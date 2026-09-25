@@ -210,3 +210,26 @@ describe('after the cached sync key has expired', () => {
     expect(toast).toHaveBeenCalledWith(expect.stringMatching(/nothing was (wiped|changed)/i), 'error');
   });
 });
+
+describe('while a sync is in flight', () => {
+  it('import waits for it instead of silently doing nothing', async () => {
+    await setRemoteSnapshot({ taskLists: [list('old', 'Old')] });
+    remote.set(CHANGELOG_FILE, { data: '[]', sha: `sha-${++shaCounter}` });
+    await db.syncMeta.update('sync-meta', { lastPulledAt: Date.now() - 60_000 });
+
+    // A slow network: the next GitHub read stalls until released.
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    const realGet = (getFile as Mock).getMockImplementation()!;
+    (getFile as Mock).mockImplementationOnce(async (...args: unknown[]) => { await gate; return realGet(...args); });
+
+    const sync = syncNow();
+    const imported = importData({ taskLists: [list('imp', 'Imported')], tasks: [], subtasks: [] });
+    await new Promise((r) => setTimeout(r, 50));
+    release();
+    await Promise.all([sync, imported]);
+
+    expect((await db.taskLists.toArray()).map((l) => l.id)).toEqual(['imp']);
+    expect((await remoteSnapshot()).taskLists.map((l) => l.id)).toEqual(['imp']);
+  });
+});

@@ -365,6 +365,21 @@ function acquireSyncLock(): AbortSignal | null {
   return syncAbort.signal;
 }
 
+/**
+ * For user-initiated whole-state operations (wipe, import, restore, force
+ * push/pull): wait for this tab's in-flight sync to finish instead of returning
+ * as if nothing happened — they used to return silently when a sync was running,
+ * so e.g. an import on a slow phone connection did nothing and said nothing.
+ * acquireSyncLock force-resets a lock older than SYNC_TIMEOUT_MS, so this ends.
+ */
+async function waitForSyncLock(): Promise<AbortSignal> {
+  for (;;) {
+    const signal = acquireSyncLock();
+    if (signal) return signal;
+    await new Promise((r) => setTimeout(r, 200));
+  }
+}
+
 function releaseSyncLock() {
   syncStartedAt = null;
   syncAbort = null;
@@ -1610,8 +1625,7 @@ async function compactSnapshot(pat: string, repo: string, encKey: CryptoKey) {
  */
 export async function forcePush(options: { backupExisting?: boolean } = {}): Promise<SyncData | null> {
   const { backupExisting = true } = options;
-  const signal = acquireSyncLock();
-  if (!signal) return null;
+  const signal = await waitForSyncLock();
 
   try {
     const creds = await getCredentials();
@@ -1712,8 +1726,7 @@ export async function forcePush(options: { backupExisting?: boolean } = {}): Pro
 }
 
 export async function forcePull() {
-  const signal = acquireSyncLock();
-  if (!signal) return;
+  const signal = await waitForSyncLock();
 
   // Everything below replaces local state wholesale. Take a device-local safety
   // copy first so a mis-click is recoverable (Settings → Backups).
@@ -1819,8 +1832,7 @@ export async function forcePull() {
 }
 
 export async function wipeAllData() {
-  const signal = acquireSyncLock();
-  if (!signal) return;
+  const signal = await waitForSyncLock();
 
   try {
     // Sync configured: settle the key before touching anything, so the wipe
@@ -1914,8 +1926,7 @@ export async function wipeAllData() {
 }
 
 export async function importData(data: ImportData) {
-  const signal = acquireSyncLock();
-  if (!signal) return;
+  const signal = await waitForSyncLock();
 
   try {
     // Sync configured: settle the key before touching anything, so the import
@@ -2062,8 +2073,7 @@ export function __resetForTesting() {
 }
 
 export async function restoreFromBackup(tier: BackupTier) {
-  const signal = acquireSyncLock();
-  if (!signal) return;
+  const signal = await waitForSyncLock();
 
   try {
     const creds = await getCredentials();
