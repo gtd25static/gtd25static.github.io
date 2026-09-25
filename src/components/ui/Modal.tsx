@@ -1,4 +1,4 @@
-import { useEffect, useRef, type ReactNode } from 'react';
+import { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 
 interface Props {
   open: boolean;
@@ -10,12 +10,19 @@ interface Props {
 export function Modal({ open, onClose, title, children }: Props) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const mouseDownTarget = useRef<EventTarget | null>(null);
+  // The body mounts only once showModal() has run. React's autoFocus is a plain
+  // .focus() at mount: inside a still-closed (display:none) <dialog> it is a
+  // no-op, and showModal() then focuses the Close button — so a "Name" field
+  // never got the caret. Mounting after showModal() lets autoFocus win; forms
+  // without one keep the browser default. (Layout effect: the re-render lands
+  // before paint, so the empty dialog is never seen.)
+  const [shown, setShown] = useState(false);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const el = dialogRef.current;
-    if (!el) return;
-    if (open && !el.open) el.showModal();
-    else if (!open && el.open) el.close();
+    if (el && open && !el.open) el.showModal();
+    else if (el && !open && el.open) el.close();
+    setShown(open);
   }, [open]);
 
   if (!open) return null;
@@ -61,7 +68,7 @@ export function Modal({ open, onClose, title, children }: Props) {
           </svg>
         </button>
       </div>
-      <div className="px-6 pb-6">{children}</div>
+      <div className="px-6 pb-6">{shown && children}</div>
     </dialog>
   );
 }
