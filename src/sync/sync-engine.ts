@@ -35,6 +35,7 @@ import {
 } from './crypto';
 import { getClockSkewMs, isClockSkewed, formatSkew } from '../lib/clock-skew';
 import { createLocalBackup } from '../db/backup';
+import { SYNC_LOCK_NAME } from './sync-lock';
 
 export const SNAPSHOT_FILE = 'gtd25-snapshot.json';
 export const CHANGELOG_FILE = 'gtd25-changelog.json';
@@ -856,7 +857,7 @@ async function resetRemoteChangelog(pat: string, repo: string, signal: AbortSign
  * hold sync hostage; where they are unavailable this falls back to the per-tab
  * lock inside runSync, i.e. exactly the old behaviour.
  */
-export const SYNC_LOCK_NAME = 'gtd25-sync';
+export { SYNC_LOCK_NAME };
 
 export async function syncNow(manual = false, pushLimit?: number): Promise<number> {
   const locks = typeof navigator !== 'undefined' ? navigator.locks : undefined;

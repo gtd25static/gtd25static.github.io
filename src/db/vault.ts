@@ -16,6 +16,7 @@ import { deriveVaultKek, DEFAULT_ARGON2, LEGACY_KDF, type KdfParams } from './va
 import { generateDek, wrapDek, unwrapDek, importKekFromBytes, generateGarbageSlot, isLegacyWrap } from './vault-crypto';
 import { setVaultKeyProvider } from './vault-middleware';
 import { encryptAllAtRest, decryptAllAtRest } from './vault-migration';
+import { withSyncLock } from '../sync/sync-lock';
 import { registerPrfCredential, getPrfOutput } from '../sync/webauthn-prf';
 import { b64encode, b64decode } from '../sync/remote-unlock-crypto';
 import { PARANOID_FLAG, isParanoidFlagSet } from './paranoid-flag';
@@ -337,7 +338,9 @@ export async function enableParanoid(passphrase: string, idleMinutes = DEFAULT_I
  * has been rewritten.
  */
 async function completeEnable(): Promise<void> {
-  await encryptAllAtRest();
+  // Holding the sync lock: a sync applying remote rows between the migration's
+  // read and write would have them overwritten by its stale copies.
+  await withSyncLock(() => encryptAllAtRest());
   await db.vault.update('vault', { migrationState: 'done' });
   const vault = await db.vault.get('vault');
   await db.localSettings.update('local', {
@@ -390,7 +393,7 @@ async function completeDisable(): Promise<void> {
   // it (a focus refill is enough) — rows nothing can open once the vault below
   // is deleted. Lock them before the first row is touched; they reload at the end.
   signalOtherTabs({ type: 'lock' });
-  await decryptAllAtRest(dek);
+  await withSyncLock(() => decryptAllAtRest(dek)); // see completeEnable
   // The safety backups too, while the key that opens them still exists.
   await decryptLocalBackups();
   // Restore the plaintext credentials to localSettings so non-paranoid sync works.
@@ -408,7 +411,7 @@ async function completeDisable(): Promise<void> {
   // reconcile turns back into a lock screen whose unlock resumes the disable.
   setFlag(false);
   try {
-    await decryptAllAtRest(dek);
+    await withSyncLock(() => decryptAllAtRest(dek));
     await db.vault.delete('vault'); // delete LAST so an interrupted disable can resume
   } catch (err) {
     setFlag(true); // the vault is still there: still Paranoid until it resumes
