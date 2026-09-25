@@ -5,6 +5,7 @@ import { purgeOldTrashItems } from '../db/purge';
 import { recordChangeInTx, recordChangeBatchInTx, ensureDeviceId } from '../sync/change-log';
 import { scheduleSyncDebounced } from '../sync/sync-engine';
 import { handleDbError } from '../lib/db-error';
+import { recordError } from '../lib/diagnostics';
 import { restoreTaskList } from './use-task-lists';
 import { restoreTask } from './use-tasks';
 import { restoreSubtask } from './use-subtasks';
@@ -19,7 +20,8 @@ export interface TrashItem {
 
 export function useTrash() {
   useEffect(() => {
-    purgeOldTrashItems();
+    // Caught: a rejection here (the database closing under it) was unhandled.
+    purgeOldTrashItems().catch((e) => recordError('trash.purge', e));
   }, []);
 
   return useLiveQuery(async () => {
@@ -51,7 +53,7 @@ export function useTrash() {
 
     items.sort((a, b) => b.deletedAt - a.deletedAt);
     return items;
-  }, [], []);
+  }, []);
 }
 
 /**

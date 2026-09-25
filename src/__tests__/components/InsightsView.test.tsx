@@ -110,6 +110,31 @@ describe('InsightsView', () => {
     expect(screen.queryByRole('heading', { name: 'Follow-ups' })).not.toBeInTheDocument();
   });
 
+  // One task in 30 days read "0.0/day".
+  it('shows a small but non-zero rate as "<0.1/day", and zero as "0/day"', () => {
+    mockUseInsights.mockReturnValue(makeData({
+      flow: { ...makeData().flow, avgCreatedPerDay: 1 / 30, avgCompletedPerDay: 0 },
+    }));
+    render(<InsightsView />);
+    expect(screen.getByText('<0.1/day')).toBeInTheDocument();
+    expect(screen.getByText('0/day')).toBeInTheDocument();
+    expect(screen.queryByText('0.0/day')).not.toBeInTheDocument();
+  });
+
+  // The ranges are rolling windows, not calendar periods: "this year" was the
+  // last 12 months.
+  it('names the ranges as the rolling windows they are', async () => {
+    mockUseInsights.mockImplementation((range: 'week' | 'month' | 'year') => makeData({ range }));
+    const user = userEvent.setup();
+    render(<InsightsView />);
+    expect(screen.getByText('Tasks created vs. completed in the last 30 days')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Year' }));
+    expect(screen.getByText('Tasks created vs. completed in the last 12 months')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Week' }));
+    expect(screen.getByText('Tasks created vs. completed in the last 7 days')).toBeInTheDocument();
+    expect(screen.queryByText(/this (week|month|year)/)).not.toBeInTheDocument();
+  });
+
   it('switches the active range and re-queries', async () => {
     mockUseInsights.mockReturnValue(makeData());
     const user = userEvent.setup();

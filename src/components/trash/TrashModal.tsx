@@ -46,6 +46,11 @@ export function TrashModal() {
 function TrashContent() {
   const items = useTrash();
 
+  // Undefined until the first read: "Trash is empty" used to flash here first.
+  if (items === undefined) {
+    return <p className="py-8 text-center text-sm text-zinc-400">Loading…</p>;
+  }
+
   if (items.length === 0) {
     return (
       <div className="flex flex-col items-center py-8 text-zinc-400">

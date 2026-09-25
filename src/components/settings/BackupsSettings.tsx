@@ -201,7 +201,9 @@ export function BackupsSettings() {
             </div>
           ))}
           <p className="text-xs text-zinc-400 dark:text-zinc-500">
-            Created automatically on this device at app start; they hold lists, tasks and subtasks (not mindmaps).
+            Created automatically on this device at app start and before anything replaces your data (an import,
+            a restore, a reset from another device); they hold lists, tasks, subtasks and mindmaps (not the Shared
+            Folder or settings).
             Restore replaces that data and syncs to other devices. Download saves it as a backup zip you can
             import on another device — encrypted or not, as with Export.
           </p>

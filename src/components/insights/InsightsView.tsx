@@ -10,11 +10,20 @@ const RANGES: { id: InsightsRange; label: string }[] = [
   { id: 'month', label: 'Month' },
   { id: 'year', label: 'Year' },
 ];
+// Rolling windows (see rangeStartFor), not calendar periods: "this year" was
+// the last 12 months.
 const RANGE_NOUN: Record<InsightsRange, string> = {
-  week: 'this week',
-  month: 'this month',
-  year: 'this year',
+  week: 'in the last 7 days',
+  month: 'in the last 30 days',
+  year: 'in the last 12 months',
 };
+
+// One task in 30 days read "0.0/day".
+function perDay(rate: number): string {
+  if (rate === 0) return '0/day';
+  if (rate < 0.1) return '<0.1/day';
+  return `${rate.toFixed(1)}/day`;
+}
 const WEEKDAYS_FULL = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 
 function formatDuration(ms: number): string {
@@ -171,12 +180,12 @@ export function InsightsView() {
                 <StatCard
                   label="Came in"
                   value={data.flow.created}
-                  sub={`${data.flow.avgCreatedPerDay.toFixed(1)}/day`}
+                  sub={perDay(data.flow.avgCreatedPerDay)}
                 />
                 <StatCard
                   label="Cleared"
                   value={data.flow.completed}
-                  sub={`${data.flow.avgCompletedPerDay.toFixed(1)}/day`}
+                  sub={perDay(data.flow.avgCompletedPerDay)}
                 />
                 <StatCard
                   label="Net"

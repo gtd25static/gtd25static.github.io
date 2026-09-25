@@ -123,6 +123,18 @@ describe('BackupsSettings — local safety backups', () => {
     expect(screen.queryByText('Safety Backups')).not.toBeInTheDocument();
   });
 
+  // The copies hold mindmaps too (since 2026-07-27), and are also made before
+  // an import/restore/reset; the text said "(not mindmaps)" and "at app start".
+  it('says what a safety backup holds', () => {
+    h.localBackups = [{ key: 'gtd25-local-backup-1', timestamp: Date.now() }];
+    renderWithDialogs();
+    const text = screen.getByText(/they hold/).textContent ?? '';
+    expect(text).toMatch(/mindmaps/);
+    expect(text).not.toMatch(/not mindmaps/);
+    expect(text).toMatch(/not the Shared\s+Folder/);
+    expect(text).toMatch(/before anything replaces your data/);
+  });
+
   it('restores through importData after confirmation', async () => {
     const user = userEvent.setup();
     h.localBackups = [{ key: 'gtd25-local-backup-1', timestamp: Date.now() }];
