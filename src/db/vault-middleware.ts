@@ -25,6 +25,13 @@
 // must fail rather than put real content on disk unencrypted.
 // setMigrationBypass(true) forces pass-through even while a key is set; the
 // disable migration uses it to write plaintext back to disk.
+//
+// A key is only ever active while the device is Paranoid (the flag is the
+// synchronous source of truth, see paranoid-flag): a tab can still hold the key
+// after another tab turned Paranoid Mode off, and anything it encrypted then
+// would be readable by nobody once that vault is gone. For the same reason such
+// a tab refuses to store at-rest ciphertext at all — which catches rows a caller
+// encrypted itself just before the flag went down.
 
 import Dexie, { type Middleware, type DBCore, type DBCoreTable } from 'dexie';
 import { encryptEntity, decryptEntity } from '../sync/crypto';
@@ -54,6 +61,11 @@ function needsEncryption(table: string, row: Row): boolean {
   return !!ENTITY_TYPE_BY_TABLE[table] && !row._enc;
 }
 
+function carriesAtRestCiphertext(table: string, row: Row): boolean {
+  if (table === 'changeLog') return (row.data as Row | null | undefined)?._enc !== undefined;
+  return row._enc !== undefined;
+}
+
 // --- Key provider + migration bypass ---
 
 let keyProvider: () => CryptoKey | null = () => null;
@@ -74,9 +86,16 @@ export function setMigrationBypass(on: boolean): void {
   migrationBypass = on;
 }
 
-/** The key actually in effect for at-rest crypto right now (null = passthrough). */
+/**
+ * The key actually in effect for at-rest crypto right now (null = passthrough).
+ * Every at-rest path — this middleware, the callers that encrypt rows themselves
+ * before writing, the blob cache, the safety backups — takes its key from here,
+ * so a key still held after Paranoid Mode went off (see the header) encrypts
+ * nothing anywhere.
+ */
 export function getActiveAtRestKey(): CryptoKey | null {
-  return migrationBypass ? null : keyProvider();
+  if (migrationBypass || !isParanoidFlagSet()) return null;
+  return keyProvider();
 }
 
 // --- Row transforms ---
@@ -279,6 +298,14 @@ export const vaultMiddleware: Middleware<DBCore> = {
           // tolerates it, real IndexedDB throws "transaction has finished".)
 
           async mutate(req) {
+            // This tab still holds a vault key but the device is not Paranoid any
+            // more: ciphertext it stores now opens with nothing (see the header).
+            // Without a key, rows an older disable left encrypted still pass, so
+            // they can at least be deleted. Deletes always pass.
+            if ((req.type === 'add' || req.type === 'put') && !isParanoidFlagSet() && keyProvider() !== null
+              && (req.values as Row[]).some((v) => carriesAtRestCiphertext(tableName, v))) {
+              throw new Error(`Paranoid Mode is off: refusing to store encrypted ${tableName}`);
+            }
             const key = getActiveAtRestKey();
             if (key && (req.type === 'add' || req.type === 'put') && req.values) {
               const rows = req.values as Row[];

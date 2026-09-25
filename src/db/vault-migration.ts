@@ -104,17 +104,22 @@ export async function encryptAllAtRest(onProgress?: ProgressFn): Promise<void> {
   await clearSharedBlobCache();
 }
 
-/** Rewrite every row back to plaintext on disk. DEK must already be active. */
-export async function decryptAllAtRest(onProgress?: ProgressFn): Promise<void> {
-  const key = getActiveAtRestKey();
-  if (!key) throw new Error('decryptAllAtRest: no at-rest key active');
+/**
+ * Rewrite every row still encrypted under `key` back to plaintext on disk. Takes
+ * the key explicitly: the disable runs a last pass after the Paranoid flag is
+ * down, when no at-rest key is active any more (see vault.completeDisable).
+ */
+export async function decryptAllAtRest(key: CryptoKey, onProgress?: ProgressFn): Promise<void> {
   const tables = encryptedTables();
   const total = await totalRows(tables);
   let done = 0;
   for (const table of tables) {
     const raw = await readRaw(table);
     const plain = await Promise.all(raw.map(async (r) => (await decryptRow(table.name, key, r)) as Row));
-    await writeRaw(table, plain);
+    // Only the rows that were still encrypted (decryptRow hands a plaintext row
+    // back as is): rewriting the others gains nothing and could undo a write
+    // that landed since the read, and it keeps the disable's last pass cheap.
+    await writeRaw(table, plain.filter((row, i) => row !== raw[i]));
     done += raw.length;
     onProgress?.(done, total);
   }

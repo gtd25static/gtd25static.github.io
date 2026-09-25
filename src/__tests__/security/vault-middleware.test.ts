@@ -43,12 +43,14 @@ beforeAll(async () => {
 
 beforeEach(async () => {
   await resetDb();
+  localStorage.setItem('gtd25-paranoid', '1'); // a key is only active on a Paranoid device
   setVaultKeyProvider(() => dek);
 });
 
 afterEach(() => {
   clearVaultKeyProvider();
   setMigrationBypass(false);
+  localStorage.removeItem('gtd25-paranoid');
 });
 
 describe('vault-middleware: at-rest encryption', () => {
@@ -215,6 +217,7 @@ describe('vault-middleware: at-rest encryption', () => {
 describe('vault-middleware: passthrough when no key', () => {
   beforeEach(() => {
     clearVaultKeyProvider(); // no DEK -> passthrough
+    localStorage.removeItem('gtd25-paranoid');
   });
 
   it('stores plaintext when Paranoid Mode is off', async () => {

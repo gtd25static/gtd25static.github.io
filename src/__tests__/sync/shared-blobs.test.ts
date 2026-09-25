@@ -12,6 +12,7 @@ beforeEach(async () => {
 
 afterEach(() => {
   clearVaultKeyProvider();
+  localStorage.removeItem('gtd25-paranoid');
 });
 
 describe('shared blob at-rest cache', () => {
@@ -30,6 +31,7 @@ describe('shared blob at-rest cache', () => {
 
   it('stores DEK-ENCRYPTED bytes when Paranoid is on, and round-trips on read', async () => {
     const dek = await deriveKey('vault-dek', generateSalt());
+    localStorage.setItem('gtd25-paranoid', '1'); // a key is only active on a Paranoid device
     setVaultKeyProvider(() => dek);
 
     const blobId = 'blob-enc';

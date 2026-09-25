@@ -368,7 +368,13 @@ export async function disableParanoid(): Promise<void> {
 }
 
 async function completeDisable(): Promise<void> {
-  await decryptAllAtRest();
+  const dek = currentDek;
+  if (!dek) throw new Error('Unlock the vault before disabling Paranoid Mode');
+  // Every other unlocked tab holds this key and would go on encrypting rows under
+  // it (a focus refill is enough) — rows nothing can open once the vault below
+  // is deleted. Lock them before the first row is touched; they reload at the end.
+  signalOtherTabs({ type: 'lock' });
+  await decryptAllAtRest(dek);
   // The safety backups too, while the key that opens them still exists.
   await decryptLocalBackups();
   // Restore the plaintext credentials to localSettings so non-paranoid sync works.
@@ -378,14 +384,28 @@ async function completeDisable(): Promise<void> {
     githubPat: restored?.githubPat,
     encryptionPassword: restored?.syncPassword,
   });
-  await db.vault.delete('vault'); // delete LAST so an interrupted disable can resume
+  // Lower the flag BEFORE the vault goes, then decrypt once more. Without the
+  // flag no tab has an at-rest key (vault-middleware), so nothing is encrypted
+  // from here on, and this last pass picks up whatever a background write here —
+  // or a tab that missed the lock — encrypted into a table the first pass had
+  // already done. A crash in between leaves vault-without-flag, which the boot
+  // reconcile turns back into a lock screen whose unlock resumes the disable.
   setFlag(false);
+  try {
+    await decryptAllAtRest(dek);
+    await db.vault.delete('vault'); // delete LAST so an interrupted disable can resume
+  } catch (err) {
+    setFlag(true); // the vault is still there: still Paranoid until it resumes
+    throw err;
+  }
   setKeyFlag(false);
   currentDek = null;
   currentSecrets = null;
   if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
   clearEncryptionKey();
   emit();
+  // The other tabs locked above, but still hold in memory what they showed.
+  signalOtherTabs({ type: 'reload' });
 }
 
 // Why the most recent unlock attempt failed. 'wrong-credential' is the only
