@@ -26,6 +26,28 @@ describe('daysUntil', () => {
     expect(daysUntil(past)).toBe(-7);
   });
 
+  // The day the clocks go back has 25 hours: Math.ceil made "tomorrow" 2 days
+  // away (a task due on the 26th showed "26/10", not "Tomorrow"); in spring the
+  // 23-hour day must still count as one.
+  describe('across a daylight-saving change (Madrid)', () => {
+    const originalTz = process.env.TZ;
+    beforeEach(() => { process.env.TZ = 'Europe/Madrid'; });
+    afterEach(() => { process.env.TZ = originalTz; });
+
+    it('the 25-hour day in October', () => {
+      vi.setSystemTime(new Date(2026, 9, 25, 10, 0));
+      expect(daysUntil(new Date(2026, 9, 26, 0, 0).getTime())).toBe(1);
+      expect(daysUntil(new Date(2026, 9, 27, 0, 0).getTime())).toBe(2);
+      expect(daysUntil(new Date(2026, 9, 24, 0, 0).getTime())).toBe(-1);
+    });
+
+    it('the 23-hour day in March', () => {
+      vi.setSystemTime(new Date(2026, 2, 29, 10, 0));
+      expect(daysUntil(new Date(2026, 2, 30, 0, 0).getTime())).toBe(1);
+      expect(daysUntil(new Date(2026, 2, 28, 0, 0).getTime())).toBe(-1);
+    });
+  });
+
   it('ignores time-of-day', () => {
     const earlyMorning = new Date('2026-03-09T03:00:00').getTime();
     const lateNight = new Date('2026-03-09T23:59:59').getTime();

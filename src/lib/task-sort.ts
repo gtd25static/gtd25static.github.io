@@ -80,3 +80,15 @@ export function sortFollowUpsForDisplay(tasks: Task[]): Task[] {
     return b.order - a.order;
   });
 }
+
+/** How long a task just marked done stays in the active list, so the tick is seen. */
+export const RECENTLY_DONE_MS = 60_000;
+
+/**
+ * What is left of that minute for `task` (≤ 0: none). Counted from completedAt:
+ * from updatedAt, editing a long-completed task brought it back for a minute.
+ */
+export function recentlyDoneRemainingMs(task: Task, now: number): number {
+  if (task.status !== 'done') return 0;
+  return RECENTLY_DONE_MS - (now - (task.completedAt ?? task.updatedAt));
+}

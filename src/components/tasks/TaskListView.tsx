@@ -25,7 +25,7 @@ import { InboxListView } from './InboxListView';
 import { MergeSuggestionsCard } from './MergeSuggestionsCard';
 import { isInboxList } from '../../lib/constants';
 import { toast } from '../ui/Toast';
-import { sortTasksForDisplay, sortTasksByDate, sortTasksByName, sortCompletedTasksForDisplay } from '../../lib/task-sort';
+import { sortTasksForDisplay, sortTasksByDate, sortTasksByName, sortCompletedTasksForDisplay, recentlyDoneRemainingMs } from '../../lib/task-sort';
 
 type SortMode = 'default' | 'date' | 'name';
 
@@ -90,8 +90,8 @@ export function TaskListView() {
     const now = Date.now();
     for (const task of tasks) {
       if (task.status === 'done' && !timersRef.current.has(task.id)) {
-        const elapsed = now - task.updatedAt;
-        if (elapsed < 60_000) {
+        const remaining = recentlyDoneRemainingMs(task, now);
+        if (remaining > 0) {
           setRecentlyDone((prev) => new Set(prev).add(task.id));
           const timer = setTimeout(() => {
             setRecentlyDone((prev) => {
@@ -100,7 +100,7 @@ export function TaskListView() {
               return next;
             });
             timersRef.current.delete(task.id);
-          }, 60_000 - elapsed);
+          }, remaining);
           timersRef.current.set(task.id, timer);
         }
       }

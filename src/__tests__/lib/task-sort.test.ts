@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { sortTasksForDisplay, sortFollowUpsForDisplay, sortCompletedTasksForDisplay, sortTasksByName } from '../../lib/task-sort';
+import { sortTasksForDisplay, sortFollowUpsForDisplay, sortCompletedTasksForDisplay, sortTasksByName, recentlyDoneRemainingMs } from '../../lib/task-sort';
 import type { Task } from '../../db/models';
 
 function makeTask(overrides: Partial<Task> & { id: string; order: number }): Task {
@@ -216,5 +216,32 @@ describe('sortTasksByName', () => {
     const sealed = { ...makeTask({ id: 's', order: 2 }), title: undefined } as unknown as Task;
     const tasks = [makeTask({ id: 'a', order: 0, title: 'Alpha' }), sealed];
     expect(sortTasksByName(tasks).map((t) => t.id)).toEqual(['s', 'a']);
+  });
+});
+
+// A task just marked done stays in the active list for a minute. That minute
+// was counted from updatedAt, so editing a long-completed task's title brought
+// it back to the active list for another 60 s.
+describe('recentlyDoneRemainingMs', () => {
+  const now = 1_000_000_000;
+
+  it('counts from the completion, not the last edit', () => {
+    const edited = makeTask({ id: 'a', order: 0, status: 'done', completedAt: now - 120_000, updatedAt: now });
+    expect(recentlyDoneRemainingMs(edited, now)).toBeLessThanOrEqual(0);
+  });
+
+  it('gives a task done 20 s ago the remaining 40 s', () => {
+    const fresh = makeTask({ id: 'b', order: 0, status: 'done', completedAt: now - 20_000, updatedAt: now - 20_000 });
+    expect(recentlyDoneRemainingMs(fresh, now)).toBe(40_000);
+  });
+
+  it('falls back to updatedAt for rows without a completion time', () => {
+    const legacy = makeTask({ id: 'c', order: 0, status: 'done', updatedAt: now - 10_000 });
+    expect(recentlyDoneRemainingMs(legacy, now)).toBe(50_000);
+  });
+
+  it('is nothing for a task that is not done', () => {
+    const open = makeTask({ id: 'd', order: 0, status: 'todo', updatedAt: now });
+    expect(recentlyDoneRemainingMs(open, now)).toBeLessThanOrEqual(0);
   });
 });

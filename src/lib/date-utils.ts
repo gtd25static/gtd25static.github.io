@@ -5,7 +5,9 @@ export function daysUntil(timestamp: number): number {
   now.setHours(0, 0, 0, 0);
   const target = new Date(timestamp);
   target.setHours(0, 0, 0, 0);
-  return Math.ceil((target.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+  // Rounded: across a daylight-saving change a day is 23 or 25 hours, and ceil
+  // made the 25-hour one two days ("Tomorrow" showed as a date).
+  return Math.round((target.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
 }
 
 export function isDueSoon(timestamp: number | undefined): boolean {
