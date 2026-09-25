@@ -64,6 +64,23 @@ function listeningTab() {
   return { heard, close: () => channel.close() };
 }
 
+// resetDb() runs the app's boot sequence, which defers a safety backup by 5 s
+// (db/index ensureDefaults). A test here that runs past that — a loaded machine
+// is enough — got a backup written mid-test, and the byte-for-byte comparisons
+// below saw it as a change. Keep that timer from being scheduled at all.
+const BOOT_BACKUP_DELAY_MS = 5000;
+async function resetDbWithoutBootBackup(): Promise<void> {
+  const realSetTimeout = globalThis.setTimeout;
+  const spy = vi.spyOn(globalThis, 'setTimeout').mockImplementation(((
+    handler: () => void, ms?: number, ...args: unknown[]
+  ) => (ms === BOOT_BACKUP_DELAY_MS ? undefined : realSetTimeout(handler, ms, ...args))) as unknown as typeof setTimeout);
+  try {
+    await resetDb();
+  } finally {
+    spy.mockRestore();
+  }
+}
+
 async function settle(until?: () => boolean): Promise<void> {
   const deadline = Date.now() + 2_000;
   do {
@@ -72,7 +89,7 @@ async function settle(until?: () => boolean): Promise<void> {
 }
 
 beforeEach(async () => {
-  await resetDb();
+  await resetDbWithoutBootBackup();
   __resetVaultStateForTests();
   __resetTabChannelForTests();
   clearErrorLog();
@@ -152,7 +169,7 @@ describe('rekeyVault rewrites the device under a new key', () => {
   });
 
   it('upgrades a legacy PBKDF2 vault', async () => {
-    await resetDb();
+    await resetDbWithoutBootBackup();
     __resetVaultStateForTests();
     localStorage.clear();
     await seedRealContent(); // plaintext rows: no key was active
