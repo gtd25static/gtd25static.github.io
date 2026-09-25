@@ -56,10 +56,13 @@ describe('parseProtocolCapture', () => {
 
   it('sanitises a hostile payload exactly like the query flow', () => {
     // Any page can invoke the handler, so treat the payload as attacker input.
+    // Markup stays as literal text: titles are only ever rendered as text (see
+    // the InboxCard test), and stripping "tags" also ate ordinary text like
+    // "a<b and c>d".
     const injected = parseProtocolCapture(
       `${CAPTURE_PROTOCOL}capture?title=${encodeURIComponent('<img src=x onerror=alert(1)>Hi')}`,
     );
-    expect(injected?.title).toBe('Hi');
+    expect(injected?.title).toBe('<img src=x onerror=alert(1)>Hi');
 
     const long = parseProtocolCapture(
       `${CAPTURE_PROTOCOL}capture?title=${'x'.repeat(MAX_TITLE_LENGTH + 500)}`,

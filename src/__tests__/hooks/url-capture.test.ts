@@ -1,4 +1,4 @@
-import { formatCaptureResult } from '../../hooks/use-url-capture';
+import { formatCaptureResult, sanitize } from '../../hooks/use-url-capture';
 
 describe('formatCaptureResult', () => {
   it('returns title + link when url param and title provided', () => {
@@ -78,5 +78,20 @@ describe('formatCaptureResult', () => {
       link: 'https://main.com',
       linkTitle: 'Page',
     });
+  });
+});
+
+// Titles are shown as text everywhere (no HTML sink), so dropping everything
+// between "<" and ">" only mangled what was captured.
+describe('sanitize', () => {
+  it('keeps angle brackets and what sits between them', () => {
+    expect(sanitize('a<b and c>d')).toBe('a<b and c>d');
+    expect(sanitize('if x < 3 and y > 4')).toBe('if x < 3 and y > 4');
+    expect(sanitize('Read <b>this</b>')).toBe('Read <b>this</b>');
+  });
+
+  it('still trims, and treats a missing value as empty', () => {
+    expect(sanitize('  padded  ')).toBe('padded');
+    expect(sanitize(null)).toBe('');
   });
 });

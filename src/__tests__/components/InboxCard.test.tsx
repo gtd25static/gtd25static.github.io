@@ -48,6 +48,14 @@ describe('InboxCard', () => {
     expect(screen.getByText('Process me')).toBeInTheDocument();
   });
 
+  // Captures keep markup as literal text (use-url-capture no longer strips it),
+  // so this is what stands between a hostile capture and the DOM.
+  it('shows a captured title with markup in it as text, never as HTML', () => {
+    const { container } = renderCard({ title: '<img src=x onerror=alert(1)>Hi', description: '<b>bold</b>' });
+    expect(screen.getByText('<img src=x onerror=alert(1)>Hi')).toBeInTheDocument();
+    expect(container.querySelector('img, b')).toBeNull();
+  });
+
   it('shows the Process dropdown button', () => {
     renderCard();
     expect(screen.getByText('Process')).toBeInTheDocument();

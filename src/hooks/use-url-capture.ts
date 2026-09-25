@@ -5,15 +5,14 @@ import { toast } from '../components/ui/Toast';
 import { MAX_TITLE_LENGTH } from '../lib/constants';
 import { extractUrl, isValidUrl } from '../lib/link-utils';
 
-/** Strip HTML tags from a string. */
-function stripHtml(s: string): string {
-  return s.replace(/<[^>]*>/g, '');
-}
-
-/** Sanitize a capture param: strip HTML, trim, truncate. */
+/**
+ * Sanitize a capture param: trim, truncate. Markup is kept as literal text —
+ * titles are only ever rendered as text, and stripping "tags" ate ordinary
+ * text such as "a<b and c>d".
+ */
 export function sanitize(raw: string | null): string {
   if (!raw) return '';
-  return stripHtml(raw).trim().slice(0, MAX_TITLE_LENGTH);
+  return raw.trim().slice(0, MAX_TITLE_LENGTH);
 }
 
 export interface CaptureResult {
