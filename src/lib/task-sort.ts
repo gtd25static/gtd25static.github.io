@@ -48,7 +48,8 @@ export function sortTasksByDate(tasks: Task[]): Task[] {
  * Sort tasks alphabetically by title (case-insensitive).
  */
 export function sortTasksByName(tasks: Task[]): Task[] {
-  return [...tasks].sort((a, b) => a.title.localeCompare(b.title, undefined, { sensitivity: 'base' }));
+  // `?? ''`: a row an older Paranoid disable left encrypted has no title (see isMergeCandidate).
+  return [...tasks].sort((a, b) => (a.title ?? '').localeCompare(b.title ?? '', undefined, { sensitivity: 'base' }));
 }
 
 /**

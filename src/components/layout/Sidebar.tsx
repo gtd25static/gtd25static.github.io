@@ -325,7 +325,7 @@ export function Sidebar() {
   const focusCount = useFocusSet().members.length;
 
   const filteredLists = searchQuery
-    ? lists.filter((l) => l.name.toLowerCase().includes(searchQuery.toLowerCase()))
+    ? lists.filter((l) => l.name?.toLowerCase().includes(searchQuery.toLowerCase())) // `?.`: see isMergeCandidate
     : lists;
 
   const inboxList = filteredLists.find((l) => isInboxList(l));

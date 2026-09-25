@@ -16,10 +16,13 @@ export interface MergeSuggestionGroup {
  * (not deleted, completed, or a resolved follow-up), and never a row the vault
  * could not decrypt — every quarantined row reads "⚠︎ unreadable", so they look
  * like duplicates of each other, and merging would destroy a row that is still
- * recoverable by re-syncing.
+ * recoverable by re-syncing. Nor one without a title at all: at-rest ciphertext
+ * this device holds no key for (left behind by a Paranoid disable before
+ * 2026-09-25) comes back raw, and comparing its missing title crashed the app.
  */
 export function isMergeCandidate(task: Task, listType: ListType): boolean {
   if (task.deletedAt || (task as { _decryptError?: boolean })._decryptError) return false;
+  if (typeof task.title !== 'string') return false;
   return listType === 'follow-ups' ? !task.archived : task.status !== 'done';
 }
 

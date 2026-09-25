@@ -47,7 +47,7 @@ export function MoveToFolderModal({ open, onClose, folders, excludeSubtreeOf, cu
     }
     const result: FolderOption[] = [];
     const walk = (parentId: string | undefined, depth: number) => {
-      const children = (byParent.get(parentId) ?? []).sort((a, b) => a.order - b.order || a.name.localeCompare(b.name));
+      const children = (byParent.get(parentId) ?? []).sort((a, b) => a.order - b.order || (a.name ?? '').localeCompare(b.name ?? '')); // `??`: see isMergeCandidate
       for (const f of children) {
         result.push({ folder: f, depth });
         walk(f.id, depth + 1);

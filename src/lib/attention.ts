@@ -91,7 +91,8 @@ export function collectDueItems(
     });
   }
 
-  result.sort((a, b) => a.dueDate - b.dueDate || a.title.localeCompare(b.title));
+  // `?? ''`: a row an older Paranoid disable left encrypted has no title (see isMergeCandidate).
+  result.sort((a, b) => a.dueDate - b.dueDate || (a.title ?? '').localeCompare(b.title ?? ''));
   return result;
 }
 

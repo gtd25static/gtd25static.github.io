@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { dayDiff, countAttention } from '../../lib/attention';
+import { dayDiff, countAttention, collectDueItems } from '../../lib/attention';
 import type { Subtask, Task } from '../../db/models';
 
 const DAY = 24 * 60 * 60 * 1000;
@@ -83,5 +83,17 @@ describe('countAttention', () => {
 
   it('is 0 when nothing is due', () => {
     expect(countAttention(NOW, [makeTask({ id: 'a' }), makeTask({ id: 'b', dueDate: NOW + 10 * DAY })])).toBe(0);
+  });
+});
+
+describe('a row without a title', () => {
+  // At-rest ciphertext a Paranoid disable before 2026-09-25 could leave behind
+  // under a destroyed key: it keeps its plaintext metadata (a due date) but has
+  // no title. Two items due at the same time are ordered by title, which threw
+  // on every start — the app could not be opened at all.
+  it('is still collected, without breaking the ordering of equal due dates', () => {
+    const sealed = { ...makeTask({ id: 'sealed', dueDate: NOW - DAY }), title: undefined } as unknown as Task;
+    const items = collectDueItems(NOW, [makeTask({ id: 'a', dueDate: NOW - DAY }), sealed], []);
+    expect(items.map((i) => i.id).sort()).toEqual(['a', 'sealed']);
   });
 });

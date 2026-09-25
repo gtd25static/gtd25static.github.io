@@ -65,13 +65,13 @@ export function MindmapBrowser() {
   const shownFolders = useMemo(
     () => folders
       .filter((f) => f.parentId === effectiveFolderId)
-      .sort((a, b) => a.order - b.order || a.name.localeCompare(b.name)),
+      .sort((a, b) => a.order - b.order || (a.name ?? '').localeCompare(b.name ?? '')), // `??`: see isMergeCandidate
     [folders, effectiveFolderId],
   );
   const shownMaps = useMemo(
     () => maps
       .filter((m) => m.folderId === effectiveFolderId)
-      .sort((a, b) => a.order - b.order || a.name.localeCompare(b.name)),
+      .sort((a, b) => a.order - b.order || (a.name ?? '').localeCompare(b.name ?? '')), // `??`: see isMergeCandidate
     [maps, effectiveFolderId],
   );
 

@@ -12,6 +12,13 @@ describe('merge suggestion candidates', () => {
     expect(isMergeCandidate(task({ title: '⚠︎ unreadable', _decryptError: true }), 'follow-ups')).toBe(false);
   });
 
+  it('never offers a row without a readable title (ciphertext this device can no longer open)', () => {
+    // Such a row has no `title` at all; normalizing it crashed the whole app.
+    const sealed = { id: 't1', listId: 'l1', status: 'todo', order: 0, createdAt: 1, updatedAt: 1, _enc: 'AAAA' } as unknown as Task;
+    expect(isMergeCandidate(sealed, 'tasks')).toBe(false);
+    expect(isMergeCandidate(sealed, 'follow-ups')).toBe(false);
+  });
+
   it('control: open tasks are candidates; deleted, done and archived ones are not', () => {
     expect(isMergeCandidate(task(), 'tasks')).toBe(true);
     expect(isMergeCandidate(task({ deletedAt: 5 }), 'tasks')).toBe(false);

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { sortTasksForDisplay, sortFollowUpsForDisplay, sortCompletedTasksForDisplay } from '../../lib/task-sort';
+import { sortTasksForDisplay, sortFollowUpsForDisplay, sortCompletedTasksForDisplay, sortTasksByName } from '../../lib/task-sort';
 import type { Task } from '../../db/models';
 
 function makeTask(overrides: Partial<Task> & { id: string; order: number }): Task {
@@ -203,5 +203,18 @@ describe('sortCompletedTasksForDisplay', () => {
     sortCompletedTasksForDisplay(tasks);
 
     expect(tasks.map((t) => t.id)).toEqual(original.map((t) => t.id));
+  });
+});
+
+describe('sortTasksByName', () => {
+  it('sorts by title, case-insensitively', () => {
+    const tasks = [makeTask({ id: 'b', order: 0, title: 'beta' }), makeTask({ id: 'a', order: 1, title: 'Alpha' })];
+    expect(sortTasksByName(tasks).map((t) => t.id)).toEqual(['a', 'b']);
+  });
+
+  it('does not throw on a row without a title (ciphertext left by an older Paranoid disable)', () => {
+    const sealed = { ...makeTask({ id: 's', order: 2 }), title: undefined } as unknown as Task;
+    const tasks = [makeTask({ id: 'a', order: 0, title: 'Alpha' }), sealed];
+    expect(sortTasksByName(tasks).map((t) => t.id)).toEqual(['s', 'a']);
   });
 });

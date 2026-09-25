@@ -141,3 +141,19 @@ describe('search', () => {
     expect(results[0].parentTaskStatus).toBe('todo');
   });
 });
+
+describe('search over rows without a title', () => {
+  // At-rest ciphertext a Paranoid disable before 2026-09-25 could leave behind:
+  // plaintext metadata, no title/name. Typing in the search box crashed the app.
+  it('skips them instead of throwing', async () => {
+    const task = await createTask(listId, { title: 'Findable task' });
+    const sealed = { status: 'todo', order: 9, createdAt: 1, updatedAt: 1, _enc: 'AAAA' };
+    await db.taskLists.add({ id: 'sealed-list', type: 'tasks', ...sealed } as never);
+    await db.tasks.add({ id: 'sealed-task', listId, ...sealed } as never);
+    await db.subtasks.add({ id: 'sealed-sub', taskId: assertDefined(task).id, ...sealed } as never);
+
+    const results = await searchDb('find');
+
+    expect(results.map((r) => r.id)).toEqual([assertDefined(task).id]);
+  });
+});
