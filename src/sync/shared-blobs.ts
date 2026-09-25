@@ -135,6 +135,16 @@ export async function canUploadSharedBlob(): Promise<boolean> {
   return (await ensureEncryptionKey()) !== null;
 }
 
+/**
+ * Why a new blob can't be uploaded right now, or null when it can: no sync set
+ * up at all, or sync set up but its key not derived yet (just after a start or
+ * an unlock). Lets the UI say which instead of a generic failure.
+ */
+export async function sharedBlobBlocker(): Promise<'no-sync' | 'not-ready' | null> {
+  if ((await getCredentials()) === null) return 'no-sync';
+  return (await canUploadSharedBlob()) ? null : 'not-ready';
+}
+
 /** Encrypt + upload a new blob to the blob branch, and cache its plaintext locally. */
 export async function uploadSharedBlob(blobId: string, plaintext: Uint8Array): Promise<void> {
   const creds = await getCredentials();

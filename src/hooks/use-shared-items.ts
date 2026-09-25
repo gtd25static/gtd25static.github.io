@@ -8,7 +8,7 @@ import { handleDbError } from '../lib/db-error';
 import { initFieldTimestamps, stampUpdatedFields } from '../sync/field-timestamps';
 import { encryptRow, getActiveAtRestKey } from '../db/vault-middleware';
 import { SYNC_VERSION } from '../sync/version';
-import { uploadSharedBlob, deleteSharedBlob } from '../sync/shared-blobs';
+import { uploadSharedBlob, deleteSharedBlob, sharedBlobBlocker } from '../sync/shared-blobs';
 import { MAX_SHARED_FOLDER_BYTES } from '../lib/constants';
 import { isValidUrl } from '../lib/link-utils';
 import { toast } from '../components/ui/Toast';
@@ -47,10 +47,12 @@ async function currentUsedBytes(): Promise<number> {
   return all.filter((i) => !i.deletedAt).reduce((sum, i) => sum + (i.size || 0), 0);
 }
 
-export function formatBytes(bytes: number): string {
+/** `round`: 'up' / 'down' instead of nearest, for sizes that must not look equal. */
+export function formatBytes(bytes: number, round: 'nearest' | 'up' | 'down' = 'nearest'): string {
+  const fn = round === 'up' ? Math.ceil : round === 'down' ? Math.floor : Math.round;
   if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  if (bytes < 1024 * 1024) return `${fn(bytes / 1024)} KB`;
+  return `${(fn(bytes / (1024 * 1024) * 10) / 10).toFixed(1)} MB`;
 }
 
 // --- Internal write helper (mirrors the Safari-safe pre-encrypt dance in use-tasks) ---
@@ -88,13 +90,28 @@ async function putSharedItem(item: SharedItem): Promise<void> {
   scheduleSyncDebounced();
 }
 
+// Files and snippets are uploaded to the sync repository; without sync the
+// upload failed with a generic "Failed to add shared file. Please try again."
+// Says why instead. Returns true if the upload can go ahead.
+async function checkCanUpload(): Promise<boolean> {
+  const blocker = await sharedBlobBlocker().catch(() => 'not-ready' as const);
+  if (blocker === 'no-sync') {
+    toast('Files and text are stored in your sync repository: set up sync in Settings to add them.', 'error');
+  } else if (blocker === 'not-ready') {
+    toast('Sync is still starting — add it again in a moment.', 'info');
+  }
+  return blocker === null;
+}
+
 // Reject items that don't fit the remaining quota. Returns true if it fit.
 async function checkFits(bytes: number): Promise<boolean> {
   const used = await currentUsedBytes();
   const remaining = MAX_SHARED_FOLDER_BYTES - used;
   if (bytes > remaining) {
+    // Size rounded up, free space down: to the nearest 0.1 MB both could read
+    // "30.0 MB" ("Item is 30.0 MB but only 30.0 MB is free").
     toast(
-      `Item is ${formatBytes(bytes)} but only ${formatBytes(Math.max(0, remaining))} is free in the shared folder.`,
+      `Item is ${formatBytes(bytes, 'up')} but only ${formatBytes(Math.max(0, remaining), 'down')} is free in the shared folder.`,
       'error',
     );
     return false;
@@ -141,6 +158,7 @@ export async function createLinkItem(url: string, title?: string): Promise<Share
 
 export async function createFileItem(file: File): Promise<SharedItem | undefined> {
   try {
+    if (!(await checkCanUpload())) return undefined;
     if (!(await checkFits(file.size))) return undefined;
     const bytes = new Uint8Array(await file.arrayBuffer());
     const blobId = newId();
@@ -175,6 +193,7 @@ export async function createSnippetItem(name: string, text: string): Promise<Sha
       toast('Nothing to save — the text is empty.', 'error');
       return undefined;
     }
+    if (!(await checkCanUpload())) return undefined;
     const bytes = new TextEncoder().encode(text);
     if (!(await checkFits(bytes.length))) return undefined;
     const blobId = newId();
