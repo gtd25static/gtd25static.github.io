@@ -100,20 +100,44 @@ export async function maintainFocusSet(now: number = Date.now()): Promise<void> 
   }
 }
 
+let tickRunning = false;
+let tickAgain = false;
+
 /**
- * Drives the two maintenance tiers on mount, on tab-visible, and once a minute:
- * the daily refresh first (so a new day is stamped and composed), then the
- * continuous top-up against the freshly stamped day.
+ * Both tiers, one run at a time: the daily refresh first (so a new day is
+ * stamped and composed), then the continuous top-up against the freshly stamped
+ * day. A request arriving mid-run — the run's own writes, or the user's —
+ * queues one more run instead of starting a parallel one, where two daily
+ * refreshes could both pick before either had stamped the day.
  */
-export function useFocusModeDaily(): void {
-  useEffect(() => {
-    const tick = async () => {
+async function runFocusMaintenance(): Promise<void> {
+  if (tickRunning) {
+    tickAgain = true;
+    return;
+  }
+  tickRunning = true;
+  try {
+    do {
+      tickAgain = false;
       const now = Date.now();
       await maybeRefillFocus(now);
       await maintainFocusSet(now);
-    };
-    const run = () => void tick().catch((e) => recordError('focus.tick', e));
-    run();
+    } while (tickAgain);
+  } finally {
+    tickRunning = false;
+  }
+}
+
+/**
+ * Drives focus maintenance on mount, on tab-visible, once a minute (the day
+ * rolling over), and whenever `dataRevision` changes. FocusView passes
+ * useFocusSet's revision, so a fresh install fills the set as soon as its
+ * settings are seeded, and a new task or a lost slot shows up at once instead
+ * of at the next minute's check.
+ */
+export function useFocusModeDaily(dataRevision?: object): void {
+  useEffect(() => {
+    const run = () => void runFocusMaintenance().catch((e) => recordError('focus.tick', e));
     const interval = setInterval(run, CHECK_INTERVAL_MS);
     const onVisible = () => {
       if (document.visibilityState === 'visible') run();
@@ -124,6 +148,10 @@ export function useFocusModeDaily(): void {
       document.removeEventListener('visibilitychange', onVisible);
     };
   }, []);
+
+  useEffect(() => {
+    void runFocusMaintenance().catch((e) => recordError('focus.tick', e));
+  }, [dataRevision]);
 }
 
 /**
@@ -138,6 +166,8 @@ export function useFocusSet(): {
   eligibleCount: number;
   completedTodayCount: number;
   state: FocusSetState;
+  /** A new object whenever the tasks, lists or local settings behind it change. */
+  revision: object | undefined;
 } {
   const data = useLiveQuery(async () => {
     const [tasks, lists, local] = await Promise.all([
@@ -149,7 +179,7 @@ export function useFocusSet(): {
   }, []);
 
   if (!data) {
-    return { members: [], eligibleCount: 0, completedTodayCount: 0, state: 'loading' };
+    return { members: [], eligibleCount: 0, completedTodayCount: 0, state: 'loading', revision: undefined };
   }
 
   const now = Date.now();
@@ -174,5 +204,5 @@ export function useFocusSet(): {
           ? 'all-clear'
           : 'all-done-today';
 
-  return { members, eligibleCount, completedTodayCount, state };
+  return { members, eligibleCount, completedTodayCount, state, revision: data };
 }

@@ -8,8 +8,8 @@ import { FocusTaskCard } from './FocusTaskCard';
  * tomorrow, while slots lost any other way are topped up continuously.
  */
 export function FocusView() {
-  useFocusModeDaily();
-  const { members, completedTodayCount, state } = useFocusSet();
+  const { members, completedTodayCount, state, revision } = useFocusSet();
+  useFocusModeDaily(revision);
 
   return (
     <div className="flex-1 overflow-y-auto px-4 pt-6 pb-24">
@@ -17,7 +17,7 @@ export function FocusView() {
         <div className="mb-5 px-1">
           <h1 className="text-lg font-medium text-zinc-800 dark:text-zinc-100">Focus</h1>
           <p className="text-sm text-zinc-400 dark:text-zinc-500">
-            Just these — finish or delete. New tasks arrive tomorrow.
+            Just these — finish or delete. A finished task's slot refills tomorrow.
           </p>
         </div>
 
