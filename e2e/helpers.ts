@@ -187,14 +187,15 @@ async function syncSection(page: Page): Promise<Locator> {
 /**
  * Link sync through Settings. Linking a device that has content of its own to a
  * repository that already holds data asks before replacing it; pass
- * `replaceLocalData` where the test means to accept that, anywhere else the
- * question fails the test.
+ * `replaceLocalData` where the test means to accept that. On a Paranoid device
+ * changing where it syncs asks for the vault passphrase; pass `vaultPassphrase`
+ * to answer. Anywhere else either question fails the test.
  */
 export async function configureSync(
   page: Page,
   github: FakeGitHub,
   syncPassword = SYNC_PASSWORD,
-  { replaceLocalData = false }: { replaceLocalData?: boolean } = {},
+  { replaceLocalData = false, vaultPassphrase }: { replaceLocalData?: boolean; vaultPassphrase?: string } = {},
 ): Promise<void> {
   const section = await syncSection(page);
   await section.getByLabel('Personal Access Token', { exact: true }).fill(github.token);
@@ -204,10 +205,21 @@ export async function configureSync(
   await section.getByRole('button', { name: 'Save', exact: true }).click();
   const saved = page.getByText('Sync settings saved', { exact: true });
   const replace = page.getByRole('button', { name: 'Connect and replace', exact: true });
-  await expect(saved.or(replace)).toBeVisible();
-  if (await replace.isVisible()) {
-    expect(replaceLocalData, 'linking asked to replace this device\'s data').toBe(true);
-    await replace.click();
+  const passphrase = page.getByPlaceholder('Vault passphrase');
+  for (;;) {
+    await expect(saved.or(replace).or(passphrase)).toBeVisible();
+    if (await passphrase.isVisible()) {
+      expect(vaultPassphrase, 'linking asked for the vault passphrase').toBeDefined();
+      await passphrase.fill(vaultPassphrase!);
+      await page.getByRole('button', { name: 'Continue', exact: true }).click();
+      await expect(passphrase).toBeHidden();
+      continue;
+    }
+    if (await replace.isVisible()) {
+      expect(replaceLocalData, 'linking asked to replace this device\'s data').toBe(true);
+      await replace.click();
+    }
+    break;
   }
   await expect(saved).toBeVisible();
 }

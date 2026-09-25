@@ -219,7 +219,8 @@ test('F: after a secondary unlock the device stays off GitHub, and re-linking sy
 
   await test.step('re-linking sync on this device brings the real content back', async () => {
     // The decoy holds content, so linking asks before replacing it — and must replace, never merge.
-    await configureSync(page, github, undefined, { replaceLocalData: true });
+    // Paranoid (the decoy vault): changing where it syncs asks for its passphrase — now the secondary one.
+    await configureSync(page, github, undefined, { replaceLocalData: true, vaultPassphrase: SECONDARY_PASSPHRASE });
     await closeSettings(page);
     await expect.poll(async () => findMarkers(await visibleText(page), MARKERS), {
       message: 'real content back on screen', timeout: 90_000,
