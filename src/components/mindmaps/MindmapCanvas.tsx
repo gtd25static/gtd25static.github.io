@@ -220,10 +220,14 @@ export function MindmapCanvas({ mapId, background, smartColoring }: { mapId: str
     setEditingId(id);
   }, [setSelectedId]);
 
-  // Keep the node being edited on screen: on a phone a new child lands past the
-  // right edge and its label was typed blind (GUI review). Pan just enough to
-  // show it (and room for the editor), using the node's final layout position.
-  const editingRect = editingId ? targetLayout.rects.get(editingId) : undefined;
+  // Keep the node being edited — or, once done, the selected one — on screen: on
+  // a phone a new child lands past the right edge and its label was typed blind,
+  // and committing a label can re-flow the map and push the node off (GUI
+  // review). Pan just enough to show it (with room for the editor), from its
+  // final layout position. A node just clicked is on screen, so this only moves
+  // the map when the layout carried the node away.
+  const focusId = editingId ?? selectedId;
+  const editingRect = focusId ? targetLayout.rects.get(focusId) : undefined;
   useEffect(() => {
     const container = containerRef.current;
     if (!editingRect || !container) return;
@@ -240,7 +244,7 @@ export function MindmapCanvas({ mapId, background, smartColoring }: { mapId: str
     let dy = bottom > height - margin ? height - margin - bottom : 0;
     if (top + dy < margin) dy = margin - top;
     if (dx || dy) setViewport((vp) => ({ ...vp, tx: vp.tx + dx, ty: vp.ty + dy }));
-  }, [editingId, editingRect?.x, editingRect?.y, editingRect?.w, editingRect?.h]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [focusId, editingRect?.x, editingRect?.y, editingRect?.w, editingRect?.h]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Leaving edit mode unmounts the focused textarea, which would drop focus to
   // <body> and take the canvas's own keys (Enter/Tab/F2/arrows/Delete) with it.
