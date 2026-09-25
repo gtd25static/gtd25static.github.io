@@ -185,3 +185,34 @@ describe('cleanOrphans', () => {
     expect(orphanEntry!.operation).toBe('upsert');
   });
 });
+
+describe('cleanOrphans — live children of a deleted parent', () => {
+  // Another device deleted the list while this one added a task to it: the task
+  // stayed alive inside a list in the Trash, invisible until the list was
+  // restored (GUI review). It now joins the list's cascade (same deletedAt), so
+  // restoring the list brings it back and deleting it forever removes it.
+  it('moves a live task of a deleted list into the list\'s cascade', async () => {
+    const list = await createTaskList('Deleted elsewhere');
+    await db.taskLists.update(list.id, { deletedAt: 5_000 });
+    const task = await createTask(list.id, { title: 'Added meanwhile' });
+    const sub = await createSubtask(task!.id, { title: 'Its step' });
+
+    await cleanOrphans();
+
+    expect((await db.tasks.get(task!.id))?.deletedAt).toBe(5_000);
+    expect((await db.subtasks.get(sub!.id))?.deletedAt).toBe(5_000);
+    const logged = (await db.changeLog.toArray()).map((e) => e.entityId);
+    expect(logged).toEqual(expect.arrayContaining([task!.id, sub!.id]));
+  });
+
+  it('moves a live subtask of a deleted task into the task\'s cascade', async () => {
+    const list = await createTaskList('Live list');
+    const task = await createTask(list.id, { title: 'Deleted elsewhere' });
+    await db.tasks.update(task!.id, { deletedAt: 7_000 });
+    const sub = await createSubtask(task!.id, { title: 'Added meanwhile' });
+
+    await cleanOrphans();
+
+    expect((await db.subtasks.get(sub!.id))?.deletedAt).toBe(7_000);
+  });
+});

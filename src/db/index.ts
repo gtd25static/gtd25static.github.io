@@ -152,6 +152,33 @@ export async function cleanOrphans() {
       orphanedTasks++;
     }
 
+    // Live children of a parent in the Trash — another device deleted the list
+    // (or task) while this one added to it — were invisible until the parent was
+    // restored. They join the parent's cascade: its exact deletedAt, so restoring
+    // the parent brings them back and deleting it forever removes them. Recorded
+    // as upserts carrying that deletedAt: a delete entry would stamp its own time
+    // on the other devices and break the equality the cascade restore relies on.
+    const deletedListAt = new Map(lists.filter((l) => l.deletedAt).map((l) => [l.id, l.deletedAt!]));
+    const deletedTaskAt = new Map<string, number>();
+    for (const task of await db.tasks.toArray()) {
+      if (task.deletedAt) { deletedTaskAt.set(task.id, task.deletedAt); continue; }
+      const cascadeAt = deletedListAt.get(task.listId);
+      if (!cascadeAt) continue;
+      const ft = stampUpdatedFields(task.fieldTimestamps, ['deletedAt'], now);
+      await db.tasks.update(task.id, { deletedAt: cascadeAt, updatedAt: now, fieldTimestamps: ft });
+      deletedTaskAt.set(task.id, cascadeAt);
+      const updated = await db.tasks.get(task.id);
+      if (updated) changeBatch.push({ entityType: 'task', entityId: task.id, operation: 'upsert', data: updated as unknown as Record<string, unknown> });
+    }
+    for (const sub of await db.subtasks.toArray()) {
+      const cascadeAt = deletedTaskAt.get(sub.taskId);
+      if (sub.deletedAt || !cascadeAt) continue;
+      const ft = stampUpdatedFields(sub.fieldTimestamps, ['deletedAt'], now);
+      await db.subtasks.update(sub.id, { deletedAt: cascadeAt, updatedAt: now, fieldTimestamps: ft });
+      const updated = await db.subtasks.get(sub.id);
+      if (updated) changeBatch.push({ entityType: 'subtask', entityId: sub.id, operation: 'upsert', data: updated as unknown as Record<string, unknown> });
+    }
+
     if (changeBatch.length > 0) {
       await recordChangeBatchInTx(changeBatch);
     }
