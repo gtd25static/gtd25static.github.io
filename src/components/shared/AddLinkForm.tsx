@@ -8,12 +8,15 @@ interface Props {
   onCancel: () => void;
 }
 
+// Rendered inside the task/subtask <form>s, so it must not be a <form> itself:
+// a nested form's submit escapes to the outer one, which the browser then
+// submits natively (page reload, everything typed is lost). Add is a plain
+// button and Enter is handled here so it never submits the outer form.
 export function AddLinkForm({ onAdd, onCancel }: Props) {
   const [url, setUrl] = useState('');
   const [title, setTitle] = useState('');
 
-  function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
+  function handleAdd() {
     const trimmedUrl = url.trim();
     if (!trimmedUrl || !isValidUrl(trimmedUrl)) return;
     onAdd(trimmedUrl, title.trim() || undefined);
@@ -21,13 +24,20 @@ export function AddLinkForm({ onAdd, onCancel }: Props) {
     setTitle('');
   }
 
+  function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    handleAdd();
+  }
+
   return (
-    <form onSubmit={handleSubmit} className="flex flex-col gap-2">
+    <div className="flex flex-col gap-2">
       <Input
         placeholder="https://..."
         type="url"
         value={url}
         onChange={(e) => setUrl(e.target.value)}
+        onKeyDown={handleKeyDown}
         autoFocus
       />
       <div className="flex items-center gap-2">
@@ -35,11 +45,12 @@ export function AddLinkForm({ onAdd, onCancel }: Props) {
           placeholder="Title (optional)"
           value={title}
           onChange={(e) => setTitle(e.target.value)}
+          onKeyDown={handleKeyDown}
           className="flex-1"
         />
-        <Button type="submit" size="sm">Add</Button>
+        <Button type="button" size="sm" onClick={handleAdd}>Add</Button>
         <Button type="button" variant="ghost" size="sm" onClick={onCancel}>Cancel</Button>
       </div>
-    </form>
+    </div>
   );
 }

@@ -34,6 +34,14 @@ describe('createSubtask', () => {
     expect(s2.order).toBe(1);
   });
 
+  it('persists additional links from the new-subtask form', async () => {
+    const links = [{ url: 'https://example.com/a', title: 'A' }, { url: 'https://example.com/b' }];
+    const sub = assertDefined(await createSubtask(taskId, { title: 'Linked', links }));
+    expect((await db.subtasks.get(sub.id))?.links).toEqual(links);
+    const entry = (await db.changeLog.toArray()).find((e) => e.entityId === sub.id);
+    expect((entry?.data as { links?: unknown })?.links).toEqual(links);
+  });
+
   it('records change in changelog', async () => {
     await createSubtask(taskId, { title: 'Test' });
     const entries = await db.changeLog.toArray();

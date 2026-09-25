@@ -23,7 +23,7 @@ export function useSubtasks(taskId: string | undefined) {
 
 export async function createSubtask(
   taskId: string,
-  data: { title: string; link?: string; linkTitle?: string; dueDate?: number },
+  data: { title: string; link?: string; linkTitle?: string; dueDate?: number; links?: TaskLink[] },
 ) {
   try {
     const now = Date.now();
@@ -39,6 +39,7 @@ export async function createSubtask(
         link: data.link,
         linkTitle: data.linkTitle,
         dueDate: data.dueDate,
+        links: data.links,
         status: 'todo',
         order: count,
         createdAt: now,
