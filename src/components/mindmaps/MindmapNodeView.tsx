@@ -159,7 +159,9 @@ export const MindmapNodeView = memo(function MindmapNodeView({
         >
           <div
             ref={boxRef}
-            className={`select-none px-1 text-sm leading-snug ${clamped ? 'line-clamp-4' : ''}`}
+            // overflow-wrap:anywhere: a long run without spaces (a URL, a pasted
+            // hash) breaks inside maxWidth instead of spilling out of the node.
+            className={`select-none px-1 text-sm leading-snug [overflow-wrap:anywhere] ${clamped ? 'line-clamp-4' : ''}`}
             style={{ width: 'max-content', maxWidth: textMaxWidth }}
           >
             {editing ? (

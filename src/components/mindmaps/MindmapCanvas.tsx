@@ -45,6 +45,9 @@ const UNDO_TOAST_MS = 8000;
 //   the open editor = commit and leave edit mode.
 // The per-node action buttons follow the mouse (see mindmap-hover.ts) and fall
 // back to the selected node, which is what touch — no hover — and the keyboard use.
+// Room kept on screen for the label editor of a narrow (new, empty) node.
+const EDITOR_MIN_WIDTH = 160;
+
 export function MindmapCanvas({ mapId, background, smartColoring }: { mapId: string; background?: string; smartColoring?: boolean }) {
   const nodes = useMindmapNodes(mapId);
   const collapsedArr = useMindmapUi((s) => s.collapsed[mapId]);
@@ -216,6 +219,28 @@ export function MindmapCanvas({ mapId, background, smartColoring }: { mapId: str
     setSelectedId(id);
     setEditingId(id);
   }, [setSelectedId]);
+
+  // Keep the node being edited on screen: on a phone a new child lands past the
+  // right edge and its label was typed blind (GUI review). Pan just enough to
+  // show it (and room for the editor), using the node's final layout position.
+  const editingRect = editingId ? targetLayout.rects.get(editingId) : undefined;
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!editingRect || !container) return;
+    const { width, height } = container.getBoundingClientRect();
+    if (!width || !height) return;
+    const margin = 24;
+    const v = viewportRef.current;
+    const left = editingRect.x * v.k + v.tx;
+    const right = (editingRect.x + Math.max(editingRect.w, EDITOR_MIN_WIDTH)) * v.k + v.tx;
+    const top = editingRect.y * v.k + v.ty;
+    const bottom = (editingRect.y + editingRect.h) * v.k + v.ty;
+    let dx = right > width - margin ? width - margin - right : 0;
+    if (left + dx < margin) dx = margin - left;
+    let dy = bottom > height - margin ? height - margin - bottom : 0;
+    if (top + dy < margin) dy = margin - top;
+    if (dx || dy) setViewport((vp) => ({ ...vp, tx: vp.tx + dx, ty: vp.ty + dy }));
+  }, [editingId, editingRect?.x, editingRect?.y, editingRect?.w, editingRect?.h]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Leaving edit mode unmounts the focused textarea, which would drop focus to
   // <body> and take the canvas's own keys (Enter/Tab/F2/arrows/Delete) with it.
@@ -665,7 +690,7 @@ export function MindmapCanvas({ mapId, background, smartColoring }: { mapId: str
       )}
 
       {/* Floating zoom controls */}
-      <div className="absolute bottom-4 right-4 flex flex-col gap-1 rounded-xl border border-zinc-200 bg-white/90 p-1 shadow-sm backdrop-blur dark:border-zinc-700 dark:bg-zinc-800/90">
+      <div className="absolute bottom-4 left-4 flex flex-col gap-1 rounded-xl border border-zinc-200 bg-white/90 p-1 shadow-sm backdrop-blur dark:border-zinc-700 dark:bg-zinc-800/90">
         <CanvasButton label="Zoom in" onClick={() => zoomBy(1.25)}>+</CanvasButton>
         <CanvasButton label="Zoom out" onClick={() => zoomBy(0.8)}>−</CanvasButton>
         <CanvasButton label="Fit map" onClick={zoomToFit}>⤢</CanvasButton>
