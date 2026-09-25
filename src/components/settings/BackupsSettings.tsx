@@ -213,8 +213,8 @@ export function BackupsSettings() {
           variant="danger"
           onClick={async () => {
             const message = syncConfigured
-              ? 'This will delete ALL tasks, lists, subtasks, and shared items on this device and every synced device. Encrypted remote backups (including a pre-wipe safety backup) are kept in the sync repo and can be restored later.'
-              : 'This will delete ALL tasks, lists, subtasks, and shared items on this device. Sync is not configured, so there is no remote backup to restore from — this cannot be undone.';
+              ? 'This will delete ALL lists, tasks, subtasks, mindmaps and the Shared Folder on this device and every synced device. Encrypted remote backups (including a pre-wipe safety backup) are kept in the sync repo and can be restored later.'
+              : 'This will delete ALL lists, tasks, subtasks, mindmaps and the Shared Folder on this device. Sync is not configured, so there is no remote backup to restore from — this cannot be undone.';
             if (await confirmDialog(message, { confirmLabel: 'Wipe All Data', typeToConfirm: 'yes' })) {
               wipeAllData();
             }
@@ -224,8 +224,8 @@ export function BackupsSettings() {
         </Button>
         <p className="mt-1 text-xs text-zinc-400 dark:text-zinc-500">
           {syncConfigured
-            ? 'Deletes all tasks locally and remotely. Encrypted remote backups are kept and can be restored. Sync settings are preserved.'
-            : 'Deletes all tasks on this device. Sync settings are preserved.'}
+            ? 'Deletes all content (tasks, mindmaps, Shared Folder) locally and remotely. Encrypted remote backups are kept and can be restored. Sync settings are preserved.'
+            : 'Deletes all content (tasks, mindmaps, Shared Folder) on this device. Sync settings are preserved.'}
         </p>
       </div>
     </>

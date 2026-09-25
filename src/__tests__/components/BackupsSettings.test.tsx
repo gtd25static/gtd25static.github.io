@@ -65,6 +65,16 @@ describe('BackupsSettings — Wipe All Data prompt wall', () => {
     return screen.getAllByRole('button', { name: 'Wipe All Data' })[1];
   }
 
+  it('says it erases mindmaps and the Shared Folder too', async () => {
+    // It always did (wipeAllData clears them), but the prompt only named tasks,
+    // lists, subtasks and shared items.
+    const user = userEvent.setup();
+    await openWipeDialog(user);
+    const dialog = screen.getByText(/This will delete ALL/);
+    expect(dialog.textContent).toMatch(/mindmaps/);
+    expect(dialog.textContent).toMatch(/Shared Folder/);
+  });
+
   it('does not wipe without the typed confirmation', async () => {
     const user = userEvent.setup();
     const confirmBtn = await openWipeDialog(user);
