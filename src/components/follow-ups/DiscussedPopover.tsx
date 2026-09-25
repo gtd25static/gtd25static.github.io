@@ -48,14 +48,21 @@ export function DiscussedPopover({ task, align, onDone }: Props) {
   const [customDate, setCustomDate] = useState<string>('');
   const rootRef = useRef<HTMLDivElement>(null);
   const [openUp, setOpenUp] = useState(false);
+  const [shiftX, setShiftX] = useState(0);
 
   // The panel opens downward by default. If that would spill past the bottom of
   // the viewport (e.g. a card near the screen edge), flip it to open upward over
   // the chip so it stays fully visible. 8px matches the ContextMenu gutter.
+  // Horizontally it hangs off the chip (`align`); on a phone the chip can sit
+  // near the left edge, which put a right-aligned panel partly off-screen, so
+  // nudge it back inside the same gutter on either side.
   useEffect(() => {
     const el = rootRef.current;
     if (!el) return;
-    if (el.getBoundingClientRect().bottom > window.innerHeight - 8) setOpenUp(true);
+    const rect = el.getBoundingClientRect();
+    if (rect.bottom > window.innerHeight - 8) setOpenUp(true);
+    if (rect.left < 8) setShiftX(8 - rect.left);
+    else if (rect.right > window.innerWidth - 8) setShiftX(window.innerWidth - 8 - rect.right);
   }, []);
 
   // Minimum date for the custom picker: tomorrow.
@@ -106,6 +113,7 @@ export function DiscussedPopover({ task, align, onDone }: Props) {
     <div
       ref={rootRef}
       onKeyDown={(e) => { if (e.key === 'Escape') onDone(); }}
+      style={shiftX ? { transform: `translateX(${shiftX}px)` } : undefined}
       className={`absolute z-50 w-64 rounded-xl border border-zinc-200 bg-white p-3 shadow-lg dark:border-zinc-700 dark:bg-zinc-900 ${align === 'right' ? 'right-0' : 'left-0'} ${openUp ? 'bottom-full mb-1' : 'top-full mt-1'}`}
     >
       <label className="mb-1 block text-xs font-medium text-zinc-500 dark:text-zinc-400">

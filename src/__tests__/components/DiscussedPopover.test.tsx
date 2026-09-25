@@ -43,6 +43,50 @@ describe('DiscussedPopover', () => {
     }
   });
 
+  // Phones: the chip sits at the left of the card but the 256px panel is
+  // right-aligned to it, so it opened ~128px off the left edge and Snooze and
+  // the presets could not be tapped.
+  describe('horizontal clamping', () => {
+    function mockPanelRect(left: number, width = 256) {
+      return vi
+        .spyOn(HTMLElement.prototype, 'getBoundingClientRect')
+        .mockReturnValue({ left, right: left + width, width, top: 100, bottom: 300 } as DOMRect);
+    }
+
+    it('shifts right when the panel would spill off the left edge', () => {
+      const spy = mockPanelRect(-128);
+      try {
+        const { container } = renderPopover();
+        const panel = container.firstChild as HTMLElement;
+        expect(panel.style.transform).toBe('translateX(136px)'); // back to the 8px gutter
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it('shifts left when the panel would spill off the right edge', () => {
+      const spy = mockPanelRect(window.innerWidth - 200);
+      try {
+        const { container } = renderPopover();
+        const panel = container.firstChild as HTMLElement;
+        expect(panel.style.transform).toBe('translateX(-64px)');
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it('stays put when it already fits', () => {
+      const spy = mockPanelRect(20);
+      try {
+        const { container } = renderPopover();
+        const panel = container.firstChild as HTMLElement;
+        expect(panel.style.transform).toBe('');
+      } finally {
+        spy.mockRestore();
+      }
+    });
+  });
+
   it('renders the current cadence presets and a custom option', () => {
     renderPopover();
     expect(screen.getByText('20h')).toBeInTheDocument();
