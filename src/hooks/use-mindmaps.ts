@@ -516,20 +516,37 @@ async function undeleteMindmapRowInTx(
   return { entityType, entityId: row.id, operation: 'upsert', data: restored as Record<string, unknown> };
 }
 
+// A map or folder restored under a deleted folder would stay out of sight:
+// un-delete the deleted folders up its parent chain — only those rows, not
+// their other contents.
+async function undeleteFolderAncestorsInTx(folderId: string | undefined, now: number): Promise<MindmapRestoreEntry[]> {
+  const entries: MindmapRestoreEntry[] = [];
+  const seen = new Set<string>(); // a synced-in parentId cycle must not loop forever
+  while (folderId && !seen.has(folderId)) {
+    seen.add(folderId);
+    const folder = await db.mindmapFolders.get(folderId);
+    if (!folder) break;
+    if (folder.deletedAt) entries.push(await undeleteMindmapRowInTx('mindmapFolder', folder, now));
+    folderId = folder.parentId;
+  }
+  return entries;
+}
+
 /**
  * Restore a soft-deleted map (Trash) with the nodes carrying its exact
  * deletedAt — the ones deleteMindmap / deleteMindmapFolder took. Nodes deleted
- * on their own before stay deleted.
+ * on their own before stay deleted. Deleted folders above it come back too.
  */
 export async function restoreMindmap(id: string): Promise<void> {
   try {
     const now = Date.now();
     await ensureDeviceId();
-    await db.transaction('rw', [db.mindmaps, db.mindmapNodes, db.changeLog], async () => {
+    await db.transaction('rw', [db.mindmapFolders, db.mindmaps, db.mindmapNodes, db.changeLog], async () => {
       const map = await db.mindmaps.get(id);
       if (!map?.deletedAt) return;
       const cascadeAt = map.deletedAt;
-      const batch: MindmapRestoreEntry[] = [await undeleteMindmapRowInTx('mindmap', map, now)];
+      const batch = await undeleteFolderAncestorsInTx(map.folderId, now);
+      batch.push(await undeleteMindmapRowInTx('mindmap', map, now));
       const nodes = await db.mindmapNodes.where('mapId').equals(id).toArray();
       for (const n of nodes) {
         if (n.deletedAt === cascadeAt) batch.push(await undeleteMindmapRowInTx('mindmapNode', n, now));
@@ -546,6 +563,7 @@ export async function restoreMindmap(id: string): Promise<void> {
  * Restore a soft-deleted folder with what its delete took (like restoring a
  * task list): the descendant folders, maps and nodes carrying the folder's
  * exact deletedAt. Anything deleted on its own before stays in the Trash.
+ * Deleted folders above it come back too.
  */
 export async function restoreMindmapFolder(id: string): Promise<void> {
   try {
@@ -556,7 +574,7 @@ export async function restoreMindmapFolder(id: string): Promise<void> {
       const folder = await db.mindmapFolders.get(id);
       if (!folder?.deletedAt) return;
       const cascadeAt = folder.deletedAt;
-      const batch: MindmapRestoreEntry[] = [];
+      const batch = await undeleteFolderAncestorsInTx(folder.parentId, now);
       const restoredFolders = new Set<string>();
       for (const folderId of folderIds) {
         const f = await db.mindmapFolders.get(folderId);

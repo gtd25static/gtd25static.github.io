@@ -408,6 +408,111 @@ describe('mindmap delete / restore vs. rows deleted earlier', () => {
   });
 });
 
+describe('restoring a map or folder whose folder is deleted', () => {
+  it('a map restored from a deleted folder chain brings the folders back, but not their other contents', async () => {
+    const s = await seedMindmapTree();
+    await deleteMindmapFolder(s.top.id);
+    await db.changeLog.clear();
+
+    await restoreFromTrash({ id: s.inner.id, type: 'mindmap', title: 'Inner', deletedAt: Date.now() });
+
+    expect((await db.mindmaps.get(s.inner.id))?.deletedAt).toBeUndefined();
+    expect((await db.mindmapNodes.get(s.kept.id))?.deletedAt).toBeUndefined();
+    expect((await db.mindmapFolders.get(s.sub.id))?.deletedAt).toBeUndefined();
+    expect((await db.mindmapFolders.get(s.top.id))?.deletedAt).toBeUndefined();
+    expect((await db.mindmaps.get(s.sibling.id))?.deletedAt).toBeTruthy();
+    await expectEarlierDeletesKept(s);
+    expect(await loggedIds('upsert')).toEqual([s.top.id, s.sub.id, s.inner.id, s.innerRoot.id, s.kept.id].sort());
+  });
+
+  it('a subfolder restored from a deleted parent brings the parent back, but not its other contents', async () => {
+    const s = await seedMindmapTree();
+    await deleteMindmapFolder(s.top.id);
+
+    await restoreFromTrash({ id: s.sub.id, type: 'mindmapFolder', title: 'Sub', deletedAt: Date.now() });
+
+    expect((await db.mindmapFolders.get(s.sub.id))?.deletedAt).toBeUndefined();
+    expect((await db.mindmaps.get(s.inner.id))?.deletedAt).toBeUndefined();
+    expect((await db.mindmapFolders.get(s.top.id))?.deletedAt).toBeUndefined();
+    expect((await db.mindmaps.get(s.sibling.id))?.deletedAt).toBeTruthy();
+    await expectEarlierDeletesKept(s);
+  });
+
+  it('a map restored on its own leaves a live folder chain alone', async () => {
+    const s = await seedMindmapTree();
+    await db.changeLog.clear();
+
+    await restoreFromTrash({ id: s.goneMap.id, type: 'mindmap', title: 'Gone map', deletedAt: Date.now() });
+
+    expect((await db.mindmaps.get(s.goneMap.id))?.deletedAt).toBeUndefined();
+    expect(await loggedIds('upsert')).toEqual([s.goneMap.id, (await rootOf(s.goneMap.id)).id].sort());
+  });
+});
+
+describe('permanentlyDelete never hard-deletes live mindmap rows', () => {
+  it('a live map (and its nodes) inside a deleted folder survives the folder', async () => {
+    const s = await seedMindmapTree();
+    await deleteMindmapFolder(s.top.id);
+    // Live inside the deleted tree: restored by an older version, or synced in.
+    await db.mindmaps.update(s.inner.id, { deletedAt: undefined });
+    await db.mindmapNodes.update(s.innerRoot.id, { deletedAt: undefined });
+    await db.changeLog.clear();
+
+    await permanentlyDelete({ id: s.top.id, type: 'mindmapFolder', title: 'Top', deletedAt: Date.now() });
+
+    expect(await db.mindmapFolders.get(s.top.id)).toBeUndefined();
+    expect(await db.mindmapFolders.get(s.sub.id)).toBeUndefined();
+    expect(await db.mindmaps.get(s.sibling.id)).toBeUndefined();
+    expect(await db.mindmaps.get(s.goneFolderMap.id)).toBeUndefined();
+    expect(await db.mindmaps.get(s.inner.id)).toBeDefined();
+    expect(await db.mindmapNodes.get(s.innerRoot.id)).toBeDefined();
+    const deleted = await loggedIds('delete');
+    expect(deleted).not.toContain(s.inner.id);
+    expect(deleted).not.toContain(s.innerRoot.id);
+  });
+
+  it('a live subfolder and everything under it survive the parent', async () => {
+    const s = await seedMindmapTree();
+    await deleteMindmapFolder(s.top.id);
+    await db.mindmapFolders.update(s.sub.id, { deletedAt: undefined });
+
+    await permanentlyDelete({ id: s.top.id, type: 'mindmapFolder', title: 'Top', deletedAt: Date.now() });
+
+    expect(await db.mindmapFolders.get(s.top.id)).toBeUndefined();
+    expect(await db.mindmapFolders.get(s.sub.id)).toBeDefined();
+    expect(await db.mindmaps.get(s.inner.id)).toBeDefined();
+    expect(await db.mindmapNodes.get(s.kept.id)).toBeDefined();
+  });
+
+  it('a live node survives its map; the deleted ones go', async () => {
+    const s = await seedMindmapTree();
+    await deleteMindmap(s.inner.id);
+    await db.mindmapNodes.update(s.kept.id, { deletedAt: undefined });
+    await db.changeLog.clear();
+
+    await permanentlyDelete({ id: s.inner.id, type: 'mindmap', title: 'Inner', deletedAt: Date.now() });
+
+    expect(await db.mindmaps.get(s.inner.id)).toBeUndefined();
+    expect(await db.mindmapNodes.get(s.innerRoot.id)).toBeUndefined();
+    expect(await db.mindmapNodes.get(s.goneNode.id)).toBeUndefined();
+    expect(await db.mindmapNodes.get(s.kept.id)).toBeDefined();
+    expect(await loggedIds('delete')).toEqual([s.inner.id, s.innerRoot.id, s.goneNode.id].sort());
+  });
+
+  it('does nothing for a map or folder that was restored meanwhile (stale Trash row)', async () => {
+    const s = await seedMindmapTree();
+    await db.changeLog.clear();
+
+    await permanentlyDelete({ id: s.inner.id, type: 'mindmap', title: 'Inner', deletedAt: Date.now() });
+    await permanentlyDelete({ id: s.top.id, type: 'mindmapFolder', title: 'Top', deletedAt: Date.now() });
+
+    expect(await db.mindmaps.get(s.inner.id)).toBeDefined();
+    expect(await db.mindmapFolders.get(s.top.id)).toBeDefined();
+    expect(await db.mindmaps.get(s.goneMap.id)).toBeDefined();
+    expect(await db.changeLog.count()).toBe(0);
+  });
+});
+
 describe('createMindmapFromOutline', () => {
   it('creates the whole tree root-first in one batch', async () => {
     const map = assertDefined(await createMindmapFromOutline('Imported', 'Root label', [

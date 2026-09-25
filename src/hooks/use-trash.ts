@@ -108,9 +108,10 @@ export async function permanentlyDelete(item: TrashItem) {
         });
         break;
       case 'mindmap': {
-        const nodes = await db.mindmapNodes.where('mapId').equals(item.id).toArray();
+        if (!(await db.mindmaps.get(item.id))?.deletedAt) break;
+        const nodes = (await db.mindmapNodes.where('mapId').equals(item.id).toArray()).filter((n) => n.deletedAt);
         await db.transaction('rw', [db.mindmaps, db.mindmapNodes, db.changeLog], async () => {
-          await db.mindmapNodes.where('mapId').equals(item.id).delete();
+          await db.mindmapNodes.bulkDelete(nodes.map((n) => n.id));
           await db.mindmaps.delete(item.id);
           const batch = nodes.map((n) => ({
             entityType: 'mindmapNode' as const,
@@ -123,27 +124,29 @@ export async function permanentlyDelete(item: TrashItem) {
         break;
       }
       case 'mindmapFolder': {
-        // Hard-delete the folder subtree (incl. tombstoned descendants), the maps
-        // inside it and their nodes — mirrors the 'list' cascade.
+        // Hard-delete the tombstoned folder subtree, the tombstoned maps inside
+        // it and their tombstoned nodes — mirrors the 'list' cascade. The walk
+        // stops at a live subfolder: it and everything under it stay.
         const allFolders = await db.mindmapFolders.toArray();
+        if (!allFolders.find((f) => f.id === item.id)?.deletedAt) break;
         const folderIds = new Set<string>([item.id]);
         let grew = true;
         while (grew) {
           grew = false;
           for (const f of allFolders) {
-            if (f.parentId && folderIds.has(f.parentId) && !folderIds.has(f.id)) {
+            if (f.deletedAt && f.parentId && folderIds.has(f.parentId) && !folderIds.has(f.id)) {
               folderIds.add(f.id);
               grew = true;
             }
           }
         }
-        const maps = (await db.mindmaps.toArray()).filter((m) => m.folderId && folderIds.has(m.folderId));
+        const maps = (await db.mindmaps.toArray()).filter((m) => m.deletedAt && m.folderId && folderIds.has(m.folderId));
         const mapIds = maps.map((m) => m.id);
         await db.transaction('rw', [db.mindmapFolders, db.mindmaps, db.mindmapNodes, db.changeLog], async () => {
           const batch: Array<{ entityType: 'mindmapFolder' | 'mindmap' | 'mindmapNode'; entityId: string; operation: 'delete' }> = [];
           for (const mapId of mapIds) {
-            const nodes = await db.mindmapNodes.where('mapId').equals(mapId).toArray();
-            await db.mindmapNodes.where('mapId').equals(mapId).delete();
+            const nodes = (await db.mindmapNodes.where('mapId').equals(mapId).toArray()).filter((n) => n.deletedAt);
+            await db.mindmapNodes.bulkDelete(nodes.map((n) => n.id));
             for (const n of nodes) batch.push({ entityType: 'mindmapNode', entityId: n.id, operation: 'delete' });
             await db.mindmaps.delete(mapId);
             batch.push({ entityType: 'mindmap', entityId: mapId, operation: 'delete' });
