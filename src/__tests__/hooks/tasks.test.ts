@@ -196,7 +196,7 @@ describe('moveTaskToList across list types', () => {
     expect(moved.links).toEqual([{ url: 'https://x.com' }]);
     expect(moved.dueDate).toBe(dueDate);
     expect(moved.starred).toBe(true);
-    expect(moved.hasWarning).toBe(true);
+    expect(moved.hasWarning).toBeTruthy(); // stored as 1 (db/warning-index.ts)
   });
 
   it('lifts the blocked state, which a follow-up cannot show or clear', async () => {

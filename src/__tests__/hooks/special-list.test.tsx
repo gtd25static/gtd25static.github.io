@@ -24,9 +24,10 @@ beforeEach(async () => {
 afterEach(() => vi.restoreAllMocks());
 
 describe('useSpecialList (Attention / sidebar counters)', { timeout: 15_000 }, () => {
-  // toggleWarning stores hasWarning: true. Booleans are not valid IndexedDB
-  // keys, so the `hasWarning` index never holds a row and the old
-  // where('hasWarning').equals(1) query always came back empty.
+  // toggleWarning used to store hasWarning: true. Booleans are not valid
+  // IndexedDB keys, so the `hasWarning` index never held a row and the
+  // where('hasWarning').equals(1) query always came back empty. It is stored as
+  // 1 now (db/warning-index.ts).
   it('counts a warned task', async () => {
     const task = assertDefined(await createTask(listId, { title: 'Warn me' }));
     await toggleWarning('task', task.id);

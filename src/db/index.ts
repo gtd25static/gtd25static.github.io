@@ -8,6 +8,7 @@ import { stampUpdatedFields } from '../sync/field-timestamps';
 import { SYNC_VERSION } from '../sync/version';
 import { runLocalMigrations } from '../sync/local-migrations';
 import { vaultMiddleware } from './vault-middleware';
+import { warningIndexMiddleware, normaliseWarningsInStore } from './warning-index';
 
 export class Gtd25DB extends Dexie {
   taskLists!: Table<TaskList, string>;
@@ -67,6 +68,13 @@ export class Gtd25DB extends Dexie {
       mindmaps: 'id, folderId, order, deletedAt',
       mindmapNodes: 'id, mapId, parentId, order, deletedAt',
     });
+    // No schema change: warnings stored as `true` (not indexable) become 1 so the
+    // hasWarning index — and with it Attention — finally sees them. See warning-index.ts.
+    this.version(9).stores({}).upgrade(async (tx) => {
+      const idbTx = (tx as unknown as { idbtrans: IDBTransaction }).idbtrans;
+      await normaliseWarningsInStore(idbTx.objectStore('tasks'));
+      await normaliseWarningsInStore(idbTx.objectStore('subtasks'));
+    });
   }
 }
 
@@ -76,6 +84,7 @@ export const db = new Gtd25DB();
 // up a key provider (see src/db/vault-middleware.ts); registering it here is
 // inert while Paranoid Mode is off.
 db.use(vaultMiddleware);
+db.use(warningIndexMiddleware);
 
 // --- Another connection wants this database's schema (or the database gone) ---
 //

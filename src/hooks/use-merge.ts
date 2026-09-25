@@ -110,7 +110,7 @@ export function combineTaskContent(survivor: Task, sources: Task[]): Partial<Tas
 
   // Flags: OR them in.
   if (!survivor.starred && sources.some((s) => s.starred)) updates.starred = true;
-  if (!survivor.hasWarning && sources.some((s) => s.hasWarning)) updates.hasWarning = true;
+  if (!survivor.hasWarning && sources.some((s) => s.hasWarning)) updates.hasWarning = 1;
 
   return updates;
 }

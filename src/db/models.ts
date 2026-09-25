@@ -77,7 +77,10 @@ export interface Task {
   // Follow-up: discussion history (oldest-first). SENSITIVE — encrypted as a unit.
   discussionLog?: DiscussionEntry[];
   // Warning
-  hasWarning?: boolean;
+  // Stored as 1 — booleans aren't valid IndexedDB keys, so `true` never reached
+  // the hasWarning index. Older rows/devices may still say `true` (normalised on
+  // write, see db/warning-index.ts); read it as a truthy flag.
+  hasWarning?: 1 | true;
   warningAt?: number;
   blockedAt?: number;
   completedAt?: number;
@@ -115,7 +118,10 @@ export interface Subtask {
   updatedAt: number;
   deletedAt?: number;
   // Warning
-  hasWarning?: boolean;
+  // Stored as 1 — booleans aren't valid IndexedDB keys, so `true` never reached
+  // the hasWarning index. Older rows/devices may still say `true` (normalised on
+  // write, see db/warning-index.ts); read it as a truthy flag.
+  hasWarning?: 1 | true;
   warningAt?: number;
   blockedAt?: number;
   completedAt?: number;

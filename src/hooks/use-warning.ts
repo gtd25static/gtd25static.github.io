@@ -8,7 +8,7 @@ export async function toggleWarning(entityType: 'task' | 'subtask', id: string) 
     if (!task) return;
     const nowWarning = !task.hasWarning;
     await updateTask(id, {
-      hasWarning: nowWarning || undefined,
+      hasWarning: nowWarning ? 1 : undefined,
       warningAt: nowWarning ? Date.now() : undefined,
     });
   } else {
@@ -16,7 +16,7 @@ export async function toggleWarning(entityType: 'task' | 'subtask', id: string) 
     if (!subtask) return;
     const nowWarning = !subtask.hasWarning;
     await updateSubtask(id, {
-      hasWarning: nowWarning || undefined,
+      hasWarning: nowWarning ? 1 : undefined,
       warningAt: nowWarning ? Date.now() : undefined,
     });
   }

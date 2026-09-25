@@ -42,18 +42,18 @@ function useSpecialList() {
     const now = Date.now();
     const items: SpecialItem[] = [];
 
-    // hasWarning is stored as `true`, and booleans are not valid IndexedDB keys,
-    // so the `hasWarning` index is always empty. Warnings are read from the
-    // not-done rows instead (done ones never count), through the status index.
-    const [openTasks, recurringTasks, openSubs] = await Promise.all([
-      db.tasks.where('status').notEqual('done').toArray(),
+    // Narrow index ranges on purpose: a liveQuery re-runs only for writes inside
+    // the ranges it read, and in Paranoid Mode every row it reads is decrypted.
+    // (Reading all open tasks instead re-ran on every task write and decrypted
+    // them all each time — enough to stall the app on large lists.) Warnings
+    // are indexed as 1; see db/warning-index.ts.
+    const [warningTasks, blockedTasks, recurringTasks, warningSubs, blockedSubs] = await Promise.all([
+      db.tasks.where('hasWarning').equals(1).toArray(),
+      db.tasks.where('status').equals('blocked').toArray(),
       db.tasks.where('nextOccurrence').belowOrEqual(now).toArray(),
-      db.subtasks.where('status').notEqual('done').toArray(),
+      db.subtasks.where('hasWarning').equals(1).toArray(),
+      db.subtasks.where('status').equals('blocked').toArray(),
     ]);
-    const warningTasks = openTasks.filter((t) => t.hasWarning);
-    const blockedTasks = openTasks.filter((t) => t.status === 'blocked');
-    const warningSubs = openSubs.filter((s) => s.hasWarning);
-    const blockedSubs = openSubs.filter((s) => s.status === 'blocked');
 
     for (const t of warningTasks) {
       if (t.deletedAt || t.status === 'done' || t.archived) continue;

@@ -21,7 +21,7 @@ describe('toggleWarning', () => {
 
       await toggleWarning('task', task.id);
       const updated = assertDefined(await db.tasks.get(task.id));
-      expect(updated.hasWarning).toBe(true);
+      expect(updated.hasWarning).toBe(1); // 1, not true: booleans can't be indexed
       expect(updated.warningAt).toBeGreaterThan(0);
     });
 
@@ -48,7 +48,7 @@ describe('toggleWarning', () => {
 
       await toggleWarning('subtask', sub.id);
       const updated = assertDefined(await db.subtasks.get(sub.id));
-      expect(updated.hasWarning).toBe(true);
+      expect(updated.hasWarning).toBe(1); // 1, not true: booleans can't be indexed
       expect(updated.warningAt).toBeGreaterThan(0);
     });
 
