@@ -974,7 +974,8 @@ else's device, and destructively.
 - Merge returns "unchanged" when local is already current.
 - Missing `fieldTimestamps` on either side falls back to entity-level LWW.
 - Union arrays converge regardless of which side is newer; sort is deterministic.
-- Tombstone wins when its timestamp ≥ local `updatedAt`.
+- Tombstone wins when its timestamp ≥ the local `deletedAt` field timestamp (only a newer restore beats it — an edit
+  to another field does not); rows without field timestamps fall back to the row's `updatedAt`.
 
 **Engine flows**
 - First sync with no remote; bootstrap from snapshot; fresh device with both files present.

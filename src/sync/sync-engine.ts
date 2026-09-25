@@ -1574,9 +1574,11 @@ async function compactSnapshot(pat: string, repo: string, encKey: CryptoKey) {
         const existing = map.get(entry.entityId);
         if (existing) {
           const rec = existing as unknown as Record<string, unknown>;
-          rec.deletedAt = entry.timestamp;
-          rec.updatedAt = entry.timestamp;
           const existingFT = rec.fieldTimestamps as Record<string, number> | undefined;
+          // Same rule as applyRemoteEntries: only a newer restore beats a delete.
+          if ((existingFT?.deletedAt ?? 0) > entry.timestamp) continue;
+          rec.deletedAt = entry.timestamp;
+          rec.updatedAt = Math.max((rec.updatedAt as number) ?? 0, entry.timestamp);
           rec.fieldTimestamps = stampUpdatedFields(existingFT, ['deletedAt'], entry.timestamp);
         }
       } else {

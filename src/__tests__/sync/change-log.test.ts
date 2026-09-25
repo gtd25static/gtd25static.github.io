@@ -304,6 +304,42 @@ describe('applyRemoteEntries — delete', () => {
     expect(task!.deletedAt).toBeUndefined();
   });
 
+  it('applies a delete even when a later edit touched another field — like every other device does', async () => {
+    // B deletes the task; A, not yet synced, edits its title a moment later. B's
+    // field merge and compaction both keep the tombstone (the edit never touched
+    // deletedAt), so A must too — it used to keep the task alive, and the two
+    // devices disagreed until a compaction happened to reconcile them.
+    const taskId = newId();
+    const now = Date.now();
+    await db.tasks.add({
+      id: taskId, listId: 'list-1', title: 'Edited after the delete', status: 'todo', order: 0,
+      createdAt: now, updatedAt: now + 500,
+      fieldTimestamps: { title: now + 500, status: now, order: now, listId: now },
+    } as never);
+    await applyRemoteEntries([{
+      id: 'e1', deviceId: 'remote', timestamp: now + 100,
+      entityType: 'task', entityId: taskId, operation: 'delete',
+    }]);
+    const task = await db.tasks.get(taskId);
+    expect(task!.deletedAt).toBe(now + 100);
+    expect(task!.title).toBe('Edited after the delete'); // recoverable from Trash as edited
+  });
+
+  it('ignores a delete older than a local restore', async () => {
+    const taskId = newId();
+    const now = Date.now();
+    await db.tasks.add({
+      id: taskId, listId: 'list-1', title: 'Restored', status: 'todo', order: 0,
+      createdAt: now, updatedAt: now + 500,
+      fieldTimestamps: { title: now, status: now, order: now, listId: now, deletedAt: now + 500 },
+    } as never);
+    await applyRemoteEntries([{
+      id: 'e1', deviceId: 'remote', timestamp: now + 100,
+      entityType: 'task', entityId: taskId, operation: 'delete',
+    }]);
+    expect((await db.tasks.get(taskId))!.deletedAt).toBeUndefined();
+  });
+
   it('no-ops for nonexistent entity', async () => {
     // Should not throw
     await applyRemoteEntries([{

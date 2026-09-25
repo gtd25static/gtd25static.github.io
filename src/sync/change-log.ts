@@ -202,12 +202,19 @@ export async function applyRemoteEntries(entries: ChangeEntry[]) {
     if (entry.operation === 'delete') {
       const existing = await getCurrent(entry.entityType, entry.entityId);
       if (existing) {
-        const localUpdatedAt = existing.updatedAt ?? 0;
-        if (entry.timestamp >= localUpdatedAt) {
+        // A delete is a change to one field, deletedAt, and loses only to a newer
+        // change of that same field (a restore). Weighing it against the whole
+        // row's updatedAt let an edit of another field made just after the delete
+        // keep the row alive here, while the field merge on the deleting device
+        // and compaction kept the tombstone — the devices then disagreed. Rows
+        // without field timestamps (pre-v5 data) keep the row-level rule.
+        const localFT = (existing as unknown as Record<string, unknown>).fieldTimestamps as Record<string, number> | undefined;
+        const newerLocal = localFT ? localFT.deletedAt ?? 0 : existing.updatedAt ?? 0;
+        if (entry.timestamp >= newerLocal) {
           const updated = {
             ...existing,
             deletedAt: entry.timestamp,
-            updatedAt: entry.timestamp,
+            updatedAt: Math.max(existing.updatedAt ?? 0, entry.timestamp),
             fieldTimestamps: stampUpdatedFields(
               (existing as unknown as Record<string, unknown>).fieldTimestamps as Record<string, number> | undefined,
               ['deletedAt'],
