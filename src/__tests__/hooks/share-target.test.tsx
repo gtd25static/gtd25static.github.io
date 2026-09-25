@@ -2,7 +2,7 @@
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import '../setup-component';
 import { vi, beforeEach, afterEach, describe, it, expect } from 'vitest';
-import { useState } from 'react';
+import { StrictMode, useState } from 'react';
 import {
   SHARE_META_PATH, shareFilePath, SHARE_STASH_TTL_MS, hasFreshShareStash,
   MAX_SHARE_FILES, MAX_SHARE_FILE_BYTES, MAX_SHARE_TOTAL_BYTES, selectFilesToStash,
@@ -176,21 +176,57 @@ describe('useShareTarget (Android share → destination prompt)', () => {
     }
   });
 
-  it('defers a plain-text share too when sync is down — a snippet also uploads bytes', async () => {
-    vi.useFakeTimers();
-    try {
-      window.history.replaceState({}, '', '/?shareTarget=1');
-      const cache = installFakeCaches({ title: 'Nota', text: 'solo texto, sin enlace', url: '', ts: Date.now(), files: [] }, {});
-      canUpload.mockResolvedValue(false);
+  // A plain-text share only uploads bytes when it becomes a Shared Folder
+  // snippet; as an Inbox task it needs no sync. Deciding before the user picked
+  // a destination meant a text share never reached the app without sync, and
+  // the stash expired after 24 h.
+  it('prompts a plain-text share immediately when sync is down, and saves it to the Inbox', async () => {
+    window.history.replaceState({}, '', '/?shareTarget=1');
+    const cache = installFakeCaches({ title: 'Nota', text: 'solo texto, sin enlace', url: '', ts: Date.now(), files: [] }, {});
+    canUpload.mockResolvedValue(false); // no sync configured / offline
 
-      render(<Harness />);
-      await act(() => vi.advanceTimersByTimeAsync(31_000));
+    render(<Harness />);
+    fireEvent.click(await screen.findByText('to-inbox'));
 
-      expect(screen.queryByText('to-folder')).toBeNull();
-      expect(cache.wasDeleted()).toBe(false);
-    } finally {
-      vi.useRealTimers();
-    }
+    await waitFor(() => expect(captureToInbox).toHaveBeenCalledTimes(1));
+    expect(captureToInbox.mock.calls[0][0]).toEqual(expect.objectContaining({ title: expect.stringContaining('solo texto') }));
+    expect(createSnippetItem).not.toHaveBeenCalled();
+    await waitFor(() => expect(cache.wasDeleted()).toBe(true));
+  });
+
+  it('a plain-text share sent to the Shared Folder while sync is down keeps the prompt and the stash', async () => {
+    window.history.replaceState({}, '', '/?shareTarget=1');
+    const cache = installFakeCaches({ title: 'Nota', text: 'solo texto, sin enlace', url: '', ts: Date.now(), files: [] }, {});
+    canUpload.mockResolvedValue(false);
+
+    render(<Harness />);
+    fireEvent.click(await screen.findByText('to-folder'));
+
+    await waitFor(() => expect(vi.mocked(toast)).toHaveBeenCalledWith(expect.stringContaining('Shared Folder needs sync'), 'info'));
+    expect(createSnippetItem).not.toHaveBeenCalled();
+    expect(screen.getByText('to-inbox')).toBeInTheDocument(); // still asking
+    expect(cache.wasDeleted()).toBe(false);
+
+    // Inbox still works from the same prompt.
+    fireEvent.click(screen.getByText('to-inbox'));
+    await waitFor(() => expect(captureToInbox).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(cache.wasDeleted()).toBe(true));
+  });
+
+  // resolveShare ran its saves inside a setPendingShare updater, which React
+  // StrictMode calls twice in development: the task was created twice.
+  it('saves once under StrictMode, and a double tap does not save twice', async () => {
+    window.history.replaceState({}, '', '/?shareTarget=1');
+    installFakeCaches({ title: 'Cool page', text: '', url: 'https://example.com/x', ts: Date.now(), files: [] }, {});
+
+    render(<StrictMode><Harness /></StrictMode>);
+    const button = await screen.findByText('to-inbox');
+    fireEvent.click(button);
+    fireEvent.click(button);
+
+    await waitFor(() => expect(captureToInbox).toHaveBeenCalledTimes(1));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(captureToInbox).toHaveBeenCalledTimes(1);
   });
 
   it('prompts a URL share immediately even when sync is down — links carry no blob', async () => {

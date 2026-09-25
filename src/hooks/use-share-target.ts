@@ -123,6 +123,14 @@ async function saveToInbox({ files, title, url, text }: PendingShare): Promise<{
 export function useShareTarget(): ShareTargetApi {
   const handled = useRef(false);
   const [pendingShare, setPendingShare] = useState<PendingShare | null>(null);
+  // The share being asked about, readable from the callbacks without a state
+  // updater (StrictMode replays updaters, which saved a share twice) and taken
+  // synchronously so a double tap can't save it twice either.
+  const pendingRef = useRef<PendingShare | null>(null);
+  const showPending = useCallback((share: PendingShare | null) => {
+    pendingRef.current = share;
+    setPendingShare(share);
+  }, []);
 
   useEffect(() => {
     if (handled.current) return;
@@ -162,13 +170,14 @@ export function useShareTarget(): ShareTargetApi {
         const url = sanitize(meta.url);
         const text = sanitize(meta.text);
 
-        // Blob-bound payloads (files, or text that could only become a snippet —
-        // both store bytes through sync) can't save before sync is ready, which
-        // at startup it may not be (key still deriving). Wait for it; if it never
-        // comes up (offline), keep the stash and defer the WHOLE payload to the
-        // next start so nothing is dropped — and so a mixed share isn't half-saved.
-        // Link/URL shares carry no blob and prompt immediately.
-        const needsBlobUpload = (meta.files?.length ?? 0) > 0 || (!url && !extractUrl(text) && !!(text || title));
+        // Files store their bytes through sync whichever destination is picked,
+        // and can't save before sync is ready, which at startup it may not be
+        // (key still deriving). Wait for it; if it never comes up (offline), keep
+        // the stash and defer the WHOLE payload to the next start so nothing is
+        // dropped — and so a mixed share isn't half-saved. Link and text shares
+        // prompt immediately: as an Inbox task they need no sync (text headed for
+        // the Shared Folder is checked when that destination is picked).
+        const needsBlobUpload = (meta.files?.length ?? 0) > 0;
         if (needsBlobUpload && !(await waitUntil(canUploadSharedBlob, SYNC_READY_TIMEOUT_MS, SYNC_READY_POLL_MS))) {
           keepStash = true;
           toast('Sync isn’t ready yet — your shared content will be saved next time you open the app online', 'info');
@@ -197,7 +206,7 @@ export function useShareTarget(): ShareTargetApi {
         // answers (resolve/discard clear it; postpone/app-close keep it for the
         // next start, still bounded by SHARE_STASH_TTL_MS + the ACR-017 sweep).
         keepStash = true;
-        setPendingShare({ files, title, url, text });
+        showPending({ files, title, url, text });
       } catch (err) {
         recordError('shareTarget.consume', err);
         toast('Could not save the shared content', 'error');
@@ -206,48 +215,57 @@ export function useShareTarget(): ShareTargetApi {
         if (flag) cleanUrl();
       }
     })();
-  }, []);
+  }, [showPending]);
 
   const resolveShare = useCallback((dest: ShareDestination) => {
-    setPendingShare((pending) => {
-      if (!pending) return null;
-      void (async () => {
-        try {
-          if (dest === 'shared-folder') {
-            const saved = await saveToSharedFolder(pending);
-            if (saved > 0) {
-              useAppState.getState().selectList(SHARED_FOLDER_LIST_ID);
-              toast(`Saved ${saved} item${saved === 1 ? '' : 's'} to the Shared Folder`, 'success');
-            }
-          } else {
-            const { filesSaved } = await saveToInbox(pending);
-            if (filesSaved > 0) {
-              toast(`Saved ${filesSaved} file${filesSaved === 1 ? '' : 's'} to the Shared Folder and added ${filesSaved === 1 ? 'an Inbox task' : 'Inbox tasks'}`, 'success');
-            }
+    const pending = pendingRef.current;
+    if (!pending) return;
+    pendingRef.current = null; // taken: a second tap is a no-op
+    void (async () => {
+      // Text with no link becomes a snippet in the Shared Folder, which stores
+      // its bytes through sync. Without sync, keep asking (Inbox still works)
+      // and keep the stash rather than lose the text.
+      const snippetOnly = pending.files.length === 0 && !pending.url && !extractUrl(pending.text);
+      if (dest === 'shared-folder' && snippetOnly && !(await canUploadSharedBlob().catch(() => false))) {
+        pendingRef.current = pending;
+        toast('The Shared Folder needs sync — add it to the Inbox, or try again once sync is set up', 'info');
+        return;
+      }
+      setPendingShare(null);
+      try {
+        if (dest === 'shared-folder') {
+          const saved = await saveToSharedFolder(pending);
+          if (saved > 0) {
+            useAppState.getState().selectList(SHARED_FOLDER_LIST_ID);
+            toast(`Saved ${saved} item${saved === 1 ? '' : 's'} to the Shared Folder`, 'success');
           }
-        } catch (err) {
-          recordError('shareTarget.save', err);
-          toast('Could not save the shared content', 'error');
-        } finally {
-          await clearStash();
+        } else {
+          const { filesSaved } = await saveToInbox(pending);
+          if (filesSaved > 0) {
+            toast(`Saved ${filesSaved} file${filesSaved === 1 ? '' : 's'} to the Shared Folder and added ${filesSaved === 1 ? 'an Inbox task' : 'Inbox tasks'}`, 'success');
+          }
         }
-      })();
-      return null;
-    });
+      } catch (err) {
+        recordError('shareTarget.save', err);
+        toast('Could not save the shared content', 'error');
+      } finally {
+        await clearStash();
+      }
+    })();
   }, []);
 
   const discardShare = useCallback(() => {
-    setPendingShare(null);
+    showPending(null);
     void clearStash();
     toast('Share discarded', 'info');
-  }, []);
+  }, [showPending]);
 
   const postponeShare = useCallback(() => {
     // Stash intentionally kept: the prompt returns on the next unlocked start
     // (or is purged unconsumed once older than SHARE_STASH_TTL_MS).
-    setPendingShare(null);
+    showPending(null);
     toast('Share kept — you’ll be asked again next time the app opens', 'info');
-  }, []);
+  }, [showPending]);
 
   return { pendingShare, resolveShare, discardShare, postponeShare };
 }
