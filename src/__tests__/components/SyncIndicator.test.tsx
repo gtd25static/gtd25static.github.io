@@ -86,4 +86,11 @@ describe('SyncIndicator', () => {
     expect(screen.getByText('Synced')).toBeInTheDocument();
     expect(screen.getByRole('button').title).toBe('Last synced 5m ago — click to sync');
   });
+
+  it('offline with changes waiting says so (it only said when it last synced)', () => {
+    setCtx({ online: false, pendingChanges: true, lastPulledAt: Date.now() - 2 * 3600 * 1000 });
+    render(<SyncIndicator />);
+    expect(screen.getByText('Offline — changes waiting to sync')).toBeInTheDocument();
+    expect(screen.getByRole('button').title).toContain('Last synced 2h ago');
+  });
 });

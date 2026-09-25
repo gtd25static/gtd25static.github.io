@@ -57,7 +57,11 @@ export function SyncIndicator() {
         title={lastSyncedTitle}
       >
         <div className="h-1.5 w-1.5 shrink-0 rounded-full bg-zinc-400" />
-        <span className="truncate">{lastPulledAt ? `Offline — last synced ${formatTimeAgo(lastPulledAt)}` : 'Offline'}</span>
+        <span className="truncate">
+          {pendingChanges
+            ? 'Offline — changes waiting to sync'
+            : lastPulledAt ? `Offline — last synced ${formatTimeAgo(lastPulledAt)}` : 'Offline'}
+        </span>
       </button>
     );
   }

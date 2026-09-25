@@ -56,7 +56,8 @@ async function applyRemoteEntries(entries: ChangeEntry[]): Promise<void> {
 }
 
 // --- Snapshot reconciliation (catches compaction gaps) ---
-async function reconcileFromSnapshot(snapshot: SyncData) {
+// Returns how many entities it changed here, for the "↓ n" the indicator shows.
+async function reconcileFromSnapshot(snapshot: SyncData): Promise<number> {
   syncAbort?.signal.throwIfAborted();
   // Helper: reconcile a collection using field-level merge. Crypto for Paranoid
   // at-rest storage is done before the write transaction so Safari cannot
@@ -115,6 +116,8 @@ async function reconcileFromSnapshot(snapshot: SyncData) {
     if (mindmaps.length > 0) await db.mindmaps.bulkPut(mindmaps);
     if (mindmapNodes.length > 0) await db.mindmapNodes.bulkPut(mindmapNodes);
   });
+  const changed = taskLists.length + tasks.length + subtasks.length + sharedItems.length
+    + mindmapFolders.length + mindmaps.length + mindmapNodes.length;
 
   // Reconcile pomodoro settings (outside entity transaction)
   if (snapshot.pomodoroSettings) {
@@ -136,6 +139,7 @@ async function reconcileFromSnapshot(snapshot: SyncData) {
       }
     }
   }
+  return changed;
 }
 
 async function replaceLocalEntitiesFromSnapshot(snapshot: Pick<SyncData, 'taskLists' | 'tasks' | 'subtasks' | 'sharedItems' | 'mindmapFolders' | 'mindmaps' | 'mindmapNodes'>): Promise<void> {
@@ -1222,6 +1226,8 @@ async function runSync(manual = false, pushLimit?: number): Promise<number> {
 
     // Reconcile with snapshot whenever its SHA changes to catch entities
     // absorbed by compaction while this device was offline or between syncs.
+    // What it brings in counts as pulled too (the indicator showed only "↑").
+    let pulledFromSnapshot = 0;
     if (remoteSnapshotFile) {
       const syncMeta = await db.syncMeta.get('sync-meta');
       if (remoteSnapshotFile.sha !== syncMeta?.lastSnapshotSha) {
@@ -1230,7 +1236,7 @@ async function runSync(manual = false, pushLimit?: number): Promise<number> {
           const snapshotData = remoteSalt
             ? await decryptSyncData(encKey, reconParsed.value)
             : reconParsed.value;
-          await reconcileFromSnapshot(snapshotData);
+          pulledFromSnapshot = await reconcileFromSnapshot(snapshotData);
         }
         await db.syncMeta.update('sync-meta', { lastSnapshotSha: remoteSnapshotFile.sha });
       }
@@ -1366,8 +1372,9 @@ async function runSync(manual = false, pushLimit?: number): Promise<number> {
               await putFile(creds.pat, creds.repo, SNAPSHOT_FILE, JSON.stringify(snapJson), snapFile.sha);
               await db.syncMeta.update('sync-meta', { pomodoroSyncedAt: Date.now() });
             } catch (putErr) {
-              // CONFLICT (409) is expected if another device updated snapshot concurrently — next sync retries
-              if (!(putErr instanceof Error && putErr.message.includes('409'))) throw putErr;
+              // CONFLICT (409) is expected if another device updated snapshot concurrently — next sync retries.
+              // (putFile throws 'CONFLICT'; this looked for '409', so the race was logged as an error.)
+              if (!(putErr instanceof Error && putErr.message === 'CONFLICT')) throw putErr;
             }
           }
         }
@@ -1406,11 +1413,11 @@ async function runSync(manual = false, pushLimit?: number): Promise<number> {
     setDirtyFlag(false);
     // Accumulate counts across batch cycle so the final done report includes totals
     if (batchAccum) {
-      batchAccum.pulled += newlyPulledCount;
+      batchAccum.pulled += newlyPulledCount + pulledFromSnapshot;
       batchAccum.pushed += pendingEntries.length;
       reportProgress('done', 'Sync complete', 1.0, batchAccum.pulled, batchAccum.pushed);
     } else {
-      reportProgress('done', 'Sync complete', 1.0, newlyPulledCount, pendingEntries.length);
+      reportProgress('done', 'Sync complete', 1.0, newlyPulledCount + pulledFromSnapshot, pendingEntries.length);
     }
     notifySyncSuccess();
     if (manual) toast('Sync complete', 'success');

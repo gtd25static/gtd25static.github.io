@@ -27,7 +27,8 @@ vi.mock('../../sync/shared-blobs', async () => ({
 vi.mock('../../sync/history-compaction', () => ({ maybeSquashDefaultBranch: vi.fn(() => Promise.resolve()) }));
 
 import { getFile, putFile, deleteFile } from '../../sync/github-api';
-import { syncNow, importData, wipeAllData, forcePush, contentReplacedByLinking, SNAPSHOT_FILE, CHANGELOG_FILE } from '../../sync/sync-engine';
+import { syncNow, importData, wipeAllData, forcePush, contentReplacedByLinking, setSyncProgressCallback, SNAPSHOT_FILE, CHANGELOG_FILE, type SyncProgress } from '../../sync/sync-engine';
+import { getErrorLog, clearErrorLog } from '../../lib/diagnostics';
 import { cacheEncryptionKey, clearEncryptionKey, deriveKey, generateSalt, createVerifier, encryptSyncData, decryptSyncData } from '../../sync/crypto';
 import { toast } from '../../components/ui/Toast';
 import { SYNC_VERSION } from '../../sync/version';
@@ -278,5 +279,39 @@ describe('force push keeps its pre-overwrite backup current', () => {
     await forcePush();
 
     expect(remote.get(backupName)!.data).toBe(snapshotBeforeSecondPush);
+  });
+});
+
+describe('what the sync indicator is told', () => {
+  afterEach(() => setSyncProgressCallback(null));
+
+  it('counts changes that arrived through the snapshot, not only through the changelog', async () => {
+    // Another device's compaction folded 2 new lists into the snapshot.
+    await db.syncMeta.update('sync-meta', { lastPulledAt: Date.now() - 60_000, lastSnapshotSha: 'older' });
+    await setRemoteSnapshot({ syncVersion: SYNC_VERSION, taskLists: [list('n1', 'New one'), list('n2', 'New two')] });
+    remote.set(CHANGELOG_FILE, { data: '[]', sha: `sha-${++shaCounter}` });
+    const done: SyncProgress[] = [];
+    setSyncProgressCallback((p) => { if (p.phase === 'done') done.push(p); });
+
+    expect(await syncNow()).toBe(0);
+    expect(done.at(-1)?.pulled).toBe(2);
+  });
+
+  it('a pomodoro push racing another device is not logged as an error', async () => {
+    clearErrorLog();
+    await db.syncMeta.update('sync-meta', { lastPulledAt: Date.now() - 60_000, pomodoroSyncedAt: 0 });
+    const pom = await db.pomodoroSettings.get('pomodoro');
+    await db.pomodoroSettings.put({ ...(pom ?? { id: 'pomodoro', masterVolume: 1 }), updatedAt: Date.now() } as never);
+    await setRemoteSnapshot({ syncVersion: SYNC_VERSION }); // current format: no migration write
+    remote.set(CHANGELOG_FILE, { data: '[]', sha: `sha-${++shaCounter}` });
+    const put = putFile as Mock;
+    const realPut = put.getMockImplementation()!;
+    put.mockImplementation(async (...args: unknown[]) => {
+      if (args[2] === SNAPSHOT_FILE) throw new Error('CONFLICT'); // another device got there first
+      return realPut(...args);
+    });
+
+    expect(await syncNow()).toBe(0);
+    expect(getErrorLog().some((e) => e.context === 'sync.pomodoroSnapshotPush')).toBe(false);
   });
 });
