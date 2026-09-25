@@ -5,7 +5,6 @@ import { useAppState } from '../stores/app-state';
 import { setTaskStatus } from './use-tasks';
 import { setSubtaskStatus } from './use-subtasks';
 import { updateTask, restoreTask } from './use-tasks';
-import { isInCooldown } from './use-follow-ups';
 import { sortTasksForDisplay, sortFollowUpsForDisplay } from '../lib/task-sort';
 import { deleteTasksBatch } from './use-bulk-operations';
 import { toast } from '../components/ui/Toast';
@@ -388,22 +387,10 @@ export function useKeyboard() {
             } else if (item.type === 'add-subtask') {
               s.ensureTaskExpanded(item.taskId!);
               s.setAddingSubtaskToTaskId(item.taskId!);
-            } else if (listTypeRef.current === 'follow-ups') {
-              // Ping toggle for follow-ups
-              const task = await db.tasks.get(item.id);
-              if (task) {
-                if (isInCooldown(task)) {
-                  await updateTask(task.id, {
-                    pingedAt: undefined,
-                    pingCooldown: undefined,
-                    pingCooldownCustomMs: undefined,
-                    pingCooldownUntil: undefined,
-                  });
-                } else {
-                  await updateTask(task.id, { pingedAt: Date.now(), pingCooldown: task.pingCooldown ?? '12h' });
-                }
-              }
-            } else if (item.type === 'task') {
+            } else if (item.type === 'task' && listTypeRef.current !== 'follow-ups') {
+              // A follow-up has nothing to expand, so Enter leaves it alone — it
+              // used to silently snooze it (legacy 12h cooldown), hiding the card.
+              // Snoozing is the Discussed popover's job.
               s.toggleTaskExpanded(item.id);
             }
           }

@@ -237,3 +237,24 @@ describe('useKeyboard — an open modal owns the keyboard', () => {
     expect(mockSetTaskStatus).toHaveBeenCalledWith('t1', 'done');
   });
 });
+
+// Enter on a follow-up used to silently snooze it with the legacy 12h cooldown
+// (not a current preset), hiding the card; the help overlay promises "Expand /
+// select", and a follow-up has nothing to expand.
+describe('useKeyboard — Enter on a follow-up', () => {
+  it('does not snooze it (no silent write)', async () => {
+    listType = 'follow-ups';
+    render(<Harness />);
+    const e = press('Enter');
+    await settle();
+    expect(e.defaultPrevented).toBe(true);
+    expect(mockUpdateTask).not.toHaveBeenCalled();
+    expect(useAppState.getState().expandedTaskIds.size).toBe(0);
+  });
+
+  it('still toggles expansion on a task in a task list', () => {
+    render(<Harness />);
+    press('Enter');
+    expect(useAppState.getState().expandedTaskIds.has('t1')).toBe(true);
+  });
+});
