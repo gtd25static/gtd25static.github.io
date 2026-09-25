@@ -6,7 +6,7 @@ import { Button } from '../ui/Button';
 import { toast } from '../ui/Toast';
 import { confirmDialog } from '../ui/ConfirmDialog';
 import { testConnection } from '../../sync/github-api';
-import { syncNow, forcePush, forcePull } from '../../sync/sync-engine';
+import { syncNow, forcePush, forcePull, contentReplacedByLinking } from '../../sync/sync-engine';
 import { deriveKey, cacheEncryptionKey, generateSalt, hasEncryptionKey } from '../../sync/crypto';
 import {
   rotateSyncKey, hasUnfinishedRotation, discardUnfinishedRotation, type RotationProgress, type RotationResult,
@@ -27,6 +27,13 @@ function rotationLabel({ phase, done, total }: RotationProgress): string {
     case 'registry': return 'Updating the device registry…';
     case 'history': return 'Compacting history…';
   }
+}
+
+function describeContent({ lists, tasks, maps }: { lists: number; tasks: number; maps: number }): string {
+  const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
+  const parts = [plural(lists, 'list'), plural(tasks, 'task')];
+  if (maps > 0) parts.push(plural(maps, 'mindmap'));
+  return parts.join(', ');
 }
 
 function rotationDoneMessage(result: RotationResult): string {
@@ -94,6 +101,22 @@ export function GitHubSettings() {
         toast('Passwords do not match', 'error');
         return;
       }
+    }
+
+    // Linking replaces this device's content with what the repository already
+    // holds (never merged — see contentReplacedByLinking). Say so before it
+    // happens: it used to be silent, and the only copy was a safety backup.
+    if (!wasSyncEnabled && willEnableSync) {
+      const replaced = await contentReplacedByLinking(pat.trim(), repo.trim());
+      if (replaced && !(await confirmDialog(
+        `This device already has ${describeContent(replaced)}. If the repository already holds data, connecting ` +
+        'replaces everything on this device with it — this device\'s items are not uploaded. A safety copy is kept ' +
+        'in Settings → Backups; export a backup first if you want your own copy.',
+        { confirmLabel: 'Connect and replace', danger: true },
+      ))) return;
+    }
+
+    if (passwordChanged && newPassword) {
       if (!wasSyncEnabled) {
         // First-time setup: the first sync publishes this salt with the snapshot.
         const salt = generateSalt();

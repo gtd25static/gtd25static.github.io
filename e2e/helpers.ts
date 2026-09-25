@@ -184,14 +184,32 @@ async function syncSection(page: Page): Promise<Locator> {
   return dialog.getByRole('heading', { name: 'GitHub Sync', exact: true }).locator('..');
 }
 
-export async function configureSync(page: Page, github: FakeGitHub, syncPassword = SYNC_PASSWORD): Promise<void> {
+/**
+ * Link sync through Settings. Linking a device that has content of its own to a
+ * repository that already holds data asks before replacing it; pass
+ * `replaceLocalData` where the test means to accept that, anywhere else the
+ * question fails the test.
+ */
+export async function configureSync(
+  page: Page,
+  github: FakeGitHub,
+  syncPassword = SYNC_PASSWORD,
+  { replaceLocalData = false }: { replaceLocalData?: boolean } = {},
+): Promise<void> {
   const section = await syncSection(page);
   await section.getByLabel('Personal Access Token', { exact: true }).fill(github.token);
   await section.getByLabel('Repository (owner/name)', { exact: true }).fill(github.fullName);
   await section.getByLabel('Encryption Password', { exact: true }).fill(syncPassword);
   await section.getByLabel('Confirm Password', { exact: true }).fill(syncPassword);
   await section.getByRole('button', { name: 'Save', exact: true }).click();
-  await expect(page.getByText('Sync settings saved', { exact: true })).toBeVisible();
+  const saved = page.getByText('Sync settings saved', { exact: true });
+  const replace = page.getByRole('button', { name: 'Connect and replace', exact: true });
+  await expect(saved.or(replace)).toBeVisible();
+  if (await replace.isVisible()) {
+    expect(replaceLocalData, 'linking asked to replace this device\'s data').toBe(true);
+    await replace.click();
+  }
+  await expect(saved).toBeVisible();
 }
 
 export async function readSyncSettings(page: Page): Promise<{ token: string; repo: string; password: string }> {

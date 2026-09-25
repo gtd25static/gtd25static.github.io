@@ -775,6 +775,33 @@ async function pruneRemoteBackups(pat: string, repo: string) {
 }
 
 /**
+ * Linking a device that has never synced to a repository that already holds
+ * data replaces this device's content with the repository's (the join path in
+ * runSync). It must stay a replace, not a merge: a device can deliberately look
+ * never-synced (Paranoid's secondary-passphrase re-init), and merging would
+ * upload what was created there into the real repository. So the settings ask
+ * before linking. Returns what would be replaced, or null when nothing would be.
+ */
+export async function contentReplacedByLinking(
+  pat: string,
+  repo: string,
+): Promise<{ lists: number; tasks: number; maps: number } | null> {
+  if ((await db.syncMeta.get('sync-meta'))?.lastPulledAt) return null;
+  const [lists, tasks, maps] = await Promise.all([
+    db.taskLists.filter((l) => !l.deletedAt).count(),
+    db.tasks.filter((t) => !t.deletedAt).count(),
+    db.mindmaps.filter((m) => !m.deletedAt).count(),
+  ]);
+  if (lists + tasks + maps === 0) return null;
+  try {
+    if (!(await getFile(pat, repo, SNAPSHOT_FILE))) return null; // empty repo: ours gets uploaded
+  } catch {
+    // Can't tell (offline, bad token): ask anyway rather than risk it.
+  }
+  return { lists, tasks, maps };
+}
+
+/**
  * The key a whole-snapshot replacement (wipe / import / backup restore) must
  * write with: the remote's current key, re-derived from the stored password when
  * the cache has expired (30 min idle / 5 min hidden) and checked against the

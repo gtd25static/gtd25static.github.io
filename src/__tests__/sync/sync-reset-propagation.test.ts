@@ -27,7 +27,7 @@ vi.mock('../../sync/shared-blobs', async () => ({
 vi.mock('../../sync/history-compaction', () => ({ maybeSquashDefaultBranch: vi.fn(() => Promise.resolve()) }));
 
 import { getFile, putFile, deleteFile } from '../../sync/github-api';
-import { syncNow, importData, wipeAllData, SNAPSHOT_FILE, CHANGELOG_FILE } from '../../sync/sync-engine';
+import { syncNow, importData, wipeAllData, contentReplacedByLinking, SNAPSHOT_FILE, CHANGELOG_FILE } from '../../sync/sync-engine';
 import { cacheEncryptionKey, clearEncryptionKey, deriveKey, generateSalt, createVerifier, encryptSyncData, decryptSyncData } from '../../sync/crypto';
 import { toast } from '../../components/ui/Toast';
 
@@ -231,5 +231,33 @@ describe('while a sync is in flight', () => {
 
     expect((await db.taskLists.toArray()).map((l) => l.id)).toEqual(['imp']);
     expect((await remoteSnapshot()).taskLists.map((l) => l.id)).toEqual(['imp']);
+  });
+});
+
+describe('contentReplacedByLinking', () => {
+  it('reports what a never-synced device would lose to a repository that holds data', async () => {
+    await setRemoteSnapshot({ taskLists: [list('r', 'Remote')] });
+    await db.taskLists.add(list('l', 'Mine'));
+    await db.tasks.add({ id: 't', listId: 'l', title: 'x', status: 'todo', order: 0, createdAt: 1, updatedAt: 1 } as Task);
+    expect(await contentReplacedByLinking('pat', 'repo')).toEqual({ lists: 1, tasks: 1, maps: 0 });
+  });
+
+  it('is null for an empty repository (this device\'s data is uploaded instead)', async () => {
+    await db.taskLists.add(list('l', 'Mine'));
+    expect(await contentReplacedByLinking('pat', 'repo')).toBeNull();
+  });
+
+  it('is null when this device has nothing, or has synced before', async () => {
+    await setRemoteSnapshot({ taskLists: [list('r', 'Remote')] });
+    expect(await contentReplacedByLinking('pat', 'repo')).toBeNull();
+    await db.taskLists.add(list('l', 'Mine'));
+    await db.syncMeta.update('sync-meta', { lastPulledAt: Date.now() });
+    expect(await contentReplacedByLinking('pat', 'repo')).toBeNull();
+  });
+
+  it('asks anyway when the repository cannot be checked', async () => {
+    await db.taskLists.add(list('l', 'Mine'));
+    (getFile as Mock).mockRejectedValueOnce(new Error('GitHub API error: 401'));
+    expect(await contentReplacedByLinking('pat', 'repo')).toEqual({ lists: 1, tasks: 0, maps: 0 });
   });
 });

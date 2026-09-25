@@ -17,6 +17,8 @@ const h = vi.hoisted(() => ({
   secrets: undefined as { githubPat?: string; syncPassword?: string } | undefined,
   setVaultSecrets: vi.fn(async () => undefined),
   isRemoteUnlockEnrolled: vi.fn(async () => false),
+  contentReplacedByLinking: vi.fn(async () => null as null | { lists: number; tasks: number; maps: number }),
+  confirm: vi.fn(async () => true),
 }));
 
 vi.mock('../../hooks/use-settings', () => ({
@@ -36,7 +38,9 @@ vi.mock('../../sync/sync-engine', () => ({
   syncNow: vi.fn(),
   forcePush: vi.fn(),
   forcePull: vi.fn(),
+  contentReplacedByLinking: h.contentReplacedByLinking,
 }));
+vi.mock('../../components/ui/ConfirmDialog', () => ({ confirmDialog: h.confirm }));
 vi.mock('../../sync/crypto', () => ({
   deriveKey: vi.fn(async () => ({})),
   cacheEncryptionKey: vi.fn(),
@@ -148,5 +152,59 @@ describe('GitHubSettings — Paranoid keeps the remote-unlock mailbox PAT', () =
     expect(h.updateLocalSettings).toHaveBeenCalledWith(
       expect.objectContaining({ githubPat: undefined, encryptionPassword: undefined }),
     );
+  });
+});
+
+describe('GitHubSettings — linking a device that already has data', () => {
+  // Linking replaces this device's content with the repository's (it can't be a
+  // merge — see contentReplacedByLinking); that used to happen without a word.
+  beforeEach(() => {
+    h.updateLocalSettings.mockClear();
+    h.confirm.mockClear();
+    h.contentReplacedByLinking.mockReset();
+    h.vault = { enabled: false, unlocked: false };
+    h.secrets = undefined;
+    h.local = { syncEnabled: false };
+  });
+
+  async function link(user: ReturnType<typeof userEvent.setup>) {
+    await user.type(screen.getByLabelText('Personal Access Token'), 'ghp_token');
+    await user.type(screen.getByLabelText('Repository (owner/name)'), 'owner/repo');
+    await user.type(screen.getByLabelText('Encryption Password'), 'alpha rhino cactus velvet moon');
+    await user.type(screen.getByLabelText('Confirm Password'), 'alpha rhino cactus velvet moon');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+  }
+
+  it('asks first, and saves nothing when the user backs out', async () => {
+    h.contentReplacedByLinking.mockResolvedValue({ lists: 2, tasks: 5, maps: 0 });
+    h.confirm.mockResolvedValue(false);
+    const user = userEvent.setup();
+    render(<GitHubSettings />);
+    await link(user);
+
+    expect(h.contentReplacedByLinking).toHaveBeenCalledWith('ghp_token', 'owner/repo');
+    expect(h.confirm).toHaveBeenCalledWith(expect.stringContaining('2 lists, 5 tasks'), expect.objectContaining({ danger: true }));
+    expect(h.updateLocalSettings).not.toHaveBeenCalled();
+  });
+
+  it('links once the user confirms', async () => {
+    h.contentReplacedByLinking.mockResolvedValue({ lists: 1, tasks: 1, maps: 1 });
+    h.confirm.mockResolvedValue(true);
+    const user = userEvent.setup();
+    render(<GitHubSettings />);
+    await link(user);
+
+    expect(h.confirm).toHaveBeenCalledWith(expect.stringContaining('1 list, 1 task, 1 mindmap'), expect.anything());
+    expect(h.updateLocalSettings).toHaveBeenCalledWith(expect.objectContaining({ syncEnabled: true }));
+  });
+
+  it('does not ask when nothing on this device would be replaced', async () => {
+    h.contentReplacedByLinking.mockResolvedValue(null);
+    const user = userEvent.setup();
+    render(<GitHubSettings />);
+    await link(user);
+
+    expect(h.confirm).not.toHaveBeenCalled();
+    expect(h.updateLocalSettings).toHaveBeenCalledWith(expect.objectContaining({ syncEnabled: true }));
   });
 });
