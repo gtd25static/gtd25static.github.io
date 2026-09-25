@@ -24,6 +24,7 @@ import { BulkActionBar } from './BulkActionBar';
 import { InboxListView } from './InboxListView';
 import { MergeSuggestionsCard } from './MergeSuggestionsCard';
 import { isInboxList } from '../../lib/constants';
+import { toast } from '../ui/Toast';
 import { sortTasksForDisplay, sortTasksByDate, sortTasksByName, sortCompletedTasksForDisplay } from '../../lib/task-sort';
 
 type SortMode = 'default' | 'date' | 'name';
@@ -143,6 +144,12 @@ export function TaskListView() {
       // Only handle intra-list task reorder
       if (activeData.type !== 'task' || overData.type !== 'task') return;
       if (activeData.listId !== overData.listId || activeData.listId !== selectedListId) return;
+      // Sorted by name or date, the positions on screen aren't the manual order:
+      // writing them back used to replace the manual order for good.
+      if (sortMode !== 'default') {
+        toast('Turn off “Sort by name/date” to rearrange tasks by hand', 'info');
+        return;
+      }
 
       const oldIndex = activeTasks.findIndex((t) => t.id === active.id);
       const newIndex = activeTasks.findIndex((t) => t.id === over.id);
