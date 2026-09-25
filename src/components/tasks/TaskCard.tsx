@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
+import { MAX_TITLE_LENGTH } from '../../lib/constants';
 import { useDroppable } from '@dnd-kit/core';
 import type { Task } from '../../db/models';
 import type { DropZoneData } from '../layout/DndProvider';
@@ -185,6 +186,7 @@ export function TaskCard({ task, index, dragHandleProps }: Props) {
             <input
               className="text-sm bg-transparent border-b border-accent-500 outline-none w-full"
               value={editedTitle}
+              maxLength={MAX_TITLE_LENGTH}
               onChange={(e) => setEditedTitle(e.target.value)}
               onClick={(e) => e.stopPropagation()}
               onKeyDown={(e) => {

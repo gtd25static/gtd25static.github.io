@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect } from 'react';
+import { MAX_TITLE_LENGTH } from '../../lib/constants';
 import type { Subtask } from '../../db/models';
 import { setSubtaskStatus, deleteSubtask, restoreSubtask, updateSubtask, convertSubtaskToTask } from '../../hooks/use-subtasks';
 import { toast } from '../ui/Toast';
@@ -76,6 +77,7 @@ export function SubtaskItem({ subtask }: Props) {
           <input
             className="text-sm bg-transparent border-b border-accent-500 outline-none w-full"
             value={editedTitle}
+            maxLength={MAX_TITLE_LENGTH}
             onChange={(e) => setEditedTitle(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === 'Enter') {

@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { MAX_TITLE_LENGTH } from '../../lib/constants';
 import { Input } from '../ui/Input';
 import { Button } from '../ui/Button';
 import { isValidUrl, extractHostname, sanitizeUrl } from '../../lib/link-utils';
@@ -41,6 +42,7 @@ export function SubtaskForm({ onSubmit, onCancel, initial }: Props) {
         <textarea
           placeholder="Subtask title"
           value={title}
+          maxLength={MAX_TITLE_LENGTH}
           onChange={(e) => { setTitle(e.target.value); e.target.style.height = 'auto'; e.target.style.height = e.target.scrollHeight + 'px'; }}
           autoFocus
           rows={1}

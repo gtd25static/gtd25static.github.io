@@ -1,4 +1,5 @@
 import { db } from '../../db';
+import { MAX_TITLE_LENGTH } from '../../lib/constants';
 import { resetDb, assertDefined } from '../helpers/db-helpers';
 import { createTaskList } from '../../hooks/use-task-lists';
 import { createTask, updateTask, setTaskStatus, deleteTask, restoreTask, moveTaskToList, reorderTasks } from '../../hooks/use-tasks';
@@ -319,5 +320,15 @@ describe('reorderTasks', () => {
     expect(tasks[0].id).toBe(c.id);
     expect(tasks[1].id).toBe(a.id);
     expect(tasks[2].id).toBe(b.id);
+  });
+});
+
+describe('task title length', () => {
+  it('is capped at MAX_TITLE_LENGTH on create and on update (inline edits went through at 900)', async () => {
+    const list = await createTaskList('L');
+    const task = assertDefined(await createTask(list.id, { title: 'x'.repeat(900) }));
+    expect((await db.tasks.get(task.id))?.title).toHaveLength(MAX_TITLE_LENGTH);
+    await updateTask(task.id, { title: 'y'.repeat(900) });
+    expect((await db.tasks.get(task.id))?.title).toHaveLength(MAX_TITLE_LENGTH);
   });
 });

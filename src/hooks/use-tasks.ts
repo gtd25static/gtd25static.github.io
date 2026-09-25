@@ -10,6 +10,7 @@ import { initFieldTimestamps, stampUpdatedFields } from '../sync/field-timestamp
 import { encryptRow, getActiveAtRestKey } from '../db/vault-middleware';
 import { SYNC_VERSION } from '../sync/version';
 import { undeleteRowInTx, type TaskSideChange } from './use-task-lists';
+import { MAX_TITLE_LENGTH } from '../lib/constants';
 
 export function useTasks(listId: string | null) {
   return useLiveQuery(
@@ -56,7 +57,7 @@ export async function createTask(
       task = {
         id,
         listId,
-        title: data.title,
+        title: data.title.slice(0, MAX_TITLE_LENGTH),
         description: data.description,
         link: data.link,
         linkTitle: data.linkTitle,
@@ -85,6 +86,8 @@ export async function createTask(
 }
 
 export async function updateTask(id: string, updates: Partial<Task>) {
+  // Every caller (inline edit included) gets the same cap as the task forms.
+  if (updates.title !== undefined) updates = { ...updates, title: updates.title.slice(0, MAX_TITLE_LENGTH) };
   try {
     const deviceId = await ensureDeviceId();
     const existing = await db.tasks.get(id);
