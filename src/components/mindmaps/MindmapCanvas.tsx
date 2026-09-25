@@ -217,14 +217,26 @@ export function MindmapCanvas({ mapId, background, smartColoring }: { mapId: str
     setEditingId(id);
   }, [setSelectedId]);
 
-  const commitEdit = useCallback((id: string, label: string) => {
-    if (editingIdRef.current !== id) return; // blur after Enter already committed
+  // Leaving edit mode unmounts the focused textarea, which would drop focus to
+  // <body> and take the canvas's own keys (Enter/Tab/F2/arrows/Delete) with it.
+  // Hand focus back to the canvas — but only if the editor still had it: when
+  // the edit ends because focus moved elsewhere (blur), leave it there.
+  const endEdit = useCallback(() => {
+    const container = containerRef.current;
+    const hadFocus = !!container?.contains(document.activeElement);
+    editingIdRef.current = null; // the blur that focus() fires must not commit again
     setEditingId(null);
-    const trimmed = label.trim();
-    if (trimmed) void updateMindmapNodeLabel(id, trimmed);
+    if (hadFocus) container?.focus({ preventScroll: true });
   }, []);
 
-  const cancelEdit = useCallback(() => setEditingId(null), []);
+  const commitEdit = useCallback((id: string, label: string) => {
+    if (editingIdRef.current !== id) return; // blur after Enter already committed
+    endEdit();
+    const trimmed = label.trim();
+    if (trimmed) void updateMindmapNodeLabel(id, trimmed);
+  }, [endEdit]);
+
+  const cancelEdit = endEdit;
 
   const addChild = useCallback(async (parentId: string) => {
     expandNode(mapId, parentId);

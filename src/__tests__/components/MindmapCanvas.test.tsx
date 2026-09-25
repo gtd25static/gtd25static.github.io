@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import '../setup-component';
 import type { MindmapNode } from '../../db/models';
@@ -259,6 +259,41 @@ describe('MindmapCanvas', () => {
     await user.type(textarea, 'draft{Escape}');
     expect(mockUpdateLabel).not.toHaveBeenCalled();
     expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
+  });
+
+  // Regression: leaving edit mode unmounts the focused textarea, which dropped
+  // focus to <body> — so after Tab → type → Enter the next Enter/Tab/F2/arrow
+  // did nothing until the canvas was clicked again.
+  it('Enter (commit) and Escape (cancel) hand focus back to the canvas, so the next key works', async () => {
+    const user = userEvent.setup();
+    render(<MindmapCanvas mapId="map-1" />);
+    await user.dblClick(nodeEl('a'));
+    const textarea = await screen.findByRole('textbox');
+    await user.clear(textarea);
+    await user.type(textarea, 'Renamed{Enter}');
+    expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
+    expect(screen.getByTestId('mindmap-canvas')).toHaveFocus();
+    expect(mockUpdateLabel).toHaveBeenCalledTimes(1); // the refocus blur must not commit twice
+
+    await user.keyboard('{F2}');
+    const again = await screen.findByRole('textbox');
+    await user.type(again, 'draft{Escape}');
+    expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
+    expect(screen.getByTestId('mindmap-canvas')).toHaveFocus();
+    expect(mockUpdateLabel).toHaveBeenCalledTimes(1); // cancel saved nothing
+  });
+
+  it('a commit caused by focus moving elsewhere does not steal focus back', async () => {
+    const user = userEvent.setup();
+    render(<><input placeholder="elsewhere" /><MindmapCanvas mapId="map-1" /></>);
+    const canvas = within(screen.getByTestId('mindmap-canvas'));
+    await user.dblClick(nodeEl('a'));
+    const textarea = await canvas.findByRole('textbox');
+    await user.type(textarea, 'x');
+    act(() => { screen.getByPlaceholderText('elsewhere').focus(); });
+    await waitFor(() => expect(canvas.queryByRole('textbox')).not.toBeInTheDocument());
+    expect(mockUpdateLabel).toHaveBeenCalledTimes(1);
+    expect(screen.getByPlaceholderText('elsewhere')).toHaveFocus();
   });
 
   it('Tab creates a child of the selected node', async () => {
