@@ -4,7 +4,7 @@ import type { ImportData } from '../db/export-import';
 import { getFile, getFileConditional, putFile, deleteFile, RateLimitError } from './github-api';
 import { jitterInterval } from './poll-jitter';
 import { cleanupSoftDeletes, archiveOldCompleted } from './conflict-resolution';
-import { applyRemoteEntries as applyRemoteEntriesToDb, getPendingEntries, clearPendingEntries, clearEntriesByIds, pendingEntryCount, recordChangeBatch } from './change-log';
+import { applyRemoteEntries as applyRemoteEntriesToDb, getPendingEntries, clearPendingEntries, clearEntriesByIds, pendingEntryCount } from './change-log';
 import { mergeEntity, stampUpdatedFields } from './field-timestamps';
 import { toast } from '../components/ui/Toast';
 import { SYNC_VERSION, isCompatibleVersion, needsMigration } from './version';
@@ -35,7 +35,6 @@ import {
 } from './crypto';
 import { getClockSkewMs, isClockSkewed, formatSkew } from '../lib/clock-skew';
 import { createLocalBackup } from '../db/backup';
-import { isInboxList } from '../lib/constants';
 
 export const SNAPSHOT_FILE = 'gtd25-snapshot.json';
 export const CHANGELOG_FILE = 'gtd25-changelog.json';
@@ -184,56 +183,6 @@ async function replaceLocalEntitiesFromSnapshot(snapshot: Pick<SyncData, 'taskLi
       if (mindmapNodes.length > 0) await db.mindmapNodes.bulkPut(mindmapNodes);
     }
   });
-}
-
-/**
- * First sync of a device that already held data: forcePull has just replaced the
- * local tables with the remote's. Put back what only this device had, merge rows
- * both sides share field by field, and record each as a pending change so the
- * next push uploads it. A local Inbox is folded into the synced one rather than
- * becoming a second "Inbox". Returns how many rows were kept or merged.
- */
-async function keepLocalDataAfterJoin(before: SyncData): Promise<number> {
-  const syncedInbox = (await db.taskLists.toArray()).find((l) => isInboxList(l) && !l.deletedAt && !l.archivedAt);
-  const localInbox = before.taskLists.find((l) => isInboxList(l) && !l.deletedAt && !l.archivedAt);
-  const foldedInboxId = localInbox && syncedInbox && localInbox.id !== syncedInbox.id ? localInbox.id : undefined;
-  const now = Date.now();
-  const tasks = before.tasks.map((t) => (t.listId === foldedInboxId
-    ? { ...t, listId: syncedInbox!.id, updatedAt: now, fieldTimestamps: stampUpdatedFields(t.fieldTimestamps, ['listId'], now) }
-    : t));
-
-  type Row = { id: string; updatedAt: number };
-  const groups: Array<[ChangeEntry['entityType'], 'taskLists' | 'tasks' | 'subtasks' | 'sharedItems' | 'mindmapFolders' | 'mindmaps' | 'mindmapNodes', Row[]]> = [
-    ['taskList', 'taskLists', before.taskLists.filter((l) => l.id !== foldedInboxId)],
-    ['task', 'tasks', tasks],
-    ['subtask', 'subtasks', before.subtasks],
-    ['sharedItem', 'sharedItems', before.sharedItems ?? []],
-    ['mindmapFolder', 'mindmapFolders', before.mindmapFolders ?? []],
-    ['mindmap', 'mindmaps', before.mindmaps ?? []],
-    ['mindmapNode', 'mindmapNodes', before.mindmapNodes ?? []],
-  ];
-
-  let kept = 0;
-  for (const [entityType, tableName, localRows] of groups) {
-    if (localRows.length === 0) continue;
-    const table = db[tableName] as unknown as import('dexie').Table<Row, string>;
-    const synced = new Map((await table.toArray()).map((r) => [r.id, r]));
-    const toWrite: Row[] = [];
-    for (const row of localRows) {
-      const current = synced.get(row.id);
-      if (!current) { toWrite.push(row); continue; }
-      const merged = mergeEntity(current as unknown as Record<string, unknown>, row as unknown as Record<string, unknown>, row.updatedAt);
-      if (merged && JSON.stringify(merged) !== JSON.stringify(current)) toWrite.push(merged as unknown as Row);
-    }
-    if (toWrite.length === 0) continue;
-    const atRest = await prepareEntityRowsForAtRest(tableName as 'tasks', toWrite as unknown as import('../db/models').Task[]);
-    await table.bulkPut(atRest as unknown as Row[]);
-    await recordChangeBatch(toWrite.map((r) => ({
-      entityType, entityId: r.id, operation: 'upsert' as const, data: r as unknown as Record<string, unknown>,
-    })));
-    kept += toWrite.length;
-  }
-  return kept;
 }
 
 // --- Safe JSON parsing ---
@@ -1094,19 +1043,10 @@ async function runSync(manual = false, pushLimit?: number): Promise<number> {
     if (remoteSnapshotFile && hasRemoteChangelog) {
       const syncMeta = await db.syncMeta.get('sync-meta');
       if (!syncMeta?.lastPulledAt) {
-        // Joining replaces local tables with the remote's; keep what only this
-        // device had (it used to be dropped silently) and upload it.
-        const localBeforeJoin = await getLocalSnapshot();
         releaseSyncLock();
         await forcePull();
         const afterPull = await db.syncMeta.get('sync-meta');
-        if (!afterPull?.lastPulledAt) return -1;
-        const kept = await keepLocalDataAfterJoin(localBeforeJoin);
-        if (kept > 0) {
-          scheduleSyncDebounced();
-          toast(`Sync connected — kept ${kept} item${kept === 1 ? '' : 's'} that only this device had`, 'success');
-        }
-        return 0;
+        return afterPull?.lastPulledAt ? 0 : -1;
       }
     }
 
