@@ -114,4 +114,18 @@ describe('AddLinkForm inside the task forms', () => {
       links: [{ url: 'https://example.com/sub', title: undefined }],
     }));
   });
+
+  it('Escape in the link fields closes only the link form, not the task being typed', async () => {
+    const onCancel = vi.fn();
+    const user = userEvent.setup();
+    render(<InlineTaskForm onSubmit={vi.fn()} onCancel={onCancel} />);
+    await user.type(screen.getByPlaceholderText('Task title'), 'Keep me');
+    await user.click(screen.getByText(/description, link, due date/));
+    await user.click(screen.getByText('+ Add link'));
+    await user.type(screen.getByPlaceholderText('https://...'), 'https://half{Escape}');
+
+    expect(onCancel).not.toHaveBeenCalled();
+    expect(screen.queryByPlaceholderText('https://...')).not.toBeInTheDocument();
+    expect(screen.getByPlaceholderText('Task title')).toHaveValue('Keep me');
+  });
 });
