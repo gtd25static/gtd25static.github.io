@@ -318,7 +318,7 @@ describe('compactSnapshot — SHA safety', () => {
 });
 
 describe('wipeAllData — ordering', () => {
-  it('writes snapshot before deleting changelog', async () => {
+  it('writes the snapshot before resetting the changelog', async () => {
     await setupWithEncryption();
 
     mockGetFile.mockImplementation((_p: string, _r: string, path: string) => {
@@ -327,22 +327,12 @@ describe('wipeAllData — ordering', () => {
     });
     mockPutFile.mockResolvedValue('sha');
 
-    const { deleteFile } = await import('../../sync/github-api');
-    const mockDeleteFile = deleteFile as Mock;
-    mockDeleteFile.mockResolvedValue(undefined);
-
     const { wipeAllData } = await import('../../sync/sync-engine');
     await wipeAllData();
 
-    // putFile for snapshot should be called before deleteFile for changelog
-    const putCalls = mockPutFile.mock.invocationCallOrder;
-    const deleteCalls = mockDeleteFile.mock.invocationCallOrder;
-
-    if (putCalls.length > 0 && deleteCalls.length > 0) {
-      const snapshotPutOrder = putCalls[0];
-      const changelogDeleteOrder = deleteCalls[0];
-      expect(snapshotPutOrder).toBeLessThan(changelogDeleteOrder);
-    }
+    const paths = mockPutFile.mock.calls.map((c: string[]) => c[2]);
+    expect(paths.indexOf(SNAPSHOT_FILE)).toBeGreaterThanOrEqual(0);
+    expect(paths.indexOf(SNAPSHOT_FILE)).toBeLessThan(paths.lastIndexOf(CHANGELOG_FILE));
   });
 });
 

@@ -316,8 +316,11 @@ function sync(manual = false, pushLimit = null) -> remainingCount:
   # older remote is handled in step 7
 
   ── 5. WIPE GATE ─────────────────────────────────────────────────────────
-  if snapshot.wipedAt and snapshot.wipedAt > lastPulledAt:
-      verifyPassphrase(); replace local from snapshot; clear changelog; return DONE
+  if snapshot.wipedAt and snapshot.wipedAt != lastWipeSeenAt and snapshot.wipedAt > lastPulledAt:
+      verifyPassphrase(); local safety backup; replace local from snapshot;
+      keep own pending entries newer than wipedAt (re-apply them), drop older ones;
+      lastWipeSeenAt = snapshot.wipedAt; continue    # the normal pull/push below
+                                                     # applies what others pushed since
 
   ── 6. KEY ───────────────────────────────────────────────────────────────
   key = resolveKey(snapshot.encryptionSalt)   # → key | NEEDS_PASSPHRASE
@@ -697,24 +700,33 @@ unretrievable. Never treat a squash as a security control.
 | **Add a device** | Bootstrap: pull the snapshot, apply the changelog on top, replace local state. | Verify the passphrase against the verifier **before** replacing anything local. |
 | **Force push** | Overwrite the remote snapshot with full local state; clear changelog. | **Refuse if local is empty and remote is not.** This one guard prevents the single worst data-loss bug in the design. Back up the remote first. |
 | **Force pull** | Replace local state from remote snapshot + changelog. | Apply **all** entries including this device's own — its local DB may be the thing being recovered. |
-| **Wipe all data** | Push an empty snapshot stamped `wipedAt`; delete the changelog; squash the blob branch. | Back up the remote snapshot first. Deleting the changelog forces other devices onto the bootstrap path. |
+| **Wipe all data** | Push an empty snapshot stamped `wipedAt`; reset the changelog to `[]`; squash the blob branch. | Back up the remote snapshot first. **Reset, never delete, the changelog**: a remote with a snapshot and no changelog is refused by every device that has data. |
 | **Import backup** | Replace local, push as a snapshot with a fresh `wipedAt`. | FK-validate the import: drop orphans rather than importing dangling references. |
 | **Restore backup tier** | Fetch the tier file, verify, decrypt, replace local, push with `wipedAt`. | Verify the passphrase against *that file's* verifier — a backup may predate a passphrase change. |
 | **Change passphrase** | New salt → re-derive → force push everything re-encrypted. | Other devices detect the salt change, fail the verifier, and prompt. There is no automatic rekey. |
 
 ### The `wipedAt` mechanism
 
-A destructive operation (wipe, import, restore) stamps the snapshot with `wipedAt = now` and deletes the changelog.
-Every other device compares `wipedAt` against its own `lastPulledAt`:
+A destructive operation (wipe, import, restore) stamps the snapshot with `wipedAt = now`, resets the changelog to
+`[]` and records `lastWipeSeenAt = wipedAt` on the device that did it. Every other device checks:
 
 ```
-if snapshot.wipedAt > myLastPulledAt:
-    → this device has NOT seen the wipe → force bootstrap from the snapshot, discard local
+if snapshot.wipedAt != myLastWipeSeenAt and snapshot.wipedAt > myLastPulledAt:
+    → this device has NOT seen the wipe → bootstrap from the snapshot, keep only its own
+      pending edits newer than the wipe, record lastWipeSeenAt, then sync normally
 ```
 
 This is what makes "wipe" mean *wipe everywhere* instead of "wipe here and let the other devices push it all back".
-Clear `wipedAt` during a later compaction once entries newer than the wipe exist (proof that every device has moved
-on).
+Everything in the changelog after the reset was pushed after it, so the adopting device applies it rather than
+clearing it (clearing it destroyed other devices' post-reset edits).
+
+- **Keep `wipedAt` through compaction.** A device offline through the reset must still adopt it when it returns,
+  however many compactions happened meanwhile.
+- **Adopt a reset once, by identity.** `wipedAt` comes from the resetting device's clock and `lastPulledAt` from this
+  one's; with a clock running behind, the comparison alone stays true and the device would re-adopt the reset on
+  every sync, discarding its own edits each time. `lastWipeSeenAt` makes it a one-time event.
+- **Repair a missing changelog.** Older builds deleted it; a snapshot carrying `wipedAt` with no changelog is
+  recreated with `[]` and then handled as above.
 
 ---
 
@@ -969,7 +981,8 @@ else's device, and destructively.
 - Own-device entries are filtered out on pull; **all** entries are applied on force pull.
 - Push returns the remaining pending count for batch continuation.
 - Version gate blocks on a newer remote.
-- `wipedAt` forces a bootstrap when newer than `lastPulledAt`.
+- `wipedAt` forces a bootstrap when newer than `lastPulledAt`, once per reset (`lastWipeSeenAt`), keeping
+  post-reset entries from other devices and this device's own post-reset edits.
 
 **Concurrency**
 - 409 retry re-fetches, applies foreign entries, rebuilds, and succeeds.

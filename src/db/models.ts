@@ -238,6 +238,11 @@ export interface SyncMeta {
   // and a verifier of the new key, pinned so a retry rotates to the same key and
   // refuses a different password. Cleared when the rotation completes.
   keyRotation?: { newSalt: string; newVerifier: string; startedAt: number };
+  // The `wipedAt` of the last wipe / import / backup restore this device adopted
+  // (or performed). A reset is adopted once, by identity: comparing it with
+  // lastPulledAt alone mixes two devices' clocks, and a device running behind
+  // would re-adopt it on every sync, discarding its own edits each time.
+  lastWipeSeenAt?: number;
 }
 
 /**

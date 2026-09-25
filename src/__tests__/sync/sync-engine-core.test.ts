@@ -712,18 +712,20 @@ describe('wipeAllData', () => {
     expect(pushed.taskLists).toEqual([]);
   });
 
-  it('deletes changelog file', async () => {
+  it('resets the changelog to empty instead of deleting it', async () => {
+    // A deleted changelog left every device refusing to sync (snapshot but no
+    // changelog); an empty one lets them adopt the wipe and carry on.
     await setupWithEncryption();
 
     mockGetFile.mockImplementation((_p: string, _r: string, path: string) => {
-      if (path === CHANGELOG_FILE) return Promise.resolve({ data: '[]', sha: 'cl-sha' });
+      if (path === CHANGELOG_FILE) return Promise.resolve({ data: '[{"id":"old"}]', sha: 'cl-sha' });
       return Promise.resolve(null);
     });
     mockPutFile.mockResolvedValue('sha');
-    mockDeleteFile.mockResolvedValue(undefined);
 
     await wipeAllData();
-    expect(mockDeleteFile).toHaveBeenCalledWith('ghp_test123', 'user/repo', CHANGELOG_FILE, 'cl-sha');
+    expect(mockPutFile).toHaveBeenCalledWith('ghp_test123', 'user/repo', CHANGELOG_FILE, '[]', 'cl-sha', expect.anything());
+    expect(mockDeleteFile).not.toHaveBeenCalledWith(expect.anything(), expect.anything(), CHANGELOG_FILE, expect.anything());
   });
 
   it('works without sync config (local only)', async () => {

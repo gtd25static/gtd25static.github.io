@@ -760,6 +760,27 @@ async function pruneRemoteBackups(pat: string, repo: string) {
 }
 
 /**
+ * After a wipe / import / backup restore has replaced the remote snapshot (stamped
+ * with `wipedAt`), reset the changelog to empty — never delete it. Other devices
+ * adopt the new snapshot through the wipedAt guard and then keep syncing through
+ * this changelog. Deleting it (what older builds did) left a remote with a
+ * snapshot and no changelog, which every device with data refuses to touch.
+ */
+async function resetRemoteChangelog(pat: string, repo: string, signal: AbortSignal): Promise<void> {
+  for (let attempt = 1; ; attempt++) {
+    const current = await getFile(pat, repo, CHANGELOG_FILE, signal);
+    try {
+      await putFile(pat, repo, CHANGELOG_FILE, '[]', current?.sha, signal);
+      return;
+    } catch (err) {
+      // Another device pushed between our read and write: whatever it pushed
+      // predates the reset, so read the new sha and reset again.
+      if (!(err instanceof Error && err.message === 'CONFLICT') || attempt >= MAX_RETRIES) throw err;
+    }
+  }
+}
+
+/**
  * One sync at a time across the WHOLE app, not just this tab. Two tabs share one
  * IndexedDB, so both read the same pending changelog and would push the same
  * entries twice — the remote survives it (entries are id-keyed and applying them
@@ -842,6 +863,19 @@ async function runSync(manual = false, pushLimit?: number): Promise<number> {
     ]);
     let remoteEntries: ChangeEntry[] = [];
     let changelogSha = remoteChangelogFile?.sha;
+    let hasRemoteChangelog = !!remoteChangelogFile;
+
+    // Older builds DELETED the changelog after a wipe / import / backup restore,
+    // leaving a snapshot stamped with wipedAt and no changelog — a state every
+    // device with data then refused to sync from ("Remote data corrupted").
+    // Recreate it empty; the wipedAt guard below decides who adopts the reset.
+    if (remoteSnapshotFile && !remoteChangelogFile) {
+      const resetCheck = safeParseJson<SyncData>(remoteSnapshotFile.data, 'remote snapshot (reset check)');
+      if (resetCheck.ok && resetCheck.value.wipedAt) {
+        changelogSha = await putFile(creds.pat, creds.repo, CHANGELOG_FILE, '[]', undefined, signal);
+        hasRemoteChangelog = true;
+      }
+    }
 
     if (remoteChangelogFile) {
       const parsed = safeParseJson<ChangeEntry[]>(remoteChangelogFile.data, 'remote changelog');
@@ -907,7 +941,7 @@ async function runSync(manual = false, pushLimit?: number): Promise<number> {
     // interrupted first setup) silently destroyed unpushed work. Refuse instead:
     // both sides keep everything and the user resolves it deliberately with
     // "Pull from remote" or a normal push.
-    if (remoteSnapshotFile && !remoteChangelogFile) {
+    if (remoteSnapshotFile && !hasRemoteChangelog) {
       const local = await getLocalSnapshot();
       const hasLocalData = local.taskLists.length > 0 || local.tasks.length > 0 ||
         local.subtasks.length > 0 || (local.mindmaps?.length ?? 0) > 0 ||
@@ -970,7 +1004,7 @@ async function runSync(manual = false, pushLimit?: number): Promise<number> {
     }
 
     // Both files exist but this device has never synced — delegate to forcePull
-    if (remoteSnapshotFile && remoteChangelogFile) {
+    if (remoteSnapshotFile && hasRemoteChangelog) {
       const syncMeta = await db.syncMeta.get('sync-meta');
       if (!syncMeta?.lastPulledAt) {
         releaseSyncLock();
@@ -1006,12 +1040,15 @@ async function runSync(manual = false, pushLimit?: number): Promise<number> {
       }
     }
 
-    // --- wipedAt guard: force bootstrap if a wipe happened since our last pull ---
+    // --- wipedAt guard: adopt a wipe / import / backup restore made elsewhere ---
+    // The reset replaced the remote snapshot; this device replaces its local data
+    // with it once, then carries on with a normal sync below, which applies what
+    // other devices pushed after the reset and pushes our own post-reset edits.
     if (remoteWipedAt && remoteSnapshotFile) {
       const syncMeta = await db.syncMeta.get('sync-meta');
       const lastPulledAt = syncMeta?.lastPulledAt;
-      if (!lastPulledAt || remoteWipedAt > lastPulledAt) {
-        // This device hasn't seen the wipe yet — force bootstrap
+      const adopted = syncMeta?.lastWipeSeenAt === remoteWipedAt;
+      if (!adopted && (!lastPulledAt || remoteWipedAt > lastPulledAt)) {
         const encResult = await resolveEncryptionKey(remoteSalt);
         if (encResult === 'needs-password') return -1;
         const encKey = encResult;
@@ -1040,6 +1077,12 @@ async function runSync(manual = false, pushLimit?: number): Promise<number> {
           snapshot = await decryptSyncData(encKey, snapshot);
         }
 
+        // Edits this device made after the reset survive it; older pending
+        // changes are what the reset replaced. A local safety copy first, since
+        // everything else here is replaced wholesale.
+        const pending = await getPendingEntries();
+        const postReset = pending.filter((e) => e.timestamp > remoteWipedAt);
+        await createLocalBackup();
         await replaceLocalEntitiesFromSnapshot(snapshot);
         if (snapshot.pomodoroSettings) {
           await db.pomodoroSettings.put(snapshot.pomodoroSettings);
@@ -1048,26 +1091,9 @@ async function runSync(manual = false, pushLimit?: number): Promise<number> {
           await db.soundPresets.clear();
           await db.soundPresets.bulkPut(snapshot.soundPresets);
         }
-        await clearPendingEntries();
-
-        // Clear any stale changelog so other devices don't re-apply old entries
-        if (changelogSha) {
-          try {
-            await putFile(creds.pat, creds.repo, CHANGELOG_FILE, '[]', changelogSha, signal);
-          } catch {
-            // Non-critical — next sync will handle it
-          }
-        }
-
-        await db.syncMeta.update('sync-meta', {
-          lastPulledAt: Date.now(),
-          lastPushedAt: Date.now(),
-          pendingChanges: false,
-        });
-        lastSyncCompletedAt = Date.now();
-        setDirtyFlag(false);
-        reportProgress('done', 'Sync complete', 1.0);
-        return 0;
+        if (postReset.length > 0) await applyRemoteEntries(postReset);
+        await clearEntriesByIds(pending.filter((e) => e.timestamp <= remoteWipedAt).map((e) => e.id));
+        await db.syncMeta.update('sync-meta', { lastWipeSeenAt: remoteWipedAt });
       }
     }
 
@@ -1514,14 +1540,10 @@ async function compactSnapshot(pat: string, repo: string, encKey: CryptoKey) {
 
     // Stamp version and re-encrypt
     snapshot.syncVersion = SYNC_VERSION;
-    // Preserve wipedAt unless changelog has entries after it (wipe fully absorbed)
-    if (savedWipedAt) {
-      const newestEntry = sorted.length > 0 ? sorted[sorted.length - 1].timestamp : 0;
-      if (newestEntry <= savedWipedAt) {
-        snapshot.wipedAt = savedWipedAt;
-      }
-      // else: entries exist after wipe — all devices have absorbed it, let wipedAt fall off
-    }
+    // Keep wipedAt: a device that was offline through the reset still has to
+    // adopt it when it comes back, however many syncs happened in between.
+    // (Each device adopts a given reset once — see SyncMeta.lastWipeSeenAt.)
+    if (savedWipedAt) snapshot.wipedAt = savedWipedAt;
     snapshot.encryptionSalt = savedSalt ?? getCachedSalt()!;
     snapshot.encryptionVerifier = savedVerifier ?? await createVerifier(encKey);
     snapshot = await encryptSyncData(encKey, snapshot);
@@ -1757,6 +1779,7 @@ export async function forcePull() {
       lastPulledAt: Date.now(),
       lastSnapshotSha: snapshotFile.sha,
       pendingChanges: false,
+      lastWipeSeenAt: snapshot.wipedAt,
     });
     lastSyncCompletedAt = Date.now();
     setDirtyFlag(false);
@@ -1795,15 +1818,17 @@ export async function wipeAllData() {
 
     // Push empty snapshot to remote if sync is configured
     const creds = await getCredentials();
+    let wipedAt: number | undefined;
     if (creds && hasEncryptionKey()) {
       const encKey = getCachedEncryptionKey()!;
       const salt = getCachedSalt()!;
 
       const currentPomSettings = await db.pomodoroSettings.get('pomodoro') ?? undefined;
       const currentSoundPresets = await db.soundPresets.toArray();
+      wipedAt = Date.now();
       let emptySnapshot: SyncData = {
         syncVersion: SYNC_VERSION,
-        wipedAt: Date.now(),
+        wipedAt,
         taskLists: [],
         tasks: [],
         subtasks: [],
@@ -1831,12 +1856,8 @@ export async function wipeAllData() {
       }
       await putFile(creds.pat, creds.repo, SNAPSHOT_FILE, JSON.stringify(emptySnapshot), existing?.sha, signal);
 
-      // Delete changelog so other devices hit the bootstrap path
-      // and load the empty snapshot instead of applying entries incrementally
-      const changelog = await getFile(creds.pat, creds.repo, CHANGELOG_FILE, signal);
-      if (changelog) {
-        await deleteFile(creds.pat, creds.repo, CHANGELOG_FILE, changelog.sha);
-      }
+      // Other devices adopt the empty snapshot through the wipedAt guard.
+      await resetRemoteChangelog(creds.pat, creds.repo, signal);
 
       // Purge all shared-folder blob bytes: history-squash the blob branch down to
       // only its placeholder. Best-effort — a failure here must not abort the wipe.
@@ -1850,6 +1871,7 @@ export async function wipeAllData() {
     await db.syncMeta.update('sync-meta', {
       lastPushedAt: Date.now(),
       pendingChanges: false,
+      ...(wipedAt ? { lastWipeSeenAt: wipedAt } : {}),
     });
 
     toast('All data wiped', 'success');
@@ -1923,14 +1945,16 @@ export async function importData(data: ImportData) {
 
     // Push to remote if sync is configured
     const creds = await getCredentials();
+    let wipedAt: number | undefined;
     if (creds && hasEncryptionKey()) {
       const encKey = getCachedEncryptionKey()!;
       const salt = getCachedSalt()!;
 
       const theme = data.settings?.theme ?? (localStorage.getItem('gtd25-theme') as Settings['theme']) ?? 'system';
+      wipedAt = Date.now();
       let snapshot: SyncData = {
         syncVersion: SYNC_VERSION,
-        wipedAt: Date.now(),
+        wipedAt,
         taskLists: data.taskLists,
         tasks: validTasks,
         subtasks: validSubtasks,
@@ -1951,17 +1975,15 @@ export async function importData(data: ImportData) {
       if (refuseWriteOverNewerRemote(existing?.data, 'importData')) return;
       await putFile(creds.pat, creds.repo, SNAPSHOT_FILE, JSON.stringify(snapshot), existing?.sha, signal);
 
-      // Delete changelog so other devices bootstrap from the imported snapshot
-      const changelog = await getFile(creds.pat, creds.repo, CHANGELOG_FILE, signal);
-      if (changelog) {
-        await deleteFile(creds.pat, creds.repo, CHANGELOG_FILE, changelog.sha);
-      }
+      // Other devices adopt the imported snapshot through the wipedAt guard.
+      await resetRemoteChangelog(creds.pat, creds.repo, signal);
     }
 
     await db.syncMeta.update('sync-meta', {
       lastPulledAt: Date.now(),
       lastPushedAt: Date.now(),
       pendingChanges: false,
+      ...(wipedAt ? { lastWipeSeenAt: wipedAt } : {}),
     });
 
     // Apply theme from imported settings
@@ -2063,9 +2085,10 @@ export async function restoreFromBackup(tier: BackupTier) {
 
     // Push as new snapshot with wipedAt so other devices bootstrap from restored data
     const salt = getCachedSalt()!;
+    const wipedAt = Date.now();
     let snapshot: SyncData = {
       syncVersion: SYNC_VERSION,
-      wipedAt: Date.now(),
+      wipedAt,
       taskLists: backupData.taskLists,
       tasks: backupData.tasks,
       subtasks: backupData.subtasks,
@@ -2086,16 +2109,14 @@ export async function restoreFromBackup(tier: BackupTier) {
     if (refuseWriteOverNewerRemote(existing?.data, 'restoreFromBackup')) return;
     await putFile(creds.pat, creds.repo, SNAPSHOT_FILE, JSON.stringify(snapshot), existing?.sha, signal);
 
-    // Delete changelog so other devices bootstrap from the restored snapshot
-    const changelog = await getFile(creds.pat, creds.repo, CHANGELOG_FILE, signal);
-    if (changelog) {
-      await deleteFile(creds.pat, creds.repo, CHANGELOG_FILE, changelog.sha);
-    }
+    // Other devices adopt the restored snapshot through the wipedAt guard.
+    await resetRemoteChangelog(creds.pat, creds.repo, signal);
 
     await db.syncMeta.update('sync-meta', {
       lastPulledAt: Date.now(),
       lastPushedAt: Date.now(),
       pendingChanges: false,
+      lastWipeSeenAt: wipedAt,
     });
 
     // Apply theme from backup settings
