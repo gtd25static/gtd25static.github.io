@@ -1,8 +1,9 @@
 import { db } from './index';
-import type { TaskList, Task, Subtask, Settings, PomodoroSettings, SoundPreset, MindmapFolder, Mindmap, MindmapNode } from './models';
+import type { TaskList, Task, Subtask, Settings, PomodoroSettings, SoundPreset, MindmapFolder, Mindmap, MindmapNode, SharedItem } from './models';
 import type JSZip from 'jszip';
 import { generateSalt, deriveKey, encryptBlob, decryptBlob, createVerifier, checkVerifier } from '../sync/crypto';
 import { MAX_MINDMAP_LABEL_LENGTH } from '../lib/constants';
+import { isValidUrl } from '../lib/link-utils';
 
 export interface ImportData {
   taskLists: TaskList[];
@@ -12,6 +13,10 @@ export interface ImportData {
   mindmapFolders?: MindmapFolder[];
   mindmaps?: Mindmap[];
   mindmapNodes?: MindmapNode[];
+  // Shared Folder LINKS (optional, additive in v3). Files and snippets are left
+  // out: their bytes live in the sync repository, and without sync the folder
+  // can't hold them. Importing adds these; this device's files are untouched.
+  sharedLinks?: SharedItem[];
   settings?: Settings;
   pomodoroSettings?: PomodoroSettings;
   soundPresets?: SoundPreset[];
@@ -52,6 +57,7 @@ interface ExportPayload {
   mindmapFolders?: MindmapFolder[];
   mindmaps?: Mindmap[];
   mindmapNodes?: MindmapNode[];
+  sharedLinks?: SharedItem[];
   settings: Settings;
   pomodoroSettings?: PomodoroSettings;
   soundPresets?: SoundPreset[];
@@ -70,16 +76,18 @@ export interface ImportOptions {
 }
 
 async function buildPayload(): Promise<ExportPayload> {
-  const [taskLists, tasks, subtasks, mindmapFolders, mindmaps, mindmapNodes, pomodoroSettings, soundPresets] = await Promise.all([
+  const [taskLists, tasks, subtasks, mindmapFolders, mindmaps, mindmapNodes, sharedItems, pomodoroSettings, soundPresets] = await Promise.all([
     db.taskLists.toArray(),
     db.tasks.toArray(),
     db.subtasks.toArray(),
     db.mindmapFolders.toArray(),
     db.mindmaps.toArray(),
     db.mindmapNodes.toArray(),
+    db.sharedItems.toArray(),
     db.pomodoroSettings.get('pomodoro'),
     db.soundPresets.toArray(),
   ]);
+  const sharedLinks = sharedItems.filter((i) => i.type === 'link' && !i.deletedAt);
 
   const settings: Settings = {
     theme: (localStorage.getItem('gtd25-theme') as Settings['theme']) ?? 'system',
@@ -94,6 +102,7 @@ async function buildPayload(): Promise<ExportPayload> {
     mindmapFolders,
     mindmaps,
     mindmapNodes,
+    ...(sharedLinks.length > 0 ? { sharedLinks } : {}),
     settings,
     pomodoroSettings: pomodoroSettings ?? undefined,
     soundPresets: soundPresets.length > 0 ? soundPresets : undefined,
@@ -254,7 +263,8 @@ function validatePayload(parsed: ExportPayload): ImportData {
     || (Array.isArray(parsed.mindmapFolders) && parsed.mindmapFolders.length > MAX_RECORDS_PER_ARRAY)
     || (Array.isArray(parsed.mindmaps) && parsed.mindmaps.length > MAX_RECORDS_PER_ARRAY)
     || (Array.isArray(parsed.mindmapNodes) && parsed.mindmapNodes.length > MAX_RECORDS_PER_ARRAY)
-    || (Array.isArray(parsed.soundPresets) && parsed.soundPresets.length > MAX_RECORDS_PER_ARRAY)) {
+    || (Array.isArray(parsed.soundPresets) && parsed.soundPresets.length > MAX_RECORDS_PER_ARRAY)
+    || (Array.isArray(parsed.sharedLinks) && parsed.sharedLinks.length > MAX_RECORDS_PER_ARRAY)) {
     throw new Error('Invalid backup: too many records');
   }
 
@@ -376,6 +386,28 @@ function validatePayload(parsed: ExportPayload): ImportData {
     if (validSoundPresets.length === 0) validSoundPresets = undefined;
   }
 
+  // Shared Folder links (optional). Rebuilt field by field, so a crafted backup
+  // can't smuggle a file/blob reference or a javascript: URL in through here.
+  let validSharedLinks: SharedItem[] | undefined;
+  if (Array.isArray(parsed.sharedLinks)) {
+    validSharedLinks = parsed.sharedLinks.flatMap((raw): SharedItem[] => {
+      const i = raw as Partial<SharedItem> | null;
+      if (!i || typeof i.id !== 'string' || !i.id) { warnings.push('Skipped shared link without valid id'); return []; }
+      if (i.type !== 'link' || typeof i.url !== 'string' || !isValidUrl(i.url)) { warnings.push(`Skipped shared item ${i.id}: not an http(s) link`); return []; }
+      if (!isValidNumber(i.createdAt) || !isValidNumber(i.updatedAt)) { warnings.push(`Skipped shared link ${i.id}: invalid timestamps`); return []; }
+      return [{
+        id: i.id,
+        type: 'link',
+        name: typeof i.name === 'string' && i.name ? i.name : i.url,
+        size: isValidNumber(i.size) ? i.size : i.url.length,
+        url: i.url,
+        order: isValidNumber(i.order) ? i.order : 0,
+        createdAt: i.createdAt,
+        updatedAt: i.updatedAt,
+      }];
+    });
+  }
+
   if (warnings.length > 0) {
     console.warn('Import validation warnings:', warnings);
   }
@@ -387,6 +419,7 @@ function validatePayload(parsed: ExportPayload): ImportData {
     mindmapFolders: validMindmapFolders,
     mindmaps: validMindmaps,
     mindmapNodes: validMindmapNodes,
+    ...(validSharedLinks ? { sharedLinks: validSharedLinks } : {}),
     settings: parsed.settings,
     pomodoroSettings: validPomodoroSettings,
     soundPresets: validSoundPresets,

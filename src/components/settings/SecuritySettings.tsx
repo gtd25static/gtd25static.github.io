@@ -898,7 +898,8 @@ function ManageForm({ idleMinutes, maxAttempts, attemptWipeJustArmed, systemIdle
         <h4 className="text-sm font-medium">Data safety</h4>
         <p className="text-xs text-zinc-400 dark:text-zinc-500">
           Paranoid devices make no automatic backups. Download a recovery backup before disabling or
-          wiping. Verify checks every item still decrypts.
+          wiping — it holds lists, tasks, mindmaps and Shared Folder links (shared files live in the sync
+          repository). Verify checks every item still decrypts.
         </p>
         <div className="flex flex-wrap gap-2">
           <Button size="sm" variant="secondary" onClick={() => setRecoveryExport(true)} disabled={busy}>Download recovery backup</Button>

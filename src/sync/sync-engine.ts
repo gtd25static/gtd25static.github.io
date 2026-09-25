@@ -4,7 +4,7 @@ import type { ImportData } from '../db/export-import';
 import { getFile, getFileConditional, putFile, deleteFile, RateLimitError } from './github-api';
 import { jitterInterval } from './poll-jitter';
 import { cleanupSoftDeletes, archiveOldCompleted } from './conflict-resolution';
-import { applyRemoteEntries as applyRemoteEntriesToDb, getPendingEntries, clearPendingEntries, clearEntriesByIds, pendingEntryCount } from './change-log';
+import { applyRemoteEntries as applyRemoteEntriesToDb, getPendingEntries, clearPendingEntries, clearEntriesByIds, pendingEntryCount, recordChangeBatch } from './change-log';
 import { mergeEntity, stampUpdatedFields } from './field-timestamps';
 import { toast } from '../components/ui/Toast';
 import { SYNC_VERSION, isCompatibleVersion, needsMigration } from './version';
@@ -2021,6 +2021,17 @@ export async function importData(data: ImportData) {
     }
 
     await clearPendingEntries();
+
+    // Shared Folder links from the backup are ADDED (files stay as they are: the
+    // backup can't carry their bytes). Recorded as pending changes, so after the
+    // reset below they reach the other devices through the normal sync.
+    if (data.sharedLinks?.length) {
+      await db.sharedItems.bulkPut(await prepareEntityRowsForAtRest('sharedItems', data.sharedLinks));
+      await recordChangeBatch(data.sharedLinks.map((item) => ({
+        entityType: 'sharedItem' as const, entityId: item.id, operation: 'upsert' as const,
+        data: item as unknown as Record<string, unknown>,
+      })));
+    }
 
     // Push to remote if sync is configured
     let wipedAt: number | undefined;
