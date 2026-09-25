@@ -697,7 +697,7 @@ unretrievable. Never treat a squash as a security control.
 | Operation | Behaviour | Critical guard |
 |---|---|---|
 | **Enable sync (first device)** | Push local state as the snapshot; changelog `[]`. | Generate the salt once. Never regenerate it while data exists. |
-| **Add a device** | Bootstrap: pull the snapshot, apply the changelog on top, replace local state. | Verify the passphrase against the verifier **before** replacing anything local. |
+| **Add a device** | Bootstrap: pull the snapshot, apply the changelog on top, replace local state — then put back what only this device had (merge shared ids field by field, fold a local Inbox into the synced one) and push it. | Verify the passphrase against the verifier **before** replacing anything local. Never drop a joining device's own data: a device used offline before sync was set up would otherwise lose it silently. |
 | **Force push** | Overwrite the remote snapshot with full local state; clear changelog. | **Refuse if local is empty and remote is not.** This one guard prevents the single worst data-loss bug in the design. Back up the remote first. |
 | **Force pull** | Replace local state from remote snapshot + changelog. | Apply **all** entries including this device's own — its local DB may be the thing being recovered. |
 | **Wipe all data** | Push an empty snapshot stamped `wipedAt`; reset the changelog to `[]`; squash the blob branch. | Back up the remote snapshot first. **Reset, never delete, the changelog**: a remote with a snapshot and no changelog is refused by every device that has data. |
