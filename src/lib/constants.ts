@@ -10,6 +10,11 @@ export const SORT_DUE_SOON_DAYS = 7;
 // point of no return is 12 months + 30 days after archiving.
 export const ARCHIVED_LIST_RETENTION_DAYS = 365;
 export const ARCHIVED_LIST_RETENTION_MS = ARCHIVED_LIST_RETENTION_DAYS * 24 * 60 * 60 * 1000;
+// gtd25 keeps work, not an archive: tasks completed and follow-ups resolved
+// this long ago go to the Trash too (user decision, 2026-09-25). The same 12
+// months as Insights' longest range, so its charts stay complete.
+export const COMPLETED_RETENTION_DAYS = 365;
+export const COMPLETED_RETENTION_MS = COMPLETED_RETENTION_DAYS * 24 * 60 * 60 * 1000;
 // Failed passphrase attempts before the panic wipe trips. 0 disables it.
 // Lives here, not in db/vault, so vault-reinit can read it without
 // importing the stateful vault module (an import cycle).

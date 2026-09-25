@@ -1,5 +1,5 @@
 import { db } from './index';
-import { ARCHIVED_LIST_RETENTION_MS } from '../lib/constants';
+import { ARCHIVED_LIST_RETENTION_MS, COMPLETED_RETENTION_MS } from '../lib/constants';
 
 const THIRTY_DAYS = 30 * 24 * 60 * 60 * 1000;
 
@@ -48,6 +48,29 @@ export async function purgeOldTrashItems() {
     const { useMindmapUi } = await import('../stores/mindmap-ui');
     useMindmapUi.getState().pruneMaps(liveMapIds);
   } catch { /* store unavailable (e.g. bare node env) — cosmetic cleanup only */ }
+}
+
+/**
+ * gtd25 keeps work, not an archive: tasks completed and follow-ups resolved more
+ * than COMPLETED_RETENTION_MS (12 months) ago go to the Trash, with their
+ * subtasks, like a delete by hand — recorded in the changelog so every device
+ * converges — and the 30-day purge above ends them. Counted from completedAt
+ * (a follow-up: from when it was resolved), not the last edit; open items,
+ * however old, are never touched. Runs at startup, from ensureDefaults().
+ */
+export async function expireCompletedItems(now: number = Date.now()) {
+  const cutoff = now - COMPLETED_RETENTION_MS;
+  const [lists, tasks] = await Promise.all([db.taskLists.toArray(), db.tasks.toArray()]);
+  const followUpLists = new Set(lists.filter((l) => l.type === 'follow-ups').map((l) => l.id));
+  const expired = tasks.filter((t) => {
+    if (t.deletedAt) return false;
+    if (followUpLists.has(t.listId)) return !!t.archived && (t.fieldTimestamps?.archived ?? t.updatedAt) < cutoff;
+    return t.status === 'done' && (t.completedAt ?? t.updatedAt) < cutoff;
+  });
+  if (expired.length === 0) return;
+
+  const { deleteTasksBatch } = await import('../hooks/use-bulk-operations');
+  await deleteTasksBatch(expired.map((t) => t.id), now);
 }
 
 /**

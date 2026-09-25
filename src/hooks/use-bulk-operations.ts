@@ -6,10 +6,10 @@ import { handleDbError } from '../lib/db-error';
 import { stampUpdatedFields } from '../sync/field-timestamps';
 import { crossTypeUpdates, statusChangeUpdates } from './use-tasks';
 
-export async function deleteTasksBatch(ids: string[]) {
+/** `now` is the deletedAt they all share (the retention expiry passes its own clock). */
+export async function deleteTasksBatch(ids: string[], now = Date.now()) {
   if (ids.length === 0) return;
   try {
-    const now = Date.now();
     const batch: Array<{ entityType: 'task' | 'subtask'; entityId: string; operation: 'delete' }> = [];
 
     await ensureDeviceId();
