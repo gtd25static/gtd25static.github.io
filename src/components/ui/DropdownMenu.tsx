@@ -16,20 +16,24 @@ interface Props {
 
 const GUTTER = 8; // keep the menu this far inside the viewport
 const GAP = 4; // between trigger and menu
+const MIN_ROOM_BELOW = 200; // less than this under the trigger (~4 rows) and a roomier above: open above
+
+interface Placement { top: number; left: number; maxHeight: number }
 
 /**
- * Where the menu goes: under the trigger, right edges aligned — or above it when
- * there is no room below — and always inside the viewport.
+ * Where the menu goes: under the trigger, right edges aligned, always inside the
+ * viewport. Taller than the room below, it scrolls (maxHeight) instead of being
+ * pushed up over its trigger — the Inbox's Process menu lists every list. It
+ * opens above only when the room below is cramped and there is more above.
  */
-function placeMenu(trigger: DOMRect, size: { width: number; height: number }): { top: number; left: number } {
-  const below = trigger.bottom + GAP;
-  const above = trigger.top - GAP - size.height;
-  const fitsBelow = below + size.height <= window.innerHeight - GUTTER;
-  const top = fitsBelow || above < GUTTER
-    ? Math.max(GUTTER, Math.min(below, window.innerHeight - GUTTER - size.height))
-    : above;
+export function placeMenu(trigger: DOMRect, size: { width: number; height: number }): Placement {
+  const roomBelow = window.innerHeight - GUTTER - (trigger.bottom + GAP);
+  const roomAbove = trigger.top - GAP - GUTTER;
   const left = Math.max(GUTTER, Math.min(trigger.right - size.width, window.innerWidth - GUTTER - size.width));
-  return { top, left };
+  if (size.height <= roomBelow || roomBelow >= MIN_ROOM_BELOW || roomBelow >= roomAbove) {
+    return { top: trigger.bottom + GAP, left, maxHeight: roomBelow };
+  }
+  return { top: trigger.top - GAP - Math.min(size.height, roomAbove), left, maxHeight: roomAbove };
 }
 
 // The menu is rendered into <body> with fixed coordinates: an absolutely placed
@@ -37,17 +41,19 @@ function placeMenu(trigger: DOMRect, size: { width: number; height: number }): {
 // scrolling <nav>, so for the last lists Rename/Archive/Delete opened out of
 // sight below the viewport (GUI review).
 export function DropdownMenu({ trigger, items, label = 'More options' }: Props) {
-  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+  const [pos, setPos] = useState<Placement | null>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const open = pos !== null;
 
   // Place it once rendered, with its real size (first frame uses an estimate).
   useLayoutEffect(() => {
-    if (!open || !triggerRef.current || !menuRef.current) return;
-    const menu = menuRef.current.getBoundingClientRect();
-    const next = placeMenu(triggerRef.current.getBoundingClientRect(), { width: menu.width, height: menu.height });
-    if (next.top !== pos!.top || next.left !== pos!.left) setPos(next);
+    const menu = menuRef.current;
+    if (!open || !triggerRef.current || !menu) return;
+    // Its full height even while maxHeight caps it: content plus borders.
+    const height = menu.scrollHeight + menu.offsetHeight - menu.clientHeight;
+    const next = placeMenu(triggerRef.current.getBoundingClientRect(), { width: menu.getBoundingClientRect().width, height });
+    if (next.top !== pos!.top || next.left !== pos!.left || next.maxHeight !== pos!.maxHeight) setPos(next);
   }, [open, pos]);
 
   useEffect(() => {
@@ -59,15 +65,17 @@ export function DropdownMenu({ trigger, items, label = 'More options' }: Props) 
       close();
     }
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') close(); };
+    // Scrolling a long menu itself is not the page moving under it.
+    const onScroll = (e: Event) => { if (!menuRef.current?.contains(e.target as Node)) close(); };
     document.addEventListener('mousedown', handleClick);
     document.addEventListener('keydown', onKey);
     // Fixed coordinates go stale when anything scrolls or resizes: just close.
-    window.addEventListener('scroll', close, true);
+    window.addEventListener('scroll', onScroll, true);
     window.addEventListener('resize', close);
     return () => {
       document.removeEventListener('mousedown', handleClick);
       document.removeEventListener('keydown', onKey);
-      window.removeEventListener('scroll', close, true);
+      window.removeEventListener('scroll', onScroll, true);
       window.removeEventListener('resize', close);
     };
   }, [open]);
@@ -86,14 +94,16 @@ export function DropdownMenu({ trigger, items, label = 'More options' }: Props) 
         <div
           ref={menuRef}
           data-dropdown-menu
-          style={{ position: 'fixed', top: pos.top, left: pos.left }}
-          className="z-[95] min-w-[160px] rounded-xl border border-zinc-200 bg-white py-1.5 shadow-lg dark:border-zinc-700 dark:bg-zinc-900"
+          style={{ position: 'fixed', top: pos.top, left: pos.left, maxHeight: pos.maxHeight }}
+          className="z-[95] min-w-[160px] max-w-80 overflow-y-auto overscroll-contain rounded-xl border border-zinc-200 bg-white py-1.5 shadow-lg dark:border-zinc-700 dark:bg-zinc-900"
         >
+          {/* Block items, not the default inline-block: inline ones made the menu's
+              natural width all of them side by side, as wide as the screen. */}
           {items.map((item) => (
             <button
               key={item.label}
               onClick={() => { item.onClick(); setPos(null); }}
-              className={`w-full px-4 py-3 md:py-2 text-left text-sm hover:bg-zinc-50 dark:hover:bg-zinc-800 ${
+              className={`block w-full break-words px-4 py-3 md:py-2 text-left text-sm hover:bg-zinc-50 dark:hover:bg-zinc-800 ${
                 item.danger ? 'text-red-600 dark:text-red-400' : 'text-zinc-700 dark:text-zinc-300'
               }`}
             >

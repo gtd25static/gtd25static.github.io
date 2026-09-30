@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import '../../__tests__/setup-component';
-import { DropdownMenu } from '../../components/ui/DropdownMenu';
+import { DropdownMenu, placeMenu } from '../../components/ui/DropdownMenu';
 
 const items = [
   { label: 'Edit', onClick: vi.fn() },
@@ -119,6 +119,25 @@ describe('DropdownMenu', () => {
       expect(parseFloat(document.querySelector<HTMLElement>('[data-dropdown-menu]')!.style.top)).toBeGreaterThanOrEqual(72);
     });
 
+    // A long menu scrolls inside itself: that scroll must not count as the page moving.
+    it('scrolling inside the menu keeps it open; scrolling the page closes it', async () => {
+      const user = userEvent.setup();
+      render(<DropdownMenu trigger={<span>Menu</span>} items={items} />);
+      await user.click(screen.getByText('Menu'));
+      fireEvent.scroll(document.querySelector('[data-dropdown-menu]')!);
+      expect(document.querySelector('[data-dropdown-menu]')).toBeInTheDocument();
+      fireEvent.scroll(document);
+      expect(document.querySelector('[data-dropdown-menu]')).not.toBeInTheDocument();
+    });
+
+    it('caps its height to the room it opens into', async () => {
+      placeTrigger({ top: 40, bottom: 72, left: 100, right: 132 });
+      const user = userEvent.setup();
+      render(<DropdownMenu trigger={<span>Menu</span>} items={items} />);
+      await user.click(screen.getByText('Menu'));
+      expect(document.querySelector<HTMLElement>('[data-dropdown-menu]')!.style.maxHeight).toBe(`${window.innerHeight - 8 - 76}px`);
+    });
+
     it('still closes on a click outside, and runs an item', async () => {
       const user = userEvent.setup();
       render(<><button>Elsewhere</button><DropdownMenu trigger={<span>Menu</span>} items={items} /></>);
@@ -128,6 +147,39 @@ describe('DropdownMenu', () => {
       await user.click(screen.getByText('Menu'));
       await user.click(screen.getByText('Elsewhere'));
       expect(document.querySelector('[data-dropdown-menu]')).not.toBeInTheDocument();
+    });
+  });
+
+  // The Inbox's Process menu lists every other list: with many lists it is taller
+  // than the room below its button, and it was pushed up to cover the button.
+  describe('placeMenu', () => {
+    const trigger = (top: number) => ({ top, bottom: top + 32, left: 468, right: 500 }) as DOMRect;
+    const roomBelow = (top: number) => window.innerHeight - 8 - (top + 32 + 4);
+
+    it('fits below: right under the trigger, right edges aligned', () => {
+      expect(placeMenu(trigger(100), { width: 200, height: 300 })).toEqual({ top: 136, left: 300, maxHeight: roomBelow(100) });
+    });
+
+    it('too tall for the room below: stays under the trigger and scrolls', () => {
+      const place = placeMenu(trigger(300), { width: 200, height: 2000 });
+      expect(place.top).toBe(336);
+      expect(place.maxHeight).toBe(roomBelow(300));
+    });
+
+    it('opens above only when the room below is cramped and above is roomier', () => {
+      const top = window.innerHeight - 100;
+      const place = placeMenu(trigger(top), { width: 200, height: 300 });
+      expect(place.top).toBe(top - 4 - 300); // its bottom edge just over the trigger
+      expect(place.maxHeight).toBe(top - 4 - 8);
+    });
+
+    it('above, too tall even there: from the top of the screen, scrolling', () => {
+      const top = window.innerHeight - 100;
+      expect(placeMenu(trigger(top), { width: 200, height: 2000 })).toEqual({ top: 8, left: 300, maxHeight: top - 4 - 8 });
+    });
+
+    it('never leaves the viewport sideways', () => {
+      expect(placeMenu({ ...trigger(100), right: 40 } as DOMRect, { width: 200, height: 100 }).left).toBe(8);
     });
   });
 });
