@@ -25,7 +25,8 @@ const KEEP_AWAKE_MS = 15_000;
  *  - the browser asks before the page is closed or reloaded;
  *  - a Paranoid vault's idle auto-lock is held off meanwhile (a lock mid-way
  *    drops the credentials the rotation needs). Content stays covered by this
- *    dialog, and a manual lock or lock-when-hidden still lock as usual.
+ *    dialog, and a manual lock or lock-when-hidden still lock as usual — as
+ *    does the idle lock once the device has slept past its window (db/vault).
  */
 export function RotationProgressDialog({ progress }: { progress: RotationProgress | null }) {
   const dialogRef = useRef<HTMLDialogElement>(null);

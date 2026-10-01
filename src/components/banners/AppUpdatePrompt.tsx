@@ -105,7 +105,11 @@ export function AppUpdatePrompt() {
   const sameCommitRefresh = needRefresh && !syncIncompat && versionChecked && sameCommit && changes.length === 0;
   const waitingForVersionCheck = needRefresh && !syncIncompat && !versionChecked;
   const available = (needRefresh || syncIncompat) && !sameCommitRefresh;
-  const promptVisible = available && !waitingForVersionCheck && !dismissed && !updateInstalledNoticeVisible;
+  // Over a locked vault it is the top banner, never the modal: the modal sat
+  // above the lock screen and looked the same whether the vault had locked under
+  // it or not (a Mac woken after hours showed it over a vault it had left open).
+  const asModal = !dismissed && !vault.locked;
+  const promptVisible = available && !waitingForVersionCheck && asModal && !updateInstalledNoticeVisible;
 
   // While the (modal) update prompt is visible, keep native <dialog>s closed
   // (Settings, confirm/password prompts, the focus nudge, …): they all use
@@ -199,7 +203,7 @@ export function AppUpdatePrompt() {
     }
   };
 
-  if (!dismissed) {
+  if (asModal) {
     return (
       <div className="fixed inset-0 z-[300] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
         <div className="w-full max-w-sm rounded-2xl border border-zinc-200 bg-white p-6 shadow-2xl dark:border-zinc-800 dark:bg-zinc-900">
@@ -251,7 +255,7 @@ export function AppUpdatePrompt() {
     );
   }
 
-  // Dismissed -> unobtrusive top banner that stays available.
+  // Dismissed, or the vault is locked -> unobtrusive top banner that stays available.
   return (
     <div className="fixed inset-x-0 top-0 z-[300] flex items-center justify-between gap-3 bg-amber-500 px-4 py-2 text-sm font-medium text-white">
       <span>{message}</span>

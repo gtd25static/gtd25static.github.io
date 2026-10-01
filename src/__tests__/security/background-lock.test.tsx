@@ -55,6 +55,19 @@ describe('useBackgroundLock', () => {
     expect(mockLock).not.toHaveBeenCalled();
   });
 
+  // The pending lock is a timer, and timers stand still while the machine sleeps
+  // (or the tab is frozen): coming back after longer than the delay cancelled it
+  // before it had ever fired.
+  it('coming back after longer than the delay locks, though the timer never fired', () => {
+    renderHook(() => useBackgroundLock(true, 30));
+    act(() => setVisibility('hidden'));
+    vi.setSystemTime(Date.now() + 60 * 60_000); // asleep: the wall clock moves, timers don't
+    act(() => setVisibility('visible'));
+    expect(mockLock).toHaveBeenCalledTimes(1);
+    act(() => { vi.advanceTimersByTime(60_000); });
+    expect(mockLock).toHaveBeenCalledTimes(1); // the stale timer does not lock again
+  });
+
   it('0 seconds locks the instant the tab hides', () => {
     renderHook(() => useBackgroundLock(true, 0));
     act(() => setVisibility('hidden'));

@@ -87,6 +87,28 @@ describe('AppUpdatePrompt', () => {
     });
   });
 
+  // The modal sat above the lock screen and looked the same whether the vault had
+  // locked under it or not: a Mac woken after hours showed it over an unlocked app.
+  it('over a locked vault it is the top banner, so the lock screen stays in view', async () => {
+    const user = userEvent.setup();
+    h.vault = { enabled: true, unlocked: false, locked: true, hasSecurityKey: false };
+    render(<AppUpdatePrompt />);
+    expect(await screen.findByText('A new version of GTD25 is available.')).toBeInTheDocument();
+    expect(screen.queryByText('Update available')).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /update now/i }));
+    expect(h.sw.applyUpdate).toHaveBeenCalled();
+  });
+
+  it('the dialog shown over an unlocked vault becomes the banner when the vault locks', async () => {
+    h.vault = { enabled: true, unlocked: true, locked: false, hasSecurityKey: false };
+    const { rerender } = render(<AppUpdatePrompt />);
+    await screen.findByText('Update available');
+    h.vault = { enabled: true, unlocked: false, locked: true, hasSecurityKey: false };
+    rerender(<AppUpdatePrompt />);
+    expect(screen.queryByText('Update available')).not.toBeInTheDocument();
+    expect(screen.getByText('A new version of GTD25 is available.')).toBeInTheDocument();
+  });
+
   it('shows a post-update Paranoid notice after the build changes', () => {
     h.sw.needRefresh = false;
     localStorage.setItem(PARANOID_UPDATE_NOTICE_KEY, JSON.stringify({

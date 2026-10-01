@@ -7,7 +7,7 @@ import { ensureDefaults, onDatabaseSupersededByOtherTab } from './db';
 import { useKeyboard } from './hooks/use-keyboard';
 import { useTheme } from './components/settings/ThemeSettings';
 import { useVault } from './hooks/use-vault';
-import { touchVaultActivity, lock, isParanoidEnabled, DEFAULT_IDLE_MINUTES } from './db/vault';
+import { touchVaultActivity, lockIfIdleExpired, lock, isParanoidEnabled, DEFAULT_IDLE_MINUTES } from './db/vault';
 import { startSystemIdleLock, DEFAULT_SYSTEM_LOCK_GRACE_MINUTES } from './lib/system-idle';
 import { checkRecurringTasks } from './hooks/use-recurring';
 import { recordError } from './lib/diagnostics';
@@ -77,6 +77,8 @@ export default function App() {
   );
 }
 
+const IDLE_WALL_CLOCK_POLL_MS = 2_000;
+
 // Everything that reads the (possibly encrypted) database lives here, so none of
 // it runs while the vault is locked — the DEK is guaranteed available once this
 // mounts (or Paranoid Mode is off entirely).
@@ -108,6 +110,22 @@ function UnlockedApp() {
     return () => {
       window.removeEventListener('pointerdown', onActivity);
       window.removeEventListener('keydown', onActivity);
+    };
+  }, []);
+
+  // The idle timer cannot see time spent asleep (see db/vault): judge it on the
+  // wall clock whenever the app may have just woken — and every couple of
+  // seconds, since a machine woken with the app in front may signal nothing.
+  useEffect(() => {
+    const poll = setInterval(lockIfIdleExpired, IDLE_WALL_CLOCK_POLL_MS);
+    document.addEventListener('visibilitychange', lockIfIdleExpired);
+    window.addEventListener('focus', lockIfIdleExpired);
+    window.addEventListener('pageshow', lockIfIdleExpired);
+    return () => {
+      clearInterval(poll);
+      document.removeEventListener('visibilitychange', lockIfIdleExpired);
+      window.removeEventListener('focus', lockIfIdleExpired);
+      window.removeEventListener('pageshow', lockIfIdleExpired);
     };
   }, []);
 

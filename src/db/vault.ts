@@ -124,14 +124,31 @@ async function patchLocalSettings(updates: Partial<LocalSettings>): Promise<void
 setVaultKeyProvider(() => currentDek);
 
 // --- Idle re-lock ---
+// The timer runs on a clock that stands still while the machine sleeps (Chrome
+// on macOS and Android): a Mac woken after hours came back unlocked, its timer
+// still holding most of the window, and the first click re-armed it. So idle
+// time is also judged on the wall clock — before any interaction re-arms, and
+// whenever the app may have just woken (lockIfIdleExpired, polled from App). A
+// wall clock set forward locks early, the safe way; one set back leaves the
+// timer as the backstop.
 let lastActivityAt = Date.now();
 function resetIdleTimer(): void {
   if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
   lastActivityAt = Date.now();
   if (currentDek) idleTimer = setTimeout(() => { lock(); }, idleTimeoutMs);
 }
-/** Call on user interaction to defer the idle re-lock. */
-export function touchVaultActivity(): void { resetIdleTimer(); }
+function idleExpired(): boolean {
+  return currentDek !== null && Date.now() - lastActivityAt >= idleTimeoutMs;
+}
+/** Call on user interaction to defer the idle re-lock — unless it has already run out. */
+export function touchVaultActivity(): void {
+  if (idleExpired()) { lock(); return; }
+  resetIdleTimer();
+}
+/** Lock if the idle window ran out while no timer could fire (the machine slept). */
+export function lockIfIdleExpired(): void {
+  if (idleExpired()) lock();
+}
 
 /**
  * Read-only view of the idle countdown, for the privacy overlay: when the

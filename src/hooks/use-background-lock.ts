@@ -18,20 +18,26 @@ export function clampBackgroundLockSeconds(value: string | number): number {
 // Honest limit: browsers throttle background-tab timers, so the lock can fire
 // late — read the delay as "at least N seconds", not exactly N. (visibility
 // events themselves are not throttled, so the 0 = immediate case is exact.)
+// Timers also stand still while the machine sleeps or the tab is frozen, so on
+// coming back the time hidden is judged on the wall clock: past the delay, it
+// locks — the pending timer used to be cancelled before it had ever fired.
 export function useBackgroundLock(enabled: boolean, seconds: number): void {
   useEffect(() => {
     if (!enabled || !isParanoidEnabled()) return;
     let timer: ReturnType<typeof setTimeout> | null = null;
+    let hiddenAt = 0;
     const onVisibility = () => {
       if (document.visibilityState === 'hidden') {
         if (seconds <= 0) {
           lock();
         } else {
+          hiddenAt = Date.now();
           timer = setTimeout(() => { lock(); }, seconds * 1000);
         }
       } else if (timer) {
         clearTimeout(timer);
         timer = null;
+        if (Date.now() - hiddenAt >= seconds * 1000) lock();
       }
     };
     document.addEventListener('visibilitychange', onVisibility);

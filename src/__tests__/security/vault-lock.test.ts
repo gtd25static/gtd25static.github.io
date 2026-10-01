@@ -4,7 +4,7 @@ import { db } from '../../db';
 import { resetDb } from '../helpers/db-helpers';
 import {
   enableParanoid, lock, unlockWithPassphrase, isUnlocked,
-  getDEK, getVaultSecrets, touchVaultActivity, setRuntimeIdleTimeoutMs,
+  getDEK, getVaultSecrets, touchVaultActivity, setRuntimeIdleTimeoutMs, lockIfIdleExpired,
   __resetVaultStateForTests, __setIdleTimeoutMsForTests,
 } from '../../db/vault';
 
@@ -86,6 +86,40 @@ describe('vault lock/unlock', () => {
     setRuntimeIdleTimeoutMs(10 * 60_000);  // change value only — must not reset the 40ms countdown
     await delay(90);
     expect(isUnlocked()).toBe(false);      // the original 40ms timer still fired (no re-arm)
+  });
+
+  // Timers run on a clock that stands still while the machine sleeps: a Mac woken
+  // after hours came back unlocked, and the first click re-armed a full window.
+  describe('time spent asleep (the wall clock moves, timers do not)', () => {
+    const sleepFor = (ms: number) => {
+      const wokeAt = Date.now() + ms;
+      vi.spyOn(Date, 'now').mockReturnValue(wokeAt);
+    };
+    afterEach(() => { vi.restoreAllMocks(); });
+
+    it('the first interaction after sleeping past the window locks instead of re-arming', async () => {
+      await enableParanoid(PASSPHRASE); // 15-minute window
+      sleepFor(3 * 60 * 60_000);
+      touchVaultActivity();
+      expect(isUnlocked()).toBe(false);
+    });
+
+    it('lockIfIdleExpired locks once the window has run out on the wall clock', async () => {
+      await enableParanoid(PASSPHRASE);
+      lockIfIdleExpired();
+      expect(isUnlocked()).toBe(true);
+      sleepFor(16 * 60_000);
+      lockIfIdleExpired();
+      expect(isUnlocked()).toBe(false);
+    });
+
+    it('a pause inside the window changes nothing', async () => {
+      await enableParanoid(PASSPHRASE);
+      sleepFor(5 * 60_000);
+      lockIfIdleExpired();
+      touchVaultActivity();
+      expect(isUnlocked()).toBe(true);
+    });
   });
 
   it('records unlock timestamps only while relaxed unlock is enabled', async () => {
