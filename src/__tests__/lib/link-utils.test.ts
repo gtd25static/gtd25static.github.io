@@ -1,4 +1,4 @@
-import { extractHostname, isValidUrl, extractUrl, sanitizeUrl } from '../../lib/link-utils';
+import { extractHostname, isValidUrl, extractUrl, sanitizeUrl, splitBareUrls } from '../../lib/link-utils';
 
 describe('extractHostname', () => {
   it('extracts hostname from a valid URL', () => {
@@ -85,5 +85,32 @@ describe('extractUrl', () => {
 
   it('extracts URL with path and query params', () => {
     expect(extractUrl('See https://example.com/path?q=1&r=2')).toBe('https://example.com/path?q=1&r=2');
+  });
+});
+
+describe('splitBareUrls', () => {
+  it('splits text around the http(s) URLs in it, leaving sentence punctuation outside', () => {
+    expect(splitBareUrls('See https://example.com/a, and (https://x.org/y).')).toEqual([
+      { text: 'See ' },
+      { url: 'https://example.com/a' },
+      { text: ', and (' },
+      { url: 'https://x.org/y' },
+      { text: ').' },
+    ]);
+  });
+
+  it('keeps a closing paren that belongs to the URL', () => {
+    expect(splitBareUrls('https://en.wikipedia.org/wiki/Foo_(bar)')).toEqual([
+      { url: 'https://en.wikipedia.org/wiki/Foo_(bar)' },
+    ]);
+  });
+
+  it('never turns other schemes into links', () => {
+    expect(splitBareUrls('javascript:alert(1) ftp://x.org/f')).toEqual([{ text: 'javascript:alert(1) ftp://x.org/f' }]);
+  });
+
+  it('returns plain text whole', () => {
+    expect(splitBareUrls('no links here')).toEqual([{ text: 'no links here' }]);
+    expect(splitBareUrls('')).toEqual([]);
   });
 });

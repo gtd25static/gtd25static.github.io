@@ -1,4 +1,4 @@
-import { isValidUrl } from './link-utils';
+import { isValidUrl, BARE_URL_RE, trimTrailingPunctuation } from './link-utils';
 import { MAX_MINDMAP_LABEL_LENGTH } from './constants';
 
 // Bare URLs typed or pasted into a mindmap node become real markdown links, with
@@ -16,10 +16,6 @@ import { MAX_MINDMAP_LABEL_LENGTH } from './constants';
 
 /** Longest display text for a linkified URL. */
 export const MAX_URL_LABEL_LENGTH = 80;
-
-// A bare http(s) URL. Backticks, angle brackets and quotes end it so a URL
-// cannot swallow the markup around it.
-const BARE_URL_RE = /https?:\/\/[^\s<>"'`]+/g;
 
 // Regions of a label that already have meaning and must be left alone: an
 // existing [text](href) link, and a `code span` (which suppresses inner parsing
@@ -78,22 +74,6 @@ export function shortenUrl(raw: string, max = MAX_URL_LABEL_LENGTH): string {
     text = raw; // not parseable as a URL: show it as-is, just shortened
   }
   return truncate(safeLinkText(text), max) || raw.slice(0, max);
-}
-
-/**
- * Trailing punctuation that belongs to the sentence, not the URL. A closing
- * paren is only sentence punctuation when the URL has no opening one — plenty of
- * real URLs end in `)`, Wikipedia's especially.
- */
-function trimTrailingPunctuation(url: string): { url: string; trailing: string } {
-  let end = url.length;
-  for (; end > 0; end--) {
-    const ch = url[end - 1];
-    if ('.,;:!?'.includes(ch)) continue;
-    if (ch === ')' && !url.slice(0, end).includes('(')) continue;
-    break;
-  }
-  return { url: url.slice(0, end), trailing: url.slice(end) };
 }
 
 function linkifyPlain(text: string): string {

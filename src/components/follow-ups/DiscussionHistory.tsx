@@ -5,6 +5,7 @@ import { confirmDialog } from '../ui/ConfirmDialog';
 import { updateTask } from '../../hooks/use-tasks';
 import { newId } from '../../lib/id';
 import { openNativePicker } from '../../lib/native-picker';
+import { splitBareUrls } from '../../lib/link-utils';
 
 interface Props {
   task: Task;
@@ -39,6 +40,33 @@ const TrashIcon = () => (
     <path d="M4 6h12M8 6V4h4v2m-6 0v9a1 1 0 001 1h6a1 1 0 001-1V6M8.5 9v5M11.5 9v5" />
   </svg>
 );
+
+// Longer URLs are shown cut with … (the link and its tooltip keep the whole URL).
+const MAX_URL_TEXT = 50;
+
+/** A note with its http(s) URLs as links that open in a new tab. */
+function NoteText({ note }: { note: string }) {
+  return (
+    <>
+      {splitBareUrls(note).map((part, i) =>
+        'url' in part ? (
+          <a
+            key={i}
+            href={part.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            title={part.url}
+            className="text-accent-600 hover:underline dark:text-accent-400"
+          >
+            {part.url.length > MAX_URL_TEXT ? `${part.url.slice(0, MAX_URL_TEXT - 1)}…` : part.url}
+          </a>
+        ) : (
+          part.text
+        ),
+      )}
+    </>
+  );
+}
 
 const sharedTextarea =
   'w-full resize-none rounded border border-zinc-300 bg-white px-2 py-1 text-sm outline-none focus:border-accent-500 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200';
@@ -179,7 +207,7 @@ export function DiscussionHistory({ task, open, onClose }: Props) {
                   </div>
                 ) : entry.note ? (
                   <p data-redact className="mt-0.5 whitespace-pre-wrap break-words text-sm text-zinc-700 dark:text-zinc-300">
-                    {entry.note}
+                    <NoteText note={entry.note} />
                   </p>
                 ) : (
                   <p className="mt-0.5 text-sm italic text-zinc-400 dark:text-zinc-500">No note</p>

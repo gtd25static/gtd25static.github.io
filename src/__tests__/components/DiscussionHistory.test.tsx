@@ -35,6 +35,22 @@ describe('DiscussionHistory (editable)', () => {
     expect(screen.queryByDisplayValue('old note')).not.toBeInTheDocument();
   });
 
+  it('makes URLs in a note clickable, shortening long ones with …', () => {
+    const long = 'https://example.com/a/very/long/path/that/goes/on/and/on?with=query&and=more';
+    renderHistory({ discussionLog: [{ id: 'd1', at: 1000, note: `Spec at https://x.org/spec, notes: ${long}` }] });
+
+    const short = screen.getByRole('link', { name: 'https://x.org/spec' });
+    expect(short).toHaveAttribute('href', 'https://x.org/spec');
+    expect(short).toHaveAttribute('target', '_blank');
+    expect(short).toHaveAttribute('rel', 'noopener noreferrer');
+
+    const shortened = screen.getByRole('link', { name: /^https:\/\/example\.com\/a\/very.*…$/ });
+    expect(shortened).toHaveAttribute('href', long);
+    expect(shortened).toHaveAttribute('title', long);
+    expect(shortened.textContent!.length).toBeLessThanOrEqual(50);
+    expect(screen.getByText(/^Spec at/)).toHaveTextContent(`Spec at https://x.org/spec, notes: ${shortened.textContent}`);
+  });
+
   it('edits a note via the pencil and saves', async () => {
     const { user, task } = renderHistory();
     await user.click(screen.getByTitle('Edit this entry'));
