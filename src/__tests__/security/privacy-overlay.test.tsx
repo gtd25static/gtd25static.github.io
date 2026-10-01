@@ -138,7 +138,25 @@ describe('PrivacyOverlay', () => {
     expect(veil()).not.toBeNull();
     fireEvent.focus(window);
     expect(veil()).toBeNull();
-    expect(mockTouch).toHaveBeenCalledTimes(2);
+  });
+
+  // Focus and visibility come back without anyone there (the window on top closes,
+  // a screen saver ends): they lift the veil, but only a gesture defers the lock.
+  it('regaining focus or visibility lifts the veil without deferring the auto-lock', () => {
+    render(<PrivacyOverlay immediate />);
+    fireEvent.blur(window);
+    fireEvent.focus(window);
+    expect(veil()).toBeNull();
+
+    background();
+    expect(veil()).not.toBeNull();
+    foreground();
+    expect(veil()).toBeNull();
+    expect(mockTouch).not.toHaveBeenCalled();
+
+    fireEvent.blur(window);
+    fireEvent.keyDown(window, { key: 'a' });
+    expect(mockTouch).toHaveBeenCalledTimes(1); // a gesture still does
   });
 
   it('pointer movement is ignored while the veil is down (no global activity source)', () => {

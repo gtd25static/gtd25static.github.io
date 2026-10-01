@@ -100,6 +100,26 @@ describe('system-idle (IdleDetector)', () => {
     expect(onLock).not.toHaveBeenCalled();
   });
 
+  // The grace is a timer, and timers stand still while the machine sleeps: closing
+  // the lid locks the screen and sleeps, hours asleep counted as nothing, and
+  // unlocking the screen on waking cancelled the lock — though the grace was over.
+  it('unlocking the screen after the grace has run out on the wall clock locks', async () => {
+    vi.useFakeTimers();
+    const detector = installFakeIdleDetector('granted');
+    const onLock = vi.fn();
+    await startSystemIdleLock(60_000, onLock, { screenLockGraceMs: 10 * 60_000 });
+
+    detector.screenState = 'locked';
+    detector.cb();
+    vi.setSystemTime(Date.now() + 12 * 60_000); // asleep: the wall clock moves, timers don't
+    detector.screenState = 'unlocked';
+    detector.cb();
+    expect(onLock).toHaveBeenCalledTimes(1);
+
+    vi.advanceTimersByTime(10 * 60_000);
+    expect(onLock).toHaveBeenCalledTimes(1); // the stale grace timer is gone
+  });
+
   it('still locks immediately on system idle when screen-lock grace is configured', async () => {
     vi.useFakeTimers();
     const detector = installFakeIdleDetector('granted');

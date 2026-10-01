@@ -86,6 +86,10 @@ export async function startSystemIdleLock(
     const graceOpt = options.screenLockGraceMs ?? 0;
     const getGraceMs = () => Math.max(0, typeof graceOpt === 'function' ? graceOpt() : graceOpt);
     let screenLockTimer: ReturnType<typeof setTimeout> | null = null;
+    // The grace timer cannot see time spent asleep, and a closed lid both locks
+    // the screen and sleeps: unlocking the screen on waking used to cancel a lock
+    // whose grace was long over. So the unlock is judged on the wall clock.
+    let graceEndsAt = 0;
     const clearScreenLockTimer = () => {
       if (screenLockTimer) {
         clearTimeout(screenLockTimer);
@@ -106,8 +110,13 @@ export async function startSystemIdleLock(
         if (graceMs === 0) {
           lockNow();
         } else if (!screenLockTimer) {
+          graceEndsAt = Date.now() + graceMs;
           screenLockTimer = setTimeout(lockNow, graceMs);
         }
+        return;
+      }
+      if (screenLockTimer && Date.now() >= graceEndsAt) {
+        lockNow();
         return;
       }
       clearScreenLockTimer();

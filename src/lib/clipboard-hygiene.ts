@@ -52,6 +52,9 @@ let pendingExpected: string | null = null;
 // the page, and a guard written against it fires on EVERY later pagehide —
 // wiping a clipboard the app never owned.
 let clearPending = false;
+// When the owed clear is due, on the wall clock: its timer stands still while the
+// machine sleeps, so on coming back catchUpPendingClipboardClear runs it if late.
+let clearDueAt = 0;
 
 /**
  * Copy text, then (Paranoid + toggle on) schedule the auto-clear. Returns the
@@ -77,7 +80,13 @@ async function scheduleClear(expected: string | null): Promise<void> {
   const token = ++clearToken;
   pendingExpected = expected;
   clearPending = true;
+  clearDueAt = Date.now() + seconds * 1000;
   setTimeout(() => { void runClear(token); }, seconds * 1000);
+}
+
+/** Run an owed clear now if its delay ran out while no timer could fire (device asleep). */
+export function catchUpPendingClipboardClear(): void {
+  if (clearPending && Date.now() >= clearDueAt) void runClear(clearToken);
 }
 
 /**
@@ -99,6 +108,7 @@ export function flushPendingClipboardClear(): void {
 
 async function runClear(token: number): Promise<void> {
   if (token !== clearToken) return; // a newer copy superseded this one
+  if (!clearPending) return;        // already settled (caught up, or flushed on pagehide)
   const expected = pendingExpected;
   clearPending = false;             // this scheduled clear is now being settled
   try {
@@ -146,6 +156,7 @@ export function __resetClipboardHygieneForTests(): void {
   clearToken = 0;
   pendingExpected = null;
   clearPending = false;
+  clearDueAt = 0;
 }
 
 /** Test-only view of whether the copied text is still retained. */

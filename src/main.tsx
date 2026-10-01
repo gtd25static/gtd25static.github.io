@@ -7,7 +7,7 @@ import { retryPendingWipe } from './lib/panic-wipe';
 import { startCrossTabLock, reconcileParanoidFlag } from './db/vault';
 import { onTabSignal } from './lib/tab-channel';
 import { startForgettingSessionOnLock } from './lib/forget-on-lock';
-import { flushPendingClipboardClear } from './lib/clipboard-hygiene';
+import { flushPendingClipboardClear, catchUpPendingClipboardClear } from './lib/clipboard-hygiene';
 
 // Capture uncaught errors for the in-app diagnostics log, and ask the browser to
 // persist storage so IndexedDB isn't silently evicted (data-loss prevention).
@@ -24,6 +24,11 @@ startForgettingSessionOnLock();
 // first left the copied content sitting on the clipboard. `pagehide` catches the
 // backgrounded/frozen case; a real close usually kills us first (documented).
 window.addEventListener('pagehide', () => flushPendingClipboardClear());
+// Its timer also stands still while the device sleeps: coming back past the
+// delay, clear at once rather than after the rest of it.
+window.addEventListener('focus', catchUpPendingClipboardClear);
+window.addEventListener('pageshow', catchUpPendingClipboardClear);
+document.addEventListener('visibilitychange', catchUpPendingClipboardClear);
 // A wipe additionally reloads us: it drops this tab's open IndexedDB connection,
 // which is what would otherwise block the deletion, and the boot-time
 // retryPendingWipe below finishes the job if it is still pending. A reload signal

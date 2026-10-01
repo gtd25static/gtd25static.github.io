@@ -22,10 +22,12 @@ const VEIL_AFTER_REMAINING_FRACTION = 0.5;
 // Deterrence, not cryptography: the content is still in the DOM behind CSS.
 // The auto-lock (which actually drops the DEK) is untouched underneath.
 //
-// Dismissing counts as vault activity (touchVaultActivity): a wake gesture is
-// real interaction. pointermove is listened to ONLY while the veil is up, so it
-// never becomes a general activity source and ACR-002 (only real interaction
-// defers the lock) keeps its shape. Waking an unfocused-but-visible window that
+// Dismissing by a gesture counts as vault activity (touchVaultActivity): a wake
+// gesture is real interaction. pointermove is listened to ONLY while the veil is
+// up, so it never becomes a general activity source and ACR-002 (only real
+// interaction defers the lock) keeps its shape. Focus and visibility also lift
+// the veil but are not gestures — they come back with nobody there (the window
+// on top closes) — so they never defer the lock. Waking an unfocused-but-visible window that
 // way restarts the countdown from that fresh activity — otherwise one stray
 // mouse move would disable the veil until the window was focused again.
 export function PrivacyOverlay({ immediate = false }: { immediate?: boolean }) {
@@ -89,8 +91,7 @@ export function PrivacyOverlay({ immediate = false }: { immediate?: boolean }) {
   // Dismiss on any deliberate return: movement, press, key, focus, tab visible.
   useEffect(() => {
     if (!veiled) return;
-    const dismiss = () => {
-      touchVaultActivity();
+    const lift = () => {
       veiledRef.current = false;
       veilAtRef.current = null;
       setVeiled(false);
@@ -99,19 +100,23 @@ export function PrivacyOverlay({ immediate = false }: { immediate?: boolean }) {
       // re-raising it here would make it impossible to dismiss.
       if (backgroundRef.current && !immediateRef.current) armCountdown();
     };
-    const onVisible = () => {
-      if (document.visibilityState === 'visible') dismiss();
+    const onGesture = () => {
+      touchVaultActivity();
+      lift();
     };
-    window.addEventListener('pointermove', dismiss);
-    window.addEventListener('pointerdown', dismiss);
-    window.addEventListener('keydown', dismiss);
-    window.addEventListener('focus', dismiss);
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') lift();
+    };
+    window.addEventListener('pointermove', onGesture);
+    window.addEventListener('pointerdown', onGesture);
+    window.addEventListener('keydown', onGesture);
+    window.addEventListener('focus', lift);
     document.addEventListener('visibilitychange', onVisible);
     return () => {
-      window.removeEventListener('pointermove', dismiss);
-      window.removeEventListener('pointerdown', dismiss);
-      window.removeEventListener('keydown', dismiss);
-      window.removeEventListener('focus', dismiss);
+      window.removeEventListener('pointermove', onGesture);
+      window.removeEventListener('pointerdown', onGesture);
+      window.removeEventListener('keydown', onGesture);
+      window.removeEventListener('focus', lift);
       document.removeEventListener('visibilitychange', onVisible);
     };
   }, [veiled, armCountdown]);

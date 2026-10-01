@@ -18,6 +18,7 @@ import {
   clampClipboardClearSeconds,
   DEFAULT_CLIPBOARD_CLEAR_SECONDS,
   flushPendingClipboardClear,
+  catchUpPendingClipboardClear,
   __resetClipboardHygieneForTests,
 } from '../../lib/clipboard-hygiene';
 
@@ -146,6 +147,31 @@ describe('clampClipboardClearSeconds', () => {
     expect(clampClipboardClearSeconds(5)).toBe(10);
     expect(clampClipboardClearSeconds(9999)).toBe(300);
     expect(clampClipboardClearSeconds('nope')).toBe(DEFAULT_CLIPBOARD_CLEAR_SECONDS);
+  });
+});
+
+// The delay is a timer, and timers stand still while the machine sleeps: woken
+// past it, the copied text stayed on the clipboard for the rest of the delay.
+describe('catchUpPendingClipboardClear', () => {
+  it('clears at once when the delay has run out on the wall clock — and only once', async () => {
+    setLocal({ paranoidClipboardClearEnabled: true, paranoidClipboardClearSeconds: 60 });
+    await writeTextWithHygiene('secret');
+    await vi.advanceTimersByTimeAsync(0);
+    writeText.mockClear();
+
+    catchUpPendingClipboardClear(); // not due yet
+    await vi.advanceTimersByTimeAsync(0);
+    expect(writeText).not.toHaveBeenCalled();
+
+    vi.setSystemTime(Date.now() + 2 * 60 * 60_000); // asleep: the wall clock moves, timers don't
+    catchUpPendingClipboardClear();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(writeText).toHaveBeenCalledWith('');
+
+    clipboardText = 'their own IBAN';
+    await vi.advanceTimersByTimeAsync(60_000); // the stale timer fires later
+    expect(writeText).toHaveBeenCalledTimes(1);
+    expect(clipboardText).toBe('their own IBAN');
   });
 });
 
