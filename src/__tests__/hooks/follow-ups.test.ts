@@ -1,4 +1,4 @@
-import { isInCooldown, cooldownRemaining, cooldownUntil, formatCooldown, cadenceMs, cadenceLabel, applyDiscussed, isAwake } from '../../hooks/use-follow-ups';
+import { isInCooldown, cooldownRemaining, cooldownUntil, formatCooldown, cadenceMs, cadenceLabel, applyDiscussed } from '../../hooks/use-follow-ups';
 import type { Task } from '../../db/models';
 
 function makeTask(overrides?: Partial<Task>): Task {
@@ -233,23 +233,5 @@ describe('applyDiscussed', () => {
     expect(update.pingCooldown).toBe('custom');
     expect(update.pingCooldownUntil).toBe(until);
     expect(update.discussionLog).toHaveLength(1);
-  });
-});
-
-describe('isAwake', () => {
-  it('is true for a fresh follow-up', () => {
-    expect(isAwake(makeTask())).toBe(true);
-  });
-
-  it('is false while snoozed', () => {
-    expect(isAwake(makeTask({ pingedAt: Date.now(), pingCooldown: '12h' }))).toBe(false);
-  });
-
-  it('is false when resolved (archived)', () => {
-    expect(isAwake(makeTask({ archived: true }))).toBe(false);
-  });
-
-  it('is false when deleted', () => {
-    expect(isAwake(makeTask({ deletedAt: Date.now() }))).toBe(false);
   });
 });

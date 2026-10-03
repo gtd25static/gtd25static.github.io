@@ -84,11 +84,6 @@ export function cadenceLabel(ms: number): string {
   return `every ${days}d`;
 }
 
-/** A follow-up is "awake" when it's live, not resolved, and not snoozed. */
-export function isAwake(task: Task): boolean {
-  return !task.archived && !task.deletedAt && !isInCooldown(task);
-}
-
 /**
  * The per-topic snooze cadence as a duration in ms. Resolution order:
  * explicit `snoozeCadence` (preset or custom days) -> the last `pingCooldown`
