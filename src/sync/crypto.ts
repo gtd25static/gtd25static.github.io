@@ -82,7 +82,17 @@ export function getCachedEncryptionKey(): CryptoKey | null {
   return cachedKey;
 }
 
+// Whether a sync key may be cached right now. db/vault installs the real rule —
+// never while a Paranoid vault is locked: locking drops the key, and a derivation
+// still running at that moment (PBKDF2-600k, ~1 s) used to put it back afterwards.
+let mayCacheKey: () => boolean = () => true;
+
+export function setSyncKeyCacheGuard(guard: () => boolean): void {
+  mayCacheKey = guard;
+}
+
 export function cacheEncryptionKey(key: CryptoKey, salt: string) {
+  if (!mayCacheKey()) return;
   cachedKey = key;
   cachedSalt = salt;
   resetIdleTimer();
@@ -235,7 +245,11 @@ export async function decryptEntity(
   entity: Record<string, unknown>,
   entityType: string,
 ): Promise<Record<string, unknown>> {
-  if (!entity._enc || typeof entity._enc !== 'string') return entity;
+  if (entity._enc === undefined) return entity;
+  // Anything but ciphertext here is forged or corrupt. Passed through, a non-string
+  // `_enc` reached the field merge and then the at-rest layer, which took it for
+  // "already encrypted" and stored the real content beside it in plaintext.
+  if (typeof entity._enc !== 'string') throw new Error(`Malformed ${entityType} record: _enc is not ciphertext`);
 
   const aad = entityAad(entityType, entity);
   let plaintext: string;
@@ -286,15 +300,28 @@ export async function encryptSyncData(key: CryptoKey, data: SyncData): Promise<S
   };
 }
 
+// A snapshot row whose `_enc` is present but not ciphertext is forged or corrupt:
+// drop it (this device keeps its own copy, and the next compaction rewrites the
+// row from it). Ciphertext that fails to open still throws, as before.
+function decryptRows(key: CryptoKey, rows: unknown[] | undefined, entityType: string): Promise<Record<string, unknown>[]> {
+  const wellFormed = (rows ?? []).filter((e) => {
+    const enc = (e as Record<string, unknown>)._enc;
+    if (enc === undefined || typeof enc === 'string') return true;
+    console.warn(`Dropping malformed ${entityType} row from the snapshot`);
+    return false;
+  });
+  return Promise.all(wellFormed.map((e) => decryptEntity(key, e as Record<string, unknown>, entityType)));
+}
+
 export async function decryptSyncData(key: CryptoKey, data: SyncData): Promise<SyncData> {
   const [taskLists, tasks, subtasks, sharedItems, mindmapFolders, mindmaps, mindmapNodes] = await Promise.all([
-    Promise.all(data.taskLists.map((e) => decryptEntity(key, e as unknown as Record<string, unknown>, 'taskList'))),
-    Promise.all(data.tasks.map((e) => decryptEntity(key, e as unknown as Record<string, unknown>, 'task'))),
-    Promise.all(data.subtasks.map((e) => decryptEntity(key, e as unknown as Record<string, unknown>, 'subtask'))),
-    Promise.all((data.sharedItems ?? []).map((e) => decryptEntity(key, e as unknown as Record<string, unknown>, 'sharedItem'))),
-    Promise.all((data.mindmapFolders ?? []).map((e) => decryptEntity(key, e as unknown as Record<string, unknown>, 'mindmapFolder'))),
-    Promise.all((data.mindmaps ?? []).map((e) => decryptEntity(key, e as unknown as Record<string, unknown>, 'mindmap'))),
-    Promise.all((data.mindmapNodes ?? []).map((e) => decryptEntity(key, e as unknown as Record<string, unknown>, 'mindmapNode'))),
+    decryptRows(key, data.taskLists, 'taskList'),
+    decryptRows(key, data.tasks, 'task'),
+    decryptRows(key, data.subtasks, 'subtask'),
+    decryptRows(key, data.sharedItems, 'sharedItem'),
+    decryptRows(key, data.mindmapFolders, 'mindmapFolder'),
+    decryptRows(key, data.mindmaps, 'mindmap'),
+    decryptRows(key, data.mindmapNodes, 'mindmapNode'),
   ]);
 
   return {
@@ -322,7 +349,7 @@ export async function encryptChangeEntries(key: CryptoKey, entries: ChangeEntry[
 export async function decryptChangeEntries(key: CryptoKey, entries: ChangeEntry[]): Promise<ChangeEntry[]> {
   const result: ChangeEntry[] = [];
   for (const entry of entries) {
-    if (entry.operation === 'delete' || !entry.data || !entry.data._enc) {
+    if (entry.operation === 'delete' || !entry.data || entry.data._enc === undefined) {
       result.push(entry);
       continue;
     }
@@ -330,9 +357,10 @@ export async function decryptChangeEntries(key: CryptoKey, entries: ChangeEntry[
       const decrypted = await decryptEntity(key, entry.data, entry.entityType);
       result.push({ ...entry, data: decrypted });
     } catch {
-      // Corrupted entry — return as-is (still has _enc, will fail validateEntityShape downstream)
+      // Forged or corrupt: dropped. Passed on as-is it could still be applied —
+      // nothing downstream rejects an entry carrying plaintext fields beside a
+      // bogus `_enc` — and compaction would merge it over the snapshot's row.
       console.warn(`Failed to decrypt ${entry.entityType} entry ${entry.id}, skipping`);
-      result.push(entry);
     }
   }
   return result;

@@ -16,7 +16,13 @@ type NudgeNotificationOptions = NotificationOptions & {
  * shown without it, and the OS's own notification history, are out of reach.
  * Best-effort: never throws.
  */
+// Nudges shown with `new Notification()` (no service worker registered): the
+// service-worker sweep below cannot see them, so they are tracked here.
+const windowNotifications = new Set<Notification>();
+
 export async function closeAllNotifications(): Promise<void> {
+  for (const notification of windowNotifications) notification.close();
+  windowNotifications.clear();
   try {
     const registration = await navigator.serviceWorker?.getRegistration();
     for (const notification of (await registration?.getNotifications()) ?? []) notification.close();
@@ -142,9 +148,11 @@ export function showNudgeNotification(title: string, body: string, opts?: { soun
 
   const showWindowNotification = () => {
     const n = new Notification(title, options);
+    windowNotifications.add(n);
     n.onclick = () => {
       window.focus();
       n.close();
+      windowNotifications.delete(n);
     };
   };
 

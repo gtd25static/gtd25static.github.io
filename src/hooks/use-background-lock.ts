@@ -21,6 +21,10 @@ export function clampBackgroundLockSeconds(value: string | number): number {
 // Timers also stand still while the machine sleeps or the tab is frozen, so on
 // coming back the time hidden is judged on the wall clock: past the delay, it
 // locks — the pending timer used to be cancelled before it had ever fired.
+// A page that is frozen (Android) or put in the back/forward cache runs no code
+// at all, so the key would sit in memory for as long as it stays there: those
+// moments lock at once. And starting while already hidden counts from now —
+// an unlock that finished in the background used to wait for the NEXT change.
 export function useBackgroundLock(enabled: boolean, seconds: number): void {
   useEffect(() => {
     if (!enabled || !isParanoidEnabled()) return;
@@ -40,10 +44,16 @@ export function useBackgroundLock(enabled: boolean, seconds: number): void {
         if (Date.now() - hiddenAt >= seconds * 1000) lock();
       }
     };
+    const onPageHide = (event: PageTransitionEvent) => { if (event.persisted) lock(); };
     document.addEventListener('visibilitychange', onVisibility);
+    document.addEventListener('freeze', lock);
+    window.addEventListener('pagehide', onPageHide);
+    if (document.visibilityState === 'hidden') onVisibility();
     return () => {
       if (timer) clearTimeout(timer);
       document.removeEventListener('visibilitychange', onVisibility);
+      document.removeEventListener('freeze', lock);
+      window.removeEventListener('pagehide', onPageHide);
     };
   }, [enabled, seconds]);
 }

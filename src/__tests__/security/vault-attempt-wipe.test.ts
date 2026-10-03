@@ -155,3 +155,24 @@ describe('attempt-wipe self-heal on a vault that predates the setting', () => {
     expect((await db.localSettings.get('local'))?.paranoidAttemptWipeArmedNotice).toBeUndefined();
   });
 });
+
+describe('the failed-attempt counter across tabs', () => {
+  // Unlocks are serialized per tab only; two tabs each did get → +1 → update in
+  // separate transactions, so simultaneous wrong guesses could count once.
+  it('a naive read-modify-write does lose increments here (the race is observable)', async () => {
+    await enableParanoid(PASS);
+    const naive = async () => {
+      const v = await db.vault.get('vault');
+      await db.vault.update('vault', { failedUnlockAttempts: (v?.failedUnlockAttempts ?? 0) + 1 });
+    };
+    await Promise.all([naive(), naive(), naive()]);
+    expect((await db.vault.get('vault'))?.failedUnlockAttempts).toBeLessThan(3);
+  });
+
+  it('incrementFailedAttempts counts every one of them', async () => {
+    const { incrementFailedAttempts } = await import('../../db/vault');
+    await enableParanoid(PASS);
+    await Promise.all([incrementFailedAttempts(), incrementFailedAttempts(), incrementFailedAttempts()]);
+    expect((await db.vault.get('vault'))?.failedUnlockAttempts).toBe(3);
+  });
+});

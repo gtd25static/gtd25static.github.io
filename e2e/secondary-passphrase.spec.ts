@@ -204,6 +204,8 @@ test('F: after a secondary unlock the device stays off GitHub, and re-linking sy
     expect(sync.token, 'PAT in the sync settings').toBe('');
     expect(sync.repo, 'repository in the sync settings').toBe('');
     expect(sync.password, 'sync password in the sync settings').toBe('');
+    expect(sync.tokenSaved, 'a PAT still saved behind the sync settings').toBe(false);
+    expect(sync.passwordSaved, 'a sync password still saved behind the sync settings').toBe(false);
     await closeSettings(page);
 
     const dump = await dumpDeviceStorage(page);

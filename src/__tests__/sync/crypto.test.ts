@@ -339,15 +339,14 @@ describe('encryptChangeEntries / decryptChangeEntries', () => {
       entityType: 'task', entityId: 't3', operation: 'delete',
     };
 
-    // Should not throw — corrupted entry returned as-is
+    // Should not throw — and the corrupted entry is dropped: passed on as-is it
+    // could still be applied, or merged over the snapshot by compaction (forged-enc.test.ts).
     const result = await decryptChangeEntries(testKey, [encrypted[0], corruptedEntry, deleteEntry]);
-    expect(result).toHaveLength(3);
+    expect(result).toHaveLength(2);
     // Good entry decrypted successfully
     expect(result[0].data!.title).toBe('Good');
-    // Corrupted entry returned as-is with _enc still present
-    expect(result[1].data!._enc).toBe('not-valid-base64-encrypted-data!!');
     // Delete entry unchanged
-    expect(result[2]).toEqual(deleteEntry);
+    expect(result[1]).toEqual(deleteEntry);
   });
 });
 

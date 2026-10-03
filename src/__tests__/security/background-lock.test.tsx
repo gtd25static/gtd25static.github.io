@@ -106,3 +106,46 @@ describe('clampBackgroundLockSeconds', () => {
     expect(clampBackgroundLockSeconds(12.9)).toBe(12);
   });
 });
+
+describe('useBackgroundLock — arming when the vault opens already hidden', () => {
+  // Unlocking with the tab already in the background (a remote unlock that
+  // landed while you switched away, or Argon2id finishing after you did) never
+  // armed the hidden-timer: it only listened for the NEXT visibility change.
+  it('counts from the moment it starts while hidden', () => {
+    setVisibilityQuiet('hidden');
+    renderHook(() => useBackgroundLock(true, 30));
+    act(() => { vi.advanceTimersByTime(30_000); });
+    expect(mockLock).toHaveBeenCalledTimes(1);
+  });
+
+  it('locks at once with a 0 s delay', () => {
+    setVisibilityQuiet('hidden');
+    renderHook(() => useBackgroundLock(true, 0));
+    expect(mockLock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('useBackgroundLock — a page that is frozen or cached cannot run its timer', () => {
+  // A frozen tab (Android) or one in the back/forward cache runs no JavaScript,
+  // so the hidden-timer never fires and the key stays in memory however long it
+  // sits there. With lock-when-hidden on, those moments lock at once.
+  it('locks when the page is frozen', () => {
+    renderHook(() => useBackgroundLock(true, 30));
+    act(() => { document.dispatchEvent(new Event('freeze')); });
+    expect(mockLock).toHaveBeenCalledTimes(1);
+  });
+
+  it('locks when the page goes into the back/forward cache', () => {
+    renderHook(() => useBackgroundLock(true, 30));
+    const event = new Event('pagehide') as Event & { persisted: boolean };
+    Object.defineProperty(event, 'persisted', { value: true });
+    act(() => { window.dispatchEvent(event); });
+    expect(mockLock).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves both alone when the feature is off', () => {
+    renderHook(() => useBackgroundLock(false, 30));
+    act(() => { document.dispatchEvent(new Event('freeze')); });
+    expect(mockLock).not.toHaveBeenCalled();
+  });
+});

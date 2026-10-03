@@ -268,6 +268,19 @@ function validatePayload(parsed: ExportPayload): ImportData {
     throw new Error('Invalid backup: too many records');
   }
 
+  // Encryption bookkeeping is never something a backup may set: a row carrying a
+  // bogus `_enc` was stored beside it in plaintext on a Paranoid device.
+  const withoutBookkeeping = <T,>(rows: T[]): T[] => rows.map((row) => {
+    const { _enc: _ciphertext, _decryptError: _quarantined, ...rest } = row as Record<string, unknown>;
+    return rest as T;
+  });
+  parsed.taskLists = withoutBookkeeping(parsed.taskLists);
+  parsed.tasks = withoutBookkeeping(parsed.tasks);
+  parsed.subtasks = withoutBookkeeping(parsed.subtasks);
+  if (Array.isArray(parsed.mindmapFolders)) parsed.mindmapFolders = withoutBookkeeping(parsed.mindmapFolders);
+  if (Array.isArray(parsed.mindmaps)) parsed.mindmaps = withoutBookkeeping(parsed.mindmaps);
+  if (Array.isArray(parsed.mindmapNodes)) parsed.mindmapNodes = withoutBookkeeping(parsed.mindmapNodes);
+
   const VALID_TASK_STATUSES = new Set(['todo', 'done', 'blocked']);
   const VALID_LIST_TYPES = new Set(['tasks', 'follow-ups']);
   const warnings: string[] = [];

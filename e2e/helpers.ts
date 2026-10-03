@@ -224,12 +224,23 @@ export async function configureSync(
   await expect(saved).toBeVisible();
 }
 
-export async function readSyncSettings(page: Page): Promise<{ token: string; repo: string; password: string }> {
+/**
+ * What the sync settings show. On a Paranoid device the saved PAT and sync
+ * password never reach the fields (they start empty), so `tokenSaved` /
+ * `passwordSaved` read the "Saved — …" placeholder that says one is stored.
+ */
+export async function readSyncSettings(page: Page): Promise<{
+  token: string; repo: string; password: string; tokenSaved: boolean; passwordSaved: boolean;
+}> {
   const section = await syncSection(page);
+  const token = section.getByLabel('Personal Access Token', { exact: true });
+  const password = section.getByLabel('Encryption Password', { exact: true });
   return {
-    token: await section.getByLabel('Personal Access Token', { exact: true }).inputValue(),
+    token: await token.inputValue(),
     repo: await section.getByLabel('Repository (owner/name)', { exact: true }).inputValue(),
-    password: await section.getByLabel('Encryption Password', { exact: true }).inputValue(),
+    password: await password.inputValue(),
+    tokenSaved: /saved/i.test((await token.getAttribute('placeholder')) ?? ''),
+    passwordSaved: /saved/i.test((await password.getAttribute('placeholder')) ?? ''),
   };
 }
 

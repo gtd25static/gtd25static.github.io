@@ -179,3 +179,24 @@ describe('PrivacyOverlay', () => {
     expect(screen.getByText(/Locking in 1:2[0-9]/)).toBeInTheDocument();
   });
 });
+
+describe('PrivacyOverlay — opened while already in the background', () => {
+  it('counts down from the start when the app comes up hidden', () => {
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' });
+    render(<PrivacyOverlay />);
+    act(() => { vi.advanceTimersByTime(TIMEOUT_MS / 2 + 2_000); });
+    expect(veil()).not.toBeNull();
+  });
+});
+
+describe('PrivacyOverlay — what the veil covers', () => {
+  // Modal <dialog>s are shown with showModal(), which puts them in the browser's
+  // top layer, above any z-index: an open form, a confirm, or the Focus nudge
+  // that pops up while you are away stayed legible above the veil. jsdom has no
+  // top layer, so pin the rule at the source.
+  it('hides open dialogs while veiled', async () => {
+    const { readFileSync } = await import('node:fs');
+    const css = readFileSync('src/styles/index.css', 'utf8');
+    expect(css).toMatch(/\.gtd-veiled dialog\[open\][^{]*\{[^}]*visibility:\s*hidden/);
+  });
+});

@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect } from 'react';
 import { createTask } from './use-tasks';
 import { getOrCreateInbox } from './use-task-lists';
 import { toast } from '../components/ui/Toast';
@@ -84,54 +84,51 @@ export function formatCaptureResult(title: string, url: string, text: string): C
   return { title: title || text };
 }
 
+// A capture read from the address bar, waiting for the app to be up to file it.
+let pendingCapture: CaptureResult | null = null;
+
 /**
- * Hook that checks for capture params on mount and creates an inbox task.
- * Triggers on:
+ * Take a capture from the address bar and scrub it at once (ACR-004). Triggers on:
  *   - /capture?title=...&url=...&text=... (Web Share Target on Android)
  *   - /?capture&title=...&url=... (bookmarklet, browser tab)
  *   - /?protocol=web%2Bgtd%3Acapture%3F... (bookmarklet, installed app —
  *     Chrome's protocol handler launch; see parseProtocolCapture)
+ * main.tsx calls this before the first render: on a locked Paranoid device the
+ * app shows the lock screen, and the captured page's title and URL used to sit
+ * in the address bar until someone unlocked. useUrlCapture files it later.
  */
+export function takeCaptureFromUrl(): void {
+  const params = new URLSearchParams(window.location.search);
+  const isShareTarget = window.location.pathname === '/capture';
+  const isBookmarklet = params.has('capture');
+  const isProtocol = params.has('protocol');
+  if (!isShareTarget && !isBookmarklet && !isProtocol) return;
+
+  // The sanitized values are read into locals before the scrub.
+  const protocolResult = isProtocol ? parseProtocolCapture(params.get('protocol')) : null;
+  const title = sanitize(params.get('title'));
+  const url = sanitize(params.get('url'));
+  const text = sanitize(params.get('text'));
+  cleanUrl();
+
+  // A protocol launch carries everything inside its own URL.
+  if (isProtocol) {
+    pendingCapture = protocolResult;
+    return;
+  }
+  if (!title && !url && !text) return;
+  const result = formatCaptureResult(title, url, text);
+  result.title = result.title.slice(0, MAX_TITLE_LENGTH);
+  if (result.title) pendingCapture = result;
+}
+
+/** Files the capture taken from the address bar (see takeCaptureFromUrl) into the Inbox, once. */
 export function useUrlCapture() {
-  const handled = useRef(false);
-
   useEffect(() => {
-    if (handled.current) return;
-
-    const params = new URLSearchParams(window.location.search);
-    const isShareTarget = window.location.pathname === '/capture';
-    const isBookmarklet = params.has('capture');
-    const isProtocol = params.has('protocol');
-
-    if (!isShareTarget && !isBookmarklet && !isProtocol) return;
-
-    handled.current = true;
-
-    const protocolResult = isProtocol ? parseProtocolCapture(params.get('protocol')) : null;
-    const title = sanitize(params.get('title'));
-    const url = sanitize(params.get('url'));
-    const text = sanitize(params.get('text'));
-
-    // Clear the share-target query string from the address bar/history IMMEDIATELY,
-    // before any async work, so the shared content (which the GET share target puts in
-    // the URL) lingers for the shortest possible window (ACR-004). The sanitized values
-    // are already captured in locals above.
-    cleanUrl();
-
-    // A protocol launch carries everything inside its own URL.
-    if (isProtocol) {
-      if (protocolResult) captureToInbox(protocolResult);
-      return;
-    }
-
-    // Skip if all params are empty
-    if (!title && !url && !text) return;
-
-    const result = formatCaptureResult(title, url, text);
-    result.title = result.title.slice(0, MAX_TITLE_LENGTH);
-    if (!result.title) return;
-
-    captureToInbox(result);
+    takeCaptureFromUrl(); // already done by main.tsx in the app; a no-op then
+    const capture = pendingCapture;
+    pendingCapture = null;
+    if (capture) void captureToInbox(capture);
   }, []);
 }
 

@@ -61,3 +61,22 @@ describe('useUrlCapture — share-target URL scrubbing (ACR-004)', () => {
     expect(createTask).not.toHaveBeenCalled();
   });
 });
+
+describe('useUrlCapture — a capture that arrives at a locked vault (threat-model review)', () => {
+  // The hook only runs once the vault is unlocked, so on a Paranoid device the
+  // captured page's title and URL sat in the address bar above "Vault locked"
+  // until someone unlocked. main.tsx now takes the capture before the first
+  // render; the hook files it once the app is up.
+  it('takeCaptureFromUrl scrubs the address bar at once, and the hook files it later', async () => {
+    const { takeCaptureFromUrl } = await import('../../hooks/use-url-capture');
+    window.history.replaceState({}, '', '/?capture&title=Secret%20page&url=https%3A%2F%2Fx.com');
+
+    takeCaptureFromUrl();
+    expect(window.location.search).toBe('');
+    expect(createTask).not.toHaveBeenCalled(); // nothing written while locked
+
+    render(<Harness />);
+    await waitFor(() => expect(createTask).toHaveBeenCalledTimes(1));
+    expect(createTask.mock.calls[0][1]).toMatchObject({ title: 'Secret page', link: 'https://x.com' });
+  });
+});

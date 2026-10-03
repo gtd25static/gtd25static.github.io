@@ -25,6 +25,7 @@ import {
 import { encryptBytes, decryptBytes, getCachedEncryptionKey } from './crypto';
 import { getActiveAtRestKey } from '../db/vault-middleware';
 import { isParanoidFlagSet } from '../db/paranoid-flag';
+import { recordError } from '../lib/diagnostics';
 
 const BLOB_DIR = 'gtd25-shared';
 export const BLOB_BRANCH = 'gtd25-blobs';
@@ -117,7 +118,16 @@ async function readBlobLocal(blobId: string): Promise<Uint8Array | null> {
   // the bytes are unreadable, not plaintext — report a miss rather than hand
   // ciphertext back as if it were the file.
   if (!dek && isParanoidFlagSet()) return null;
-  return dek ? decryptBytes(dek, row.data) : row.data;
+  if (!dek) return row.data;
+  try {
+    return await decryptBytes(dek, row.data);
+  } catch (err) {
+    // Not under this key (a corrupt or stale entry): a miss, so the file is
+    // downloaded again, rather than an error every time it is opened.
+    recordError('sharedBlobs.readCache', err);
+    await db.sharedBlobs.delete(blobId);
+    return null;
+  }
 }
 
 // --- Public API ---

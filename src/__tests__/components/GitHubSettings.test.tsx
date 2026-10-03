@@ -301,3 +301,49 @@ describe('GitHubSettings — Paranoid: where this device syncs is behind the pas
     expect(h.requirePassphrase).not.toHaveBeenCalled();
   });
 });
+
+describe('GitHubSettings — Paranoid: the saved credentials never reach the form', () => {
+  // The passphrase gate guarded CHANGING where this device syncs, but the form
+  // was prefilled with the PAT and sync password (each with a reveal toggle), so
+  // an unattended unlocked session could simply read them — the same lasting
+  // access to every later change, without changing anything (threat-model review).
+  beforeEach(() => {
+    h.updateLocalSettings.mockClear();
+    h.setVaultSecrets.mockClear();
+    h.requirePassphrase.mockReset();
+    h.requirePassphrase.mockResolvedValue('the passphrase');
+    h.isRemoteUnlockEnrolled.mockResolvedValue(false);
+    h.vault = { enabled: true, unlocked: true };
+    h.secrets = { githubPat: 'ghp_SECRET_TOKEN', syncPassword: 'SECRET sync words here' };
+    h.local = { githubRepo: 'owner/repo', syncEnabled: true };
+  });
+
+  it('shows neither secret, only that one is saved', () => {
+    const { container } = render(<GitHubSettings />);
+    expect(screen.getByLabelText('Personal Access Token')).toHaveValue('');
+    expect(screen.getByLabelText('Encryption Password')).toHaveValue('');
+    expect(screen.getByLabelText('Personal Access Token')).toHaveAttribute('placeholder', expect.stringMatching(/saved/i));
+    expect(screen.getByLabelText('Encryption Password')).toHaveAttribute('placeholder', expect.stringMatching(/saved/i));
+    expect(container.innerHTML).not.toContain('SECRET');
+  });
+
+  it('saving with the fields left empty keeps both secrets, and asks for nothing', async () => {
+    const user = userEvent.setup();
+    render(<GitHubSettings />);
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    expect(h.requirePassphrase).not.toHaveBeenCalled();
+    expect(h.setVaultSecrets).toHaveBeenCalledWith({ githubPat: 'ghp_SECRET_TOKEN', syncPassword: 'SECRET sync words here' });
+    expect(h.updateLocalSettings).toHaveBeenCalledWith(expect.objectContaining({ syncEnabled: true }));
+  });
+
+  it('a new PAT typed in replaces the saved one, behind the passphrase', async () => {
+    const user = userEvent.setup();
+    render(<GitHubSettings />);
+    await user.type(screen.getByLabelText('Personal Access Token'), 'github_pat_NEW');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    expect(h.requirePassphrase).toHaveBeenCalledOnce();
+    expect(h.setVaultSecrets).toHaveBeenCalledWith(expect.objectContaining({ githubPat: 'github_pat_NEW', syncPassword: 'SECRET sync words here' }));
+    // …and does not stay on screen afterwards.
+    expect(screen.getByLabelText('Personal Access Token')).toHaveValue('');
+  });
+});

@@ -34,7 +34,7 @@
 // encrypted itself just before the flag went down.
 
 import Dexie, { type Middleware, type DBCore, type DBCoreTable } from 'dexie';
-import { encryptEntity, decryptEntity } from '../sync/crypto';
+import { encryptEntity, decryptEntity, SENSITIVE_FIELDS } from '../sync/crypto';
 import { recordError } from '../lib/diagnostics';
 import { isParanoidFlagSet } from './paranoid-flag';
 
@@ -53,17 +53,37 @@ function isHandledTable(name: string): boolean {
   return name === 'changeLog' || name in ENTITY_TYPE_BY_TABLE;
 }
 
+/**
+ * Whether `row` is at-rest ciphertext that may be stored as it is: its `_enc` is
+ * a ciphertext string AND no content field sits beside it in the clear. Any
+ * truthy `_enc` used to count — so a row that picked up a forged `_enc` from
+ * sync was stored verbatim, real content and all. (`fieldTimestamps` is not
+ * content here: rows written before SYNC_VERSION 7 still carry it beside their
+ * ciphertext until their next write.)
+ */
+function isAtRestCiphertext(entityType: string, row: Row): boolean {
+  if (typeof row._enc !== 'string') return false;
+  return !(SENSITIVE_FIELDS[entityType] ?? []).some((f) => f !== 'fieldTimestamps' && row[f] !== undefined);
+}
+
 function needsEncryption(table: string, row: Row): boolean {
   if (table === 'changeLog') {
     if (row.operation !== 'upsert' || row.data == null) return false;
-    return !(row.data as Row)._enc;
+    return !isAtRestCiphertext(String(row.entityType), row.data as Row);
   }
-  return !!ENTITY_TYPE_BY_TABLE[table] && !row._enc;
+  const entityType = ENTITY_TYPE_BY_TABLE[table];
+  return !!entityType && !isAtRestCiphertext(entityType, row);
 }
 
 function carriesAtRestCiphertext(table: string, row: Row): boolean {
-  if (table === 'changeLog') return (row.data as Row | null | undefined)?._enc !== undefined;
-  return row._enc !== undefined;
+  if (table === 'changeLog') return typeof (row.data as Row | null | undefined)?._enc === 'string';
+  return typeof row._enc === 'string';
+}
+
+/** A row minus a leftover `_enc` that is not its ciphertext (see isAtRestCiphertext). */
+function withoutEnc(row: Row): Row {
+  const { _enc: _stale, ...rest } = row;
+  return rest;
 }
 
 // --- Key provider + migration bypass ---
@@ -116,15 +136,15 @@ export async function encryptRow(table: string, key: CryptoKey, row: Row | null 
     // the enable migration write rows it encrypted IN MEMORY through the normal
     // write path, so it needs no global read/write bypass (whose window made
     // concurrent liveQuery reads return raw `_enc` -> e.g. blank list names).
-    if (data._enc) return row;
-    const encData = await encryptEntity(key, data, String(row.entityType));
+    if (isAtRestCiphertext(String(row.entityType), data)) return row;
+    const encData = await encryptEntity(key, withoutEnc(data), String(row.entityType));
     return { ...row, data: encData };
   }
 
   const entityType = ENTITY_TYPE_BY_TABLE[table];
   if (!entityType) return row;
-  if (row._enc) return row; // already at-rest encrypted -> pass through (see above)
-  return encryptEntity(key, row, entityType);
+  if (isAtRestCiphertext(entityType, row)) return row; // already at-rest encrypted -> pass through (see above)
+  return encryptEntity(key, withoutEnc(row), entityType);
 }
 
 export async function decryptRow(table: string, key: CryptoKey, row: Row | null | undefined): Promise<Row | null | undefined> {
@@ -132,14 +152,18 @@ export async function decryptRow(table: string, key: CryptoKey, row: Row | null 
 
   if (table === 'changeLog') {
     const data = row.data as Row | undefined;
-    if (!data || !data._enc) return row;
+    if (!data || data._enc === undefined) return row;
+    // A non-string `_enc` was never ciphertext: the row is plaintext (it gets
+    // encrypted properly on its next write).
+    if (typeof data._enc !== 'string') return { ...row, data: withoutEnc(data) };
     const decData = await decryptEntity(key, data, String(row.entityType));
     return { ...row, data: decData };
   }
 
   const entityType = ENTITY_TYPE_BY_TABLE[table];
   if (!entityType) return row;
-  if (!row._enc) return row; // already plaintext (e.g. mid-migration)
+  if (row._enc === undefined) return row; // already plaintext (e.g. mid-migration)
+  if (typeof row._enc !== 'string') return withoutEnc(row); // see the changeLog case above
   return decryptEntity(key, row, entityType);
 }
 

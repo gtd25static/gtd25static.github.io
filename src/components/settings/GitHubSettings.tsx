@@ -50,16 +50,21 @@ export function GitHubSettings() {
   // The PAT and sync password live in the vault when Paranoid Mode is on, else
   // in localSettings. Repo is never secret, so always localSettings.
   const currentSyncPassword = paranoid ? (getVaultSecrets()?.syncPassword ?? '') : (local.encryptionPassword ?? '');
+  const storedPat = paranoid ? (getVaultSecrets()?.githubPat ?? '') : (local.githubPat ?? '');
+  // On a Paranoid device the saved secrets never reach the form: changing them is
+  // behind the passphrase, and reading them (prefilled, with a reveal toggle)
+  // gave an unattended unlocked session the same lasting access to every later
+  // change. The fields start empty; left empty, they keep what is saved.
+  const effectivePat = paranoid ? (pat.trim() || storedPat) : pat.trim();
+  const typedPassword = encPassword.trim();
+  const keepsSavedPassword = paranoid && !typedPassword;
 
   // Sync local state when Dexie data (or the unlocked vault) loads.
   useEffect(() => {
     if (initialized) return;
     if (paranoid) {
       if (!unlocked) return; // wait until the vault is unlocked to read secrets
-      const secrets = getVaultSecrets();
-      setPat(secrets?.githubPat ?? '');
       setRepo(local.githubRepo ?? '');
-      setEncPassword(secrets?.syncPassword ?? '');
       setInitialized(true);
     } else if (local.githubPat !== undefined) {
       setPat(local.githubPat ?? '');
@@ -70,10 +75,10 @@ export function GitHubSettings() {
   }, [paranoid, unlocked, local.githubPat, local.githubRepo, local.encryptionPassword, initialized]);
 
   async function handleSave() {
-    const newPassword = encPassword.trim();
+    const newPassword = keepsSavedPassword ? currentSyncPassword : typedPassword;
     const passwordChanged = newPassword !== currentSyncPassword;
     const wasSyncEnabled = local.syncEnabled;
-    const willEnableSync = !!(pat.trim() && repo.trim());
+    const willEnableSync = !!(effectivePat && repo.trim());
     // On a device that already syncs, a new password means re-encrypting the
     // whole repository under it (sync/key-rotation.ts) — run after the other
     // fields are saved, and only when this device can read the remote (a cached
@@ -97,7 +102,7 @@ export function GitHubSettings() {
     // unlocked but unattended session must not be able to point it at another
     // repository (every later change would be streamed there) or swap the key.
     if (paranoid && unlocked) {
-      const credentialsChanged = pat.trim() !== (getVaultSecrets()?.githubPat ?? '')
+      const credentialsChanged = effectivePat !== storedPat
         || repo.trim() !== (local.githubRepo ?? '') || passwordChanged;
       if (credentialsChanged && await requirePassphrase('Your passphrase is needed to change where this device syncs.') === null) return;
     }
@@ -106,7 +111,7 @@ export function GitHubSettings() {
     // holds (never merged — see contentReplacedByLinking). Say so before it
     // happens: it used to be silent, and the only copy was a safety backup.
     if (!wasSyncEnabled && willEnableSync) {
-      const replaced = await contentReplacedByLinking(pat.trim(), repo.trim());
+      const replaced = await contentReplacedByLinking(effectivePat, repo.trim());
       if (replaced && !(await confirmDialog(
         `This device already has ${describeContent(replaced)}. If the repository already holds data, connecting ` +
         'replaces everything on this device with it — this device\'s items are not uploaded. A safety copy is kept ' +
@@ -136,13 +141,13 @@ export function GitHubSettings() {
       if (!unlocked) { toast('Unlock the vault to change sync credentials', 'error'); return; }
       // Secrets go into the vault; localSettings keeps only the non-secret repo,
       // and the plaintext credential fields stay cleared.
-      await setVaultSecrets({ githubPat: pat.trim() || undefined, syncPassword: passwordToStore });
+      await setVaultSecrets({ githubPat: effectivePat || undefined, syncPassword: passwordToStore });
       // Remote unlock/wipe deliberately keeps a plaintext copy of the PAT here:
       // it is the only way a LOCKED device can reach its mailbox. Clearing it on
       // every save silently killed the remote wipe (the watcher stops polling)
       // and the lock screen's "request unlock", while Settings still read
       // "Enabled" — the enrolment lives in the vault row, not in this field.
-      const mailboxPat = (await isRemoteUnlockEnrolled()) ? pat.trim() || undefined : undefined;
+      const mailboxPat = (await isRemoteUnlockEnrolled()) ? effectivePat || undefined : undefined;
       await updateLocalSettings({
         githubRepo: repo.trim() || undefined,
         syncEnabled: willEnableSync,
@@ -158,6 +163,7 @@ export function GitHubSettings() {
       });
     }
     toast('Sync settings saved', 'success');
+    if (paranoid) setPat(''); // a typed-in secret does not stay on screen either
     if (!rotating) return;
 
     const ok = await confirmDialog(
@@ -166,11 +172,12 @@ export function GitHubSettings() {
         : 'Change the sync password? Everything in the repository — the snapshot, every shared file and the backups — is re-encrypted with the new password, and the old one stops working everywhere. Make sure your other devices are online and have synced first: changes they have not pushed yet would be lost. They will ask for the new password on their next sync.',
       { confirmLabel: 'Change password', danger: true },
     );
-    if (!ok) { setEncPassword(currentSyncPassword); setEncPasswordConfirm(''); return; }
+    if (!ok) { setEncPassword(paranoid ? '' : currentSyncPassword); setEncPasswordConfirm(''); return; }
     setRotation({ phase: 'syncing' });
     try {
       const result = await rotateSyncKey(newPassword, setRotation);
       toast(rotationDoneMessage(result), 'success');
+      if (paranoid) setEncPassword('');
       setEncPasswordConfirm('');
     } catch (e) {
       recordError('sync.rotateKey', e);
@@ -191,13 +198,13 @@ export function GitHubSettings() {
   }
 
   async function handleTest() {
-    if (!pat.trim() || !repo.trim()) {
+    if (!effectivePat || !repo.trim()) {
       toast('Enter PAT and repo first', 'error');
       return;
     }
     setTesting(true);
     try {
-      const ok = await testConnection(pat.trim(), repo.trim());
+      const ok = await testConnection(effectivePat, repo.trim());
       if (!ok) recordError('github.connectionTest', new Error('Connection test returned a non-OK response'));
       toast(ok ? 'Connection successful!' : 'Connection failed', ok ? 'success' : 'error');
     } catch (err) {
@@ -216,7 +223,7 @@ export function GitHubSettings() {
         type="password"
         value={pat}
         onChange={(e) => setPat(e.target.value)}
-        placeholder="ghp_..."
+        placeholder={paranoid && storedPat ? 'Saved — type a new one to replace it' : 'ghp_...'}
       />
       <Input
         label="Repository (owner/name)"
@@ -230,12 +237,12 @@ export function GitHubSettings() {
           type="password"
           value={encPassword}
           onChange={(e) => setEncPassword(e.target.value)}
-          placeholder="Required for sync"
+          placeholder={paranoid && currentSyncPassword ? 'Saved — type a new one to change it' : 'Required for sync'}
         />
-        {encPassword.trim() !== currentSyncPassword && encPassword.trim() !== '' && (
-          <PasswordStrengthBar secret={encPassword.trim()} kind="sync" />
+        {typedPassword !== currentSyncPassword && typedPassword !== '' && (
+          <PasswordStrengthBar secret={typedPassword} kind="sync" />
         )}
-        {encPassword.trim() !== currentSyncPassword && encPassword.trim() && (
+        {typedPassword !== currentSyncPassword && typedPassword && (
           <div className="mt-2">
             <Input
               label="Confirm Password"

@@ -185,3 +185,22 @@ describe('showTimerNotification', () => {
     // unhandled rejection and fail the run)
   });
 });
+
+describe('closeAllNotifications reaches window notifications too', () => {
+  // Without a service worker a nudge falls back to `new Notification()`, which
+  // the service-worker sweep run on lock and wipe cannot see.
+  beforeEach(() => {
+    instances.length = 0;
+    MockNotification.permission = 'granted';
+    installNotificationMock();
+    clearServiceWorkerMock();
+  });
+
+  it('closes a fallback nudge', async () => {
+    const { closeAllNotifications } = await import('../../lib/notifications');
+    showNudgeNotification('A gentle nudge', '“REAL TITLE” is overdue.');
+    expect(instances).toHaveLength(1);
+    await closeAllNotifications();
+    expect(instances[0].close).toHaveBeenCalled();
+  });
+});

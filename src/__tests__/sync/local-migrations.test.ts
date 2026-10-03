@@ -77,3 +77,13 @@ describe('4 -> 5: legacy working-status normalization', () => {
     expect(await db.changeLog.count()).toBe(changesBefore);
   });
 });
+
+describe('runLocalMigrations — the chain reaches the current version', () => {
+  // It stopped at 5 → 6, so every start since SYNC_VERSION 7 threw
+  // "No local migration found from version 6" (unawaited, so only logged).
+  it('runs from 6 and from 0 up to SYNC_VERSION without throwing', async () => {
+    const { SYNC_VERSION } = await import('../../sync/version');
+    await expect(runLocalMigrations(db, 6, SYNC_VERSION)).resolves.toBeUndefined();
+    await expect(runLocalMigrations(db, 0, SYNC_VERSION)).resolves.toBeUndefined();
+  });
+});

@@ -10,7 +10,7 @@
 import { db } from './index';
 import {
   generateSalt, createVerifier, checkVerifier,
-  encryptBlob, decryptBlob, clearEncryptionKey,
+  encryptBlob, decryptBlob, clearEncryptionKey, setSyncKeyCacheGuard,
 } from '../sync/crypto';
 import { deriveVaultKek, DEFAULT_ARGON2, LEGACY_KDF, type KdfParams } from './vault-kdf';
 import { generateDek, wrapDek, unwrapDek, importKekFromBytes, generateGarbageSlot, isLegacyWrap } from './vault-crypto';
@@ -122,6 +122,7 @@ async function patchLocalSettings(updates: Partial<LocalSettings>): Promise<void
 // while the tab is open (ACR-002). Only real interaction — via touchVaultActivity()
 // from App.tsx pointer/key handlers — re-arms the idle timer.
 setVaultKeyProvider(() => currentDek);
+setSyncKeyCacheGuard(() => !readFlag() || currentDek !== null);
 
 // --- Idle re-lock ---
 // The timer runs on a clock that stands still while the machine sleeps (Chrome
@@ -706,6 +707,23 @@ export async function clearSecondaryPassphrase(): Promise<void> {
   await db.vault.update('vault', { wrappedDek2: await generateGarbageSlot() });
 }
 
+/**
+ * Count one failed attempt, read and write in ONE transaction. unlockChain only
+ * serializes attempts within this tab; two tabs each reading the count before
+ * either wrote it counted two wrong guesses as one. IndexedDB serializes
+ * read-write transactions on the same store across tabs. Returns the new count
+ * and the configured limit (0 = no wipe), or null without a vault.
+ */
+export async function incrementFailedAttempts(): Promise<{ count: number; max: number } | null> {
+  return db.transaction('rw', db.vault, async () => {
+    const vault = await db.vault.get('vault');
+    if (!vault) return null;
+    const count = (vault.failedUnlockAttempts ?? 0) + 1;
+    await db.vault.update('vault', { failedUnlockAttempts: count });
+    return { count, max: vault.maxUnlockAttempts ?? 0 };
+  });
+}
+
 // Count a failed unlock; trip the panic wipe at the configured limit. The counter
 // lives in the vault row so a reload cannot reset it. Re-reads the LATEST
 // persisted vault (not a possibly-stale snapshot) so the increment is monotonic
@@ -718,11 +736,9 @@ export async function clearSecondaryPassphrase(): Promise<void> {
 async function registerFailedAttempt(method: UnlockMethod = 'passphrase', countsTowardWipe = true): Promise<void> {
   await recordUnlockAttempt(method, false, Date.now());
   if (!countsTowardWipe) return;
-  const vault = await db.vault.get('vault');
-  if (!vault) return;
-  const max = vault.maxUnlockAttempts ?? 0; // 0 => tripwire disabled
-  const count = (vault.failedUnlockAttempts ?? 0) + 1;
-  await db.vault.update('vault', { failedUnlockAttempts: count });
+  const attempts = await incrementFailedAttempts();
+  if (!attempts) return;
+  const { count, max } = attempts;
   if (max > 0 && count >= max) {
     const { panicWipe } = await import('../lib/panic-wipe'); // dynamic: avoids an import cycle
     await panicWipe();
@@ -988,8 +1004,23 @@ async function rewrapPassphrase(passphrase: string): Promise<void> {
   const passSalt = upgrading ? generateSalt() : vault.passSalt;
   const kdf = upgrading ? kdfParams : (vault.kdf ?? kdfParams);
   const kek = await deriveVaultKek(passphrase, passSalt, kdf);
+  // Same salt and KDF as slot 2: a new main passphrase equal to the secondary one
+  // would open both slots — slot 1 first, so the secondary would silently stop
+  // doing its job. Only its owner can trip this, so saying so reveals nothing.
+  if (!upgrading && vault.wrappedDek2 && await opensSlot(kek, vault.wrappedDek2, 'slot2')) {
+    throw new Error('Choose a passphrase different from your secondary passphrase');
+  }
   const dekWrappedByPass = await wrapDek(kek, currentDek, 'slot1');
   await db.vault.update('vault', { passSalt, dekWrappedByPass, kdf });
+}
+
+async function opensSlot(kek: CryptoKey, wrapped: string, slot: 'slot2'): Promise<boolean> {
+  try {
+    await unwrapDek(kek, wrapped, slot);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**

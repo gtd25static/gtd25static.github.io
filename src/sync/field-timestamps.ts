@@ -5,7 +5,10 @@
  * modified. During merge, the newer value for each field wins independently.
  */
 
-const EXCLUDED_FIELDS = new Set(['id', 'createdAt', 'updatedAt', 'fieldTimestamps']);
+// `_enc` (ciphertext) and `_decryptError` (a quarantined row) are encryption
+// bookkeeping, never data: a merge that adopted a remote `_enc` on the strength of
+// its timestamp made the at-rest layer store the decrypted row verbatim.
+const EXCLUDED_FIELDS = new Set(['id', 'createdAt', 'updatedAt', 'fieldTimestamps', '_enc', '_decryptError']);
 
 // Fields merged as id-keyed unions instead of whole-value LWW. discussionLog
 // entries are appended independently on different devices; whole-field LWW
@@ -97,7 +100,8 @@ export function mergeEntity(
   if (!localFT || !remoteFT) {
     const localUpdatedAt = (local.updatedAt as number) ?? 0;
     if (remoteTimestamp >= localUpdatedAt) {
-      return remote;
+      const { _enc: _ciphertext, _decryptError: _quarantined, ...row } = remote;
+      return row;
     }
     return null;
   }

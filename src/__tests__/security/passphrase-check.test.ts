@@ -200,3 +200,22 @@ describe('checkPassphrase when the key cannot be derived', () => {
     expect(labels.join(' ')).not.toMatch(/duress|decoy/i);
   });
 });
+
+describe('changing the main passphrase (without a re-key) to the secondary one', () => {
+  // The change keeps the salt and KDF, so both slots would then open with the
+  // same passphrase — slot 1 first: the secondary passphrase silently became an
+  // ordinary unlock of the real content (threat-model review).
+  it('is refused, and the secondary passphrase keeps doing its job', async () => {
+    await setSecondaryPassphrase(SECONDARY);
+    await expect(changePassphrase(REAL, SECONDARY, { rekey: false })).rejects.toThrow(/different/i);
+    expect(await checkPassphrase(REAL)).toBe('main');
+    expect(await checkPassphrase(SECONDARY)).toBe('secondary');
+  });
+
+  it('any other new passphrase is still accepted', async () => {
+    await setSecondaryPassphrase(SECONDARY);
+    await changePassphrase(REAL, ROTATED, { rekey: false });
+    expect(await checkPassphrase(ROTATED)).toBe('main');
+    expect(await checkPassphrase(SECONDARY)).toBe('secondary');
+  });
+});

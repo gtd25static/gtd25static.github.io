@@ -88,6 +88,19 @@ const localMigrations: LocalMigration[] = [
       // created by the Dexie v8 schema; nothing to backfill.
     },
   },
+  {
+    // No-op: v7 moved fieldTimestamps inside the encrypted blob, which each row
+    // does on its next write. (Missing until 2026-10: every start since v7 threw.)
+    fromVersion: 6,
+    toVersion: 7,
+    migrate: async () => {},
+  },
+  {
+    // No-op: v8 added taskList.savedSearches, absent on older rows.
+    fromVersion: 7,
+    toVersion: 8,
+    migrate: async () => {},
+  },
 ];
 
 export async function runLocalMigrations(database: Gtd25DB, from: number, to: number): Promise<void> {

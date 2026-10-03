@@ -1,7 +1,8 @@
 import { db } from './index';
 import type { Vault } from './models';
 import { generateDek, wrapDek, generateGarbageSlot } from './vault-crypto';
-import { createVerifier, encryptBlob } from '../sync/crypto';
+import { createVerifier, encryptBlob, encryptBytes } from '../sync/crypto';
+import { clearDeviceIdCache } from '../sync/change-log';
 import { CONTENT_TABLES, readContentRows, encryptContentRows } from './vault-content';
 import { placeholderRow, placeholderBlobBytes } from '../lib/placeholder-content';
 import { purgeLocalBackups } from './backup';
@@ -79,8 +80,12 @@ export async function reinitVaultWithPlaceholders(vault: Vault, realDek: CryptoK
   const encByTable = await encryptContentRows(
     newDek, plainByTable, (entityType, { _decryptError: _corrupt, ...row }) => placeholderRow(entityType, row),
   );
-  // Shared-blob cache: keep the ids/structure, replace bytes with dummy text.
-  const placeholderBlobs = blobs.map((b) => ({ ...b, data: placeholderBlobBytes(b.id) }));
+  // Shared-blob cache: keep the ids/structure, replace bytes with dummy text —
+  // encrypted under the new DEK like every Paranoid cache entry. In plaintext
+  // they could not be opened (every read decrypts) and marked this swap on disk.
+  const placeholderBlobs = await Promise.all(
+    blobs.map(async (b) => ({ ...b, data: await encryptBytes(newDek, placeholderBlobBytes(b.id)) })),
+  );
 
   // 3. Build the re-keyed vault row (slot 1 = new DEK under the duress KEK; slot
   //    2 fresh garbage; verifier/secrets under the new DEK; every real-DEK
@@ -144,6 +149,9 @@ export async function reinitVaultWithPlaceholders(vault: Vault, realDek: CryptoK
   );
 
   // 5. Outside IndexedDB (see the header) — only once the swap has committed.
+  // This tab cached the old device id; left there it would go on stamping every
+  // new change with the id the swap just replaced.
+  clearDeviceIdCache();
   purgeLocalBackups();
   for (const key of SYNC_HISTORY_KEYS) {
     try { localStorage.removeItem(key); } catch { /* storage unavailable */ }

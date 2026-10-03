@@ -2,6 +2,7 @@ import { useEffect } from 'react';
 import { db } from '../db';
 import { useLocalSettings, updateLocalSettings } from './use-settings';
 import { useVault } from './use-vault';
+import { isParanoidEnabled, isUnlocked } from '../db/vault';
 import { computeNudge, shouldNudgeNow } from '../lib/nudges';
 import { endOfDayMs } from '../lib/attention';
 import { showNudgeNotification } from '../lib/notifications';
@@ -57,6 +58,9 @@ export function useNudges() {
 
       // Stamp first to minimise the window where two tabs both fire.
       await updateLocalSettings({ lastNudgeAt: now });
+      // The vault may have locked while this ran: what it read is real content,
+      // and the lock has already cleared notifications and the nudge dialog.
+      if (isParanoidEnabled() && !isUnlocked()) return;
       showNudgeNotification(nudge.title, nudge.body, { sound: local.nudgeSoundEnabled !== false });
       showFocusNudge(nudge);
     }

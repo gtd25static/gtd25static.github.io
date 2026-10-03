@@ -213,3 +213,8 @@ input[type="checkbox"] {
 .gtd-veiled [data-toaster] {
   visibility: hidden;
 }
+/* …and so are modal dialogs: showModal() puts them in the top layer too, so an
+   open form, a confirm or the Focus nudge stayed legible above the veil. */
+.gtd-veiled dialog[open] {
+  visibility: hidden;
+}

@@ -99,6 +99,17 @@ export class FakeGitHub {
     return this.files.get(`${branch}:${path}`)?.bytes.toString('utf8');
   }
 
+  /**
+   * Overwrite (or create) a file as anyone holding the PAT could — an attacker
+   * with backend write access but no sync password (Scenario 7).
+   */
+  writeText(path: string, text: string, branch = DEFAULT_BRANCH): void {
+    const bytes = Buffer.from(text, 'utf8');
+    const sha = gitBlobSha(bytes);
+    this.files.set(`${branch}:${path}`, { bytes, sha });
+    this.blobs.set(sha, bytes);
+  }
+
   /** Every stored file as `branch:path` -> base64 bytes, for byte-identical comparisons. */
   repoContents(): Record<string, string> {
     return Object.fromEntries([...this.files].map(([key, file]) => [key, file.bytes.toString('base64')]));

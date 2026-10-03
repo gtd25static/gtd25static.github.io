@@ -80,6 +80,8 @@ export function PrivacyOverlay({ immediate = false }: { immediate?: boolean }) {
     document.addEventListener('visibilitychange', onVisibility);
     window.addEventListener('blur', enterBackground);
     window.addEventListener('focus', returnToForeground);
+    // Up already in the background (an unlock that finished there): count from now.
+    if (document.visibilityState === 'hidden') enterBackground();
     return () => {
       clearInterval(poll);
       document.removeEventListener('visibilitychange', onVisibility);
@@ -141,7 +143,8 @@ export function PrivacyOverlay({ immediate = false }: { immediate?: boolean }) {
   return (
     <div
       data-testid="privacy-overlay"
-      // Above the app (incl. modals), below toasts' popover top layer.
+      // Above the app. Toasts and modal <dialog>s live in the browser's top
+      // layer, above any z-index: index.css hides them while veiled.
       className="fixed inset-0 z-[90] flex flex-col items-center justify-center gap-3 bg-white/60 backdrop-blur-2xl motion-safe:animate-[privacy-veil-in_150ms_ease-out] dark:bg-zinc-900/60"
     >
       <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" className="text-zinc-500 dark:text-zinc-400" aria-hidden>

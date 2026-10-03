@@ -8,6 +8,7 @@ import { startCrossTabLock, reconcileParanoidFlag } from './db/vault';
 import { onTabSignal } from './lib/tab-channel';
 import { startForgettingSessionOnLock } from './lib/forget-on-lock';
 import { flushPendingClipboardClear, catchUpPendingClipboardClear } from './lib/clipboard-hygiene';
+import { takeCaptureFromUrl } from './hooks/use-url-capture';
 
 // Capture uncaught errors for the in-app diagnostics log, and ask the browser to
 // persist storage so IndexedDB isn't silently evicted (data-loss prevention).
@@ -39,6 +40,11 @@ onTabSignal((signal) => {
     try { window.location.reload(); } catch { /* environment without a real location */ }
   }
 });
+
+// A capture link (bookmarklet, share target, protocol handler) carries the
+// captured page in the URL: take it out of the address bar before anything renders
+// — on a locked Paranoid device the lock screen stays up until someone unlocks.
+takeCaptureFromUrl();
 
 // Finish any wipe whose IndexedDB deletion was blocked (e.g. by a second tab)
 // BEFORE the app opens the database again; renders immediately when none is pending.
