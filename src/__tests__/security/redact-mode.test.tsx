@@ -106,7 +106,6 @@ describe('redact sweep contract', () => {
     'src/components/trash/TrashModal.tsx',
     // Always-visible chrome — the reminders strip was the reported leak
     'src/components/banners/TopBanner.tsx',
-    'src/components/banners/FollowUpsReadyBanner.tsx',
     'src/components/banners/FocusNudgeToast.tsx',
     'src/components/banners/ShareTargetPrompt.tsx',
     'src/components/layout/Sidebar.tsx',

@@ -5,7 +5,6 @@ import { useShallow } from 'zustand/react/shallow';
 import { daysUntil } from '../../lib/date-utils';
 import { db } from '../../db';
 import { MotivationBanner } from './MotivationBanner';
-import { FollowUpsReadyBanner } from './FollowUpsReadyBanner';
 
 interface DueBucket {
   label: string;
@@ -119,7 +118,6 @@ export function TopBanner() {
   return (
     <>
       <DueSoonSection />
-      <FollowUpsReadyBanner />
       <MotivationBanner />
     </>
   );

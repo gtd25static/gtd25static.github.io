@@ -10,16 +10,11 @@ import { vi, describe, it, expect } from 'vitest';
 const dueSoon = [
   { type: 'task' as const, id: 'd1', taskId: 't1', title: 'Due secret', dueDate: Date.now() - 86_400_000 },
 ];
-const followUps = [
-  { taskId: 'f1', listId: 'l1', listName: 'People', title: 'Follow-up secret' },
-];
 
 vi.mock('../../hooks/use-due-soon', () => ({ useDueSoon: () => dueSoon }));
-vi.mock('../../hooks/use-ready-follow-ups', () => ({ useReadyFollowUps: () => followUps }));
 vi.mock('../../hooks/use-motivation', () => ({ useMotivation: () => null }));
 
 import { TopBanner } from '../../components/banners/TopBanner';
-import { FollowUpsReadyBanner } from '../../components/banners/FollowUpsReadyBanner';
 
 /** Redact mode blurs `[data-redact]`; being inside one counts as covered. */
 function isRedacted(el: HTMLElement): boolean {
@@ -32,10 +27,5 @@ describe('redact-mode coverage of the always-visible banners', () => {
     expect(isRedacted(screen.getByText(/Due secret/))).toBe(true);
     // The urgency chrome around it is not content and stays readable.
     expect(isRedacted(screen.getByText('Overdue:'))).toBe(false);
-  });
-
-  it('the Ready-to-discuss banner hides follow-up titles', () => {
-    render(<FollowUpsReadyBanner />);
-    expect(isRedacted(screen.getByText(/Follow-up secret/))).toBe(true);
   });
 });
