@@ -75,7 +75,11 @@ export async function rekeyVaultContent(input: RekeyInput): Promise<{ newDek: Cr
     remote = {
       dekWrappedByRuk: await wrapDek(await importKekFromBytes(ruk), newDek, 'ruk'),
       rukWrappedByDek: await encryptBlob(newDek, b64encode(ruk)),
-      remoteUnlock: vault.remoteUnlock,
+      // The approver list's seal is re-made under the new DEK (see Vault.remoteUnlock).
+      remoteUnlock: vault.remoteUnlock && {
+        approvers: vault.remoteUnlock.approvers,
+        seal: await encryptBlob(newDek, JSON.stringify(vault.remoteUnlock.approvers)),
+      },
     };
   }
   const newVault: Vault = {

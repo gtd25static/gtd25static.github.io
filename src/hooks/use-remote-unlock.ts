@@ -10,11 +10,13 @@ import {
   getMailboxPat, getRepo, requestRemoteUnlock, pollRemoteUnlock, pollRemoteCommands, cancelRemoteUnlock,
   expirePendingUnlock, hasPendingUnlock, refreshRegistryHeartbeat,
   pollApproverInbox, listApprovedDevices, readPendingApproval, approveRemoteUnlock, publishOwnRegistryEntry,
+  dropDecommissionedDevices, recordRemoteDenial,
 } from '../sync/remote-unlock';
 
 const SLOW_POLL_MS = 12_000;   // background cadence (wipe watch / invitations)
 const FAST_POLL_MS = 2_500;    // while an unlock request is pending — keeps approval snappy
 const REFOCUS_POLL_AFTER_MS = 60_000; // only force a poll on refocus after this long hidden
+const DECOMMISSION_CHECK_MS = 60_000; // how often the approver tick looks for forgotten devices
 
 function isHidden(): boolean {
   return typeof document !== 'undefined' && document.visibilityState === 'hidden';
@@ -219,6 +221,7 @@ export function useRemoteApprovals(): { pending: ApprovalRequest | null; approve
   const publishedForSalt = useRef<string | null>(null);
   const current = useRef<ApprovalRequest | null>(null); // mirror of `pending` for callbacks
   const deferredToast = useRef<string | null>(null);     // shown on next focus
+  const lastDecommissionCheck = useRef(0);
 
   // Clear the on-screen prompt. Toast now if focused; otherwise defer to refocus.
   const dismiss = useCallback((toastMsg: string | null) => {
@@ -258,6 +261,12 @@ export function useRemoteApprovals(): { pending: ApprovalRequest | null; approve
       const salt = getCachedSalt();
       if (salt && publishedForSalt.current !== salt && await publishOwnRegistryEntry()) publishedForSalt.current = salt;
       await pollApproverInbox(pat, repo, myId);
+      // Devices another trusted device forgot (maybe stolen): stop showing their
+      // requests here too, without waiting for someone to open the Settings.
+      if (Date.now() - lastDecommissionCheck.current >= DECOMMISSION_CHECK_MS) {
+        lastDecommissionCheck.current = Date.now();
+        await dropDecommissionedDevices(pat, repo);
+      }
       const managed = await listApprovedDevices();
       for (const m of managed) {
         const p = await readPendingApproval(pat, repo, m.deviceId);
@@ -332,7 +341,13 @@ export function useRemoteApprovals(): { pending: ApprovalRequest | null; approve
     }
   }, [dismiss]);
 
-  const deny = useCallback(() => { dismiss(null); }, [dismiss]);
+  // A denial is remembered: that device's requests pause, and Settings warns that
+  // a request you did not expect means its key is likely out.
+  const deny = useCallback(() => {
+    const cur = current.current;
+    if (cur) void recordRemoteDenial(cur.deviceId).catch((err) => recordError('remoteUnlock.deny', err));
+    dismiss(null);
+  }, [dismiss]);
 
   return { pending, approve, deny };
 }

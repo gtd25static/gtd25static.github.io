@@ -6,7 +6,7 @@ import { db } from '../db';
 import type { LocalSettings, RemoteApproverInfo } from '../db/models';
 import {
   generateIdentityKeys, publicIdentityOf, registryMac, verifyRegistryMac,
-  registryEntryBytes, type DeviceIdentity, type PublicIdentity,
+  registryEntryBytes, identityFingerprint, type DeviceIdentity, type PublicIdentity,
 } from './remote-unlock-crypto';
 import { getFile, putFile, deleteFile, getFileConditional, type ConditionalFile } from './github-api';
 import {
@@ -16,7 +16,7 @@ import {
 import { encryptBlob, decryptBlob } from './crypto';
 import { importKekFromBytes } from '../db/vault-crypto';
 import { isParanoidFlagSet } from '../db/paranoid-flag';
-import { wrapDekWithRuk, unlockWithRemoteKey, clearRemoteUnlock, getVaultSecrets, getRukRaw, isRemoteUnlockEnrolled, isUnlocked } from '../db/vault';
+import { wrapDekWithRuk, unlockWithRemoteKey, clearRemoteUnlock, getVaultSecrets, getRukRaw, isRemoteUnlockEnrolled, isUnlocked, setRemoteApprovers } from '../db/vault';
 export { isRemoteUnlockEnrolled } from '../db/vault'; // re-exported so the UI imports it from one place
 import { getCachedSalt } from './crypto';
 import { deriveRegistryMacKey } from './remote-unlock-crypto';
@@ -79,7 +79,25 @@ export interface RegistryEntry extends RemoteApproverInfo {
   updatedAt: number;
   mac: string;
 }
-type Registry = Record<string, RegistryEntry>; // keyed by deviceId
+/**
+ * A device decommissioned for every trusted device ("forget" / "purge"): MAC'd
+ * like an entry, so a PAT-only writer cannot forge one. Devices used to be
+ * dropped by the mere ABSENCE of their entry — which anyone holding the PAT could
+ * arrange, disarming remote unlock and wipe for every approver at once.
+ */
+export interface RegistryTombstone { deviceId: string; removed: true; removedAt: number; mac: string }
+type Registry = Record<string, RegistryEntry | RegistryTombstone>; // keyed by deviceId
+
+const te0 = new TextEncoder();
+function tombstoneBytes(deviceId: string, removedAt: number): Uint8Array {
+  return te0.encode(`registry-tombstone|${deviceId}|${removedAt}`);
+}
+
+async function isAuthenticTombstone(e: unknown, macKey: CryptoKey): Promise<boolean> {
+  const t = e as Partial<RegistryTombstone> | null;
+  if (!t || t.removed !== true || typeof t.deviceId !== 'string' || !Number.isFinite(t.removedAt) || typeof t.mac !== 'string') return false;
+  return verifyRegistryMac(macKey, t.mac, tombstoneBytes(t.deviceId, t.removedAt!));
+}
 
 export async function buildRegistryEntry(
   deviceId: string, name: string, pub: PublicIdentity, paranoid: boolean, macKey: CryptoKey,
@@ -90,7 +108,8 @@ export async function buildRegistryEntry(
 }
 
 /** True only if the entry's MAC verifies under the syncPassword-derived key. */
-export async function isAuthenticEntry(e: RegistryEntry, macKey: CryptoKey): Promise<boolean> {
+export async function isAuthenticEntry(e: RegistryEntry | RegistryTombstone, macKey: CryptoKey): Promise<boolean> {
+  if ('removed' in e) return false;
   if (!e || typeof e.mac !== 'string' || !e.deviceId || !e.ecdhPub || !e.ecdsaPub) return false;
   return verifyRegistryMac(macKey, e.mac, registryEntryBytes({
     deviceId: e.deviceId, name: e.name, ecdhPub: e.ecdhPub, ecdsaPub: e.ecdsaPub,
@@ -102,19 +121,21 @@ export function mergeEntry(reg: Registry, entry: RegistryEntry): Registry {
   return { ...reg, [entry.deviceId]: entry };
 }
 
-function safeParseRegistry(s: string): Registry {
+/** The registry map, or null when the file is not one (corrupt, an array, a primitive). */
+function safeParseRegistry(s: string): Registry | null {
   try {
     const v = JSON.parse(s) as unknown;
-    return v && typeof v === 'object' ? (v as Registry) : {};
+    return v && typeof v === 'object' && !Array.isArray(v) ? (v as Registry) : null;
   } catch {
-    return {};
+    return null;
   }
 }
 
 /** Publish/update this device's authenticated registry entry (merges into the file). */
 export async function publishRegistryEntry(pat: string, repo: string, entry: RegistryEntry): Promise<void> {
   const existing = await getFile(pat, repo, REGISTRY_PATH);
-  const next = mergeEntry(existing ? safeParseRegistry(existing.data) : {}, entry);
+  // A corrupt file holds nothing worth keeping: its entries are already gone.
+  const next = mergeEntry((existing && safeParseRegistry(existing.data)) ?? {}, entry);
   await putFile(pat, repo, REGISTRY_PATH, JSON.stringify(next), existing?.sha);
 }
 
@@ -122,10 +143,10 @@ export async function publishRegistryEntry(pat: string, repo: string, entry: Reg
 export async function readAuthenticRegistry(pat: string, repo: string, macKey: CryptoKey): Promise<RegistryEntry[]> {
   const file = await getFile(pat, repo, REGISTRY_PATH);
   if (!file) return [];
-  const reg = safeParseRegistry(file.data);
+  const reg = safeParseRegistry(file.data) ?? {};
   const out: RegistryEntry[] = [];
   for (const e of Object.values(reg)) {
-    if (await isAuthenticEntry(e, macKey)) out.push(e);
+    if (e && await isAuthenticEntry(e, macKey)) out.push(e as RegistryEntry);
   }
   return out;
 }
@@ -136,6 +157,14 @@ export async function readAuthenticRegistry(pat: string, repo: string, macKey: C
 
 export const approverInboxPath = (deviceId: string): string => `gtd25-approver-${deviceId}.json`;
 const REQUEST_TTL_MS = 2 * 60_000;
+// A request dated further ahead than this is not shown: one dated a month out
+// (signed with a key lifted from a disk image) would otherwise wait on every
+// approver for a month. Covers ordinary clock drift between two devices.
+const REQUEST_FUTURE_SKEW_MS = 2 * 60_000;
+// After a denial, that device's requests are not shown for this long: a request
+// you did not make, repeated every few seconds until someone taps Approve, was the
+// way to wear an approver down.
+export const DENIAL_PAUSE_MS = 10 * 60_000;
 
 function safeParseObj<T>(s: string): Record<string, T> {
   try {
@@ -203,6 +232,8 @@ export interface ManagedDevice {
   lastWipeAck?: { commandNonce: string; wipedAt: number; verifiedAt: number };
   /** Its registry entry's last refresh (see refreshRegistryHeartbeat); absent until first read. */
   lastSeenAt?: number;
+  /** When an unlock request from it was last declined here (see recordRemoteDenial). */
+  lastDeniedAt?: number;
 }
 
 /** A protected device refreshes its registry entry at most this often, while unlocked. */
@@ -239,9 +270,12 @@ export async function enableRemoteUnlock(ctx: EnrollContext, approverDeviceIds: 
   const approvers = authentic.filter((e) => approverDeviceIds.includes(e.deviceId) && !e.paranoid && e.deviceId !== deviceId);
   if (approvers.length === 0) throw new Error('Select at least one eligible (non-Paranoid) approver device');
 
+  // Deliver first, wrap last — like removeApprover. The other way round, a failed
+  // delivery left the DEK wrapped under a key some approvers held while Settings
+  // read "Enabled" with no approver listed and no PAT for the wipe watcher.
   const ruk = crypto.getRandomValues(new Uint8Array(32));
+  const delivered: string[] = [];
   try {
-    await wrapDekWithRuk(ruk);
     for (const a of approvers) {
       const rukEcies = await eciesEncryptTo(a.ecdhPub, ruk);
       const ts = Date.now();
@@ -249,14 +283,20 @@ export async function enableRemoteUnlock(ctx: EnrollContext, approverDeviceIds: 
       await postApproverInvite(pat, repo, a.deviceId, {
         fromDeviceId: deviceId, fromName: deviceName, fromEcdsaPub: identity.ecdsaPub, rukEcies, ts, sig,
       });
+      delivered.push(a.deviceId);
     }
+    await wrapDekWithRuk(ruk);
+  } catch (err) {
+    // Take back what was handed out: nothing opens with it, but nobody should hold it.
+    for (const id of delivered) {
+      await removeApproverInvite(pat, repo, id, deviceId).catch((e) => recordError('remoteUnlock.enable.rollback', e));
+    }
+    throw err;
   } finally {
     ruk.fill(0);
   }
 
-  await db.vault.update('vault', {
-    remoteUnlock: { approvers: approvers.map((a) => ({ deviceId: a.deviceId, name: a.name, ecdhPub: a.ecdhPub, ecdsaPub: a.ecdsaPub })) },
-  });
+  await setRemoteApprovers(approvers.map((a) => ({ deviceId: a.deviceId, name: a.name, ecdhPub: a.ecdhPub, ecdsaPub: a.ecdsaPub })));
   // Keep the PAT plaintext so the locked device can reach the mailbox.
   await db.localSettings.update('local', { githubPat: pat });
   return approvers;
@@ -288,7 +328,9 @@ export async function addApprovers(ctx: EnrollContext, approverDeviceIds: string
     ruk.fill(0);
   }
   const merged = [...(vault?.remoteUnlock?.approvers ?? []), ...toAdd.map((a) => ({ deviceId: a.deviceId, name: a.name, ecdhPub: a.ecdhPub, ecdsaPub: a.ecdsaPub }))];
-  await db.vault.update('vault', { remoteUnlock: { approvers: merged } });
+  await setRemoteApprovers(merged);
+  // The locked device's mailbox poll (and the wipe watcher) needs the PAT in the clear.
+  await db.localSettings.update('local', { githubPat: pat });
   return toAdd;
 }
 
@@ -317,7 +359,16 @@ export async function removeApprover(ctx: EnrollContext, targetDeviceId: string)
   if (!approvers.some((a) => a.deviceId === targetDeviceId)) {
     throw new Error('That device is not one of this vault’s approvers');
   }
-  const staying = approvers.filter((a) => a.deviceId !== targetDeviceId);
+  // An approver that has since turned Paranoid (its entry says so) or replaced its
+  // identity no longer qualifies: the new key is not sent to it — it would sit in a
+  // mailbox nobody empties, encrypted to a private key left in plaintext on that disk.
+  const authentic = await readAuthenticRegistry(pat, repo, ctx.macKey).catch(() => [] as RegistryEntry[]);
+  const stillEligible = (a: RemoteApproverInfo) => {
+    const e = authentic.find((r) => r.deviceId === a.deviceId);
+    if (!e) return true; // not in the registry right now: nothing says otherwise
+    return !e.paranoid && JSON.stringify(e.ecdhPub) === JSON.stringify(a.ecdhPub);
+  };
+  const staying = approvers.filter((a) => a.deviceId !== targetDeviceId && stillEligible(a));
 
   if (staying.length === 0) {
     // Nothing left to hold a rotated RUK; a lone wrap would just be dead weight.
@@ -350,7 +401,7 @@ export async function removeApprover(ctx: EnrollContext, targetDeviceId: string)
     recordError('remoteUnlock.removeApprover.partial', err);
     throw new Error(delivered === 0
       ? 'Could not reach the trusted devices — nothing was changed, remote unlock still works as before.'
-      : `Interrupted after handing the new key to ${delivered} of ${staying.length} device(s). Remote unlock is not usable until you run this again — the vault itself is unaffected, and retrying is safe.`);
+      : `Interrupted after handing the new key to ${delivered} of ${staying.length} device(s). Until you run this again the device you are removing can still unlock this one, and the ones that got the new key cannot — the vault itself is unaffected, and retrying is safe.`);
   } finally {
     ruk.fill(0);
   }
@@ -359,7 +410,7 @@ export async function removeApprover(ctx: EnrollContext, targetDeviceId: string)
   // invite only carries a RUK that no longer opens anything.
   await removeApproverInvite(pat, repo, targetDeviceId, deviceId)
     .catch((err) => recordError('remoteUnlock.removeApprover.invite', err));
-  await db.vault.update('vault', { remoteUnlock: { approvers: staying } });
+  await setRemoteApprovers(staying);
   return { remaining: staying.length };
 }
 
@@ -509,6 +560,7 @@ export async function listApprovedDevices(): Promise<ManagedDevice[]> {
     lastWipeCommand: v.lastWipeCommand,
     lastWipeAck: v.lastWipeAck,
     lastSeenAt: v.lastSeenAt,
+    lastDeniedAt: v.lastDeniedAt,
   }));
 }
 
@@ -575,23 +627,23 @@ async function deleteRemoteFileIfExists(pat: string, repo: string, path: string)
   }
 }
 
-/** Best-effort removal of a device's authenticated registry entry. This is the shared
- *  "decommissioned" signal: registry entries are durable, so other trusted devices read
- *  the entry's absence and drop the device from their own managed list. */
-async function removeRegistryEntry(pat: string, repo: string, deviceId: string): Promise<void> {
+/** Best-effort: replace a device's registry entry with an authenticated tombstone —
+ *  the shared "decommissioned" signal every trusted device acts on (see
+ *  RegistryTombstone). Without the MAC key nothing authentic can be written; the
+ *  device is then forgotten here only. */
+async function writeRegistryTombstone(pat: string, repo: string, deviceId: string, macKey: CryptoKey | null): Promise<void> {
+  if (!macKey) {
+    recordError('remoteUnlock.tombstone', new Error('No registry key: the device is forgotten on this device only'));
+    return;
+  }
   try {
     const existing = await getFile(pat, repo, REGISTRY_PATH);
-    if (!existing) return;
-    const reg = safeParseRegistry(existing.data);
-    if (!Object.prototype.hasOwnProperty.call(reg, deviceId)) return;
-    delete reg[deviceId];
-    if (Object.keys(reg).length === 0) {
-      await deleteFile(pat, repo, REGISTRY_PATH, existing.sha);
-    } else {
-      await putFile(pat, repo, REGISTRY_PATH, JSON.stringify(reg), existing.sha);
-    }
+    const reg = (existing && safeParseRegistry(existing.data)) ?? {};
+    const removedAt = Date.now();
+    reg[deviceId] = { deviceId, removed: true, removedAt, mac: await registryMac(macKey, tombstoneBytes(deviceId, removedAt)) };
+    await putFile(pat, repo, REGISTRY_PATH, JSON.stringify(reg), existing?.sha);
   } catch (err) {
-    recordError('remoteUnlock.removeRegistryEntry', err);
+    recordError('remoteUnlock.tombstone', err);
   }
 }
 
@@ -603,21 +655,24 @@ async function removeRegistryEntry(pat: string, repo: string, deviceId: string):
  * Which devices the registry lists, and — for the entries whose MAC verifies
  * (so a backend writer can't fake one) — when each was last refreshed.
  */
-async function readRegistryKeys(pat: string, repo: string, macKey: CryptoKey | null): Promise<{ present: boolean; ids: Set<string>; seenAt: Map<string, number> }> {
+async function readRegistryKeys(pat: string, repo: string, macKey: CryptoKey | null): Promise<{ present: boolean; ids: Set<string>; seenAt: Map<string, number>; tombstoned: Set<string> }> {
   const seenAt = new Map<string, number>();
+  const tombstoned = new Set<string>();
   try {
     const file = await getFile(pat, repo, REGISTRY_PATH);
-    if (!file) return { present: false, ids: new Set<string>(), seenAt };
-    const reg = safeParseRegistry(file.data);
+    const reg = file ? safeParseRegistry(file.data) : null;
+    if (!reg) return { present: false, ids: new Set<string>(), seenAt, tombstoned };
     if (macKey) {
       for (const e of Object.values(reg)) {
-        if (Number.isFinite(e?.updatedAt) && await isAuthenticEntry(e, macKey)) seenAt.set(e.deviceId, e.updatedAt);
+        if (!e) continue;
+        if (await isAuthenticTombstone(e, macKey)) tombstoned.add(e.deviceId);
+        else if ('updatedAt' in e && Number.isFinite(e.updatedAt) && await isAuthenticEntry(e, macKey)) seenAt.set(e.deviceId, e.updatedAt);
       }
     }
-    return { present: true, ids: new Set(Object.keys(reg)), seenAt };
+    return { present: true, ids: new Set(Object.keys(reg)), seenAt, tombstoned };
   } catch (err) {
     recordError('remoteUnlock.readRegistryKeys', err);
-    return { present: false, ids: new Set<string>(), seenAt };
+    return { present: false, ids: new Set<string>(), seenAt, tombstoned };
   }
 }
 
@@ -753,11 +808,11 @@ export async function refreshManagedDeviceWipeStatuses(pat: string, repo: string
 
   const decisions: Record<string, LifecycleDecision> = {};
   for (const deviceId of Object.keys(snapshot)) {
-    // Decommission wins over everything: a device removed from the registry by any trusted
-    // device is gone for all of them — even if a "forgotten" device still has an armed wipe
-    // command file. Only act when the registry file actually exists (a missing file is
-    // transient, not a signal to mass-drop every managed device).
-    if (registry.present && !registry.ids.has(deviceId)) {
+    // Decommission wins over everything: a device another trusted device forgot or purged
+    // is gone for all of them — even with a wipe command still armed. Only an AUTHENTIC
+    // tombstone counts: absence, a corrupt file or a forged tombstone are things anyone
+    // with the PAT can produce.
+    if (registry.tombstoned.has(deviceId)) {
       decisions[deviceId] = { kind: 'drop' };
       continue;
     }
@@ -816,7 +871,29 @@ export async function refreshManagedDeviceWipeStatuses(pat: string, repo: string
   return listApprovedDevices();
 }
 
-export async function purgeManagedDevice(pat: string, repo: string, targetDeviceId: string): Promise<void> {
+/**
+ * Approver, in the background: drop the managed devices another trusted device has
+ * decommissioned (authentic tombstones only). The full refresh runs only while the
+ * Security settings are open, so a forgotten — maybe stolen — device's unlock
+ * prompts kept appearing on the others until someone opened them. Returns the ids dropped.
+ */
+export async function dropDecommissionedDevices(pat: string, repo: string, macKey?: CryptoKey): Promise<string[]> {
+  if (isParanoidFlagSet()) return [];
+  const local = await db.localSettings.get('local');
+  const managed = Object.keys(local?.remoteApproverFor ?? {});
+  if (managed.length === 0) return [];
+  const registry = await readRegistryKeys(pat, repo, macKey ?? await getRegistryMacKey().catch(() => null));
+  const gone = managed.filter((id) => registry.tombstoned.has(id));
+  if (gone.length > 0) {
+    await mutateRemoteApproverFor((cur) => {
+      for (const id of gone) delete cur[id];
+      return cur;
+    });
+  }
+  return gone;
+}
+
+export async function purgeManagedDevice(pat: string, repo: string, targetDeviceId: string, macKey?: CryptoKey): Promise<void> {
   if (isParanoidFlagSet()) throw new Error('A Paranoid device cannot manage remote wipe records');
   const local = await db.localSettings.get('local');
   if (!local?.remoteApproverFor?.[targetDeviceId]) throw new Error('Not enrolled to manage that device');
@@ -827,7 +904,7 @@ export async function purgeManagedDevice(pat: string, repo: string, targetDevice
   // Best-effort remote cleanup; the local entry is removed regardless (so a transient GitHub
   // failure can never leave a phantom device on this trusted device's list).
   await removeApproverInvite(pat, repo, local.deviceId, targetDeviceId).catch((err) => recordError('remoteUnlock.purge.removeInvite', err));
-  await removeRegistryEntry(pat, repo, targetDeviceId);
+  await writeRegistryTombstone(pat, repo, targetDeviceId, macKey ?? await getRegistryMacKey().catch(() => null));
   await Promise.all([
     deleteRemoteFileIfExists(pat, repo, cmdPath(targetDeviceId)),
     deleteRemoteFileIfExists(pat, repo, wipeStatusPath(targetDeviceId)),
@@ -837,7 +914,7 @@ export async function purgeManagedDevice(pat: string, repo: string, targetDevice
   await mutateRemoteApproverFor((cur) => { delete cur[targetDeviceId]; return cur; });
 }
 
-export async function forgetManagedDeviceAfterWipeCommand(pat: string, repo: string, targetDeviceId: string): Promise<void> {
+export async function forgetManagedDeviceAfterWipeCommand(pat: string, repo: string, targetDeviceId: string, macKey?: CryptoKey): Promise<void> {
   if (isParanoidFlagSet()) throw new Error('A Paranoid device cannot manage remote wipe records');
   const local = await db.localSettings.get('local');
   const entry = local?.remoteApproverFor?.[targetDeviceId];
@@ -852,7 +929,7 @@ export async function forgetManagedDeviceAfterWipeCommand(pat: string, repo: str
   // armed so the target still self-wipes if it ever comes back online. Best-effort remote ops;
   // local entry always removed.
   await removeApproverInvite(pat, repo, local.deviceId, targetDeviceId).catch((err) => recordError('remoteUnlock.forget.removeInvite', err));
-  await removeRegistryEntry(pat, repo, targetDeviceId);
+  await writeRegistryTombstone(pat, repo, targetDeviceId, macKey ?? await getRegistryMacKey().catch(() => null));
   await Promise.all([
     deleteRemoteFileIfExists(pat, repo, unlockReqPath(targetDeviceId)),
     deleteRemoteFileIfExists(pat, repo, unlockRespPath(targetDeviceId)),
@@ -984,6 +1061,8 @@ export async function readPendingApproval(pat: string, repo: string, fromDeviceI
   const req = (() => { try { return JSON.parse(file.data) as UnlockRequest; } catch { return null; } })();
   if (!req || req.fromDeviceId !== fromDeviceId) return null;
   if (Date.now() - req.ts > REQUEST_TTL_MS) return null; // stale / replay
+  if (req.ts > Date.now() + REQUEST_FUTURE_SKEW_MS) return null; // dated ahead
+  if (entry.lastDeniedAt && Date.now() - entry.lastDeniedAt < DENIAL_PAUSE_MS) return null; // just denied
   const myId = local?.deviceId ?? '';
   const myBlob = req.kForApprover[myId];
   if (!myBlob) return null;
@@ -1020,6 +1099,7 @@ export async function approveRemoteUnlock(pat: string, repo: string, fromDeviceI
   const req = (() => { try { return JSON.parse(file.data) as UnlockRequest; } catch { return null; } })();
   if (!req || req.fromDeviceId !== fromDeviceId || !req.kForApprover?.[myId]) throw new Error('No unlock request found');
   if (Date.now() - req.ts > REQUEST_TTL_MS) throw new Error('Request expired');
+  if (req.ts > Date.now() + REQUEST_FUTURE_SKEW_MS) throw new Error('Unlock request is dated in the future — approval aborted');
   // Re-verify the requester signature (the request must be genuine)...
   if (!(await verifyPayload(entry.ecdsaPub, req.sig, requestBytes({ fromDeviceId: req.fromDeviceId, nonce: req.nonce, ts: req.ts, kForApprover: req.kForApprover })))) {
     throw new Error('Unlock request signature is invalid — approval aborted');
@@ -1042,6 +1122,20 @@ export async function approveRemoteUnlock(pat: string, repo: string, fromDeviceI
   } finally {
     k.fill(0);
   }
+}
+
+/**
+ * Approver: remember that a request from this device was declined. Its requests
+ * are not shown for DENIAL_PAUSE_MS, and Settings says what a request you did not
+ * expect means (its key is likely out: remove it, re-key it).
+ */
+export async function recordRemoteDenial(fromDeviceId: string): Promise<void> {
+  await mutateRemoteApproverFor((cur) => {
+    const entry = cur[fromDeviceId];
+    if (!entry) return null;
+    cur[fromDeviceId] = { ...entry, lastDeniedAt: Date.now() };
+    return cur;
+  });
 }
 
 function concat(a: Uint8Array, b: Uint8Array): Uint8Array {
@@ -1073,6 +1167,31 @@ async function getActivePat(): Promise<string | null> {
 }
 
 /** Registry MAC key from the current syncPassword + the cached sync salt, or null. */
+/**
+ * This device's identity fingerprint — what a protected device shows for it while
+ * enrolling approvers. Settings shows it here so the two can actually be compared
+ * (it used to be shown on the protected side only). Null before an identity exists.
+ */
+export async function ownFingerprint(): Promise<string | null> {
+  const local = await db.localSettings.get('local');
+  return local?.deviceIdentity ? identityFingerprint(publicIdentityOf(local.deviceIdentity)) : null;
+}
+
+/**
+ * Right after this device turned Paranoid: publish its (new) identity as Paranoid,
+ * so protected devices stop offering it as an approver and stop sending it keys,
+ * and empty the mailbox of invites addressed to the old identity. Best effort;
+ * needs sync.
+ */
+export async function retireApproverRole(): Promise<void> {
+  await publishOwnRegistryEntry();
+  const local = await db.localSettings.get('local');
+  const repo = local?.githubRepo;
+  const pat = getVaultSecrets()?.githubPat;
+  if (!pat || !repo || !local?.deviceId) return;
+  await deleteRemoteFileIfExists(pat, repo, approverInboxPath(local.deviceId));
+}
+
 export async function getRegistryMacKey(): Promise<CryptoKey | null> {
   const sp = await getSyncPassword();
   const salt = getCachedSalt();

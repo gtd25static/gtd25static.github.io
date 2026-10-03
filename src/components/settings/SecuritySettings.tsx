@@ -25,7 +25,7 @@ import { isWebAuthnSupported } from '../../sync/webauthn-prf';
 import {
   isRemoteUnlockEnrolled, listEnrolledApprovers, listApproverCandidates, buildEnrollContext,
   enableRemoteUnlock, addApprovers, removeApprover, disableRemoteUnlock, setDeviceName, getDeviceName,
-  publishOwnRegistryEntry, listApprovedDevices, sendRemoteWipe, pollApproverInbox,
+  publishOwnRegistryEntry, listApprovedDevices, sendRemoteWipe, pollApproverInbox, ownFingerprint,
   refreshManagedDeviceWipeStatuses, purgeManagedDevice, forgetManagedDeviceAfterWipeCommand,
   type RegistryEntry, type ManagedDevice,
 } from '../../sync/remote-unlock';
@@ -921,6 +921,7 @@ function ManageForm({ idleMinutes, maxAttempts, attemptWipeJustArmed, systemIdle
 // Protected-device side (Paranoid ON, unlocked): enroll trusted devices that can
 // remotely unlock or wipe THIS device.
 function RemoteUnlockSection() {
+  const local = useLocalSettings();
   const [enrolled, setEnrolled] = useState(false);
   const [approvers, setApprovers] = useState<Array<{ deviceId: string; name: string }>>([]);
   const [candidates, setCandidates] = useState<Array<{ e: RegistryEntry; fp: string }> | null>(null);
@@ -1026,7 +1027,8 @@ function RemoteUnlockSection() {
                 <span className="font-medium text-zinc-700 dark:text-zinc-200">{e.name}</span>
               </label>
               <p className="mt-1 font-mono text-[10px] leading-tight text-zinc-400 dark:text-zinc-500">
-                Confirm this matches the fingerprint on that device:<br />{fp}
+                Select it only if this matches the fingerprint that device shows (Settings → Security,
+                under its name) — a device of the same name could be someone else's:<br />{fp}
               </p>
             </li>
           ))}
@@ -1049,6 +1051,14 @@ function RemoteUnlockSection() {
         lock screen — or wipe it if lost. You approve each unlock on the trusted device; nothing is
         typed here. Keeps the GitHub token readable while locked (see the security notes / threat model).
       </p>
+      {local.remoteUnlockTampered && (
+        <div data-remote-unlock-tampered className="rounded-md border border-red-300 bg-red-50 p-2 text-xs text-red-800 dark:border-red-800 dark:bg-red-950/40 dark:text-red-200">
+          On {new Date(local.remoteUnlockTampered).toLocaleString()} the list of trusted devices stored here was found
+          changed while the vault was locked — a swapped key would have received this device's unlock key. Remote
+          unlock was turned off. Re-key this device, then set remote unlock up again.
+          <button type="button" className="ml-2 underline" onClick={() => void updateLocalSettings({ remoteUnlockTampered: undefined })}>Dismiss</button>
+        </div>
+      )}
       {enrolled ? (
         <>
           <p className="text-xs text-emerald-600 dark:text-emerald-400">
@@ -1092,13 +1102,16 @@ function RemoteUnlockSection() {
 function DeviceNameSection() {
   const [name, setName] = useState('');
   const [busy, setBusy] = useState(false);
-  useEffect(() => { void (async () => setName(await getDeviceName()))(); }, []);
+  // What a protected device shows for this one while enrolling it: compare the two.
+  const [fingerprint, setFingerprint] = useState<string | null>(null);
+  useEffect(() => { void (async () => { setName(await getDeviceName()); setFingerprint(await ownFingerprint()); })(); }, []);
 
   async function save() {
     setBusy(true);
     try {
       await setDeviceName(name);
       const published = await publishOwnRegistryEntry();
+      setFingerprint(await ownFingerprint());
       toast(published ? 'Device name saved' : 'Saved (will publish on next sync)', 'success');
     } catch (e) {
       recordError('remoteUnlock.setDeviceName', e);
@@ -1116,6 +1129,11 @@ function DeviceNameSection() {
         <Input label="This device's name" value={name} onChange={(e) => setName(e.target.value)} disabled={busy} />
         <Button size="sm" variant="secondary" onClick={save} disabled={busy}>Save</Button>
       </div>
+      {fingerprint && (
+        <p data-own-fingerprint className="font-mono text-[10px] leading-tight text-zinc-400 dark:text-zinc-500">
+          This device's fingerprint (compare it when another device enrols this one):<br />{fingerprint}
+        </p>
+      )}
     </div>
   );
 }
@@ -1240,6 +1258,12 @@ function ApproverDevicesSection() {
                   <p className={`text-[11px] ${m.lastWipeAck ? 'text-emerald-600 dark:text-emerald-400' : 'text-zinc-400 dark:text-zinc-500'}`}>
                     {wipeStatus(m)}
                   </p>
+                  {m.lastDeniedAt && (
+                    <p data-denied-warning className="text-[11px] text-amber-600 dark:text-amber-400">
+                      You declined an unlock request from it on {formatRemoteWipeTime(m.lastDeniedAt)}. If you did
+                      not expect one, its device key is likely out: forget or wipe it, and re-key it if you have it.
+                    </p>
+                  )}
                   {!m.lastWipeAck && (() => {
                     const activity = deviceActivity(m.lastSeenAt);
                     return activity && (

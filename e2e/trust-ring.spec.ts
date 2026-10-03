@@ -31,6 +31,12 @@ test('a trusted device shows when the protected device was last seen', async ({ 
   await expect.poll(() => github.readText('gtd25-snapshot.json'), { timeout: 60_000 }).toBeTruthy();
   await nameDevice(phone, 'My Phone');
   await expect.poll(() => github.readText('gtd25-devices.json'), { timeout: 60_000 }).toContain('My Phone');
+  // The phone shows its own fingerprint, so the one the laptop shows can be compared
+  // (threat-model review batch 3: it used to be shown on the laptop's side only).
+  const phoneSettings = await openSettings(phone, 'Security');
+  const phoneFingerprint = (await phoneSettings.locator('[data-own-fingerprint]').innerText()).match(/\d{5}( \d{5}){4}/)?.[0];
+  expect(phoneFingerprint, 'the phone shows its fingerprint').toBeTruthy();
+  await closeSettings(phone);
 
   // The laptop: sync on, Paranoid Mode on, trusts the phone.
   await openApp(page);
@@ -40,6 +46,7 @@ test('a trusted device shows when the protected device was last seen', async ({ 
   await enableParanoid(page, MAIN_PASSPHRASE);
   const security = await openSettings(page, 'Security');
   await security.getByRole('button', { name: 'Set up remote unlock' }).click();
+  await expect(security.locator('li').filter({ hasText: 'My Phone' })).toContainText(phoneFingerprint!);
   await security.getByRole('checkbox', { name: /My Phone/ }).check();
   await security.getByRole('button', { name: 'Enable for selected' }).click();
   await page.getByPlaceholder('Vault passphrase').fill(MAIN_PASSPHRASE);

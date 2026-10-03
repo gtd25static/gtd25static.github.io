@@ -29,7 +29,7 @@ import { rekeyVaultContent, type RekeyResult } from './vault-rekey';
 import { DEFAULT_MAX_ATTEMPTS } from '../lib/constants';
 import { purgeLocalBackups, decryptLocalBackups, createLocalBackup } from './backup';
 import { onTabSignal, signalOtherTabs } from '../lib/tab-channel';
-import type { LocalSettings, Vault, PrfCredential } from './models';
+import type { LocalSettings, Vault, PrfCredential, RemoteApproverInfo } from './models';
 
 // Synchronous mirror of "a security-key credential is enrolled", so the lock
 // screen and settings can render the affordance without awaiting IndexedDB.
@@ -368,10 +368,19 @@ async function completeEnable(): Promise<void> {
     githubPat: undefined,
     encryptionPassword: undefined,
     // A Paranoid device must NOT be a remote-unlock approver — drop any approver
-    // secrets it held (enforcement, alongside the runtime refusals in remote-unlock).
+    // secrets it held (enforcement, alongside the runtime refusals in remote-unlock)
+    // and the identity they were sent to: its private keys stay in plaintext on
+    // this disk, and invites still waiting in its mailbox were encrypted to them.
     remoteApproverFor: undefined,
+    deviceIdentity: undefined,
   });
   purgeLocalBackups();
+  // Best effort, after the fact: tell the other devices this one is Paranoid now
+  // (they stop offering it as an approver and stop sending it keys) and empty its
+  // mailbox. Needs sync; a device without it has nothing published to correct.
+  void import('../sync/remote-unlock')
+    .then((m) => m.retireApproverRole())
+    .catch((err) => recordError('vault.retireApproverRole', err));
 }
 
 /**
@@ -875,6 +884,7 @@ async function finishUnlock(vault: Vault, dek: CryptoKey, method: UnlockMethod =
       recordError('vault.armAttemptWipe', err);
     }
   }
+  await checkRemoteApproverSeal(vault, dek).catch((err) => recordError('vault.remoteApproverSeal', err));
   await recordUnlockEvent().catch((err) => recordError('vault.recordUnlockEvent', err));
   await recordUnlockAttempt(method, true, Date.now());
   resetIdleTimer();
@@ -981,6 +991,37 @@ export async function unlockWithRemoteKey(rukRaw: Uint8Array): Promise<boolean> 
 export async function isRemoteUnlockEnrolled(): Promise<boolean> {
   const vault = await db.vault.get('vault');
   return !!vault?.dekWrappedByRuk;
+}
+
+/**
+ * Store the approver list with its seal (see Vault.remoteUnlock). Every writer of
+ * the list goes through here, so the seal always matches what was written.
+ */
+export async function setRemoteApprovers(approvers: RemoteApproverInfo[]): Promise<void> {
+  if (!currentDek) throw new Error('Unlock the vault before changing remote unlock');
+  await db.vault.update('vault', { remoteUnlock: { approvers, seal: await encryptBlob(currentDek, JSON.stringify(approvers)) } });
+}
+
+/**
+ * At unlock: does the approver list on disk still match its seal? A list sealed
+ * by no one (enrolled before seals) is sealed now. A mismatch means the list was
+ * rewritten while locked — a swapped key would have received the RUK through the
+ * next remote unlock — so remote unlock is turned off and Settings says why.
+ */
+async function checkRemoteApproverSeal(vault: Vault, dek: CryptoKey): Promise<void> {
+  const remote = vault.remoteUnlock;
+  if (!remote) return;
+  const current = JSON.stringify(remote.approvers ?? []);
+  if (!remote.seal) {
+    await db.vault.update('vault', { remoteUnlock: { approvers: remote.approvers ?? [], seal: await encryptBlob(dek, current) } });
+    return;
+  }
+  let sealed: string | null = null;
+  try { sealed = await decryptBlob(dek, remote.seal); } catch { /* unreadable counts as altered */ }
+  if (sealed === current) return;
+  recordError('vault.remoteApproversAltered', new Error('The remote-unlock approver list does not match its seal'));
+  await clearRemoteUnlock();
+  await patchLocalSettings({ githubPat: undefined, remoteUnlockTampered: Date.now() });
 }
 
 /** Tear down remote-unlock enrollment (drop the RUK-wrapped DEK + cached approvers). */

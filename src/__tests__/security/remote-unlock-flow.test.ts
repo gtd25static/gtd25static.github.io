@@ -385,7 +385,7 @@ describe('remote wipe', () => {
     await actAsPhone();
     const status = await ru.readRemoteWipeStatus(PAT, REPO, LAP);
     expect(status?.commandNonce).toBe(command.nonce);
-    const refreshed = await ru.refreshManagedDeviceWipeStatuses(PAT, REPO);
+    const refreshed = await ru.refreshManagedDeviceWipeStatuses(PAT, REPO, macKey);
     expect(refreshed.find((d) => d.deviceId === LAP)?.lastWipeAck?.commandNonce).toBe(command.nonce);
   });
 
@@ -468,10 +468,10 @@ describe('remote wipe', () => {
     await ru.pollRemoteCommands(PAT, REPO, LAP);
 
     await actAsPhone();
-    await ru.refreshManagedDeviceWipeStatuses(PAT, REPO);
+    await ru.refreshManagedDeviceWipeStatuses(PAT, REPO, macKey);
     expect((await db.localSettings.get('local'))?.remoteApproverFor?.[LAP]?.lastWipeAck).toBeTruthy();
 
-    await ru.purgeManagedDevice(PAT, REPO, LAP);
+    await ru.purgeManagedDevice(PAT, REPO, LAP, macKey);
 
     expect((await db.localSettings.get('local'))?.remoteApproverFor?.[LAP]).toBeUndefined();
     expect(files[ru.approverInboxPath(PHONE)]).toBeUndefined();
@@ -486,7 +486,7 @@ describe('remote wipe', () => {
     const command = await ru.sendRemoteWipe(PAT, REPO, LAP);
     expect(files[ru.cmdPath(LAP)]).toBeTruthy();
 
-    await ru.forgetManagedDeviceAfterWipeCommand(PAT, REPO, LAP);
+    await ru.forgetManagedDeviceAfterWipeCommand(PAT, REPO, LAP, macKey);
 
     expect((await db.localSettings.get('local'))?.remoteApproverFor?.[LAP]).toBeUndefined();
     expect(files[ru.approverInboxPath(PHONE)]).toBeUndefined();
@@ -505,10 +505,10 @@ describe('remote wipe', () => {
     expect(await ru.pollApproverInbox(PAT, REPO, PHONE, macKey)).toBe(1);
     expect((await db.localSettings.get('local'))?.remoteApproverFor?.[LAP]?.lastWipeCommand).toBeUndefined();
 
-    const refreshed = await ru.refreshManagedDeviceWipeStatuses(PAT, REPO);
+    const refreshed = await ru.refreshManagedDeviceWipeStatuses(PAT, REPO, macKey);
 
     expect(refreshed.find((d) => d.deviceId === LAP)?.lastWipeCommand?.nonce).toBe(command.nonce);
-    await ru.forgetManagedDeviceAfterWipeCommand(PAT, REPO, LAP);
+    await ru.forgetManagedDeviceAfterWipeCommand(PAT, REPO, LAP, macKey);
     expect((await db.localSettings.get('local'))?.remoteApproverFor?.[LAP]).toBeUndefined();
   });
 
@@ -520,9 +520,9 @@ describe('remote wipe', () => {
     await actAsLaptop();
     await ru.pollRemoteCommands(PAT, REPO, LAP);
     await actAsPhone();
-    await ru.refreshManagedDeviceWipeStatuses(PAT, REPO);
+    await ru.refreshManagedDeviceWipeStatuses(PAT, REPO, macKey);
 
-    await expect(ru.forgetManagedDeviceAfterWipeCommand(PAT, REPO, LAP)).rejects.toThrow(/Use purge/);
+    await expect(ru.forgetManagedDeviceAfterWipeCommand(PAT, REPO, LAP, macKey)).rejects.toThrow(/Use purge/);
     expect((await db.localSettings.get('local'))?.remoteApproverFor?.[LAP]).toBeTruthy();
   });
 
@@ -530,7 +530,7 @@ describe('remote wipe', () => {
     await enrollPair();
     await actAsPhone();
 
-    await expect(ru.forgetManagedDeviceAfterWipeCommand(PAT, REPO, LAP)).rejects.toThrow(/Send a wipe command/);
+    await expect(ru.forgetManagedDeviceAfterWipeCommand(PAT, REPO, LAP, macKey)).rejects.toThrow(/Send a wipe command/);
     expect((await db.localSettings.get('local'))?.remoteApproverFor?.[LAP]).toBeTruthy();
   });
 
@@ -553,7 +553,7 @@ describe('remote wipe: shared lifecycle across trusted devices', () => {
 
     // Phone 2 (never acted) derives the same "pending" state from the shared command file.
     await actAsPhone2();
-    const refreshed = await ru.refreshManagedDeviceWipeStatuses(PAT, REPO);
+    const refreshed = await ru.refreshManagedDeviceWipeStatuses(PAT, REPO, macKey);
     const dev = refreshed.find((d) => d.deviceId === LAP);
     expect(dev?.lastWipeCommand?.nonce).toBe(command.nonce);
     expect(dev?.lastWipeAck).toBeUndefined();
@@ -571,12 +571,12 @@ describe('remote wipe: shared lifecycle across trusted devices', () => {
     expect((await ru.pollRemoteCommands(PAT, REPO, LAP)).wiped).toBe(true);
 
     await actAsPhone2();
-    const r2 = await ru.refreshManagedDeviceWipeStatuses(PAT, REPO);
+    const r2 = await ru.refreshManagedDeviceWipeStatuses(PAT, REPO, macKey);
     expect(r2.find((d) => d.deviceId === LAP)?.lastWipeAck?.commandNonce).toBe(command.nonce);
     phone2Local = await snapshotLocal();
 
     await actAsPhone();
-    const r1 = await ru.refreshManagedDeviceWipeStatuses(PAT, REPO);
+    const r1 = await ru.refreshManagedDeviceWipeStatuses(PAT, REPO, macKey);
     expect(r1.find((d) => d.deviceId === LAP)?.lastWipeAck?.commandNonce).toBe(command.nonce);
   });
 
@@ -590,15 +590,15 @@ describe('remote wipe: shared lifecycle across trusted devices', () => {
 
     // Phone 1 confirms then purges.
     await actAsPhone();
-    await ru.refreshManagedDeviceWipeStatuses(PAT, REPO);
-    await ru.purgeManagedDevice(PAT, REPO, LAP);
+    await ru.refreshManagedDeviceWipeStatuses(PAT, REPO, macKey);
+    await ru.purgeManagedDevice(PAT, REPO, LAP, macKey);
     phoneLocal = await snapshotLocal();
     expect(phoneLocal.remoteApproverFor?.[LAP]).toBeUndefined();
 
     // Phone 2 still has the local entry, but a refresh drops it (registry entry + files gone).
     await actAsPhone2();
     expect((await db.localSettings.get('local'))?.remoteApproverFor?.[LAP]).toBeTruthy();
-    const r = await ru.refreshManagedDeviceWipeStatuses(PAT, REPO);
+    const r = await ru.refreshManagedDeviceWipeStatuses(PAT, REPO, macKey);
     expect(managedIds(r)).not.toContain(LAP);
     expect((await db.localSettings.get('local'))?.remoteApproverFor?.[LAP]).toBeUndefined();
   });
@@ -609,14 +609,14 @@ describe('remote wipe: shared lifecycle across trusted devices', () => {
     await ru.sendRemoteWipe(PAT, REPO, LAP);
     phoneLocal = await snapshotLocal();
 
-    await ru.forgetManagedDeviceAfterWipeCommand(PAT, REPO, LAP);
+    await ru.forgetManagedDeviceAfterWipeCommand(PAT, REPO, LAP, macKey);
     phoneLocal = await snapshotLocal();
     expect(phoneLocal.remoteApproverFor?.[LAP]).toBeUndefined();
     expect(files[ru.cmdPath(LAP)]).toBeTruthy(); // still armed
 
     // Phone 2 drops it on refresh even though the command file is still present.
     await actAsPhone2();
-    const r = await ru.refreshManagedDeviceWipeStatuses(PAT, REPO);
+    const r = await ru.refreshManagedDeviceWipeStatuses(PAT, REPO, macKey);
     expect(managedIds(r)).not.toContain(LAP);
 
     // The target still self-wipes from the armed command.
@@ -631,11 +631,11 @@ describe('remote wipe: shared lifecycle across trusted devices', () => {
     await actAsLaptop();
     await ru.pollRemoteCommands(PAT, REPO, LAP);
     await actAsPhone();
-    await ru.refreshManagedDeviceWipeStatuses(PAT, REPO); // record the confirmed ack
+    await ru.refreshManagedDeviceWipeStatuses(PAT, REPO, macKey); // record the confirmed ack
 
     // Kick off a refresh (which has already snapshotted state) and a purge together.
-    const refresh = ru.refreshManagedDeviceWipeStatuses(PAT, REPO);
-    const purge = ru.purgeManagedDevice(PAT, REPO, LAP);
+    const refresh = ru.refreshManagedDeviceWipeStatuses(PAT, REPO, macKey);
+    const purge = ru.purgeManagedDevice(PAT, REPO, LAP, macKey);
     await Promise.all([refresh, purge]);
 
     expect((await db.localSettings.get('local'))?.remoteApproverFor?.[LAP]).toBeUndefined();
@@ -645,7 +645,7 @@ describe('remote wipe: shared lifecycle across trusted devices', () => {
     await enrollTwoApprovers();
     delete files[ru.REGISTRY_PATH];
     await actAsPhone();
-    const r = await ru.refreshManagedDeviceWipeStatuses(PAT, REPO);
+    const r = await ru.refreshManagedDeviceWipeStatuses(PAT, REPO, macKey);
     expect(managedIds(r)).toContain(LAP);
   });
 
@@ -656,11 +656,11 @@ describe('remote wipe: shared lifecycle across trusted devices', () => {
     await actAsLaptop();
     await ru.pollRemoteCommands(PAT, REPO, LAP);
     await actAsPhone();
-    await ru.refreshManagedDeviceWipeStatuses(PAT, REPO);
+    await ru.refreshManagedDeviceWipeStatuses(PAT, REPO, macKey);
 
     // A 409-style failure on the registry rewrite must not abort the local removal.
     failPutPaths.add(ru.REGISTRY_PATH);
-    await ru.purgeManagedDevice(PAT, REPO, LAP);
+    await ru.purgeManagedDevice(PAT, REPO, LAP, macKey);
     expect((await db.localSettings.get('local'))?.remoteApproverFor?.[LAP]).toBeUndefined();
   });
 
@@ -670,7 +670,7 @@ describe('remote wipe: shared lifecycle across trusted devices', () => {
     await ru.sendRemoteWipe(PAT, REPO, LAP);
 
     failPutPaths.add(ru.REGISTRY_PATH);
-    await ru.forgetManagedDeviceAfterWipeCommand(PAT, REPO, LAP);
+    await ru.forgetManagedDeviceAfterWipeCommand(PAT, REPO, LAP, macKey);
     expect((await db.localSettings.get('local'))?.remoteApproverFor?.[LAP]).toBeUndefined();
   });
 });
@@ -680,11 +680,11 @@ describe('remote wipe: resilience to unexpected backend errors', () => {
     await enrollTwoApprovers();
     await actAsPhone();
     const command = await ru.sendRemoteWipe(PAT, REPO, LAP);
-    await ru.refreshManagedDeviceWipeStatuses(PAT, REPO); // cache "pending"
+    await ru.refreshManagedDeviceWipeStatuses(PAT, REPO, macKey); // cache "pending"
 
     // GitHub returns 500 for the status read on the next refresh.
     failGetPaths.add(ru.wipeStatusPath(LAP));
-    const r = await ru.refreshManagedDeviceWipeStatuses(PAT, REPO);
+    const r = await ru.refreshManagedDeviceWipeStatuses(PAT, REPO, macKey);
 
     // No throw; the device is retained with its previously-cached command metadata.
     const dev = r.find((d) => d.deviceId === LAP);
@@ -697,7 +697,7 @@ describe('remote wipe: resilience to unexpected backend errors', () => {
     await actAsPhone();
     failGetPaths.add(ru.REGISTRY_PATH);
 
-    const r = await ru.refreshManagedDeviceWipeStatuses(PAT, REPO);
+    const r = await ru.refreshManagedDeviceWipeStatuses(PAT, REPO, macKey);
     expect(managedIds(r)).toContain(LAP);
   });
 
@@ -708,10 +708,10 @@ describe('remote wipe: resilience to unexpected backend errors', () => {
     await actAsLaptop();
     await ru.pollRemoteCommands(PAT, REPO, LAP);
     await actAsPhone();
-    await ru.refreshManagedDeviceWipeStatuses(PAT, REPO);
+    await ru.refreshManagedDeviceWipeStatuses(PAT, REPO, macKey);
 
     failGetPaths.add(ru.wipeStatusPath(LAP));
-    await expect(ru.purgeManagedDevice(PAT, REPO, LAP)).rejects.toThrow();
+    await expect(ru.purgeManagedDevice(PAT, REPO, LAP, macKey)).rejects.toThrow();
     // The managed entry must survive a failed purge so the user can retry.
     expect((await db.localSettings.get('local'))?.remoteApproverFor?.[LAP]).toBeTruthy();
   });
@@ -723,10 +723,10 @@ describe('remote wipe: resilience to unexpected backend errors', () => {
     await actAsLaptop();
     await ru.pollRemoteCommands(PAT, REPO, LAP);
     await actAsPhone();
-    await ru.refreshManagedDeviceWipeStatuses(PAT, REPO);
+    await ru.refreshManagedDeviceWipeStatuses(PAT, REPO, macKey);
 
     failDeletePaths.add(ru.cmdPath(LAP));
-    await ru.purgeManagedDevice(PAT, REPO, LAP);
+    await ru.purgeManagedDevice(PAT, REPO, LAP, macKey);
     expect((await db.localSettings.get('local'))?.remoteApproverFor?.[LAP]).toBeUndefined();
   });
 
@@ -736,7 +736,7 @@ describe('remote wipe: resilience to unexpected backend errors', () => {
     await ru.sendRemoteWipe(PAT, REPO, LAP);
 
     failDeletePaths.add(ru.unlockReqPath(LAP));
-    await ru.forgetManagedDeviceAfterWipeCommand(PAT, REPO, LAP);
+    await ru.forgetManagedDeviceAfterWipeCommand(PAT, REPO, LAP, macKey);
     expect((await db.localSettings.get('local'))?.remoteApproverFor?.[LAP]).toBeUndefined();
   });
 
@@ -1072,5 +1072,167 @@ describe('remote unlock: activity heartbeat and "last seen"', () => {
     managed = await ru.refreshManagedDeviceWipeStatuses(PAT, REPO, macKey);
     expect(managed.find((m) => m.deviceId === LAP)?.lastSeenAt).toBe(seenAt);
     expect((await ru.listApprovedDevices()).find((m) => m.deviceId === LAP)?.lastSeenAt).toBe(seenAt);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Threat-model review, batch 3 (2026-10-03): remote unlock & wipe.
+// ---------------------------------------------------------------------------
+
+describe('decommission needs an authenticated tombstone (review batch 3)', () => {
+  // Devices used to be dropped by the mere ABSENCE of their registry entry — so a
+  // PAT-only writer could disarm remote unlock and wipe for every approver, and a
+  // corrupt registry dropped everyone.
+  it('an entry deleted by a PAT-only writer is not a decommission', async () => {
+    await enrollTwoApprovers();
+    const reg = JSON.parse(files[ru.REGISTRY_PATH].data);
+    delete reg[LAP];
+    files[ru.REGISTRY_PATH] = { data: JSON.stringify(reg), sha: 'w' };
+    await actAsPhone();
+    const r = await ru.refreshManagedDeviceWipeStatuses(PAT, REPO, macKey);
+    expect(managedIds(r)).toContain(LAP);
+  });
+
+  for (const garbage of ['not json', '[]', 'null', '"x"']) {
+    it(`a corrupt registry (${garbage}) drops nobody`, async () => {
+      await enrollTwoApprovers();
+      files[ru.REGISTRY_PATH] = { data: garbage, sha: 'g' };
+      await actAsPhone();
+      expect(managedIds(await ru.refreshManagedDeviceWipeStatuses(PAT, REPO, macKey))).toContain(LAP);
+    });
+  }
+
+  it('a forged tombstone (wrong MAC) drops nobody', async () => {
+    await enrollTwoApprovers();
+    const reg = JSON.parse(files[ru.REGISTRY_PATH].data);
+    reg[LAP] = { deviceId: LAP, removed: true, removedAt: Date.now(), mac: 'Zm9yZ2Vk' };
+    files[ru.REGISTRY_PATH] = { data: JSON.stringify(reg), sha: 't' };
+    await actAsPhone();
+    expect(managedIds(await ru.refreshManagedDeviceWipeStatuses(PAT, REPO, macKey))).toContain(LAP);
+  });
+
+  it('a forget by one approver reaches the other through the background check alone', async () => {
+    await enrollTwoApprovers();
+    await actAsPhone();
+    await ru.sendRemoteWipe(PAT, REPO, LAP);
+    await ru.forgetManagedDeviceAfterWipeCommand(PAT, REPO, LAP, macKey);
+    expect(JSON.parse(files[ru.REGISTRY_PATH].data)[LAP]?.removed).toBe(true);
+
+    await actAsPhone2();
+    expect(await ru.dropDecommissionedDevices(PAT, REPO, macKey)).toEqual([LAP]);
+    expect((await db.localSettings.get('local'))?.remoteApproverFor?.[LAP]).toBeUndefined();
+  });
+});
+
+describe('enrolment hands out nothing it cannot finish (review batch 3)', () => {
+  it('a failed delivery leaves remote unlock off, with no invite left behind', async () => {
+    await db.localSettings.update('local', { deviceId: LAP, githubRepo: REPO, githubPat: PAT, encryptionPassword: 'syncpw', syncEnabled: true });
+    await vault.enableParanoid(PASS);
+    await ru.publishRegistryEntry(PAT, REPO, await ru.buildRegistryEntry(PHONE, 'My Phone', publicIdentityOf(phoneIdentity), false, macKey));
+    await ru.publishRegistryEntry(PAT, REPO, await ru.buildRegistryEntry(PHONE2, 'Tablet', publicIdentityOf(phone2Identity), false, macKey));
+    failPutPaths.add(ru.approverInboxPath(PHONE2));
+
+    await expect(ru.enableRemoteUnlock({ pat: PAT, repo: REPO, deviceId: LAP, deviceName: 'Work Laptop', macKey }, [PHONE, PHONE2])).rejects.toThrow();
+    expect(await vault.isRemoteUnlockEnrolled()).toBe(false);
+    expect(files[ru.approverInboxPath(PHONE)]).toBeUndefined(); // the one already delivered was taken back
+  });
+
+  it('adding approvers keeps the PAT usable while locked (the wipe watcher needs it)', async () => {
+    await enrollPair();
+    await actAsLaptop();
+    await db.localSettings.update('local', { githubPat: undefined });
+    await ru.publishRegistryEntry(PAT, REPO, await ru.buildRegistryEntry(PHONE2, 'Tablet', publicIdentityOf(phone2Identity), false, macKey));
+    await ru.addApprovers({ pat: PAT, repo: REPO, deviceId: LAP, deviceName: 'Work Laptop', macKey }, [PHONE2]);
+    expect((await db.localSettings.get('local'))?.githubPat).toBe(PAT);
+  });
+});
+
+describe('an approver that turned Paranoid gets no more keys (review batch 3)', () => {
+  it('a rotation skips an approver whose registry entry now says Paranoid', async () => {
+    await enrollTwoApprovers();
+    // PHONE2 turned Paranoid and re-published itself as such.
+    await ru.publishRegistryEntry(PAT, REPO, await ru.buildRegistryEntry(PHONE2, 'Tablet', publicIdentityOf(phone2Identity), true, macKey));
+    delete files[ru.approverInboxPath(PHONE2)];
+    await actAsLaptop();
+    await ru.removeApprover({ pat: PAT, repo: REPO, deviceId: LAP, deviceName: 'Work Laptop', macKey }, PHONE);
+    expect(files[ru.approverInboxPath(PHONE2)]).toBeUndefined();
+    expect((await db.vault.get('vault'))?.remoteUnlock?.approvers.map((a) => a.deviceId) ?? []).not.toContain(PHONE2);
+  });
+
+  it('turning Paranoid on drops this device\'s approver identity', async () => {
+    // A phone that approves for the laptop (its own database: no vault yet).
+    await db.localSettings.put({
+      id: 'local', syncEnabled: false, syncIntervalMs: 300_000, deviceId: PHONE, deviceIdentity: phoneIdentity,
+      remoteApproverFor: { [LAP]: { ruk: 'x', ecdsaPub: {}, name: 'Work Laptop' } },
+    } as LocalSettings);
+    const before = (await db.localSettings.get('local'))?.deviceIdentity;
+    expect(before).toBeTruthy();
+    await vault.enableParanoid('phone turns paranoid passphrase 4 river');
+    const after = (await db.localSettings.get('local'))?.deviceIdentity;
+    expect(after?.ecdhPub).not.toEqual(before?.ecdhPub);
+    expect((await db.localSettings.get('local'))?.remoteApproverFor).toBeUndefined();
+  });
+});
+
+describe('the cached approver list is sealed under the DEK (review batch 3)', () => {
+  it('an approver key swapped on disk while locked is caught at the next unlock', async () => {
+    await enrollPair();
+    await actAsLaptop();
+    vault.lock();
+    const v = (await db.vault.get('vault'))!;
+    const attacker = await generateIdentityKeys();
+    await db.vault.update('vault', {
+      remoteUnlock: { ...v.remoteUnlock!, approvers: v.remoteUnlock!.approvers.map((a) => ({ ...a, ecdhPub: publicIdentityOf(attacker).ecdhPub })) },
+    });
+    expect(await vault.unlockWithPassphrase(PASS)).toBe(true);
+    expect(await vault.isRemoteUnlockEnrolled()).toBe(false); // turned off: the key may be out
+    expect((await db.localSettings.get('local'))?.remoteUnlockTampered).toBeGreaterThan(0);
+  });
+
+  it('an untouched list unlocks as usual and stays enrolled', async () => {
+    await enrollPair();
+    await actAsLaptop();
+    vault.lock();
+    expect(await vault.unlockWithPassphrase(PASS)).toBe(true);
+    expect(await vault.isRemoteUnlockEnrolled()).toBe(true);
+    expect((await db.localSettings.get('local'))?.remoteUnlockTampered).toBeUndefined();
+  });
+});
+
+describe('unlock requests the approver will show (review batch 3)', () => {
+  it('ignores a request dated in the future', async () => {
+    await enrollPair();
+    await actAsLaptop();
+    vault.lock();
+    vi.useFakeTimers({ now: Date.now() + 30 * 24 * 60 * 60 * 1000, toFake: ['Date'] });
+    await ru.requestRemoteUnlock(PAT, REPO, LAP);
+    vi.useRealTimers();
+    await actAsPhone();
+    expect(await ru.readPendingApproval(PAT, REPO, LAP)).toBeNull();
+  });
+
+  it('a denial is remembered, and requests from that device pause for a while', async () => {
+    await enrollPair();
+    await actAsLaptop();
+    vault.lock();
+    await ru.requestRemoteUnlock(PAT, REPO, LAP);
+    await actAsPhone();
+    expect(await ru.readPendingApproval(PAT, REPO, LAP)).not.toBeNull();
+    await ru.recordRemoteDenial(LAP);
+    expect((await db.localSettings.get('local'))?.remoteApproverFor?.[LAP]?.lastDeniedAt).toBeGreaterThan(0);
+    phoneLocal = await snapshotLocal();
+
+    await actAsLaptop();
+    await ru.requestRemoteUnlock(PAT, REPO, LAP); // asked again right away
+    await actAsPhone();
+    expect(await ru.readPendingApproval(PAT, REPO, LAP)).toBeNull();
+  });
+});
+
+describe('this device\'s fingerprint, as the other side computes it (review batch 3)', () => {
+  it('ownFingerprint matches the fingerprint the protected device shows for this entry', async () => {
+    const { identityFingerprint } = await import('../../sync/remote-unlock-crypto');
+    await db.localSettings.update('local', { deviceIdentity: phoneIdentity });
+    expect(await ru.ownFingerprint()).toBe(await identityFingerprint(publicIdentityOf(phoneIdentity)));
   });
 });

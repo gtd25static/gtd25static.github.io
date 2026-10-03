@@ -37,6 +37,8 @@ vi.mock('../../sync/remote-unlock', () => ({
   readPendingApproval: h.readPendingApproval,
   approveRemoteUnlock: h.approveRemoteUnlock,
   publishOwnRegistryEntry: vi.fn(async () => undefined),
+  dropDecommissionedDevices: vi.fn(async () => []),
+  recordRemoteDenial: vi.fn(async () => undefined),
 }));
 vi.mock('../../db/vault', () => ({ isRemoteUnlockEnrolled: vi.fn(async () => true) }));
 // The approver half only runs on a Paranoid-OFF device; the lock-screen half is

@@ -351,7 +351,13 @@ export interface LocalSettings {
     // device back to a stale key. Absent on entries stored before rotation
     // existed, which read as 0 and accept the first re-issue.
     acceptedTs?: number;
+    // When this device last declined an unlock request from that device: a
+    // request you did not expect means its key is likely out (see Settings).
+    lastDeniedAt?: number;
   }>;
+  // When an unlock found the sealed approver list (Vault.remoteUnlock.seal) did
+  // not match the one on disk — remote unlock was turned off then (Settings says so).
+  remoteUnlockTampered?: number;
 }
 
 // A protected device's enrolled approver (public info cached locally so the
@@ -415,7 +421,10 @@ export interface Vault {
   // approvers without re-keying the existing ones. No new at-rest exposure: recovering
   // RUK still requires the DEK (i.e. an unlocked vault).
   rukWrappedByDek?: string;
-  remoteUnlock?: { approvers: RemoteApproverInfo[] };
+  // `seal`: the approver list encrypted under the DEK. The list itself must stay
+  // readable while locked (the lock screen encrypts requests to these keys), so
+  // a disk writer could swap a key; the seal catches that at the next unlock.
+  remoteUnlock?: { approvers: RemoteApproverInfo[]; seal?: string };
 }
 
 export interface ChangeEntry {
