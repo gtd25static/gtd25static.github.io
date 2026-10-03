@@ -7,6 +7,7 @@ import { scheduleSyncDebounced } from '../sync/sync-engine';
 import { INBOX_LIST_NAME, ARCHIVED_LIST_RETENTION_MS, pickInboxList } from '../lib/constants';
 import { handleDbError } from '../lib/db-error';
 import { initFieldTimestamps, stampUpdatedFields } from '../sync/field-timestamps';
+import { sanitizeSavedSearches, sameSearch, MAX_SAVED_SEARCHES, MAX_SAVED_SEARCH_LENGTH } from '../lib/list-filter';
 
 export function useTaskLists() {
   const allLists = useLiveQuery(
@@ -82,6 +83,41 @@ async function setArchivedAt(id: string, archivedAt: number | undefined, errorCo
       const updated = await db.taskLists.get(id);
       if (updated) {
         await recordChangeInTx('taskList', id, 'upsert', updated as unknown as Record<string, unknown>);
+      }
+    });
+    scheduleSyncDebounced();
+  } catch (error) {
+    handleDbError(error, errorContext);
+  }
+}
+
+/** Keep a quick-filter search as a chip on the list. A duplicate, a blank or over-long one, or one past the cap is ignored. */
+export async function saveListSearch(listId: string, query: string) {
+  const search = query.trim();
+  if (!search || search.length > MAX_SAVED_SEARCH_LENGTH) return;
+  await setSavedSearches(listId, 'save search', (current) =>
+    current.some((s) => sameSearch(s, search)) || current.length >= MAX_SAVED_SEARCHES ? current : [...current, search]);
+}
+
+export async function deleteListSearch(listId: string, search: string) {
+  await setSavedSearches(listId, 'delete saved search', (current) => current.filter((s) => !sameSearch(s, search)));
+}
+
+async function setSavedSearches(listId: string, errorContext: string, change: (current: string[]) => string[]) {
+  try {
+    await ensureDeviceId();
+    await db.transaction('rw', [db.taskLists, db.changeLog], async () => {
+      const existing = await db.taskLists.get(listId);
+      if (!existing) return;
+      const current = sanitizeSavedSearches(existing.savedSearches);
+      const savedSearches = change(current);
+      if (savedSearches.length === current.length && savedSearches.every((s, i) => s === current[i])) return;
+      const now = Date.now();
+      const fieldTimestamps = stampUpdatedFields(existing.fieldTimestamps, ['savedSearches'], now);
+      await db.taskLists.update(listId, { savedSearches, updatedAt: now, fieldTimestamps });
+      const updated = await db.taskLists.get(listId);
+      if (updated) {
+        await recordChangeInTx('taskList', listId, 'upsert', updated as unknown as Record<string, unknown>);
       }
     });
     scheduleSyncDebounced();

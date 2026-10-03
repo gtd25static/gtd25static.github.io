@@ -20,6 +20,7 @@ beforeEach(async () => {
   __resetVaultStateForTests();
   localStorage.removeItem('gtd25-paranoid');
   useAppState.getState().setSearchQuery('');
+  useAppState.getState().setListFilter('');
   useFocusNudgeStore.getState().dismiss();
 });
 
@@ -48,16 +49,18 @@ describe("locking closes the app's notifications", () => {
 });
 
 describe('locking forgets the session', () => {
-  it('clears the search text, any pending nudge, and ends the sync session', async () => {
+  it('clears the search text, the list filter, any pending nudge, and ends the sync session', async () => {
     const endSession = vi.spyOn(syncEngine, 'endSyncSession');
     const stop = startForgettingSessionOnLock();
     await enableParanoid(PASS);
     useAppState.getState().setSearchQuery('FIRE_THE_CFO');
+    useAppState.getState().setListFilter('FIRE_THE_CFO');
     showFocusNudge({ kind: 'overdue', title: 'Overdue task', body: '“FIRE_THE_CFO” is overdue.', taskId: 't1' } as NudgeContent);
 
     lock();
 
     expect(useAppState.getState().searchQuery).toBe('');
+    expect(useAppState.getState().listFilter).toBe('');
     expect(useFocusNudgeStore.getState().nudge).toBeNull();
     expect(endSession).toHaveBeenCalled();
     stop();

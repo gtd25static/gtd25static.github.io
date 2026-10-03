@@ -15,7 +15,7 @@ const VERIFIER_PLAINTEXT = 'gtd25-encryption-check';
 const FIELD_TIMESTAMPS = 'fieldTimestamps';
 
 export const SENSITIVE_FIELDS: Record<string, string[]> = {
-  taskList: ['name', FIELD_TIMESTAMPS],
+  taskList: ['name', 'savedSearches', FIELD_TIMESTAMPS],
   task: ['title', 'description', 'link', 'linkTitle', 'links', 'discussionLog', FIELD_TIMESTAMPS],
   subtask: ['title', 'link', 'linkTitle', 'links', FIELD_TIMESTAMPS],
   // Shared Folder: everything except opaque id/order/timestamps is encrypted —

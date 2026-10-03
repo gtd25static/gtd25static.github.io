@@ -34,6 +34,10 @@ export interface TaskList {
   // than ARCHIVED_LIST_RETENTION_MS. Plaintext metadata (a timestamp, like
   // deletedAt) — NOT in SENSITIVE_FIELDS.taskList.
   archivedAt?: number;
+  // The list's saved quick-filter searches, shown as chips (oldest first). What
+  // someone searches for is content: SENSITIVE (encrypted on the wire and at
+  // rest), merged as a whole (LWW). Untrusted on read — see lib/list-filter.ts.
+  savedSearches?: string[];
   fieldTimestamps?: Record<string, number>;
 }
 

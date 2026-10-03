@@ -8,7 +8,6 @@
 // at different times, and a v6 row must keep merging correctly on a v7 client.
 import { deriveKey, generateSalt, encryptEntity, decryptEntity, SENSITIVE_FIELDS } from '../../sync/crypto';
 import { runRemoteMigrations } from '../../sync/migrations';
-import { SYNC_VERSION } from '../../sync/version';
 import { mergeEntity } from '../../sync/field-timestamps';
 import type { SyncData } from '../../db/models';
 
@@ -85,7 +84,7 @@ describe('a v6 device and a v7 device in the same install', () => {
       settings: { theme: 'system' as const },
     } as unknown as SyncData;
 
-    const migrated = runRemoteMigrations(data, 6, SYNC_VERSION);
+    const migrated = runRemoteMigrations(data, 6, 7);
 
     expect(migrated.syncVersion).toBe(7);
     expect(migrated.tasks).toBe(rows); // same reference: nothing rewritten

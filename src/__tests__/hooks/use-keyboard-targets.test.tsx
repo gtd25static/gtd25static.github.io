@@ -23,7 +23,7 @@ vi.mock('dexie-react-hooks', () => ({
   useLiveQuery: (_fn: unknown, deps?: unknown[], def?: unknown) => {
     if (def && typeof def === 'object' && 'lock' in (def as object)) return { lock: false, redact: false };
     if (def === null) return listType; // selected list type
-    if (Array.isArray(deps) && deps.length === 2) return mainItems; // main-area nav items
+    if (Array.isArray(deps) && deps.length === 3) return mainItems; // main-area nav items [list, expanded, filter]
     return []; // sidebar lists
   },
 }));

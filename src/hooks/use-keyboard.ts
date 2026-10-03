@@ -6,6 +6,7 @@ import { setTaskStatus } from './use-tasks';
 import { setSubtaskStatus } from './use-subtasks';
 import { updateTask, restoreTask } from './use-tasks';
 import { sortTasksForDisplay, sortFollowUpsForDisplay } from '../lib/task-sort';
+import { filterTasksByQuery } from '../lib/list-filter';
 import { deleteTasksBatch } from './use-bulk-operations';
 import { toast } from '../components/ui/Toast';
 import { confirmDialog } from '../components/ui/ConfirmDialog';
@@ -42,6 +43,7 @@ export function useKeyboard() {
   const expandedTaskIds = useAppState((s) => s.expandedTaskIds);
   const selectedListId = useAppState((s) => s.selectedListId);
   const focusedItemId = useAppState((s) => s.focusedItemId);
+  const listFilter = useAppState((s) => s.listFilter);
 
   // Paranoid-extra toggles, readable synchronously from the key handler
   // (preventDefault can't wait for an async read).
@@ -91,7 +93,8 @@ export function useKeyboard() {
       ]);
       const isTasksList = selectedList?.type === 'tasks';
       const isFollowUps = selectedList?.type === 'follow-ups';
-      const live = listTasks.filter((t) => {
+      // Only what the list's quick filter leaves on screen.
+      const live = filterTasksByQuery(listTasks, listFilter).filter((t) => {
         if (t.deletedAt || t.archived) return false;
         // Follow-ups show all non-archived; task lists hide done
         if (!isFollowUps && t.status === 'done') return false;
@@ -135,7 +138,7 @@ export function useKeyboard() {
       }
       return items;
     },
-    [selectedListId, expandedKey],
+    [selectedListId, expandedKey, listFilter],
     [],
   );
 
@@ -487,6 +490,8 @@ export function useKeyboard() {
             s.clearSelection();
           } else if (s.searchQuery) {
             s.setSearchQuery('');
+          } else if (s.listFilter) {
+            s.setListFilter('');
           } else if (s.creatingTask) {
             s.setCreatingTask(false);
           } else if (s.addingSubtaskToTaskId) {

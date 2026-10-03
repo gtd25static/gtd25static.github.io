@@ -21,6 +21,7 @@ export function startForgettingSessionOnLock(): () => void {
     if (!enabled || (unlocked && !busy)) return;
     endSyncSession();
     useAppState.getState().setSearchQuery('');
+    useAppState.getState().setListFilter('');
     dismissFocusNudge();
     // Two retainers of decrypted content that outlive the DEK: the text held for
     // the clipboard auto-clear's comparison, and any blob: URL still resolvable

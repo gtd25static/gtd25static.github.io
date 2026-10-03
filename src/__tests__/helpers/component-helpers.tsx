@@ -21,6 +21,7 @@ export function resetAppState() {
     helpOpen: false,
     trashOpen: false,
     searchQuery: '',
+    listFilter: '',
     navigateToTaskId: null,
     quickCaptureOpen: false,
     bulkMode: false,

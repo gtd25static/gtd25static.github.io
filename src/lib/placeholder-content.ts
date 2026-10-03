@@ -105,6 +105,10 @@ export function placeholderRow(entityType: string, row: Row): Row {
       case 'discussionLog':
         out[field] = Array.isArray(out[field]) ? placeholderDiscussion(id, out[field] as DiscussionEntry[]) : out[field];
         break;
+      case 'savedSearches':
+        // Same number of chips, each a lorem word or two; a malformed value goes too.
+        out[field] = Array.isArray(out[field]) ? (out[field] as unknown[]).map((_, i) => loremWords(id, 300 + i, 1, 2)) : [];
+        break;
       case 'size':
         // Only a blob-backed item has bytes to describe; a link's size stays as is.
         if (row.blobId) out[field] = placeholderBlobBytes(String(row.blobId)).length;

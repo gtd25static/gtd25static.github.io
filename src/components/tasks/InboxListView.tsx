@@ -1,6 +1,9 @@
 import { useTasks } from '../../hooks/use-tasks';
+import { useAppState } from '../../stores/app-state';
+import { filterTasksByQuery } from '../../lib/list-filter';
 import { InboxCard } from './InboxCard';
 import { MergeSuggestionsCard } from './MergeSuggestionsCard';
+import { ListFilterBar } from './ListFilterBar';
 
 interface Props {
   listId: string;
@@ -8,7 +11,8 @@ interface Props {
 
 export function InboxListView({ listId }: Props) {
   const tasks = useTasks(listId);
-  const activeTasks = tasks.filter((t) => t.status !== 'done');
+  const listFilter = useAppState((s) => s.listFilter);
+  const activeTasks = filterTasksByQuery(tasks, listFilter).filter((t) => t.status !== 'done');
 
   return (
     <div className="flex flex-1 flex-col overflow-hidden">
@@ -23,6 +27,8 @@ export function InboxListView({ listId }: Props) {
             </p>
           </div>
 
+          <ListFilterBar listId={listId} />
+
           {/* Possible-duplicate merge suggestions */}
           <MergeSuggestionsCard listId={listId} listType="tasks" />
 
@@ -33,7 +39,7 @@ export function InboxListView({ listId }: Props) {
                 <path d="M22 12h-6l-2 3H10l-2-3H2" />
                 <path d="M5.45 5.11L2 12v6a2 2 0 002 2h16a2 2 0 002-2v-6l-3.45-6.89A2 2 0 0016.76 4H7.24a2 2 0 00-1.79 1.11z" />
               </svg>
-              <p className="text-sm">Inbox empty</p>
+              <p className="text-sm">{listFilter.trim() ? 'Nothing in the Inbox matches this filter' : 'Inbox empty'}</p>
             </div>
           ) : (
             <div>

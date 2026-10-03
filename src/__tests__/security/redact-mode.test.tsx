@@ -88,6 +88,7 @@ describe('redact sweep contract', () => {
     'src/components/tasks/TaskCard.tsx',
     'src/components/tasks/InboxCard.tsx',
     'src/components/tasks/SearchResults.tsx',
+    'src/components/tasks/ListFilterBar.tsx',
     'src/components/tasks/SpecialListView.tsx',
     'src/components/tasks/TaskListView.tsx',
     'src/components/tasks/TaskForm.tsx',

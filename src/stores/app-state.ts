@@ -13,6 +13,9 @@ interface AppState {
   helpOpen: boolean;
   trashOpen: boolean;
   searchQuery: string;
+  // The open list's quick filter (ListFilterBar). Cleared when another list is
+  // selected, and on lock.
+  listFilter: string;
   navigateToTaskId: string | null;
   quickCaptureOpen: boolean;
   // Mindmaps: id of the map open in the editor (null = folder browser).
@@ -41,6 +44,7 @@ interface AppState {
   setHelpOpen: (open: boolean) => void;
   setTrashOpen: (open: boolean) => void;
   setSearchQuery: (query: string) => void;
+  setListFilter: (query: string) => void;
   setNavigateToTaskId: (id: string | null) => void;
   setQuickCaptureOpen: (open: boolean) => void;
   setOpenMindmapId: (id: string | null) => void;
@@ -71,6 +75,7 @@ export const useAppState = create<AppState>((set) => ({
   trashOpen: false,
   redacted: typeof localStorage !== 'undefined' && localStorage.getItem('gtd25-redacted') === '1',
   searchQuery: '',
+  listFilter: '',
   navigateToTaskId: null,
   quickCaptureOpen: false,
   openMindmapId: null,
@@ -83,7 +88,7 @@ export const useAppState = create<AppState>((set) => ({
   // that opened in whichever list came next. Callers that focus something in the
   // new view (search, reveal) set it after this.
   selectList: (id) => set({
-    selectedListId: id, searchQuery: '', bulkMode: false, selectedTaskIds: new Set(),
+    selectedListId: id, searchQuery: '', listFilter: '', bulkMode: false, selectedTaskIds: new Set(),
     focusedItemId: null, creatingTask: false, addingSubtaskToTaskId: null, editingItemId: null,
   }),
   toggleTaskExpanded: (id) =>
@@ -110,6 +115,7 @@ export const useAppState = create<AppState>((set) => ({
   setHelpOpen: (open) => set({ helpOpen: open }),
   setTrashOpen: (open) => set({ trashOpen: open }),
   setSearchQuery: (query) => set({ searchQuery: query }),
+  setListFilter: (query) => set({ listFilter: query }),
   setNavigateToTaskId: (id) => set({ navigateToTaskId: id }),
   setQuickCaptureOpen: (open) => set({ quickCaptureOpen: open }),
   setOpenMindmapId: (id) => set({ openMindmapId: id }),

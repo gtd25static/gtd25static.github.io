@@ -69,6 +69,15 @@ const migrations: RemoteMigration[] = [
     toVersion: 7,
     migrate: (data) => ({ ...data, syncVersion: 7 }),
   },
+  {
+    // v8 adds `taskList.savedSearches`, an encrypted field. Additive: older
+    // snapshots simply lack it. The bump is the point — a v7 build doesn't know
+    // the field is sensitive and would write it back in the clear (on the wire
+    // and at rest), so it must stop syncing ("update required") instead.
+    fromVersion: 7,
+    toVersion: 8,
+    migrate: (data) => ({ ...data, syncVersion: 8 }),
+  },
 ];
 
 export function runRemoteMigrations(data: SyncData, from: number, to: number): SyncData {

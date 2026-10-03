@@ -19,7 +19,9 @@ import { FollowUpCard } from './FollowUpCard';
 import { InlineTaskForm } from '../tasks/InlineTaskForm';
 import { DropdownMenu } from '../ui/DropdownMenu';
 import { MergeSuggestionsCard } from '../tasks/MergeSuggestionsCard';
+import { ListFilterBar } from '../tasks/ListFilterBar';
 import { sortFollowUpsForDisplay, sortTasksByDate } from '../../lib/task-sort';
+import { filterTasksByQuery } from '../../lib/list-filter';
 import { toast } from '../ui/Toast';
 
 function SortableFollowUpItem({ task, index, listId }: { task: Task; index: number; listId: string }) {
@@ -53,7 +55,11 @@ interface Props {
 }
 
 export function FollowUpList({ listId, listName }: Props) {
-  const { active: rawActive, archived } = useFollowUps(listId);
+  const followUps = useFollowUps(listId);
+  const listFilter = useAppState((s) => s.listFilter);
+  const filtering = listFilter.trim() !== '';
+  const rawActive = filterTasksByQuery(followUps.active, listFilter);
+  const archived = filterTasksByQuery(followUps.archived, listFilter);
   // "Sort by date": awake follow-ups by due date; snoozed ones still at the bottom.
   const [sortByDate, setSortByDate] = useState(false);
   const displayed = sortFollowUpsForDisplay(rawActive);
@@ -108,6 +114,11 @@ export function FollowUpList({ listId, listName }: Props) {
         toast('Turn off “Sort by date” to rearrange follow-ups by hand', 'info');
         return;
       }
+      // Filtered, the hidden follow-ups aren't in the order written back.
+      if (filtering) {
+        toast('Clear the filter to rearrange follow-ups by hand', 'info');
+        return;
+      }
 
       const oldIndex = visible.findIndex((t) => t.id === dragActive.id);
       const newIndex = visible.findIndex((t) => t.id === over.id);
@@ -160,6 +171,8 @@ export function FollowUpList({ listId, listName }: Props) {
             />
           </div>
 
+          <ListFilterBar listId={listId} />
+
           {/* Possible-duplicate merge suggestions */}
           <MergeSuggestionsCard listId={listId} listType="follow-ups" />
 
@@ -195,7 +208,9 @@ export function FollowUpList({ listId, listName }: Props) {
           ) : (
             <div className="flex flex-col items-center justify-center py-16 text-zinc-400">
               <p className="text-sm">
-                {snoozed.length > 0 && !showSnoozed ? 'All follow-ups are snoozed' : 'No follow-ups yet'}
+                {filtering
+                  ? (snoozed.length > 0 && !showSnoozed ? 'Only snoozed follow-ups match this filter' : 'No follow-ups match this filter')
+                  : (snoozed.length > 0 && !showSnoozed ? 'All follow-ups are snoozed' : 'No follow-ups yet')}
               </p>
             </div>
           )}

@@ -23,9 +23,11 @@ import { FollowUpList } from '../follow-ups/FollowUpList';
 import { BulkActionBar } from './BulkActionBar';
 import { InboxListView } from './InboxListView';
 import { MergeSuggestionsCard } from './MergeSuggestionsCard';
+import { ListFilterBar } from './ListFilterBar';
 import { isInboxList } from '../../lib/constants';
 import { toast } from '../ui/Toast';
 import { sortTasksForDisplay, sortTasksByDate, sortTasksByName, sortCompletedTasksForDisplay, recentlyDoneRemainingMs } from '../../lib/task-sort';
+import { filterTasksByQuery } from '../../lib/list-filter';
 
 type SortMode = 'default' | 'date' | 'name';
 
@@ -57,7 +59,7 @@ function SortableTaskItem({ task, index, listId }: { task: Task; index: number; 
 }
 
 export function TaskListView() {
-  const { selectedListId, navigateToTaskId, setNavigateToTaskId, creatingTask, setCreatingTask, focusedItemId, focusZone, bulkMode, setBulkMode } = useAppState(useShallow(s => ({ selectedListId: s.selectedListId, navigateToTaskId: s.navigateToTaskId, setNavigateToTaskId: s.setNavigateToTaskId, creatingTask: s.creatingTask, setCreatingTask: s.setCreatingTask, focusedItemId: s.focusedItemId, focusZone: s.focusZone, bulkMode: s.bulkMode, setBulkMode: s.setBulkMode })));
+  const { selectedListId, navigateToTaskId, setNavigateToTaskId, creatingTask, setCreatingTask, focusedItemId, focusZone, bulkMode, setBulkMode, listFilter } = useAppState(useShallow(s => ({ selectedListId: s.selectedListId, navigateToTaskId: s.navigateToTaskId, setNavigateToTaskId: s.setNavigateToTaskId, creatingTask: s.creatingTask, setCreatingTask: s.setCreatingTask, focusedItemId: s.focusedItemId, focusZone: s.focusZone, bulkMode: s.bulkMode, setBulkMode: s.setBulkMode, listFilter: s.listFilter })));
   const lists = useTaskLists();
   const tasks = useTasks(selectedListId);
   const [creating, setCreating] = useState(false);
@@ -126,11 +128,13 @@ export function TaskListView() {
   }, []);
 
   const sortFn = sortMode === 'date' ? sortTasksByDate : sortMode === 'name' ? sortTasksByName : sortTasksForDisplay;
+  const filtering = listFilter.trim() !== '';
+  const shownTasks = filterTasksByQuery(tasks, listFilter);
   const activeTasks = selectedList
-    ? sortFn(tasks.filter((t) => t.status !== 'done' || recentlyDone.has(t.id)))
+    ? sortFn(shownTasks.filter((t) => t.status !== 'done' || recentlyDone.has(t.id)))
     : [];
   const completedTasks = selectedList
-    ? sortCompletedTasksForDisplay(tasks.filter((t) => t.status === 'done' && !recentlyDone.has(t.id)))
+    ? sortCompletedTasksForDisplay(shownTasks.filter((t) => t.status === 'done' && !recentlyDone.has(t.id)))
     : [];
 
   // Handle intra-list task reorder via shared DndContext
@@ -148,6 +152,11 @@ export function TaskListView() {
       // writing them back used to replace the manual order for good.
       if (sortMode !== 'default') {
         toast('Turn off “Sort by name/date” to rearrange tasks by hand', 'info');
+        return;
+      }
+      // Filtered, the hidden tasks aren't in the order written back.
+      if (filtering) {
+        toast('Clear the filter to rearrange tasks by hand', 'info');
         return;
       }
 
@@ -204,6 +213,8 @@ export function TaskListView() {
             />
           </div>
 
+          <ListFilterBar listId={selectedListId} />
+
           {/* Possible-duplicate merge suggestions */}
           <MergeSuggestionsCard listId={selectedListId} listType="tasks" />
 
@@ -233,7 +244,9 @@ export function TaskListView() {
           )}
 
           {/* Active tasks */}
-          {activeTasks.length === 0 && completedTasks.length === 0 ? (
+          {activeTasks.length === 0 && completedTasks.length === 0 && filtering ? (
+            <p className="py-12 text-center text-sm text-zinc-400">No tasks match this filter</p>
+          ) : activeTasks.length === 0 && completedTasks.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-16 text-zinc-400">
               <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="mb-3 text-zinc-300 dark:text-zinc-600">
                 <path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
