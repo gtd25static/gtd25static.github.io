@@ -19,7 +19,7 @@ import {
   encryptSyncData, decryptSyncData, cacheEncryptionKey, getCachedSalt,
 } from '../../sync/crypto';
 import { syncNow, endSyncSession, SNAPSHOT_FILE, CHANGELOG_FILE } from '../../sync/sync-engine';
-import { BLOB_BRANCH, KEEP_PATH, blobPath } from '../../sync/shared-blobs';
+import { BLOB_BRANCH, KEEP_PATH, blobPath, blobAad } from '../../sync/shared-blobs';
 import { BACKUP_FILES } from '../../sync/remote-backups';
 import { publishOwnRegistryEntry, readAuthenticRegistry } from '../../sync/remote-unlock';
 import { deriveRegistryMacKey } from '../../sync/remote-unlock-crypto';
@@ -115,7 +115,8 @@ describe('rotateSyncKey rotates the whole repo', () => {
     for (const [blobId, plain] of Object.entries(PLAIN)) {
       const bytes = fakeRepo.readBytes(blobPath(blobId), BLOB_BRANCH);
       expect(bytes, `${blobId} on the blob branch`).not.toBeNull();
-      expect(await decryptBytes(newKey, bytes!)).toEqual(plain);
+      // Rewritten bound to its id (blobAad): it opens only as itself.
+      expect(await decryptBytes(newKey, bytes!, blobAad(blobId))).toEqual(plain);
       await expect(decryptBytes(oldKey, bytes!)).rejects.toBeTruthy();
     }
     expect(fakeRepo.historyLength(BLOB_BRANCH)).toBe(1);
@@ -248,7 +249,7 @@ describe('rotateSyncKey resumes', () => {
     const pinned = (await db.syncMeta.get('sync-meta'))!.keyRotation!;
     expect(pinned).toBeTruthy();
     const pinnedKey = await deriveKey(NEW_PW, pinned.newSalt);
-    expect(await decryptBytes(pinnedKey, fakeRepo.readBytes(blobPath('b1'), BLOB_BRANCH)!)).toEqual(PLAIN.b1);
+    expect(await decryptBytes(pinnedKey, fakeRepo.readBytes(blobPath('b1'), BLOB_BRANCH)!, blobAad('b1'))).toEqual(PLAIN.b1);
     expect((JSON.parse(fakeRepo.readText(SNAPSHOT_FILE)!) as SyncData).encryptionSalt).toBe(oldSalt);
     expect((await db.localSettings.get('local'))?.encryptionPassword).toBe(OLD_PW);
     expect(getCachedSalt()).toBe(oldSalt);

@@ -113,6 +113,52 @@ export async function testConnection(pat: string, repo: string): Promise<boolean
   }
 }
 
+export interface TokenReach {
+  /** A classic token's scopes (X-OAuth-Scopes); null for a fine-grained token, or when unknown. */
+  classicScopes: string[] | null;
+  /** Whether the token can push to the repository that serves this app. */
+  canPushAppSite: boolean;
+}
+
+/**
+ * How far the sync token reaches beyond the sync repository. A classic token with
+ * `repo` scope opens every repository of its account — on the account that hosts
+ * this app, its own site too: one push there runs on every device at the next
+ * update, so a PAT leaked to a TLS proxy, a keylogger or a disk image (Scenarios
+ * 4, 5, 8) would become code execution everywhere. Best-effort; never throws.
+ */
+export async function tokenReach(pat: string): Promise<TokenReach> {
+  const headers = { Authorization: `Bearer ${pat}`, Accept: 'application/vnd.github.v3+json' };
+  const get = (url: string) => fetch(url, { cache: 'no-store', signal: AbortSignal.timeout(15_000), headers });
+  let classicScopes: string[] | null = null;
+  try {
+    const resp = await get('https://api.github.com/user');
+    const raw = resp.headers.get('X-OAuth-Scopes');
+    if (resp.ok && raw !== null) classicScopes = raw.split(',').map((scope) => scope.trim()).filter(Boolean);
+  } catch { /* unknown */ }
+  let canPushAppSite = false;
+  const host = typeof location === 'undefined' ? '' : location.hostname;
+  if (host.endsWith('.github.io')) {
+    const owner = host.slice(0, -'.github.io'.length);
+    try {
+      const resp = await get(`https://api.github.com/repos/${owner}/${host}`);
+      if (resp.ok) canPushAppSite = !!((await resp.json()) as { permissions?: { push?: boolean } }).permissions?.push;
+    } catch { /* unknown */ }
+  }
+  return { classicScopes, canPushAppSite };
+}
+
+/** What to tell the user about a token that reaches too far, or null. */
+export function tokenReachWarning(reach: TokenReach): string | null {
+  if (reach.canPushAppSite) {
+    return 'This token can push to the repository that hosts this app: whoever obtains it could change the app on every device. Use a fine-grained token limited to your sync repository.';
+  }
+  if (reach.classicScopes?.some((scope) => scope === 'repo' || scope === 'public_repo' || scope === 'workflow')) {
+    return 'This classic token opens all your repositories. A fine-grained token limited to the sync repository (Contents: read and write) is safer.';
+  }
+  return null;
+}
+
 export async function getFile(
   pat: string,
   repo: string,
@@ -124,6 +170,11 @@ export async function getFile(
   if (!resp.ok) throw new Error(`GitHub API error: ${resp.status}`);
   return decodeContentsResponse(pat, repo, path, await resp.json(), signal);
 }
+
+// The snapshot and changelog are written by whoever holds the PAT, and parsed
+// whole: past this a file is refused rather than downloaded and parsed until the
+// tab runs out of memory (the same bound as a backup import's decoded data).
+export const MAX_REMOTE_FILE_BYTES = 80 * 1024 * 1024;
 
 // The Contents API only inlines files up to 1 MB. Above that it answers with
 // `content: ""` and `encoding: "none"` — decoding that as base64 silently yields
@@ -142,13 +193,20 @@ async function decodeContentsResponse(
   if (!file || typeof file.content !== 'string' || typeof file.sha !== 'string') {
     throw new Error(`Malformed GitHub response for ${path}: missing content or sha`);
   }
+  if (typeof file.size === 'number' && file.size > MAX_REMOTE_FILE_BYTES) {
+    throw new Error(`${path} is too large to sync (${file.size} bytes)`);
+  }
   const notInlined = file.encoding === 'none' || (file.content === '' && typeof file.size === 'number' && file.size > 0);
   if (notInlined) {
     const resp = await apiFetch(pat, gitUrl(repo, `git/blobs/${file.sha}`), {
       headers: { Accept: 'application/vnd.github.raw' },
     }, signal);
     if (!resp.ok) throw new Error(`GitHub API error: ${resp.status} (blob for ${path})`);
-    return { data: new TextDecoder().decode(await resp.arrayBuffer()), sha: file.sha };
+    const declared = Number(resp.headers.get('Content-Length'));
+    if (declared > MAX_REMOTE_FILE_BYTES) throw new Error(`${path} is too large to sync (${declared} bytes)`);
+    const bytes = await resp.arrayBuffer();
+    if (bytes.byteLength > MAX_REMOTE_FILE_BYTES) throw new Error(`${path} is too large to sync (${bytes.byteLength} bytes)`);
+    return { data: new TextDecoder().decode(bytes), sha: file.sha };
   }
   let data: string;
   try {

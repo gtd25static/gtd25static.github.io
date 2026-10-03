@@ -19,6 +19,7 @@ import { MindmapNodeView } from './MindmapNodeView';
 import { MindmapEdges } from './MindmapEdges';
 import { confirmDialog } from '../ui/ConfirmDialog';
 import { mdToPlainText } from '../../lib/mini-markdown';
+import { isHexColor } from '../../lib/mindmap-style';
 
 interface Viewport { tx: number; ty: number; k: number }
 
@@ -583,7 +584,9 @@ export function MindmapCanvas({ mapId, background, smartColoring }: { mapId: str
       tabIndex={0}
       onKeyDown={onKeyDown}
       className="relative flex-1 overflow-hidden outline-none"
-      style={background ? { background } : undefined}
+      // Validated here too, like node colours: a value from sync, an import or a
+      // tampered local DB must not reach the style attribute unchecked.
+      style={isHexColor(background) ? { background } : undefined}
       data-testid="mindmap-canvas"
       // Horizontal drags here pan the map; they must not also open the sidebar.
       data-no-sidebar-swipe

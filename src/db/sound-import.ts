@@ -1,5 +1,6 @@
 import { db } from './index';
 import { ALL_SOUND_CODES } from '../lib/pomodoro-sounds';
+import { inflateWithin } from '../lib/zip-limits';
 
 export interface ImportResult {
   imported: string[];
@@ -36,10 +37,8 @@ export async function importSoundsFromZip(file: File): Promise<ImportResult> {
     const basename = name.split('/').pop() ?? name;
     const stem = basename.replace(/\.(m4a|mp3)$/i, '');
 
-    const data = await entry.async('arraybuffer');
-    if (data.byteLength > MAX_SOUND_FILE_BYTES) {
-      throw new Error(`Sound "${basename}" is too large`);
-    }
+    // Stops inflating at the cap (a small archive can inflate to gigabytes).
+    const data = await inflateWithin(entry, MAX_SOUND_FILE_BYTES, `Sound "${basename}" is too large`);
     totalBytes += data.byteLength;
     if (totalBytes > MAX_SOUND_TOTAL_BYTES) {
       throw new Error('Sound archive exceeds the total size limit');

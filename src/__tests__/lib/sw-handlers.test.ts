@@ -258,3 +258,35 @@ describe('handleSwMessage', () => {
     expect(skipWaiting).not.toHaveBeenCalled();
   });
 });
+
+describe('handleShareTarget — a share already waiting is kept', () => {
+  // Any website can POST to the share-target path (a form on its page navigates
+  // here), and each POST used to overwrite the share being held — on a locked
+  // device, until someone unlocked (threat-model review, batch 2).
+  function installWaitingShare(ts: number) {
+    const puts: string[] = [];
+    (globalThis as unknown as { caches: unknown }).caches = {
+      has: async () => true,
+      open: async () => ({
+        match: async () => new Response(JSON.stringify({ ts, title: 'held', text: '', url: '', files: [], skippedFiles: 0 })),
+        put: async (req: Request) => { puts.push(new URL(req.url).pathname); },
+      }),
+      delete: async () => true,
+    };
+    return puts;
+  }
+
+  it('a fresh waiting share is not replaced, and the app is told why', async () => {
+    const puts = installWaitingShare(Date.now() - 60_000);
+    const res = await handleShareTarget(shareRequest({ title: 'Forged', text: 'x' }));
+    expect(res.headers.get('Location')).toBe('/?shareTarget=busy');
+    expect(puts).toEqual([]);
+  });
+
+  it('an expired one no longer blocks a new share', async () => {
+    const puts = installWaitingShare(Date.now() - 25 * 60 * 60 * 1000);
+    const res = await handleShareTarget(shareRequest({ title: 'New', text: 'x' }));
+    expect(res.headers.get('Location')).toBe('/?shareTarget=1');
+    expect(puts).toContain(SHARE_META_PATH);
+  });
+});

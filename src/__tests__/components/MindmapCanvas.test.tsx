@@ -470,3 +470,17 @@ describe('MindmapCanvas', () => {
     expect(screen.getByText(/<img src=x/)).toBeInTheDocument();
   });
 });
+
+describe('MindmapCanvas — the canvas colour', () => {
+  // Validated on write only, so a value from a backup import or a tampered local
+  // DB reached the style attribute as it was (threat-model review, batch 2).
+  it('applies a #rrggbb colour', () => {
+    render(<MindmapCanvas mapId="map-1" background="#112233" />);
+    expect(screen.getByTestId('mindmap-canvas').style.background).not.toBe('');
+  });
+
+  it('ignores anything else', () => {
+    render(<MindmapCanvas mapId="map-1" background="url(data:image/png;base64,AAAA)" />);
+    expect(screen.getByTestId('mindmap-canvas').style.background).toBe('');
+  });
+});

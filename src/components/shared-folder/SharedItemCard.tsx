@@ -64,8 +64,10 @@ export function SharedItemCard({ item }: { item: SharedItem }) {
   const [busy, setBusy] = useState(false);
   const [previewOpen, setPreviewOpen] = useState(false);
   // Images preview in an overlay on click (Copy/Download from there); every
-  // other file type keeps the direct download.
-  const isImage = item.type === 'file' && !!item.mimeType?.startsWith('image/');
+  // other file type keeps the direct download. Not SVG: it is a document that can
+  // carry script, and the preview's blob: URL opened in a tab ("Open image in new
+  // tab") would render it in this app's origin.
+  const isImage = item.type === 'file' && !!item.mimeType?.startsWith('image/') && !item.mimeType.includes('svg');
 
   async function download() {
     if (!item.blobId) return;
@@ -74,7 +76,10 @@ export function SharedItemCard({ item }: { item: SharedItem }) {
       const bytes = await getSharedBlobBytes(item.blobId);
       // Copy into a fresh ArrayBuffer so the Blob owns a clean, correctly-sized buffer.
       const buf = bytes.slice().buffer;
-      const blob = new Blob([buf], { type: item.mimeType || 'application/octet-stream' });
+      // Always opaque bytes: the type is whatever the uploader's file said, and a
+      // blob: URL of type text/html or image/svg+xml opened in a tab renders as a
+      // document in this app's origin. The download attribute names the file.
+      const blob = new Blob([buf], { type: 'application/octet-stream' });
       // Tracked so a lock revokes it: the minute-long grace below kept decrypted
       // file bytes resolvable at a same-origin blob: URL after the DEK was gone.
       const url = createSessionObjectUrl(blob, 60_000);

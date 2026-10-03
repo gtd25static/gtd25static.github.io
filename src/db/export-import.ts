@@ -4,6 +4,8 @@ import type JSZip from 'jszip';
 import { generateSalt, deriveKey, encryptBlob, decryptBlob, createVerifier, checkVerifier } from '../sync/crypto';
 import { MAX_MINDMAP_LABEL_LENGTH } from '../lib/constants';
 import { isValidUrl } from '../lib/link-utils';
+import { inflateWithin } from '../lib/zip-limits';
+import { isHexColor } from '../lib/mindmap-style';
 
 export interface ImportData {
   taskLists: TaskList[];
@@ -30,6 +32,7 @@ const PBKDF2_ITERATIONS = 600_000;
 // they can exhaust memory/CPU (ACR-011). Generous enough for any real backup.
 const MAX_IMPORT_ZIP_BYTES = 50 * 1024 * 1024;   // the .zip on disk
 const MAX_DECODED_BYTES = 80 * 1024 * 1024;      // data.json / decrypted payload string
+const MAX_MANIFEST_BYTES = 64 * 1024;             // manifest.json (a few fields)
 const MAX_RECORDS_PER_ARRAY = 200_000;           // tasks / subtasks / lists / presets
 
 export type ExportKeySource = 'passphrase' | 'sync';
@@ -165,8 +168,7 @@ export async function parseImportZip(file: File, opts?: ImportOptions): Promise<
 
   const dataFile = zip.file('data.json');
   if (dataFile) {
-    const raw = await dataFile.async('string');
-    if (raw.length > MAX_DECODED_BYTES) throw new Error('Invalid backup: data.json is too large');
+    const raw = new TextDecoder().decode(await inflateWithin(dataFile, MAX_DECODED_BYTES, 'Invalid backup: data.json is too large'));
     let parsed: ExportPayload;
     try {
       parsed = JSON.parse(raw);
@@ -179,7 +181,8 @@ export async function parseImportZip(file: File, opts?: ImportOptions): Promise<
   // Encrypted container
   const manifestFile = zip.file('manifest.json');
   if (manifestFile) {
-    const parsed = await decryptPayload(zip, await manifestFile.async('string'), opts);
+    const manifest = new TextDecoder().decode(await inflateWithin(manifestFile, MAX_MANIFEST_BYTES, 'Invalid backup: manifest.json is too large'));
+    const parsed = await decryptPayload(zip, manifest, opts);
     return validatePayload(parsed);
   }
 
@@ -203,8 +206,7 @@ async function decryptPayload(
 
   const encFile = zip.file('data.enc');
   if (!encFile) throw new Error('Invalid backup: missing data.enc');
-  const cipher = await encFile.async('string');
-  if (cipher.length > MAX_DECODED_BYTES) throw new Error('Invalid backup: encrypted data is too large');
+  const cipher = new TextDecoder().decode(await inflateWithin(encFile, MAX_DECODED_BYTES, 'Invalid backup: encrypted data is too large'));
 
   // Resolve a key: try the sync password first when the backup was encrypted
   // with it, otherwise prompt. A wrong password is caught by the verifier.
@@ -363,6 +365,11 @@ function validatePayload(parsed: ExportPayload): ImportData {
       if (!m.name || typeof m.name !== 'string') { warnings.push(`Skipped mindmap ${m.id}: missing name`); return false; }
       if (!isValidNumber(m.createdAt) || !isValidNumber(m.updatedAt)) { warnings.push(`Skipped mindmap ${m.id}: invalid timestamps`); return false; }
       return true;
+    }).map((m) => {
+      // The canvas colour reaches a style attribute: only a '#rrggbb' gets in.
+      if (m.background === undefined || isHexColor(m.background)) return m;
+      const { background: _invalid, ...rest } = m;
+      return rest;
     });
     const validMapIds = new Set(validMindmaps.map((m) => m.id));
     validMindmapNodes = (parsed.mindmapNodes ?? []).filter((n) => {

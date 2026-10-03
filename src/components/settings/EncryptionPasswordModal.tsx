@@ -21,11 +21,16 @@ export function EncryptionPasswordModal() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [showWipeConfirm, setShowWipeConfirm] = useState(false);
+  // The saved password stopped opening the repository (see sync-engine).
+  const [keyChanged, setKeyChanged] = useState(false);
 
   const isNewPassword = salt === '';
 
   useEffect(() => {
-    const handler = (s: string) => setSalt(s);
+    const handler = (s: string, opts?: { keyChanged?: boolean }) => {
+      setSalt(s);
+      setKeyChanged(!!opts?.keyChanged);
+    };
     onEncryptionPasswordNeeded(handler);
     return () => offEncryptionPasswordNeeded(handler);
   }, []);
@@ -152,7 +157,9 @@ export function EncryptionPasswordModal() {
         <p className="mb-4 text-sm text-zinc-500 dark:text-zinc-400">
           {isNewPassword
             ? 'All synced data is encrypted. Set a password to protect your data. All devices must use the same password.'
-            : 'Your synced data is encrypted. Enter the password to decrypt it.'}
+            : keyChanged
+              ? 'The password saved on this device no longer opens the repository. If you changed the sync password on another device, enter the new one. If you did not, someone with access to the repository may have altered it — your data on this device is untouched, so do not wipe it.'
+              : 'Your synced data is encrypted. Enter the password to decrypt it.'}
         </p>
 
         <Input

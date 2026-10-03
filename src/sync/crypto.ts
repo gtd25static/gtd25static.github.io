@@ -264,10 +264,14 @@ export async function decryptEntity(
   }
   const sensitiveData = JSON.parse(plaintext) as Record<string, unknown>;
 
-  // Spread decrypted fields back, remove _enc
+  // Spread decrypted fields back, remove _enc — and any content field sitting in
+  // the clear beside the ciphertext: content only ever comes from the blob, or a
+  // backend writer could add a description or link to a genuine record.
+  // (fieldTimestamps stays: rows written before SYNC_VERSION 7 carry it outside.)
+  const content = new Set((SENSITIVE_FIELDS[entityType] ?? []).filter((f) => f !== FIELD_TIMESTAMPS));
   const result: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(entity)) {
-    if (k !== '_enc') {
+    if (k !== '_enc' && !content.has(k)) {
       result[k] = v;
     }
   }
@@ -300,14 +304,15 @@ export async function encryptSyncData(key: CryptoKey, data: SyncData): Promise<S
   };
 }
 
-// A snapshot row whose `_enc` is present but not ciphertext is forged or corrupt:
-// drop it (this device keeps its own copy, and the next compaction rewrites the
-// row from it). Ciphertext that fails to open still throws, as before.
+// Every row of an encrypted snapshot carries ciphertext (encryptEntity always adds
+// `_enc`). One without it, or with an `_enc` that is not ciphertext, was planted
+// or corrupted by whoever can write the repository: drop it (this device keeps
+// its own copy, and the next compaction rewrites the row from it). Ciphertext
+// that fails to open still throws, as before.
 function decryptRows(key: CryptoKey, rows: unknown[] | undefined, entityType: string): Promise<Record<string, unknown>[]> {
   const wellFormed = (rows ?? []).filter((e) => {
-    const enc = (e as Record<string, unknown>)._enc;
-    if (enc === undefined || typeof enc === 'string') return true;
-    console.warn(`Dropping malformed ${entityType} row from the snapshot`);
+    if (typeof (e as Record<string, unknown>)._enc === 'string') return true;
+    console.warn(`Dropping a ${entityType} row without ciphertext from the snapshot`);
     return false;
   });
   return Promise.all(wellFormed.map((e) => decryptEntity(key, e as Record<string, unknown>, entityType)));
@@ -346,11 +351,27 @@ export async function encryptChangeEntries(key: CryptoKey, entries: ChangeEntry[
   );
 }
 
-export async function decryptChangeEntries(key: CryptoKey, entries: ChangeEntry[]): Promise<ChangeEntry[]> {
+/**
+ * Decrypt incoming changelog entries. An upsert without ciphertext is dropped —
+ * every entry pushed to an encrypted repository is encrypted, so a plaintext one
+ * was planted by whoever can write it, and would be shown as the user's own —
+ * unless `allowPlaintext`: only for the first encryption of a repository that
+ * has never been encrypted (no salt yet), whose older entries are plaintext.
+ */
+export async function decryptChangeEntries(
+  key: CryptoKey,
+  entries: ChangeEntry[],
+  { allowPlaintext = false }: { allowPlaintext?: boolean } = {},
+): Promise<ChangeEntry[]> {
   const result: ChangeEntry[] = [];
   for (const entry of entries) {
-    if (entry.operation === 'delete' || !entry.data || entry.data._enc === undefined) {
+    if (entry.operation === 'delete' || !entry.data) {
       result.push(entry);
+      continue;
+    }
+    if (entry.data._enc === undefined) {
+      if (allowPlaintext) result.push(entry);
+      else console.warn(`Dropping a ${entry.entityType} entry ${entry.id} without ciphertext`);
       continue;
     }
     try {

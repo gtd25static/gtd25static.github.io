@@ -113,3 +113,23 @@ describe('SharedItemCard routing', () => {
     expect(getSharedBlobBytes).toHaveBeenCalledWith('b1');
   });
 });
+
+describe('shared files never become documents in the app origin', () => {
+  // A shared file's type is whatever the uploader's file said. As a blob: URL of
+  // type image/svg+xml or text/html, opened in a tab, it would render as a page in
+  // this origin (threat-model review, batch 2).
+  it('downloads as opaque bytes whatever the stored type', async () => {
+    render(<SharedItemCard item={item({ name: 'page.html', mimeType: 'text/html' })} />);
+    fireEvent.click(screen.getByText('page.html'));
+    await waitFor(() => expect(anchorClicks).toBe(1));
+    const blob = vi.mocked(URL.createObjectURL).mock.calls[0][0] as Blob;
+    expect(blob.type).toBe('application/octet-stream');
+  });
+
+  it('an SVG is downloaded, not previewed', async () => {
+    render(<SharedItemCard item={item({ name: 'drawing.svg', mimeType: 'image/svg+xml' })} />);
+    fireEvent.click(screen.getByText('drawing.svg'));
+    await waitFor(() => expect(anchorClicks).toBe(1));
+    expect(screen.queryByRole('img')).toBeNull();
+  });
+});

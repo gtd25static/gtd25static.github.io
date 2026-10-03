@@ -49,6 +49,7 @@ import {
   cacheEncryptionKey,
   encryptSyncData,
   createVerifier,
+  encryptChangeEntries,
 } from '../../sync/crypto';
 import { clearErrorLog, getErrorLog } from '../../lib/diagnostics';
 
@@ -259,7 +260,8 @@ describe('syncNow — normal sync', () => {
     };
 
     mockGetFile.mockImplementation((_p: string, _r: string, path: string) => {
-      if (path === CHANGELOG_FILE) return Promise.resolve({ data: JSON.stringify([foreignEntry, ownEntry]), sha: 'cl-sha' });
+      // Every entry in an encrypted repository is encrypted (plaintext ones are dropped).
+      if (path === CHANGELOG_FILE) return encryptChangeEntries(testKey, [foreignEntry, ownEntry]).then((e) => ({ data: JSON.stringify(e), sha: 'cl-sha' }));
       if (path === SNAPSHOT_FILE) return Promise.resolve({ data: snapshotContent, sha: 'snap-sha' });
       return Promise.resolve(null);
     });
@@ -623,7 +625,7 @@ describe('syncNow — fresh device bootstrap (both files exist, no lastPulledAt)
 
     mockGetFile.mockImplementation((_p: string, _r: string, path: string) => {
       if (path === SNAPSHOT_FILE) return Promise.resolve({ data: snapshotContent, sha: 'snap-sha' });
-      if (path === CHANGELOG_FILE) return Promise.resolve({ data: JSON.stringify([changelogEntry]), sha: 'cl-sha' });
+      if (path === CHANGELOG_FILE) return encryptChangeEntries(testKey, [changelogEntry]).then((e) => ({ data: JSON.stringify(e), sha: 'cl-sha' }));
       return Promise.resolve(null);
     });
     mockPutFile.mockResolvedValue('sha');

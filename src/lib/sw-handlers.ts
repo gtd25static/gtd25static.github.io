@@ -3,7 +3,7 @@
 // so it can't be imported from tests. The slices of `self` the handlers need are
 // passed in structurally (this module compiles under the app's DOM tsconfig).
 
-import { SHARE_CACHE, SHARE_TARGET_ACTION, SHARE_META_PATH, shareFilePath, SHARE_TARGET_FLAG, selectFilesToStash } from './share-target';
+import { SHARE_CACHE, SHARE_TARGET_ACTION, SHARE_META_PATH, shareFilePath, SHARE_TARGET_FLAG, selectFilesToStash, hasFreshShareStash } from './share-target';
 
 // --- Web Share Target (POST/multipart) ---
 // The OS share sheet POSTs the shared title/text/url + files here. We can't reach the
@@ -11,6 +11,11 @@ import { SHARE_CACHE, SHARE_TARGET_ACTION, SHARE_META_PATH, shareFilePath, SHARE
 // redirect into the app, which consumes it (use-share-target). Files go to the Shared
 // Folder; text/links to the Inbox.
 export async function handleShareTarget(request: Request): Promise<Response> {
+  // A share already waiting is kept, never replaced: any website can POST here (a
+  // form on another page navigates to this path), and the next one used to
+  // overwrite the share being held — on a locked device, until someone unlocked.
+  // The app says a share is still waiting; this one can be shared again after.
+  if (await hasFreshShareStash()) return Response.redirect(`/?${SHARE_TARGET_FLAG}=busy`, 303);
   try {
     const form = await request.formData();
     const str = (k: string): string => { const v = form.get(k); return typeof v === 'string' ? v : ''; };

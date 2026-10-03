@@ -136,7 +136,7 @@ Constants: `SNAPSHOT_FILE` and `CHANGELOG_FILE` in `src/sync/sync-engine.ts:29-3
 
 ### Authentication
 
-GitHub Personal Access Token, **fine-grained or classic**, with `contents: read/write` on the chosen repo. The token is stored in `LocalSettings.githubPat` (IndexedDB). It is sent only as a `Bearer` header to `api.github.com`. There is no OAuth flow because that would require a server.
+GitHub Personal Access Token with `contents: read/write` on the chosen repo — **fine-grained and limited to that repository** (Settings warns about a classic token, and about any token that can push to the repository hosting the app, since a leak of it would let someone change the app on every device). The token is stored in `LocalSettings.githubPat` (IndexedDB). It is sent only as a `Bearer` header to `api.github.com`. There is no OAuth flow because that would require a server.
 
 ### Wire format & encryption
 

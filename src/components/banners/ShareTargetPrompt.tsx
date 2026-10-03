@@ -29,6 +29,9 @@ export function ShareTargetPrompt({ pendingShare, resolveShare, discardShare, po
             {preview}
           </p>
         )}
+        <p className="text-xs text-zinc-400 dark:text-zinc-500">
+          Keep it only if you just shared it — any website can send content here.
+        </p>
         <p className="text-sm text-zinc-500 dark:text-zinc-400">
           Where should this go?
           {hasFiles && (

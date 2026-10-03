@@ -61,11 +61,20 @@ function reasonOf(key: string): BackupReason {
 
 // Keep the MAX_BACKUPS newest copies, plus the newest one taken before a change
 // if app starts have pushed it out of those (at most one extra copy).
+// A burst of replacements (repeated remote resets: whoever can write the repo can
+// trigger them) used to push the copy taken before the first one out of the ring
+// within minutes. The oldest pre-change copy of the last day is kept as well.
+const PRE_CHANGE_HOLD_MS = 24 * 60 * 60 * 1000;
+
 function pruneOldBackups() {
   const keys = listBackupKeys();
   const keep = new Set(keys.slice(0, MAX_BACKUPS));
-  const newestBeforeChange = keys.find((key) => reasonOf(key) === 'change');
+  const changes = keys.filter((key) => reasonOf(key) === 'change');
+  const newestBeforeChange = changes[0];
   if (newestBeforeChange) keep.add(newestBeforeChange);
+  const since = Date.now() - PRE_CHANGE_HOLD_MS;
+  const oldestRecentChange = changes.filter((key) => parseInt(key.replace(BACKUP_KEY_PREFIX, ''), 10) >= since).pop();
+  if (oldestRecentChange) keep.add(oldestRecentChange);
   for (const key of keys) {
     if (!keep.has(key)) localStorage.removeItem(key);
   }

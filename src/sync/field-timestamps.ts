@@ -18,6 +18,30 @@ const EXCLUDED_FIELDS = new Set(['id', 'createdAt', 'updatedAt', 'fieldTimestamp
 const UNION_ARRAY_FIELDS = new Set(['discussionLog']);
 
 type Entity = Record<string, unknown>;
+
+/**
+ * How far in the future a remote timestamp may lie. Merges are last-writer-wins
+ * on the writer's clock and are never corrected on receipt (lib/clock-skew.ts
+ * explains why); but a value beyond this can only be a broken clock or a forged
+ * row, and left alone it wins every later comparison: an edit stamped 9e15 could
+ * never be edited back, nor a delete stamped so be restored.
+ */
+export const MAX_FUTURE_SKEW_MS = 24 * 60 * 60 * 1000;
+
+/** A remote row with every timestamp later than `now` + MAX_FUTURE_SKEW_MS brought back to that bound. */
+export function capFutureTimestamps<T extends Entity>(row: T, now = Date.now()): T {
+  const bound = now + MAX_FUTURE_SKEW_MS;
+  const cap = (v: unknown) => (typeof v === 'number' && v > bound ? bound : v);
+  const out: Entity = { ...row };
+  for (const field of ['createdAt', 'updatedAt', 'deletedAt']) {
+    if (field in out) out[field] = cap(out[field]);
+  }
+  const ft = row.fieldTimestamps;
+  if (ft && typeof ft === 'object') {
+    out.fieldTimestamps = Object.fromEntries(Object.entries(ft as Record<string, unknown>).map(([k, v]) => [k, cap(v)]));
+  }
+  return out as T;
+}
 type FieldTimestamps = Record<string, number>;
 type IdEntry = { id: string; at?: number } & Record<string, unknown>;
 

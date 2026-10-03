@@ -13,7 +13,7 @@ export const SHARE_CACHE = 'gtd25-share-v1';
 export const SHARE_TARGET_ACTION = '/share-target';
 export const SHARE_META_PATH = '/__gtd25-share/meta';
 export const shareFilePath = (i: number): string => `/__gtd25-share/file/${i}`;
-export const SHARE_TARGET_FLAG = 'shareTarget'; // ?shareTarget=1 (or =error)
+export const SHARE_TARGET_FLAG = 'shareTarget'; // ?shareTarget=1 (or =error, or =busy: an earlier share was still waiting)
 
 // The stash holds shared content in PLAINTEXT until the app consumes it, so its
 // lifetime must be bounded: anything older than this is purged unconsumed by the

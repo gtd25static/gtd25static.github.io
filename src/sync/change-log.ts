@@ -3,7 +3,8 @@ import type { ChangeEntry } from '../db/models';
 import { newId } from '../lib/id';
 import { SYNC_VERSION } from './version';
 import { migrateEntryData } from './migrations';
-import { mergeEntity, stampUpdatedFields } from './field-timestamps';
+import { mergeEntity, stampUpdatedFields, capFutureTimestamps, MAX_FUTURE_SKEW_MS } from './field-timestamps';
+import { noteRemoteDeletions } from '../db/purge';
 import { prepareEntityRowsForAtRest } from './at-rest-writes';
 import type { Subtask, Task, TaskList, SharedItem, MindmapFolder, Mindmap, MindmapNode } from '../db/models';
 
@@ -135,6 +136,11 @@ const requiredFields: Record<ChangeEntry['entityType'], string[]> = {
   mindmapNode: ['id', 'mapId', 'label', 'order', 'createdAt', 'updatedAt'],
 };
 
+/** One of the entity kinds this app syncs (not just any string a remote entry names). */
+export function isKnownEntityType(entityType: unknown): entityType is ChangeEntry['entityType'] {
+  return typeof entityType === 'string' && Object.hasOwn(requiredFields, entityType);
+}
+
 function validateEntityShape(data: Record<string, unknown> | undefined, entityType: ChangeEntry['entityType']): boolean {
   if (!data || typeof data !== 'object') return false;
   const fields = requiredFields[entityType];
@@ -146,7 +152,21 @@ function validateEntityShape(data: Record<string, unknown> | undefined, entityTy
 
 export async function applyRemoteEntries(entries: ChangeEntry[]) {
   // Sort by timestamp ascending so later entries win
-  const sorted = [...entries].sort((a, b) => a.timestamp - b.timestamp);
+  // Remote entries are written by whoever can write the repository. An unknown
+  // kind is skipped (a forged `entityType` used to throw and stop every sync on
+  // every device), and timestamps beyond the skew tolerance are capped — a change
+  // stamped 9e15 used to beat every later edit, delete or restore, for good.
+  const now = Date.now();
+  const sorted = entries
+    .filter((e) => isKnownEntityType(e.entityType) && Number.isFinite(e.timestamp))
+    .map((e) => ({
+      ...e,
+      timestamp: Math.min(e.timestamp, now + MAX_FUTURE_SKEW_MS),
+      data: e.data ? capFutureTimestamps(e.data, now) : e.data,
+    }))
+    .sort((a, b) => a.timestamp - b.timestamp);
+  // Records this sync moves into the Trash: their 30 days run from now, here.
+  const newlyDeleted: string[] = [];
   const localState: Record<ChangeEntry['entityType'], Map<string, EntityRow | null>> = {
     taskList: new Map<string, EntityRow | null>(),
     task: new Map<string, EntityRow | null>(),
@@ -192,6 +212,7 @@ export async function applyRemoteEntries(entries: ChangeEntry[]) {
         const localFT = (existing as unknown as Record<string, unknown>).fieldTimestamps as Record<string, number> | undefined;
         const newerLocal = localFT ? localFT.deletedAt ?? 0 : existing.updatedAt ?? 0;
         if (entry.timestamp >= newerLocal) {
+          if (!existing.deletedAt) newlyDeleted.push(entry.entityId);
           const updated = {
             ...existing,
             deletedAt: entry.timestamp,
@@ -226,9 +247,11 @@ export async function applyRemoteEntries(entries: ChangeEntry[]) {
         entry.timestamp,
       );
       if (merged) {
+        if (merged.deletedAt && !existing.deletedAt) newlyDeleted.push(entry.entityId);
         setChanged(entry.entityType, entry.entityId, merged as unknown as EntityRow);
       }
     } else {
+      if (data?.deletedAt) newlyDeleted.push(entry.entityId);
       setChanged(entry.entityType, entry.entityId, data as unknown as EntityRow);
     }
   }
@@ -269,6 +292,7 @@ export async function applyRemoteEntries(entries: ChangeEntry[]) {
       await db.mindmapNodes.bulkPut(mindmapNodes);
     }
   });
+  await noteRemoteDeletions(newlyDeleted);
 }
 
 export async function getPendingEntries(limit?: number): Promise<ChangeEntry[]> {

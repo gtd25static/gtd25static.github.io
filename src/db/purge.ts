@@ -4,16 +4,38 @@ import { ARCHIVED_LIST_RETENTION_MS, COMPLETED_RETENTION_MS } from '../lib/const
 const THIRTY_DAYS = 30 * 24 * 60 * 60 * 1000;
 
 /**
- * Hard-delete soft-deleted items older than 30 days from local IndexedDB.
- * Runs at startup and when the trash modal is opened.
+ * Note records that sync has just moved into this device's Trash (see
+ * LocalSettings.trashArrivals). Their deletedAt is whatever the remote says —
+ * a writer to the repository could date it years back, and the purge below
+ * used to hard-delete such a record at the very next start, with no Trash at all.
+ */
+export async function noteRemoteDeletions(ids: string[]): Promise<void> {
+  if (ids.length === 0) return;
+  const now = Date.now();
+  await db.transaction('rw', db.localSettings, async () => {
+    const local = await db.localSettings.get('local');
+    if (!local) return;
+    const trashArrivals = { ...(local.trashArrivals ?? {}) };
+    for (const id of ids) trashArrivals[id] ??= now;
+    await db.localSettings.update('local', { trashArrivals });
+  });
+}
+
+/**
+ * Hard-delete soft-deleted items older than 30 days from local IndexedDB — 30
+ * days from their deletedAt and, when sync brought the delete, from its arrival
+ * here too. Runs at startup and when the trash modal is opened.
  */
 export async function purgeOldTrashItems() {
   const cutoff = Date.now() - THIRTY_DAYS;
+  const arrivals = (await db.localSettings.get('local'))?.trashArrivals ?? {};
+  const expired = (row: { id: string; deletedAt?: number }) =>
+    !!row.deletedAt && row.deletedAt < cutoff && (arrivals[row.id] ?? 0) < cutoff;
 
   // Shared items first: collect blobIds to remove from the backend + local cache
   // before the metadata rows are hard-deleted. Done outside the entity transaction
   // because deleting a backend blob is a network call.
-  const oldShared = await db.sharedItems.filter((i) => !!i.deletedAt && i.deletedAt < cutoff).toArray();
+  const oldShared = await db.sharedItems.filter(expired).toArray();
   if (oldShared.length > 0) {
     const { deleteSharedBlob } = await import('../sync/shared-blobs');
     for (const item of oldShared) {
@@ -23,24 +45,26 @@ export async function purgeOldTrashItems() {
   }
 
   await db.transaction('rw', [db.taskLists, db.tasks, db.subtasks, db.mindmapFolders, db.mindmaps, db.mindmapNodes], async () => {
-    const oldLists = await db.taskLists.filter((l) => !!l.deletedAt && l.deletedAt < cutoff).toArray();
+    const oldLists = await db.taskLists.filter(expired).toArray();
     for (const l of oldLists) await db.taskLists.delete(l.id);
 
-    const oldTasks = await db.tasks.filter((t) => !!t.deletedAt && t.deletedAt < cutoff).toArray();
+    const oldTasks = await db.tasks.filter(expired).toArray();
     for (const t of oldTasks) await db.tasks.delete(t.id);
 
-    const oldSubs = await db.subtasks.filter((s) => !!s.deletedAt && s.deletedAt < cutoff).toArray();
+    const oldSubs = await db.subtasks.filter(expired).toArray();
     for (const s of oldSubs) await db.subtasks.delete(s.id);
 
-    const oldFolders = await db.mindmapFolders.filter((f) => !!f.deletedAt && f.deletedAt < cutoff).toArray();
+    const oldFolders = await db.mindmapFolders.filter(expired).toArray();
     for (const f of oldFolders) await db.mindmapFolders.delete(f.id);
 
-    const oldMaps = await db.mindmaps.filter((m) => !!m.deletedAt && m.deletedAt < cutoff).toArray();
+    const oldMaps = await db.mindmaps.filter(expired).toArray();
     for (const m of oldMaps) await db.mindmaps.delete(m.id);
 
-    const oldNodes = await db.mindmapNodes.filter((n) => !!n.deletedAt && n.deletedAt < cutoff).toArray();
+    const oldNodes = await db.mindmapNodes.filter(expired).toArray();
     for (const n of oldNodes) await db.mindmapNodes.delete(n.id);
   });
+
+  await forgetSettledArrivals(arrivals);
 
   // Drop device-local collapse state for maps that no longer exist.
   try {
@@ -48,6 +72,26 @@ export async function purgeOldTrashItems() {
     const { useMindmapUi } = await import('../stores/mindmap-ui');
     useMindmapUi.getState().pruneMaps(liveMapIds);
   } catch { /* store unavailable (e.g. bare node env) — cosmetic cleanup only */ }
+}
+
+/** Drop arrival entries whose record is gone (purged) or no longer in the Trash (restored). */
+async function forgetSettledArrivals(arrivals: Record<string, number>): Promise<void> {
+  const ids = Object.keys(arrivals);
+  if (ids.length === 0) return;
+  const tables = [db.taskLists, db.tasks, db.subtasks, db.sharedItems, db.mindmapFolders, db.mindmaps, db.mindmapNodes];
+  const stillInTrash = new Set<string>();
+  for (const table of tables) {
+    for (const row of await (table as unknown as { bulkGet(k: string[]): Promise<Array<{ id: string; deletedAt?: number } | undefined>> }).bulkGet(ids)) {
+      if (row?.deletedAt) stillInTrash.add(row.id);
+    }
+  }
+  if (stillInTrash.size === ids.length) return;
+  await db.transaction('rw', db.localSettings, async () => {
+    const local = await db.localSettings.get('local');
+    if (!local?.trashArrivals) return;
+    const trashArrivals = Object.fromEntries(Object.entries(local.trashArrivals).filter(([id]) => stillInTrash.has(id) || !(id in arrivals)));
+    await db.localSettings.update('local', { trashArrivals });
+  });
 }
 
 /**

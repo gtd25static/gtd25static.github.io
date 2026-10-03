@@ -50,6 +50,37 @@ test('a forged `_enc` in the changelog cannot make a Paranoid device store conte
   expect(await unlock(page, MAIN_PASSPHRASE)).toBe(true);
 });
 
+test('content planted in the changelog in the clear is not shown as the user\'s own', async ({ page, github }) => {
+  // Batch 2: every entry pushed to an encrypted repository is encrypted, so a
+  // plaintext one was planted by whoever holds the PAT — it used to be shown,
+  // clickable link and all, and stuck there against later edits and deletes.
+  test.setTimeout(240_000);
+  await openApp(page);
+  await createList(page, 'Work');
+  await createTask(page, 'A real task');
+  await configureSync(page, github);
+  await closeSettings(page);
+  await expect.poll(() => github.readText('gtd25-snapshot.json')?.length ?? 0, { timeout: 60_000 }).toBeGreaterThan(0);
+
+  const snapshot = JSON.parse(github.readText('gtd25-snapshot.json')!) as { taskLists: Array<{ id: string }> };
+  const changelog = JSON.parse(github.readText('gtd25-changelog.json') ?? '[]') as Array<Record<string, unknown>>;
+  const listId = snapshot.taskLists[0]?.id ?? (changelog.find((e) => e.entityType === 'taskList')?.entityId as string);
+  const now = Date.now();
+  changelog.push({
+    id: 'planted', deviceId: 'attacker-device', timestamp: now, entityType: 'task', entityId: 'planted-task',
+    operation: 'upsert', v: 8,
+    data: {
+      id: 'planted-task', listId, title: 'PLANTED pay this invoice', link: 'https://phish.example/pay',
+      status: 'todo', order: -1, createdAt: now, updatedAt: now, fieldTimestamps: { title: 9e15 },
+    },
+  });
+  github.writeText('gtd25-changelog.json', JSON.stringify(changelog));
+
+  await syncNow(page);
+  await expect(taskCards(page).filter({ hasText: 'A real task' })).toBeVisible();
+  await expect(page.getByText('PLANTED pay this invoice')).toHaveCount(0);
+});
+
 test('on a Paranoid device the sync settings never show the saved PAT or sync password', async ({ page, github }) => {
   test.setTimeout(240_000);
   await openApp(page);

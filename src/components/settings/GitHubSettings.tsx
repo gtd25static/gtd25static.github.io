@@ -5,7 +5,7 @@ import { Input } from '../ui/Input';
 import { Button } from '../ui/Button';
 import { toast } from '../ui/Toast';
 import { confirmDialog } from '../ui/ConfirmDialog';
-import { testConnection } from '../../sync/github-api';
+import { testConnection, tokenReach, tokenReachWarning } from '../../sync/github-api';
 import { syncNow, forcePush, forcePull, contentReplacedByLinking } from '../../sync/sync-engine';
 import { deriveKey, cacheEncryptionKey, generateSalt, hasEncryptionKey } from '../../sync/crypto';
 import {
@@ -163,6 +163,7 @@ export function GitHubSettings() {
       });
     }
     toast('Sync settings saved', 'success');
+    if (willEnableSync && (effectivePat !== storedPat || !wasSyncEnabled)) void warnIfTokenReachesTooFar(effectivePat);
     if (paranoid) setPat(''); // a typed-in secret does not stay on screen either
     if (!rotating) return;
 
@@ -197,6 +198,11 @@ export function GitHubSettings() {
     toast('Unfinished password change forgotten', 'info');
   }
 
+  async function warnIfTokenReachesTooFar(token: string) {
+    const warning = tokenReachWarning(await tokenReach(token));
+    if (warning) toast(warning, 'error');
+  }
+
   async function handleTest() {
     if (!effectivePat || !repo.trim()) {
       toast('Enter PAT and repo first', 'error');
@@ -207,6 +213,7 @@ export function GitHubSettings() {
       const ok = await testConnection(effectivePat, repo.trim());
       if (!ok) recordError('github.connectionTest', new Error('Connection test returned a non-OK response'));
       toast(ok ? 'Connection successful!' : 'Connection failed', ok ? 'success' : 'error');
+      if (ok) await warnIfTokenReachesTooFar(effectivePat);
     } catch (err) {
       recordError('github.connectionTest', err);
       toast('Connection failed', 'error');
@@ -223,7 +230,7 @@ export function GitHubSettings() {
         type="password"
         value={pat}
         onChange={(e) => setPat(e.target.value)}
-        placeholder={paranoid && storedPat ? 'Saved — type a new one to replace it' : 'ghp_...'}
+        placeholder={paranoid && storedPat ? 'Saved — type a new one to replace it' : 'github_pat_… (fine-grained, this repository only)'}
       />
       <Input
         label="Repository (owner/name)"

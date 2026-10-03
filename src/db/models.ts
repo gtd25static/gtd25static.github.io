@@ -253,6 +253,14 @@ export interface SyncMeta {
   // lastPulledAt alone mixes two devices' clocks, and a device running behind
   // would re-adopt it on every sync, discarding its own edits each time.
   lastWipeSeenAt?: number;
+  // The repository this device has seen encrypted (opened with a verified key).
+  // That repository showing up without a salt was stripped by whoever can write
+  // it — taking it for a first encryption used to destroy the content.
+  encryptedRepo?: string;
+  // The highest syncVersion this device has seen on the remote. It only ever goes
+  // up; lower means someone lowered it (to let an older build in, which would
+  // write newer encrypted fields back in the clear).
+  maxSyncVersionSeen?: number;
 }
 
 /**
@@ -285,6 +293,11 @@ export interface LocalSettings {
   nudgeSoundEnabled?: boolean;
   lastNudgeAt?: number;
   lastFocusRefillDay?: string; // local 'YYYY-MM-DD' of the last Focus Mode refill (device-local)
+  // When a record arrived here already deleted by sync, by id (device-local; ids
+  // and times only). The 30-day Trash window runs from the later of that and its
+  // deletedAt, so a delete back-dated by whoever can write the repo is not
+  // purged at the next start. Entries go when the record is purged or restored.
+  trashArrivals?: Record<string, number>;
   // Paranoid Mode (device-local; not synced). Persistent record of the mode;
   // the synchronous gate flag lives in localStorage ('gtd25-paranoid').
   paranoidEnabled?: boolean;

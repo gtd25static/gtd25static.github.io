@@ -22,6 +22,7 @@ const h = vi.hoisted(() => ({
   rotateSyncKey: vi.fn(),
   requirePassphrase: vi.fn(async (): Promise<string | null> => 'the passphrase'),
   confirm: vi.fn(async () => true),
+  reach: { classicScopes: null as string[] | null, canPushAppSite: false },
 }));
 
 vi.mock('../../hooks/use-settings', () => ({
@@ -31,7 +32,11 @@ vi.mock('../../hooks/use-settings', () => ({
 vi.mock('../../hooks/use-vault', () => ({
   useVault: () => h.vault,
 }));
-vi.mock('../../sync/github-api', () => ({ testConnection: vi.fn() }));
+vi.mock('../../sync/github-api', () => ({
+  testConnection: vi.fn(),
+  tokenReach: vi.fn(async () => h.reach),
+  tokenReachWarning: (reach: { canPushAppSite: boolean }) => (reach.canPushAppSite ? 'TOKEN REACHES TOO FAR' : null),
+}));
 vi.mock('../../sync/sync-engine', () => ({
   syncNow: vi.fn(),
   forcePush: vi.fn(),
@@ -345,5 +350,42 @@ describe('GitHubSettings — Paranoid: the saved credentials never reach the for
     expect(h.setVaultSecrets).toHaveBeenCalledWith(expect.objectContaining({ githubPat: 'github_pat_NEW', syncPassword: 'SECRET sync words here' }));
     // …and does not stay on screen afterwards.
     expect(screen.getByLabelText('Personal Access Token')).toHaveValue('');
+  });
+});
+
+describe('GitHubSettings — a token that reaches beyond the sync repository', () => {
+  // A classic token, or any token that can push to the repository serving this
+  // app: a leak of it (TLS proxy, keylogger, disk image) would let someone change
+  // the app on every device (threat-model review, batch 2).
+  beforeEach(() => {
+    h.toast.mockClear();
+    h.updateLocalSettings.mockClear();
+    h.vault = { enabled: false, unlocked: false };
+    h.secrets = undefined;
+    h.local = { githubPat: '', githubRepo: 'owner/repo', syncEnabled: false };
+    h.contentReplacedByLinking.mockResolvedValue(null);
+  });
+
+  it('is called out when the device is linked with it', async () => {
+    h.reach = { classicScopes: ['repo'], canPushAppSite: true };
+    const user = userEvent.setup();
+    render(<GitHubSettings />);
+    await user.type(screen.getByLabelText('Personal Access Token'), 'ghp_classic');
+    await user.type(screen.getByLabelText('Encryption Password'), 'alpha rhino cactus velvet moon');
+    await user.type(screen.getByLabelText('Confirm Password'), 'alpha rhino cactus velvet moon');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    await vi.waitFor(() => expect(h.toast).toHaveBeenCalledWith('TOKEN REACHES TOO FAR', 'error'));
+  });
+
+  it('says nothing for a token limited to the sync repository', async () => {
+    h.reach = { classicScopes: null, canPushAppSite: false };
+    const user = userEvent.setup();
+    render(<GitHubSettings />);
+    await user.type(screen.getByLabelText('Personal Access Token'), 'github_pat_scoped');
+    await user.type(screen.getByLabelText('Encryption Password'), 'alpha rhino cactus velvet moon');
+    await user.type(screen.getByLabelText('Confirm Password'), 'alpha rhino cactus velvet moon');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(h.toast).not.toHaveBeenCalledWith('TOKEN REACHES TOO FAR', 'error');
   });
 });

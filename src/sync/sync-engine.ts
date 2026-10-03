@@ -4,8 +4,9 @@ import type { ImportData } from '../db/export-import';
 import { getFile, getFileConditional, putFile, deleteFile, RateLimitError } from './github-api';
 import { jitterInterval } from './poll-jitter';
 import { cleanupSoftDeletes, archiveOldCompleted } from './conflict-resolution';
-import { applyRemoteEntries as applyRemoteEntriesToDb, getPendingEntries, clearPendingEntries, clearEntriesByIds, pendingEntryCount, recordChangeBatch } from './change-log';
-import { mergeEntity, stampUpdatedFields } from './field-timestamps';
+import { applyRemoteEntries as applyRemoteEntriesToDb, getPendingEntries, clearPendingEntries, clearEntriesByIds, pendingEntryCount, recordChangeBatch, isKnownEntityType } from './change-log';
+import { mergeEntity, stampUpdatedFields, capFutureTimestamps, MAX_FUTURE_SKEW_MS } from './field-timestamps';
+import { noteRemoteDeletions } from '../db/purge';
 import { toast } from '../components/ui/Toast';
 import { SYNC_VERSION, isCompatibleVersion, needsMigration } from './version';
 import { runRemoteMigrations, normalizeLegacyWorkingStatus } from './migrations';
@@ -60,6 +61,8 @@ async function applyRemoteEntries(entries: ChangeEntry[]): Promise<void> {
 // Returns how many entities it changed here, for the "↓ n" the indicator shows.
 async function reconcileFromSnapshot(snapshot: SyncData): Promise<number> {
   syncAbort?.signal.throwIfAborted();
+  // Records this moves into the Trash: their 30 days run from now (db/purge).
+  const newlyDeleted: string[] = [];
   // Helper: reconcile a collection using field-level merge. Crypto for Paranoid
   // at-rest storage is done before the write transaction so Safari cannot
   // auto-close the transaction during a crypto.subtle await.
@@ -71,9 +74,13 @@ async function reconcileFromSnapshot(snapshot: SyncData): Promise<number> {
     for (const e of await table.toArray()) localMap.set(e.id, e);
 
     const toPut: T[] = [];
-    for (const remote of remoteEntities) {
+    const now = Date.now();
+    for (const remoteRow of remoteEntities) {
+      // Timestamps beyond the skew tolerance are capped (see capFutureTimestamps).
+      const remote = capFutureTimestamps(remoteRow as unknown as Record<string, unknown>, now) as unknown as T;
       const local = localMap.get(remote.id);
       if (!local) {
+        if ((remote as { deletedAt?: number }).deletedAt) newlyDeleted.push(remote.id);
         toPut.push(remote);
       } else {
         const merged = mergeEntity(
@@ -81,6 +88,7 @@ async function reconcileFromSnapshot(snapshot: SyncData): Promise<number> {
           remote as unknown as Record<string, unknown>,
           remote.updatedAt,
         );
+        if (merged?.deletedAt && !(local as { deletedAt?: number }).deletedAt) newlyDeleted.push(remote.id);
         if (merged) toPut.push(merged as unknown as T);
       }
     }
@@ -117,6 +125,7 @@ async function reconcileFromSnapshot(snapshot: SyncData): Promise<number> {
     if (mindmaps.length > 0) await db.mindmaps.bulkPut(mindmaps);
     if (mindmapNodes.length > 0) await db.mindmapNodes.bulkPut(mindmapNodes);
   });
+  await noteRemoteDeletions(newlyDeleted);
   const changed = taskLists.length + tasks.length + subtasks.length + sharedItems.length
     + mindmapFolders.length + mindmaps.length + mindmapNodes.length;
 
@@ -145,6 +154,10 @@ async function reconcileFromSnapshot(snapshot: SyncData): Promise<number> {
 
 async function replaceLocalEntitiesFromSnapshot(snapshot: Pick<SyncData, 'taskLists' | 'tasks' | 'subtasks' | 'sharedItems' | 'mindmapFolders' | 'mindmaps' | 'mindmapNodes'>): Promise<void> {
   syncAbort?.signal.throwIfAborted(); // see applyRemoteEntries above
+  // Whatever arrives already in the Trash gets its 30 days from now (db/purge).
+  const inTrash = [snapshot.taskLists, snapshot.tasks, snapshot.subtasks, snapshot.sharedItems ?? [],
+    snapshot.mindmapFolders ?? [], snapshot.mindmaps ?? [], snapshot.mindmapNodes ?? []]
+    .flatMap((rows) => (rows as Array<{ id: string; deletedAt?: number }>).filter((r) => r.deletedAt).map((r) => r.id));
   // Bootstrap / force-pull / ZIP import / backup-restore can all carry pre-v5
   // data with the removed 'working' status — normalize before writing locally.
   const prepared = await prepareSyncDataForAtRest({
@@ -189,6 +202,7 @@ async function replaceLocalEntitiesFromSnapshot(snapshot: Pick<SyncData, 'taskLi
       if (mindmapNodes.length > 0) await db.mindmapNodes.bulkPut(mindmapNodes);
     }
   });
+  await noteRemoteDeletions(inTrash);
 }
 
 // --- Safe JSON parsing ---
@@ -316,7 +330,10 @@ function notifySyncSuccess() {
 }
 
 // --- Encryption password callbacks ---
-type PasswordNeededCallback = (salt: string) => void;
+// `keyChanged`: this device's saved password no longer opens the repository. Its
+// key was changed on another device — or by whoever can write the repository; the
+// prompt says so, and the saved password is kept (it used to be deleted).
+type PasswordNeededCallback = (salt: string, opts?: { keyChanged?: boolean }) => void;
 const passwordNeededListeners: Set<PasswordNeededCallback> = new Set();
 
 export function onEncryptionPasswordNeeded(cb: PasswordNeededCallback) {
@@ -327,8 +344,20 @@ export function offEncryptionPasswordNeeded(cb: PasswordNeededCallback) {
   passwordNeededListeners.delete(cb);
 }
 
-function notifyPasswordNeeded(salt: string) {
-  for (const cb of passwordNeededListeners) cb(salt);
+function notifyPasswordNeeded(salt: string, opts?: { keyChanged?: boolean }) {
+  for (const cb of passwordNeededListeners) cb(salt, opts);
+}
+
+/** Note that `repo` opened with a verified key (see SyncMeta.encryptedRepo). */
+async function rememberEncryptedRepo(repo: string): Promise<void> {
+  const meta = await db.syncMeta.get('sync-meta');
+  if (meta && meta.encryptedRepo !== repo) await db.syncMeta.update('sync-meta', { encryptedRepo: repo });
+}
+
+/** The remote is at this build's SYNC_VERSION now (it was, or was just migrated up). */
+async function rememberSyncVersion(): Promise<void> {
+  const meta = await db.syncMeta.get('sync-meta');
+  if (meta && (meta.maxSyncVersionSeen ?? 0) < SYNC_VERSION) await db.syncMeta.update('sync-meta', { maxSyncVersionSeen: SYNC_VERSION });
 }
 
 // --- Sync progress reporting ---
@@ -1031,9 +1060,8 @@ async function runSync(manual = false, pushLimit?: number): Promise<number> {
       if (snapshot.encryptionSalt) {
         const ok = await checkVerifier(encKey, snapshot.encryptionVerifier ?? '');
         if (!ok) {
-          await db.localSettings.update('local', { encryptionPassword: undefined });
           clearEncryptionKey();
-          notifyPasswordNeeded(snapshot.encryptionSalt);
+          notifyPasswordNeeded(snapshot.encryptionSalt, { keyChanged: true });
           return -1;
         }
         snapshot = await decryptSyncData(encKey, snapshot);
@@ -1074,6 +1102,7 @@ async function runSync(manual = false, pushLimit?: number): Promise<number> {
     let remoteSalt: string | undefined;
     let remoteVersion: number | undefined;
     let remoteWipedAt: number | undefined;
+    let remoteVersionWentBack = false;
     if (remoteSnapshotFile) {
       const versionParsed = safeParseJson<SyncData>(remoteSnapshotFile.data, 'remote snapshot (version check)');
       if (!versionParsed.ok) {
@@ -1093,6 +1122,27 @@ async function runSync(manual = false, pushLimit?: number): Promise<number> {
         reportError('Update required', { category: 'update-required', message: 'Remote data requires a newer app version' });
         if (manual) toast('Remote data requires a newer app version', 'error');
         return -1;
+      }
+
+      const meta = await db.syncMeta.get('sync-meta');
+      // This repository was encrypted when this device last opened it. Without a
+      // salt now, it was stripped by whoever can write it: taken for a first
+      // encryption, this device used to re-encrypt the ciphertext shells as empty
+      // records and push them — the content gone on every device.
+      if (!remoteSalt && meta?.encryptedRepo === creds.repo) {
+        recordSyncMessage('encryptionMissing', 'The repository no longer carries its encryption salt');
+        reportError('Repository encryption missing', { category: 'corrupt-remote', message: 'The repository is no longer marked as encrypted — it may have been tampered with' });
+        toast('Sync stopped: the repository is no longer marked as encrypted. It may have been tampered with.', 'error');
+        return -1;
+      }
+      // syncVersion only ever goes up. Lower than seen before was set back by
+      // hand — to let an older build in, which would write newer encrypted
+      // fields in the clear. Its snapshot is migrated up again, but not kept as
+      // a migration backup (it may hold what such a build wrote).
+      remoteVersionWentBack = (remoteVersion ?? 0) < (meta?.maxSyncVersionSeen ?? 0);
+      if (remoteVersionWentBack) {
+        recordSyncMessage('versionWentBack', `Remote sync version went back to ${remoteVersion ?? 'none'}`);
+        reportError('Repository version went back', { category: 'corrupt-remote', message: 'The repository\'s sync version was lowered — it may have been tampered with' });
       }
     }
 
@@ -1115,9 +1165,8 @@ async function runSync(manual = false, pushLimit?: number): Promise<number> {
           if (snapshotData.ok && snapshotData.value.encryptionVerifier) {
             const ok = await checkVerifier(encKey, snapshotData.value.encryptionVerifier);
             if (!ok) {
-              await db.localSettings.update('local', { encryptionPassword: undefined });
               clearEncryptionKey();
-              notifyPasswordNeeded(remoteSalt);
+              notifyPasswordNeeded(remoteSalt, { keyChanged: true });
               return -1;
             }
           }
@@ -1164,19 +1213,20 @@ async function runSync(manual = false, pushLimit?: number): Promise<number> {
       if (verifierParsed.ok && verifierParsed.value.encryptionVerifier) {
         const ok = await checkVerifier(encKey, verifierParsed.value.encryptionVerifier);
         if (!ok) {
-          // Saved password is wrong — clear it and prompt
-          await db.localSettings.update('local', { encryptionPassword: undefined });
+          // The saved password no longer opens the repository: prompt, and keep it
+          // (a forged verifier used to make every device delete its own).
           clearEncryptionKey();
-          notifyPasswordNeeded(remoteSalt);
+          notifyPasswordNeeded(remoteSalt, { keyChanged: true });
           return -1;
         }
+        await rememberEncryptedRepo(creds.repo);
       }
     }
 
     // Migrate remote snapshot if needed (after encryption is resolved)
     if (remoteSnapshotFile && needsMigration(remoteVersion)) {
       reportProgress('applying', 'Migrating data...', 0.45);
-      await backupRemoteSnapshot(creds.pat, creds.repo, remoteSnapshotFile.data, remoteVersion ?? 0);
+      if (!remoteVersionWentBack) await backupRemoteSnapshot(creds.pat, creds.repo, remoteSnapshotFile.data, remoteVersion ?? 0);
       // Decrypt → migrate → re-encrypt → write
       const migParsed = safeParseJson<SyncData>(remoteSnapshotFile.data, 'remote snapshot (migration)');
       if (!migParsed.ok) {
@@ -1193,12 +1243,13 @@ async function runSync(manual = false, pushLimit?: number): Promise<number> {
       const encrypted = await encryptSyncData(encKey, migrated);
       await putFile(creds.pat, creds.repo, SNAPSHOT_FILE, JSON.stringify(encrypted), remoteSnapshotFile.sha, signal);
     }
+    if (remoteSnapshotFile) await rememberSyncVersion();
 
     reportProgress('applying', 'Applying changes...', 0.6);
 
     // Filter out our own entries and apply remote ones (decrypt encrypted entries)
     let foreignEntries = remoteEntries.filter((e) => e.deviceId !== creds.deviceId);
-    foreignEntries = await decryptChangeEntries(encKey, foreignEntries);
+    foreignEntries = await decryptChangeEntries(encKey, foreignEntries, { allowPlaintext: !remoteSalt });
     // Count only entries not seen in the previous sync cycle
     const previousForeignIds = new Set(
       cachedRemoteEntries.filter((e) => e.deviceId !== creds.deviceId).map((e) => e.id),
@@ -1291,7 +1342,7 @@ async function runSync(manual = false, pushLimit?: number): Promise<number> {
           currentSha = fresh?.sha;
           // Apply any new foreign entries (decrypt them)
           let newForeign = freshEntries.filter((e) => e.deviceId !== creds.deviceId && !appliedForeignIds.has(e.id));
-          newForeign = await decryptChangeEntries(encKey, newForeign);
+          newForeign = await decryptChangeEntries(encKey, newForeign, { allowPlaintext: !remoteSalt });
           if (newForeign.length > 0) {
             await applyRemoteEntries(newForeign);
             for (const e of newForeign) appliedForeignIds.add(e.id);
@@ -1516,7 +1567,7 @@ async function compactSnapshot(pat: string, repo: string, encKey: CryptoKey) {
     const initialChangelogSha = changelogFile.sha;
 
     // Decrypt changelog entries for merging
-    entries = await decryptChangeEntries(encKey, entries);
+    entries = await decryptChangeEntries(encKey, entries, { allowPlaintext: !savedSalt });
 
     // Apply all changelog entries to snapshot
     const entityMaps = {
@@ -1529,7 +1580,16 @@ async function compactSnapshot(pat: string, repo: string, encKey: CryptoKey) {
       mindmapNode: new Map((snapshot.mindmapNodes ?? []).map((e) => [e.id, e])),
     };
 
-    const sorted = [...entries].sort((a, b) => a.timestamp - b.timestamp);
+    // Same rules as applyRemoteEntries: unknown kinds skipped (one used to throw
+    // here and stop every compaction), timestamps from the far future capped.
+    const now = Date.now();
+    for (const map of Object.values(entityMaps)) {
+      for (const [id, row] of map) map.set(id, capFutureTimestamps(row as unknown as Record<string, unknown>, now) as never);
+    }
+    const sorted = entries
+      .filter((e) => isKnownEntityType(e.entityType) && Number.isFinite(e.timestamp))
+      .map((e) => ({ ...e, timestamp: Math.min(e.timestamp, now + MAX_FUTURE_SKEW_MS), data: e.data ? capFutureTimestamps(e.data, now) : e.data }))
+      .sort((a, b) => a.timestamp - b.timestamp);
     for (const entry of sorted) {
       const map = entityMaps[entry.entityType];
       if (entry.operation === 'delete') {
@@ -1795,12 +1855,12 @@ export async function forcePull() {
     if (snapshot.encryptionSalt) {
       const ok = await checkVerifier(encKey, snapshot.encryptionVerifier ?? '');
       if (!ok) {
-        await db.localSettings.update('local', { encryptionPassword: undefined });
         clearEncryptionKey();
-        notifyPasswordNeeded(snapshot.encryptionSalt);
+        notifyPasswordNeeded(snapshot.encryptionSalt, { keyChanged: true });
         return;
       }
       snapshot = await decryptSyncData(encKey, snapshot);
+      await rememberEncryptedRepo(creds.repo);
     }
 
     reportProgress('applying', 'Applying data...', 0.6);
@@ -1820,7 +1880,7 @@ export async function forcePull() {
     if (changelogFile) {
       const clParsed = safeParseJson<ChangeEntry[]>(changelogFile.data, 'changelog (force pull)');
       let entries = clParsed.ok ? clParsed.value : [];
-      entries = await decryptChangeEntries(encKey, entries);
+      entries = await decryptChangeEntries(encKey, entries, { allowPlaintext: !snapshot.encryptionSalt });
       if (entries.length > 0) {
         await applyRemoteEntries(entries);
       }

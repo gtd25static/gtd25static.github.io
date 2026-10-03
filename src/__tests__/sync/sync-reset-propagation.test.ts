@@ -29,7 +29,7 @@ vi.mock('../../sync/history-compaction', () => ({ maybeSquashDefaultBranch: vi.f
 import { getFile, putFile, deleteFile } from '../../sync/github-api';
 import { syncNow, importData, wipeAllData, forcePush, contentReplacedByLinking, setSyncProgressCallback, SNAPSHOT_FILE, CHANGELOG_FILE, type SyncProgress } from '../../sync/sync-engine';
 import { getErrorLog, clearErrorLog } from '../../lib/diagnostics';
-import { cacheEncryptionKey, clearEncryptionKey, deriveKey, generateSalt, createVerifier, encryptSyncData, decryptSyncData } from '../../sync/crypto';
+import { cacheEncryptionKey, clearEncryptionKey, deriveKey, generateSalt, createVerifier, encryptSyncData, decryptSyncData, encryptChangeEntries } from '../../sync/crypto';
 import { toast } from '../../components/ui/Toast';
 import { SYNC_VERSION } from '../../sync/version';
 
@@ -127,7 +127,7 @@ describe('another device adopting a reset', () => {
       id: 'e1', deviceId: 'device-B', timestamp: Date.now(),
       entityType: 'taskList', entityId: 'new', operation: 'upsert', data: { ...list('new', 'Added after reset') }, v: 7,
     };
-    remote.set(CHANGELOG_FILE, { data: JSON.stringify([afterReset]), sha: `sha-${++shaCounter}` });
+    remote.set(CHANGELOG_FILE, { data: JSON.stringify(await encryptChangeEntries(testKey, [afterReset])), sha: `sha-${++shaCounter}` });
 
     expect(await syncNow()).toBe(0);
 

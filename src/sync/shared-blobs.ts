@@ -93,6 +93,31 @@ export async function ensureBlobBranch(creds: Creds): Promise<void> {
   blobBranchEnsured = true;
 }
 
+// --- Binding a file's bytes to its id ---
+
+/**
+ * AES-GCM additional data for a shared file's bytes on the wire: its id. Without
+ * it, whoever can write the repository could swap two files' bytes (or put a
+ * deleted file's bytes back under another's name) and each would open as the
+ * other; now that fails to decrypt instead.
+ */
+export function blobAad(blobId: string): Uint8Array {
+  return new TextEncoder().encode(`sharedBlob:${blobId}`);
+}
+
+/**
+ * Open a shared file's bytes from the wire: bound to its id, or — written before
+ * 2026-10-03 — unbound (such files gain the binding at the next sync-password
+ * change, which re-encrypts them all).
+ */
+export async function decryptSharedBlob(key: CryptoKey, bytes: Uint8Array, blobId: string): Promise<Uint8Array> {
+  try {
+    return await decryptBytes(key, bytes, blobAad(blobId));
+  } catch {
+    return decryptBytes(key, bytes);
+  }
+}
+
 // --- Local at-rest cache (DEK when Paranoid on, plaintext otherwise) ---
 
 export async function cacheBlobLocal(blobId: string, plaintext: Uint8Array): Promise<void> {
@@ -160,7 +185,7 @@ export async function uploadSharedBlob(blobId: string, plaintext: Uint8Array): P
   const creds = await getCredentials();
   if (!creds) throw new Error('Sync is not configured');
   const key = await requireSyncKey();
-  const ciphertext = await encryptBytes(key, plaintext);
+  const ciphertext = await encryptBytes(key, plaintext, blobAad(blobId));
   await ensureBlobBranch(creds);
   await putBinaryFile(creds.pat, creds.repo, blobPath(blobId), ciphertext, undefined, undefined, BLOB_BRANCH);
   await cacheBlobLocal(blobId, plaintext);
@@ -179,7 +204,7 @@ export async function getSharedBlobBytes(blobId: string): Promise<Uint8Array> {
   let ciphertext = await getBinaryFile(creds.pat, creds.repo, blobPath(blobId), undefined, BLOB_BRANCH);
   if (!ciphertext) ciphertext = await getBinaryFile(creds.pat, creds.repo, blobPath(blobId));
   if (!ciphertext) throw new Error(`Blob ${blobId} not found on remote`);
-  const plaintext = await decryptBytes(key, ciphertext);
+  const plaintext = await decryptSharedBlob(key, ciphertext, blobId);
   await cacheBlobLocal(blobId, plaintext);
   return plaintext;
 }

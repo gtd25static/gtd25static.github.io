@@ -151,6 +151,9 @@ export function useShareTarget(): ShareTargetApi {
         cleanUrl();
         return;
       }
+      // The service worker kept an earlier, unfiled share rather than replace it:
+      // offer that one (below), and say why the new one did not arrive.
+      if (flag === 'busy') toast('An earlier share is still waiting — file it, then share again', 'info');
       let keepStash = false;
       try {
         // Cheap existence probe first: on a normal launch with nothing stashed this

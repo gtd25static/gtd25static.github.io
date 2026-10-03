@@ -36,13 +36,13 @@ import {
   createBlobBase64, updateRef, type GitTreeEntry,
 } from './github-api';
 import {
-  deriveKey, generateSalt, createVerifier, checkVerifier, encryptBytes, decryptBytes,
+  deriveKey, generateSalt, createVerifier, checkVerifier, encryptBytes,
   cacheEncryptionKey, getCachedEncryptionKey, getCachedSalt,
 } from './crypto';
 import { syncNow, forcePush, endSyncSession, SYNC_LOCK_NAME } from './sync-engine';
 import { hasPendingEntries } from './change-log';
 import { getSyncPat, rememberSyncPassword, forgetSyncPassword } from './sync-credentials';
-import { BLOB_BRANCH, KEEP_PATH, blobPath, ensureBlobBranch } from './shared-blobs';
+import { BLOB_BRANCH, KEEP_PATH, blobPath, ensureBlobBranch, blobAad, decryptSharedBlob } from './shared-blobs';
 import { overwriteAllBackups } from './remote-backups';
 import { publishOwnRegistryEntry } from './remote-unlock';
 import { squashDefaultBranch } from './history-compaction';
@@ -193,9 +193,9 @@ async function deleteMigrationBackups(creds: Creds): Promise<void> {
   }
 }
 
-async function opensWith(key: CryptoKey, bytes: Uint8Array): Promise<Uint8Array | null> {
+async function opensWith(key: CryptoKey, bytes: Uint8Array, blobId: string): Promise<Uint8Array | null> {
   try {
-    return await decryptBytes(key, bytes);
+    return await decryptSharedBlob(key, bytes, blobId);
   } catch {
     return null;
   }
@@ -247,17 +247,17 @@ async function rotateBlobBranch(
     if (!existing) legacyOnDefault.push(path);
     const asIs = async (): Promise<GitTreeEntry> =>
       existing ?? { path, mode: '100644', type: 'blob', sha: await createBlobBase64(pat, repo, b64encode(bytes)) };
-    if (await opensWith(newKey, bytes)) {
+    if (await opensWith(newKey, bytes, blobId)) {
       tree.push(await asIs()); // already rotated (a retry)
       continue;
     }
-    const plain = await opensWith(oldKey, bytes);
+    const plain = await opensWith(oldKey, bytes, blobId);
     if (!plain) {
       result.blobsUnreadable++;
       tree.push(await asIs());
       continue;
     }
-    const sha = await createBlobBase64(pat, repo, b64encode(await encryptBytes(newKey, plain)));
+    const sha = await createBlobBase64(pat, repo, b64encode(await encryptBytes(newKey, plain, blobAad(blobId))));
     tree.push({ path, mode: '100644', type: 'blob', sha });
     result.blobsRewritten++;
   }
