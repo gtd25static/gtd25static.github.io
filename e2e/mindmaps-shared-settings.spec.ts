@@ -145,3 +145,37 @@ test('an imported backup\'s theme applies at once, and a picked theme survives a
   await expect(page.getByText('Backup imported successfully')).toBeVisible();
   await expect.poll(() => isDark(page)).toBe(true);
 });
+
+test('"Collapse all" on a big map, panned away, brings the root back to the centre', async ({ page }) => {
+  await openApp(page);
+  await openMindmaps(page);
+  await page.getByRole('button', { name: 'Import', exact: true }).click();
+  const outline = ['# Big plan'];
+  for (let s = 0; s < 12; s++) {
+    outline.push(`## Section ${s}`);
+    for (let i = 0; i < 8; i++) outline.push(`- Item ${s}.${i}`);
+  }
+  await page.getByPlaceholder(/# My map/).fill(outline.join('\n'));
+  await page.getByRole('button', { name: 'Import', exact: true }).last().click();
+  await expect(page.locator('[data-mindmap-node]')).toHaveCount(1 + 12 * 9);
+
+  // Pan far down-right of the root, as reading the far end of a big map does.
+  const canvas = page.getByTestId('mindmap-canvas');
+  const box = (await canvas.boundingBox())!;
+  const root = node(page, 'Big plan');
+  for (let i = 0; i < 3; i++) {
+    await page.mouse.move(box.x + box.width - 20, box.y + box.height - 20);
+    await page.mouse.down();
+    await page.mouse.move(box.x + 20, box.y + 20, { steps: 8 });
+    await page.mouse.up();
+  }
+  await expect(root).not.toBeInViewport();
+
+  await page.getByRole('button', { name: 'Collapse all', exact: true }).click();
+  await expect(page.locator('[data-mindmap-node]')).toHaveCount(1);
+  await expect(async () => {
+    const r = (await root.boundingBox())!;
+    expect(Math.abs(r.x + r.width / 2 - (box.x + box.width / 2))).toBeLessThan(4);
+    expect(Math.abs(r.y + r.height / 2 - (box.y + box.height / 2))).toBeLessThan(4);
+  }).toPass({ timeout: 3000 });
+});

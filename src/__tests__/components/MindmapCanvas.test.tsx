@@ -484,3 +484,66 @@ describe('MindmapCanvas — the canvas colour', () => {
     expect(screen.getByTestId('mindmap-canvas').style.background).toBe('');
   });
 });
+
+describe('MindmapCanvas — "Collapse all" brings the root back into view', () => {
+  // A big expanded map, panned around, then folded from the toolbar: only the
+  // root is left, wherever the big layout had put it — often off screen.
+  const W = 800;
+  const H = 600;
+  let rectSpy: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => {
+    // Only the <svg> and its container: node boxes keep measuring as before.
+    rectSpy = vi.spyOn(SVGSVGElement.prototype, 'getBoundingClientRect').mockReturnValue(
+      { x: 0, y: 0, left: 0, top: 0, right: W, bottom: H, width: W, height: H, toJSON: () => ({}) } as DOMRect);
+  });
+  afterEach(() => rectSpy.mockRestore());
+
+  function viewport() {
+    const g = document.querySelector('svg > g')!.getAttribute('transform')!;
+    const [tx, ty, k] = g.match(/-?[\d.]+(?:e-?\d+)?/g)!.map(Number);
+    return { tx, ty, k };
+  }
+  function rootOnScreen() {
+    const { tx, ty, k } = viewport();
+    const b = nodeBox('root');
+    return { x: (b.x + b.w / 2) * k + tx, y: (b.y + b.h / 2) * k + ty };
+  }
+  function panBy(dx: number, dy: number) {
+    const svg = document.querySelector('svg')!;
+    fireEvent.pointerDown(svg, { pointerId: 7, pointerType: 'mouse', clientX: 400, clientY: 300 });
+    fireEvent.pointerMove(svg, { pointerId: 7, pointerType: 'mouse', clientX: 400 + dx, clientY: 300 + dy });
+    fireEvent.pointerUp(svg, { pointerId: 7, pointerType: 'mouse', clientX: 400 + dx, clientY: 300 + dy });
+  }
+
+  it('centres the root after the whole map is collapsed', async () => {
+    render(<MindmapCanvas mapId="map-1" />);
+    panBy(-3000, -2000);
+    expect(rootOnScreen().x).toBeLessThan(0);
+
+    act(() => useMindmapUi.getState().collapseAll('map-1', ['root', 'a']));
+
+    await waitFor(() => {
+      const p = rootOnScreen();
+      expect(Math.abs(p.x - W / 2)).toBeLessThan(2);
+      expect(Math.abs(p.y - H / 2)).toBeLessThan(2);
+    }, { timeout: 1500 });
+  });
+
+  it('collapsing one node still leaves the view where it is', async () => {
+    render(<MindmapCanvas mapId="map-1" />);
+    panBy(-3000, -2000);
+    const before = viewport();
+    act(() => useMindmapUi.getState().toggleCollapsed('map-1', 'a'));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(viewport()).toEqual(before);
+  });
+
+  it('a "Collapse all" of another map does not move this one', async () => {
+    render(<MindmapCanvas mapId="map-1" />);
+    panBy(-3000, -2000);
+    const before = viewport();
+    act(() => useMindmapUi.getState().collapseAll('map-2', ['x']));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(viewport()).toEqual(before);
+  });
+});

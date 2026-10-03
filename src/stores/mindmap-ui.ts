@@ -50,6 +50,9 @@ interface MindmapUiState {
   setSmartColoringDefault: (on: boolean) => void;
   /** Collapse every node that has children / expand everything, for one map. */
   collapseAll: (mapId: string, parentIds: string[]) => void;
+  /** Raised by collapseAll: the canvas fits what is left (the root), which a
+   *  big layout may have left off screen. `seq` makes each request new. Not persisted. */
+  recenterRequest: { mapId: string; seq: number } | null;
   expandAll: (mapId: string) => void;
   /** Drop stored state for maps that no longer exist (called on purge). */
   pruneMaps: (liveMapIds: Set<string>) => void;
@@ -113,6 +116,7 @@ export const useMindmapUi = create<MindmapUiState>((set, get) => ({
   setSelectedNodeId: (id) => set((s) => (s.selectedNodeId === id ? s : { selectedNodeId: id, stylePreview: null })),
   stylePreview: null,
   setStylePreview: (patch) => set({ stylePreview: patch }),
+  recenterRequest: null,
   toggleCollapsed: (mapId, nodeId) =>
     set((state) => {
       const current = state.collapsed[mapId] ?? [];
@@ -140,7 +144,7 @@ export const useMindmapUi = create<MindmapUiState>((set, get) => ({
       const collapsed = { ...state.collapsed, [mapId]: [...parentIds] };
       if (parentIds.length === 0) delete collapsed[mapId];
       persistWith(state, { collapsed });
-      return { collapsed };
+      return { collapsed, recenterRequest: { mapId, seq: (state.recenterRequest?.seq ?? 0) + 1 } };
     }),
   expandAll: (mapId) =>
     set((state) => {

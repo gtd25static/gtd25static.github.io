@@ -53,3 +53,26 @@ describe('mindmap-ui persistence', () => {
     expect(garbage.getState().smartColoringDefault).toBe(false);
   });
 });
+
+describe('collapseAll asks the canvas to bring the root back into view', () => {
+  it('raises a request for that map, a new one each time', () => {
+    useMindmapUi.getState().collapseAll('map-1', ['n1']);
+    const first = useMindmapUi.getState().recenterRequest;
+    expect(first?.mapId).toBe('map-1');
+    useMindmapUi.getState().collapseAll('map-1', ['n1']);
+    expect(useMindmapUi.getState().recenterRequest?.seq).not.toBe(first?.seq);
+  });
+
+  it('a single toggle, expand or expand-all asks for nothing', () => {
+    const before = useMindmapUi.getState().recenterRequest;
+    useMindmapUi.getState().toggleCollapsed('map-1', 'n1');
+    useMindmapUi.getState().expand('map-1', 'n1');
+    useMindmapUi.getState().expandAll('map-1');
+    expect(useMindmapUi.getState().recenterRequest).toBe(before);
+  });
+
+  it('is not stored: it is a one-off view request, not state', () => {
+    useMindmapUi.getState().collapseAll('map-1', ['n1']);
+    expect(localStorage.getItem('gtd25-mindmap-ui')).not.toContain('recenter');
+  });
+});

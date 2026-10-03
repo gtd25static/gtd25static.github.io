@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { MindmapNode } from '../../db/models';
 import { buildTree, descendantIds } from '../../lib/mindmap-tree';
-import { layoutMindmap, translateLayoutY, type LayoutRect, type NodeSize } from '../../lib/mindmap-layout';
+import { layoutMindmap, translateLayoutY, type LayoutRect, type MindmapLayout, type NodeSize } from '../../lib/mindmap-layout';
 import { anchorPoints, nodeActionAnchors, resolveHoverTarget } from '../../lib/mindmap-hover';
 import { useAnimatedLayout } from '../../hooks/use-animated-layout';
 import {
@@ -181,9 +181,8 @@ export function MindmapCanvas({ mapId, background, smartColoring }: { mapId: str
     setViewport({ tx: sx - ((sx - tx) / k) * k2, ty: sy - ((sy - ty) / k) * k2, k: k2 });
   }, []);
 
-  const zoomToFit = useCallback(() => {
+  const fitBounds = useCallback((bounds: MindmapLayout['bounds']) => {
     const svg = svgRef.current;
-    const { bounds } = layoutRef.current;
     if (!svg) return;
     const bw = bounds.maxX - bounds.minX;
     const bh = bounds.maxY - bounds.minY;
@@ -196,6 +195,19 @@ export function MindmapCanvas({ mapId, background, smartColoring }: { mapId: str
       k,
     });
   }, []);
+  const zoomToFit = useCallback(() => fitBounds(layoutRef.current.bounds), [fitBounds]);
+
+  // "Collapse all" leaves only the root, wherever the big layout had put it —
+  // often off screen, and hard to find. Fit what is left, from the layout the
+  // fold is heading to (the animated one still has the big map's bounds). Only
+  // requests raised while this map is open count.
+  const recenterRequest = useMindmapUi((s) => s.recenterRequest);
+  const handledRecenterRef = useRef(recenterRequest?.seq);
+  useEffect(() => {
+    if (!recenterRequest || recenterRequest.seq === handledRecenterRef.current) return;
+    handledRecenterRef.current = recenterRequest.seq;
+    if (recenterRequest.mapId === mapId) fitBounds(targetLayout.bounds);
+  }, [recenterRequest, mapId, targetLayout, fitBounds]);
 
   // Fit once the first real layout exists; motion arms one quiet frame later.
   // On a large map the measurements land in several commits, re-firing this
