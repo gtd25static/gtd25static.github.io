@@ -4,9 +4,9 @@ import { generateDek, wrapDek, generateGarbageSlot } from './vault-crypto';
 import { createVerifier, encryptBlob, encryptBytes } from '../sync/crypto';
 import { clearDeviceIdCache } from '../sync/change-log';
 import { CONTENT_TABLES, readContentRows, encryptContentRows } from './vault-content';
-import { placeholderRow, placeholderBlobBytes } from '../lib/placeholder-content';
+import { placeholderRow, placeholderBlobBytes, createPlaceholderContext } from '../lib/placeholder-content';
+import { replaceShareStashWithPlaceholder } from '../lib/share-target';
 import { purgeLocalBackups } from './backup';
-import { SHARE_CACHE } from '../lib/share-target';
 import { clearErrorLog } from '../lib/diagnostics';
 import { closeAllNotifications } from '../lib/notifications';
 import { newId } from '../lib/id';
@@ -77,14 +77,17 @@ export async function reinitVaultWithPlaceholders(vault: Vault, realDek: CryptoK
   //    quarantined row (`_decryptError`) has real content that is already
   //    unreadable, so it gets a decoy like any other, minus the corruption flag.
   const newDek = await generateDek();
+  // One context for the whole swap: values stay distinct within each list, map or
+  // task, and everything is in the same language.
+  const placeholders = createPlaceholderContext();
   const encByTable = await encryptContentRows(
-    newDek, plainByTable, (entityType, { _decryptError: _corrupt, ...row }) => placeholderRow(entityType, row),
+    newDek, plainByTable, (entityType, { _decryptError: _corrupt, ...row }) => placeholderRow(entityType, row, placeholders),
   );
   // Shared-blob cache: keep the ids/structure, replace bytes with dummy text —
   // encrypted under the new DEK like every Paranoid cache entry. In plaintext
   // they could not be opened (every read decrypts) and marked this swap on disk.
   const placeholderBlobs = await Promise.all(
-    blobs.map(async (b) => ({ ...b, data: await encryptBytes(newDek, placeholderBlobBytes(b.id)) })),
+    blobs.map(async (b) => ({ ...b, data: await encryptBytes(newDek, placeholderBlobBytes(b.id, placeholders.vocab)) })),
   );
 
   // 3. Build the re-keyed vault row (slot 1 = new DEK under the duress KEK; slot
@@ -143,7 +146,11 @@ export async function reinitVaultWithPlaceholders(vault: Vault, realDek: CryptoK
         remoteApproverFor: undefined,
         deviceId: newId(),
         deviceIdentity: undefined,
-        unlockLog: local?.unlockLog?.filter((e) => e.method === 'passphrase'),
+        // Every entry kept, as a passphrase one (a security key or remote unlock
+        // can't have happened on a vault that has neither). Dropping them shifted
+        // "the previous unlock" back to an old passphrase one, so an old typo could
+        // raise the failed-attempts alert right at this moment.
+        unlockLog: local?.unlockLog?.map((e) => ({ ...e, method: 'passphrase' as const })),
       });
     },
   );
@@ -157,9 +164,24 @@ export async function reinitVaultWithPlaceholders(vault: Vault, realDek: CryptoK
     try { localStorage.removeItem(key); } catch { /* storage unavailable */ }
   }
   clearErrorLog();
-  try {
-    if (typeof caches !== 'undefined') await caches.delete(SHARE_CACHE);
-  } catch { /* no Cache Storage in this context: nothing was stashed */ }
+  // A share waiting at the lock screen (it said "you will be asked where to file
+  // it") is replaced, not deleted: the same prompt then comes up, with placeholder
+  // content, as it would after any unlock.
+  await replaceShareStashWithPlaceholder((meta) => {
+    const ctx = createPlaceholderContext();
+    const shown = placeholderRow('sharedItem', { id: `share-${meta.ts}`, type: 'link', name: 'x', url: 'x' }, ctx);
+    return {
+      ...meta,
+      title: meta.title ? String(shown.name) : '',
+      text: '',
+      url: meta.url ? String(shown.url) : '',
+      files: meta.files.map((_, i) => {
+        const bytes = placeholderBlobBytes(`share-${meta.ts}-${i}`, ctx.vocab);
+        const file = placeholderRow('sharedItem', { id: `share-${meta.ts}-${i}`, type: 'file', name: 'x' }, ctx);
+        return { name: String(file.name), type: 'text/plain', size: bytes.length, bytes };
+      }),
+    };
+  });
   await closeAllNotifications();
 
   void realDek; // consumed only as the read key before this call; not persisted

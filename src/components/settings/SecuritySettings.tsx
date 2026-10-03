@@ -273,7 +273,7 @@ function SecondaryPassphraseSection() {
     setBusy(true);
     try {
       const result = await checkPassphrase(candidate);
-      if (result === 'secondary') toast('This is the secondary passphrase — it would open the separate workspace. Nothing was changed.', 'success');
+      if (result === 'secondary') toast('This is the secondary passphrase. Nothing was changed.', 'success');
       else if (result === 'main') toast('This is your main passphrase.', 'info');
       else toast("This passphrase doesn't open this vault.", 'error');
     } catch (e) {
@@ -289,9 +289,10 @@ function SecondaryPassphraseSection() {
     <div className="space-y-2 border-t border-zinc-200 pt-3 dark:border-zinc-700">
       <h4 className="text-sm font-medium">Secondary passphrase</h4>
       <p className="text-xs text-zinc-400 dark:text-zinc-500">
-        An additional passphrase that opens this vault into a separate workspace. The first time it is
-        used to unlock, this device keeps only that workspace — your other devices are not affected. It
-        must be as strong as, and different from, your main passphrase.
+        {/* Deliberately says nothing about what it does: anyone made to unlock this
+            device can read this screen (the threat model documents the behaviour). */}
+        An additional passphrase for this vault. It must be as strong as, and different from, your
+        main passphrase.
       </p>
       {needsRewrite && (
         <p className="text-xs text-amber-600 dark:text-amber-400">

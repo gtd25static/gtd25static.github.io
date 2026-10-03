@@ -11,7 +11,7 @@ import { test, expect } from './fixtures';
 import {
   MAIN_PASSPHRASE, SECONDARY_PASSPHRASE, ROTATED_PASSPHRASE, SYNC_PASSWORD,
   appShell, changePassphrase, closeSettings, configureSync, contentRowIds, createList, createTask,
-  dialogTitled, dumpDeviceStorage, enableParanoid, findMarkers, hasShareStash, lock, lockHeading,
+  dialogTitled, dumpDeviceStorage, enableParanoid, findMarkers, lock, lockHeading,
   openApp, openList, openSettings, readSyncSettings, seenText, setSecondaryPassphrase, stashShareLikeTheServiceWorker,
   taskCards, unlock, visibleText, watchForText,
 } from './helpers';
@@ -105,7 +105,10 @@ test('C: after the main passphrase is changed, the secondary still opens the dec
   expect(await unlock(page, ROTATED_PASSPHRASE), 'the rotated main passphrase no longer works').toBe(false);
 });
 
-test('D: a share held while locked is dropped, unseen, by the secondary unlock', async ({ page }) => {
+// Since the threat-model review (batch 4) the held share is REPLACED, not dropped:
+// the lock screen promised a prompt, and the main passphrase shows one (control
+// below) — so the secondary unlock shows one too, holding placeholder content.
+test('D: a share held while locked is replaced, unseen, by the secondary unlock — the prompt still comes', async ({ page }) => {
   await paranoidDeviceWithSecondary(page);
   await lock(page, 'button');
   await stashShareLikeTheServiceWorker(page, SHARE_MARKER);
@@ -117,12 +120,10 @@ test('D: a share held while locked is dropped, unseen, by the secondary unlock',
   await watchForText(page, secrets);
   expect(await unlock(page, SECONDARY_PASSPHRASE)).toBe(true);
 
-  await expect.configure({ soft: true }).poll(() => hasShareStash(page), {
-    message: `the held share (Cache Storage "${'gtd25-share-v1'}") is deleted`,
-    timeout: 10_000,
-  }).toBe(false);
+  const prompt = dialogTitled(page, 'Save shared content');
+  await expect.soft(prompt, 'the share destination prompt the lock screen promised').toBeVisible();
+  await expect.soft(prompt).not.toContainText(SHARE_MARKER);
   expect.soft(await seenText(page), 'held-share / real content rendered after the secondary unlock').toEqual([]);
-  await expect.soft(dialogTitled(page, 'Save shared content'), 'share destination prompt').toBeHidden();
   expect.soft(findMarkers(await dumpDeviceStorage(page), secrets), 'held-share / real content in device storage').toEqual([]);
 });
 

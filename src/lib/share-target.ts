@@ -103,3 +103,32 @@ export function selectFilesToStash<T extends { size: number }>(all: T[]): { keep
   }
   return { keep, skipped: all.length - keep.length };
 }
+
+/** A placeholder file for replaceShareStashWithPlaceholder: its listing plus its bytes. */
+export type PlaceholderShareFile = SharedFileMeta & { bytes: Uint8Array<ArrayBuffer> };
+
+/**
+ * Rewrite a waiting share with other content, keeping its timestamp and its number
+ * of files — used by the secondary passphrase's swap, so the prompt the lock
+ * screen promised ("you will be asked where to file it") still comes up, with
+ * nothing real in it. A stash that is unreadable or past its TTL is deleted.
+ */
+export async function replaceShareStashWithPlaceholder(
+  make: (meta: SharedPayloadMeta) => Omit<SharedPayloadMeta, 'files'> & { files: PlaceholderShareFile[] },
+): Promise<void> {
+  try {
+    if (typeof caches === 'undefined' || !(await caches.has(SHARE_CACHE))) return;
+    const metaRes = await (await caches.open(SHARE_CACHE)).match(SHARE_META_PATH);
+    const meta = metaRes ? ((await metaRes.json()) as SharedPayloadMeta) : null;
+    await caches.delete(SHARE_CACHE); // the real payload goes, whatever follows
+    if (!meta || typeof meta.ts !== 'number' || Date.now() - meta.ts > SHARE_STASH_TTL_MS) return;
+    const next = make(meta);
+    const cache = await caches.open(SHARE_CACHE);
+    const files = next.files.map(({ bytes: _bytes, ...listing }) => listing);
+    await cache.put(new Request(SHARE_META_PATH), new Response(JSON.stringify({ ...next, files }), { headers: { 'Content-Type': 'application/json' } }));
+    await Promise.all(next.files.map((f, i) =>
+      cache.put(new Request(shareFilePath(i)), new Response(f.bytes, { headers: { 'Content-Type': f.type } }))));
+  } catch {
+    try { if (typeof caches !== 'undefined') await caches.delete(SHARE_CACHE); } catch { /* storage unavailable */ }
+  }
+}

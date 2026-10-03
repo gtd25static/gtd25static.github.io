@@ -12,7 +12,8 @@ const gitCommit = git('git rev-parse --short HEAD')
 // Commit subjects ship inside version.json, so a subject naming the secondary
 // passphrase's cover would put a telltale word in the bundle (the e2e "shipped
 // bundle names none of this" test): such subjects are left out.
-const TELLTALE = /duress|decoy/i
+// (The last pattern: one shipped subject pointed at this filter itself.)
+const TELLTALE = /duress|decoy|must not carry/i
 const lastSubject = git('git log -1 --pretty=%s')
 const gitMessage = TELLTALE.test(lastSubject) ? '' : lastSubject
 // Recent commits as a mini changelog: {h: short hash, s: subject}.
