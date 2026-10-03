@@ -44,7 +44,11 @@ vi.mock('../../sync/sync-engine', () => ({
   contentReplacedByLinking: h.contentReplacedByLinking,
 }));
 vi.mock('../../components/ui/ConfirmDialog', () => ({ confirmDialog: h.confirm }));
-vi.mock('../../components/settings/passphrase-gate', () => ({ requirePassphrase: h.requirePassphrase }));
+vi.mock('../../components/settings/passphrase-gate', () => ({
+  requirePassphrase: h.requirePassphrase,
+  // The proof-only gate (passphrase, or a security key): same answer as typing it here.
+  requireOwner: async () => (await h.requirePassphrase()) !== null,
+}));
 vi.mock('../../sync/crypto', () => ({
   deriveKey: vi.fn(async () => ({})),
   cacheEncryptionKey: vi.fn(),

@@ -327,6 +327,7 @@ export async function pruneChangelogIfSyncDisabled(): Promise<number> {
   const local = await db.localSettings.get('local');
   if (local?.syncEnabled) return 0;
 
+  await compactOfflineChangelog();
   const count = await db.changeLog.count();
   if (count <= MAX_CHANGELOG_ENTRIES_OFFLINE) return 0;
 
@@ -336,4 +337,26 @@ export async function pruneChangelogIfSyncDisabled(): Promise<number> {
   // Track that pruning occurred so we can warn when sync is later enabled
   await db.localSettings.update('local', { changelogPruned: true });
   return oldest.length;
+}
+
+/**
+ * With sync off nothing reads the changelog until sync is set up, and then only
+ * each record's latest change matters (linking never merges past versions). It
+ * used to keep up to 10,000 full past versions of every record — titles, notes,
+ * labels, including records deleted for good — for anyone with the unlocked app,
+ * or the disk of a device without Paranoid Mode. Keep only the newest entry per
+ * record, and none for a record that no longer exists here (purged).
+ */
+async function compactOfflineChangelog(): Promise<void> {
+  const entries = await db.changeLog.orderBy('timestamp').toArray();
+  if (entries.length === 0) return;
+  const newest = new Map<string, ChangeEntry>();
+  for (const e of entries) newest.set(`${e.entityType}:${e.entityId}`, e); // ascending: the last one wins
+  const keep = new Set<string>();
+  for (const e of newest.values()) {
+    if (!isKnownEntityType(e.entityType)) continue;
+    if (await tableForEntity[e.entityType]().get(e.entityId)) keep.add(e.id);
+  }
+  const drop = entries.filter((e) => !keep.has(e.id)).map((e) => e.id);
+  if (drop.length > 0) await db.changeLog.bulkDelete(drop);
 }

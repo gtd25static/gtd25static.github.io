@@ -125,3 +125,54 @@ export async function decryptAllAtRest(key: CryptoKey, onProgress?: ProgressFn):
   }
   await clearSharedBlobCache();
 }
+
+/**
+ * Whether a stored row is anything but plain at-rest ciphertext: `fieldTimestamps`
+ * beside its ciphertext (written before SYNC_VERSION 7 moved it inside: which
+ * fields exist and when each changed, readable from a locked disk), or no
+ * ciphertext at all (a row a forged `_enc` had left in plaintext — closed in
+ * batch 1 of the 2026-10 review, but such a row stayed so until edited).
+ */
+function needsRewrite(table: string, row: Row): boolean {
+  const target = table === 'changeLog' ? (row.operation === 'upsert' ? row.data as Row | undefined : undefined) : row;
+  if (!target) return false;
+  return typeof target._enc !== 'string' || 'fieldTimestamps' in target;
+}
+
+/**
+ * Once, at the first unlock after an update (LocalSettings.atRestRewrittenAt):
+ * rewrite every stored row that needsRewrite. It runs inside the unlock, before
+ * the app is shown, so nothing can edit a row between the read and the write;
+ * the crypto happens outside any transaction (Safari). A row the key cannot open
+ * is left as it is. Returns how many rows were rewritten.
+ */
+export async function rewriteLegacyAtRestRows(key: CryptoKey): Promise<number> {
+  let rewritten = 0;
+  for (const table of encryptedTables()) {
+    setMigrationBypass(true);
+    let rows: Row[];
+    try {
+      rows = (await table.toArray()) as Row[];
+    } finally {
+      setMigrationBypass(false);
+    }
+    const fixed: Row[] = [];
+    for (const row of rows.filter((r) => needsRewrite(table.name, r))) {
+      try {
+        const plain = await decryptRow(table.name, key, row);
+        fixed.push((await encryptRow(table.name, key, plain)) as Row);
+      } catch (err) {
+        recordError('vault.atRestRewrite', err);
+      }
+    }
+    if (fixed.length === 0) continue;
+    setMigrationBypass(true);
+    try {
+      await table.bulkPut(fixed as unknown[]);
+    } finally {
+      setMigrationBypass(false);
+    }
+    rewritten += fixed.length;
+  }
+  return rewritten;
+}

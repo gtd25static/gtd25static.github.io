@@ -219,28 +219,32 @@ describe('rekeyVault rewrites the device under a new key', () => {
     expect(getVaultSecrets()).toEqual({ githubPat: 'ghp_secret', syncPassword: 'sync pw' });
   });
 
-  it('keeps remote unlock enrolled under the same remote-unlock key', async () => {
+  // The remote-unlock key used to be kept across a re-key — and the approvers
+  // hold it, while whoever had the old DEK could read it from any old image: the
+  // re-key then protected nothing from them (threat-model review, batch 5). It is
+  // dropped; with no way to hand a new one to the approvers (no sync here) remote
+  // unlock is left off and the result says so. remote-unlock-flow.test.ts covers
+  // the hand-out.
+  it('drops the old remote-unlock key: it opens nothing, and without sync remote unlock is off', async () => {
     const ruk = crypto.getRandomValues(new Uint8Array(32));
     const rukCopy = new Uint8Array(ruk);
     await wrapDekWithRuk(ruk);
     const approvers = [{ deviceId: 'phone', name: 'Phone', ecdhPub: { kty: 'EC' } as JsonWebKey, ecdsaPub: { kty: 'EC' } as JsonWebKey }];
     await db.vault.update('vault', { remoteUnlock: { approvers } });
-    const before = (await db.vault.get('vault'))!;
 
     const result = await rekeyVault(REAL);
 
     const after = (await db.vault.get('vault'))!;
-    expect(result.remoteUnlockKept).toBe(true);
-    expect(after.dekWrappedByRuk).not.toBe(before.dekWrappedByRuk);
-    expect(after.remoteUnlock?.approvers).toEqual(approvers);
-    expect(Array.from((await getRukRaw())!)).toEqual(Array.from(rukCopy));
+    expect(result.remoteUnlock).toBe('turned-off');
+    expect(after.dekWrappedByRuk).toBeUndefined();
+    expect(await getRukRaw()).toBeNull();
     lock();
-    expect(await unlockWithRemoteKey(rukCopy)).toBe(true);
+    expect(await unlockWithRemoteKey(rukCopy)).toBe(false);
   });
 
-  it('reports remote unlock as not kept when it was never enrolled', async () => {
+  it('reports no remote unlock when it was never enrolled', async () => {
     const result = await rekeyVault(REAL);
-    expect(result.remoteUnlockKept).toBe(false);
+    expect(result.remoteUnlock).toBe('none');
     expect((await db.vault.get('vault'))!.dekWrappedByRuk).toBeUndefined();
   });
 
@@ -412,7 +416,7 @@ describe('changePassphrase', () => {
     await setSecondaryPassphrase(SECONDARY);
     const [before] = await rawRows(db.tasks);
     const result = await changePassphrase(REAL, ROTATED, { rekey: true });
-    expect(result).toEqual({ securityKeysDropped: 0, remoteUnlockKept: false });
+    expect(result).toEqual({ securityKeysDropped: 0, remoteUnlock: 'none' });
     expect((await rawRows(db.tasks))[0]._enc).not.toBe(before._enc);
     expect(await checkPassphrase(SECONDARY)).toBe('none');
     lock();

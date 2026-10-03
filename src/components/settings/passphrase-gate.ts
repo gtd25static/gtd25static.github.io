@@ -1,10 +1,10 @@
 import type { LocalSettings } from '../../db/models';
 import { db } from '../../db';
-import { confirmCurrentPassphrase, isParanoidEnabled } from '../../db/vault';
+import { confirmCurrentPassphrase, confirmOwnerWithSecurityKey, getVaultSnapshot, isParanoidEnabled } from '../../db/vault';
 import { updateLocalSettings } from '../../hooks/use-settings';
 import { recordError } from '../../lib/diagnostics';
 import { weakensProtection } from '../../lib/security-weakening';
-import { promptPassword } from '../ui/PasswordPrompt';
+import { promptPassword, promptPasswordOrAlternative, ALTERNATIVE } from '../ui/PasswordPrompt';
 import { toast } from '../ui/Toast';
 
 // The gate in front of anything that changes how this vault opens — and, on a
@@ -18,6 +18,33 @@ export async function requirePassphrase(reason: string): Promise<string | null> 
     message: reason, confirmLabel: 'Continue', placeholder: 'Vault passphrase',
   });
   if (typed === null) return null;
+  return checkTyped(typed);
+}
+
+/**
+ * The same gate for changes that need only proof, not the passphrase itself: with
+ * a security key enrolled, a touch of it is accepted instead. A security-key user
+ * on an untrusted machine had to type the passphrase for every one of these —
+ * exactly what the key is there to avoid (a keylogger takes it).
+ */
+export async function requireOwner(reason: string): Promise<boolean> {
+  if (!getVaultSnapshot().hasSecurityKey) return (await requirePassphrase(reason)) !== null;
+  const answer = await promptPasswordOrAlternative('Confirm your passphrase', {
+    message: reason, confirmLabel: 'Continue', placeholder: 'Vault passphrase', alternativeLabel: 'Use security key',
+  });
+  if (answer === null) return false;
+  if (answer !== ALTERNATIVE) return (await checkTyped(answer)) !== null;
+  let ok = false;
+  try {
+    ok = await confirmOwnerWithSecurityKey();
+  } catch (e) {
+    recordError('security.confirmSecurityKey', e);
+  }
+  if (!ok) toast('The security key did not confirm it', 'error');
+  return ok;
+}
+
+async function checkTyped(typed: string): Promise<string | null> {
   let ok = false;
   try {
     ok = await confirmCurrentPassphrase(typed);
@@ -42,7 +69,7 @@ export async function requirePassphrase(reason: string): Promise<string | null> 
 export async function updateSecuritySettings(changes: Partial<LocalSettings>): Promise<boolean> {
   const current = await db.localSettings.get('local');
   if (current && isParanoidEnabled() && weakensProtection(current, changes)
-    && await requirePassphrase('Your passphrase is needed to loosen this device’s protection.') === null) {
+    && !await requireOwner('Your passphrase is needed to loosen this device’s protection.')) {
     return false;
   }
   await updateLocalSettings(changes);

@@ -276,6 +276,18 @@ export async function decryptEntity(
     }
   }
   Object.assign(result, sensitiveData);
+  // Timestamps on both sides (a row stamped while locked — e.g. a startup expiry
+  // setting deletedAt — gets them outside its ciphertext): keep the later of each,
+  // or the outside ones were silently dropped here.
+  const outer = entity[FIELD_TIMESTAMPS];
+  const inner = sensitiveData[FIELD_TIMESTAMPS];
+  if (outer && inner && typeof outer === 'object' && typeof inner === 'object') {
+    const merged: Record<string, number> = { ...(inner as Record<string, number>) };
+    for (const [k, v] of Object.entries(outer as Record<string, unknown>)) {
+      if (typeof v === 'number' && !(merged[k] >= v)) merged[k] = v;
+    }
+    result[FIELD_TIMESTAMPS] = merged;
+  }
   return result;
 }
 

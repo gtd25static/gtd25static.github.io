@@ -17,7 +17,7 @@ import { recordError } from '../../lib/diagnostics';
 import { checkSecretStrength } from '../../lib/password-strength';
 import { PasswordStrengthBar } from '../ui/PasswordStrengthBar';
 import { RotationProgressDialog } from './RotationProgressDialog';
-import { requirePassphrase } from './passphrase-gate';
+import { requireOwner } from './passphrase-gate';
 
 function describeContent({ lists, tasks, maps }: { lists: number; tasks: number; maps: number }): string {
   const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
@@ -104,7 +104,7 @@ export function GitHubSettings() {
     if (paranoid && unlocked) {
       const credentialsChanged = effectivePat !== storedPat
         || repo.trim() !== (local.githubRepo ?? '') || passwordChanged;
-      if (credentialsChanged && await requirePassphrase('Your passphrase is needed to change where this device syncs.') === null) return;
+      if (credentialsChanged && !await requireOwner('Your passphrase is needed to change where this device syncs.')) return;
     }
 
     // Linking replaces this device's content with what the repository already

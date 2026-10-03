@@ -298,6 +298,9 @@ export interface LocalSettings {
   // deletedAt, so a delete back-dated by whoever can write the repo is not
   // purged at the next start. Entries go when the record is purged or restored.
   trashArrivals?: Record<string, number>;
+  // When this device last rewrote its stored rows that were not plain at-rest
+  // ciphertext (db/vault-migration rewriteLegacyAtRestRows) — once per device.
+  atRestRewrittenAt?: number;
   // Paranoid Mode (device-local; not synced). Persistent record of the mode;
   // the synchronous gate flag lives in localStorage ('gtd25-paranoid').
   paranoidEnabled?: boolean;

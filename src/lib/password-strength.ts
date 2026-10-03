@@ -92,6 +92,84 @@ function wordStructureBits(s: string): WordEstimate {
   return { applies: true, bits, words };
 }
 
+// --- Patterns (threat-model review, batch 5) ---------------------------------
+// What a cracker's rule sets try first, and the estimate above priced as if
+// random: a secret made of one piece repeated ("passwordpassword…", "aaaa…"),
+// alphabet or digit runs ("abcdef…", "12345…"), keyboard rows ("qwertyuiop…"), and
+// a known password inside a longer one ("correcthorse" + "batterystaple"). Each
+// such piece is priced at what it costs to guess; the rest as before.
+const KEYBOARD_ROWS = ['1234567890', 'qwertyuiop', 'asdfghjkl', 'zxcvbnm'];
+const MIN_SEQUENCE = 4;   // "abcd", "1234", "dcba"
+const MIN_KEYBOARD = 5;   // "qwert" — shorter rows sit inside ordinary words ("liberty")
+const SEQUENCE_BITS = (len: number) => Math.log2(36 * 2) + Math.log2(len); // which start, which way, how long
+const KEYBOARD_BITS = (len: number) => Math.log2(KEYBOARD_ROWS.length * 2 * 10) + Math.log2(len);
+// A known password found inside a longer secret counts as one word, never more.
+const COMMON_PIECES = [...COMMON].filter((w) => w.length >= 6).sort((a, b) => b.length - a.length);
+
+function plainBits(s: string): number {
+  const w = wordStructureBits(s);
+  return w.applies ? Math.min(charsetBits(s), w.bits) : charsetBits(s);
+}
+
+/** A secret made of one unit repeated k ≥ 2 times: the unit, or null. */
+function repeatedUnit(s: string): { unit: string; times: number } | null {
+  for (let u = 1; u <= s.length / 2; u++) {
+    if (s.length % u !== 0) continue;
+    const unit = s.slice(0, u);
+    if (unit.repeat(s.length / u) === s) return { unit, times: s.length / u };
+  }
+  return null;
+}
+
+function sequenceAt(s: string, i: number): number {
+  const isAlnum = (c: string) => /[a-z0-9]/.test(c);
+  if (!isAlnum(s[i]) || i + 1 >= s.length || !isAlnum(s[i + 1])) return 0;
+  const step = s.charCodeAt(i + 1) - s.charCodeAt(i);
+  if (step !== 1 && step !== -1) return 0;
+  let j = i + 1;
+  while (j + 1 < s.length && isAlnum(s[j + 1]) && s.charCodeAt(j + 1) - s.charCodeAt(j) === step) j++;
+  return j - i + 1;
+}
+
+function keyboardAt(s: string, i: number): number {
+  let best = 0;
+  for (const row of KEYBOARD_ROWS) {
+    for (const line of [row, [...row].reverse().join('')]) {
+      const start = line.indexOf(s[i]);
+      if (start < 0) continue;
+      let n = 0;
+      while (i + n < s.length && start + n < line.length && s[i + n] === line[start + n]) n++;
+      best = Math.max(best, n);
+    }
+  }
+  return best;
+}
+
+/** The pattern-aware estimate, or null when the secret holds no pattern. */
+function patternBits(secret: string): number | null {
+  const s = secret.toLowerCase();
+  const rep = repeatedUnit(s);
+  if (rep) return (COMMON.has(rep.unit) ? COMMON_BITS : patternBits(rep.unit) ?? plainBits(rep.unit)) + Math.log2(rep.times);
+  let bits = 0;
+  let rest = '';
+  let found = false;
+  for (let i = 0; i < s.length;) {
+    const common = COMMON_PIECES.find((w) => s.startsWith(w, i));
+    const seq = sequenceAt(s, i);
+    const keys = keyboardAt(s, i);
+    if (common && common.length >= Math.max(seq, keys)) {
+      bits += DICEWARE_BITS; i += common.length; found = true;
+    } else if (seq >= MIN_SEQUENCE && seq >= keys) {
+      bits += SEQUENCE_BITS(seq); i += seq; found = true;
+    } else if (keys >= MIN_KEYBOARD) {
+      bits += KEYBOARD_BITS(keys); i += keys; found = true;
+    } else {
+      rest += secret[i]; i += 1;
+    }
+  }
+  return found ? bits + (rest ? plainBits(rest) : 0) : null;
+}
+
 export function estimateSecretStrength(secret: string, kind: SecretKind): StrengthEstimate {
   const rate = GUESS_RATE[kind];
   const requiredBits = Math.log2(rate * YEAR_SECONDS) + 1;
@@ -103,7 +181,12 @@ export function estimateSecretStrength(secret: string, kind: SecretKind): Streng
   } else if (secret) {
     const w = wordStructureBits(secret);
     bits = w.applies ? Math.min(charsetBits(secret), w.bits) : charsetBits(secret);
-    if (bits < requiredBits) {
+    const patterned = patternBits(secret);
+    if (patterned !== null && patterned < bits) {
+      bits = patterned;
+      if (bits < requiredBits) hint = 'Avoid repeated text, sequences like abcd or 1234, keyboard rows and well-known passwords.';
+    }
+    if (bits < requiredBits && !hint) {
       hint = w.applies && w.words <= 2
         ? 'One or two words are easy to guess — use 4–5 unrelated words or a longer phrase.'
         : 'Make it longer — add more words or characters.';

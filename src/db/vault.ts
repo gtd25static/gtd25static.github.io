@@ -15,7 +15,7 @@ import {
 import { deriveVaultKek, DEFAULT_ARGON2, LEGACY_KDF, type KdfParams } from './vault-kdf';
 import { generateDek, wrapDek, unwrapDek, importKekFromBytes, generateGarbageSlot, isLegacyWrap } from './vault-crypto';
 import { setVaultKeyProvider } from './vault-middleware';
-import { encryptAllAtRest, decryptAllAtRest } from './vault-migration';
+import { encryptAllAtRest, decryptAllAtRest, rewriteLegacyAtRestRows } from './vault-migration';
 import { withSyncLock } from '../sync/sync-lock';
 import { registerPrfCredential, getPrfOutput } from '../sync/webauthn-prf';
 import { b64encode, b64decode } from '../sync/remote-unlock-crypto';
@@ -759,6 +759,35 @@ async function registerFailedAttempt(method: UnlockMethod = 'passphrase', counts
  * enrolled, the user cancels, or the derived key is wrong — the caller then falls
  * back to the passphrase.
  */
+/**
+ * The gates' other proof (settings/passphrase-gate requireOwner): a touch of an
+ * enrolled security key instead of typing the passphrase — which a security-key
+ * user on a machine they don't trust should never have to type. Like
+ * confirmCurrentPassphrase it acts on nothing: no unlock, write, count or log.
+ */
+export async function confirmOwnerWithSecurityKey(): Promise<boolean> {
+  if (!currentDek) throw new Error('Unlock the vault first');
+  const vault = await db.vault.get('vault');
+  if (!vault?.prfSalt) return false;
+  const keys = vaultSecurityKeys(vault);
+  if (keys.length === 0) return false;
+  const prfOutput = await getPrfOutput(keys.map((k) => k.credentialId), vault.prfSalt, keys.map((k) => k.transports));
+  if (!prfOutput) return false;
+  try {
+    const kek = await importKekFromBytes(prfOutput);
+    for (const k of keys) {
+      let dek: CryptoKey;
+      try {
+        dek = await unwrapDek(kek, k.dekWrappedByPrf, `prf:${k.credentialId}`);
+      } catch { continue; /* not this credential */ }
+      return (await checkVerifier(dek, vault.verifier)) && currentDek !== null;
+    }
+    return false;
+  } finally {
+    prfOutput.fill(0);
+  }
+}
+
 export async function unlockWithSecurityKey(): Promise<boolean> {
   lastUnlockFailure = null;
   const vault = await db.vault.get('vault');
@@ -856,6 +885,15 @@ async function finishUnlock(vault: Vault, dek: CryptoKey, method: UnlockMethod =
     recordError('vault.finishUnlock.resume', err);
     lastUnlockFailure = 'resume-failed';
     return false;
+  }
+
+  // Once per device: rewrite stored rows older builds left with fieldTimestamps
+  // beside their ciphertext, or in plaintext (see rewriteLegacyAtRestRows). Here,
+  // before the app is shown, so nothing edits a row in between.
+  if (!(await db.localSettings.get('local'))?.atRestRewrittenAt) {
+    await rewriteLegacyAtRestRows(dek)
+      .then(() => patchLocalSettings({ atRestRewrittenAt: Date.now() }))
+      .catch((err) => recordError('vault.atRestRewrite', err));
   }
 
   // Backfill a uniform garbage slot 2 for vaults enabled before duress existed,
@@ -1093,7 +1131,12 @@ export async function changePassphrase(
  * vault unlocked. Rejects with 'Incorrect passphrase' for anything but the main
  * passphrase — the secondary one included — counting and logging nothing.
  */
-export async function rekeyVault(currentPassphrase: string, newPassphrase?: string): Promise<RekeyResult> {
+export async function rekeyVault(
+  currentPassphrase: string,
+  newPassphrase?: string,
+  // Tests hand in the remote-unlock context; the app builds it from the sync settings.
+  opts: { remoteUnlockContext?: import('../sync/remote-unlock').EnrollContext } = {},
+): Promise<RekeyResult> {
   if (!currentDek) throw new Error('Unlock the vault first');
   if (rekeying) throw new Error('The vault is already being re-keyed');
   const { vault, mainPassphrase } = await authenticateMainPassphrase(currentPassphrase, 'vault.rekey');
@@ -1107,8 +1150,6 @@ export async function rekeyVault(currentPassphrase: string, newPassphrase?: stri
   if (!(await checkVerifier(currentDek, vault.verifier))) {
     throw new Error('The vault changed underneath this tab. Reload the app and try again');
   }
-  // Recovered under the OLD key, before the swap; re-wrapped under the new one.
-  const ruk = vault.dekWrappedByRuk ? await getRukRaw() : null;
   const newSalt = generateSalt();
   // Kept as it opened slot 1 — without whitespace typed around it (see passphraseCandidates).
   const newKek = await deriveVaultKek(newPassphrase ?? mainPassphrase, newSalt, kdfParams);
@@ -1121,7 +1162,7 @@ export async function rekeyVault(currentPassphrase: string, newPassphrase?: stri
   emit();
   try {
     const { newDek, result } = await rekeyVaultContent({
-      vault, newKek, newSalt, kdf: kdfParams, secrets: currentSecrets, ruk,
+      vault, newKek, newSalt, kdf: kdfParams, secrets: currentSecrets,
     });
     currentDek = newDek;
     setKeyFlag(false); // the security keys' wraps opened the old DEK
@@ -1131,10 +1172,15 @@ export async function rekeyVault(currentPassphrase: string, newPassphrase?: stri
     await createLocalBackup();
     // The other tabs' memory still holds what they showed under the old key.
     signalOtherTabs({ type: 'reload' });
+    // Remote unlock was dropped with the old key (see vault-rekey): hand the
+    // approvers a new one now, or leave it off and say so.
+    if (result.remoteUnlock === 'turned-off') {
+      const { reissueRemoteUnlock } = await import('../sync/remote-unlock');
+      if (await reissueRemoteUnlock(opts.remoteUnlockContext)) result.remoteUnlock = 'rotated';
+    }
     return result;
   } finally {
     // On failure the transaction rolled back and currentDek still is the old key.
-    if (ruk) ruk.fill(0);
     resetIdleTimer();
     endRekeyWindow();
     emit();

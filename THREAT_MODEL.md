@@ -1,6 +1,8 @@
 # GTD25 — Security Review & Threat Model
 
-**Last updated:** 2026-10-03 (**Threat-model review — batch 4 of 5: what the secondary passphrase leaves on screen.** Scenario 3b claimed an unlock that "looks and logs like a completely ordinary passphrase unlock"; on screen it did not. (1) **The placeholder content was visibly fake** — every title, name, note and label was Latin filler, every link `example.com` — and Settings described the swap ("opens this vault into a separate workspace… this device keeps only that workspace — your other devices are not affected"), telling a coercer both that it happened and where the real data is. The placeholder is now ordinary to-do content in the browser's language (English or Spanish: tasks, steps, notes, list and map names, links to common sites, `.txt` notes for files), and Settings says only "An additional passphrase for this vault". (2) **Only 24 values per field**, so repeated titles everywhere put a "Possible duplicates" banner over most lists, list names repeated, and equal saved searches collapsed (the batch-1 note "keeping their number" was false). Values are now distinct within each list, task, map and folder, and saved searches keep their number. (3) **The Inbox lost its identity** (it is found by its name): it vanished from the sidebar, Focus started picking from it, and the next capture created a new "Inbox". Its name is kept. (4) **A share held at the lock screen** — which promised "you will be asked where to file it" — was deleted, so the promised prompt never came (the main passphrase shows it). It is now replaced with placeholder content, so the same prompt comes. (5) **The unlock log kept only passphrase entries**, which moved "the previous unlock" back and could raise the failed-attempts alert with weeks-old dates at the moment of coercion; every entry is now kept, relabelled. (6) The commit subject that pointed at the bundle's own telltale filter is filtered from `version.json` too. **Residuals, stated plainly:** the phrase lists ship in the bundle and the public source, so someone who has studied this app can recognise them; content that does not match what the coercer knows of you (a list they know exists, a language you never use) still gives it away; this is cover for a first look at the screen, not for an informed examination — which the pre-coercion-image and consistency-tell residuals below already conceded.)
+**Last updated:** 2026-10-03 (**Threat-model review — batch 5 of 5: re-key, the gate, secrets, retention, and claims the document could not keep.** (1) **A re-key protected nothing while remote unlock was on:** it kept the remote-unlock key, which every approver holds and which whoever had the old DEK could read (`rukWrappedByDek`) from any old image — so it unwrapped the new DEK from a later one. A re-key now drops that key and hands the approvers a **new** one (delivered first, wrapped last); without sync at hand remote unlock is left off and the result says so. **Impact:** §4's and Scenario 3's "a DEK lifted from memory opens nothing written afterwards" now holds with remote unlock enrolled. (2) **The same compromise had the sync password and the PAT** (both in `vault.secrets`), which a re-key carries over: Settings now says, next to *Re-key*, to also change the sync password and revoke the token when the reason is a copy of storage or memory (Recommendation 10 says so too). (3) **The gate accepts a security key:** gated changes made a security-key user type the passphrase on whatever machine they were on — exactly what the key is for avoiding (Scenario 5). Changes that need only proof now offer *Use security key* (an assertion that unwraps an enrolled key's DEK wrap; nothing written, counted or logged); those that need the passphrase itself (removing a key, whose follow-up re-key derives from it; changing or re-keying with it) still ask for it. (4) **The strength gate priced patterns as random:** `passwordpasswordpassword`, the alphabet, a keyboard row, `correcthorsebatterystaple`, `12345678901234` and 43 × `a` all passed. Repeated text, sequences, keyboard rows and a known password inside a longer one are now priced at what they cost to guess. (5) **At rest:** the first unlock after this update rewrites, once, every stored row that is not plain ciphertext — `fieldTimestamps` beside the ciphertext (rows untouched since SYNC_VERSION 7, so "now true" in §1 was true only for rewritten rows) or none at all (a row left in plaintext by the forged-`_enc` hole before batch 1); timestamps found both outside and inside a ciphertext are merged instead of the outside ones being dropped. With sync off the changelog no longer keeps past versions (up to 10,000, "deleted forever" records included): one entry per existing record. (6) **Claims corrected:** the update prompt is not a control against a malicious origin or an active TLS interceptor (the commit check reads the same channel); Scenario 4 now covers an interceptor that *modifies* traffic (full client compromise); the CSP does not close exfiltration to `api.github.com` (an attacker's own gist) or by navigation; a security key adds a way in and removes no passphrase wrap from the disk, so offline strength is the passphrase's; a removed security key still opens images taken before (re-key); exports also carry mindmaps, shared links and sound presets.)
+
+**Previously updated:** 2026-10-03 (**Threat-model review — batch 4 of 5: what the secondary passphrase leaves on screen.** Scenario 3b claimed an unlock that "looks and logs like a completely ordinary passphrase unlock"; on screen it did not. (1) **The placeholder content was visibly fake** — every title, name, note and label was Latin filler, every link `example.com` — and Settings described the swap ("opens this vault into a separate workspace… this device keeps only that workspace — your other devices are not affected"), telling a coercer both that it happened and where the real data is. The placeholder is now ordinary to-do content in the browser's language (English or Spanish: tasks, steps, notes, list and map names, links to common sites, `.txt` notes for files), and Settings says only "An additional passphrase for this vault". (2) **Only 24 values per field**, so repeated titles everywhere put a "Possible duplicates" banner over most lists, list names repeated, and equal saved searches collapsed (the batch-1 note "keeping their number" was false). Values are now distinct within each list, task, map and folder, and saved searches keep their number. (3) **The Inbox lost its identity** (it is found by its name): it vanished from the sidebar, Focus started picking from it, and the next capture created a new "Inbox". Its name is kept. (4) **A share held at the lock screen** — which promised "you will be asked where to file it" — was deleted, so the promised prompt never came (the main passphrase shows it). It is now replaced with placeholder content, so the same prompt comes. (5) **The unlock log kept only passphrase entries**, which moved "the previous unlock" back and could raise the failed-attempts alert with weeks-old dates at the moment of coercion; every entry is now kept, relabelled. (6) The commit subject that pointed at the bundle's own telltale filter is filtered from `version.json` too. **Residuals, stated plainly:** the phrase lists ship in the bundle and the public source, so someone who has studied this app can recognise them; content that does not match what the coercer knows of you (a list they know exists, a language you never use) still gives it away; this is cover for a first look at the screen, not for an informed examination — which the pre-coercion-image and consistency-tell residuals below already conceded.)
 
 **Previously updated:** 2026-10-03 (**Threat-model review — batch 3 of 5: remote unlock & wipe.** (1) **The fingerprint "backstop" could not be used:** the protected device showed each candidate's fingerprint and asked to compare it with the one "on that device" — which no screen showed. An attacker with the PAT and the sync password (or one cracked offline) could register an approver named like your phone and receive the RUK (+ a disk image = the DEK). The approver now shows **its own fingerprint** under its device name, and the enrolment text says to select a candidate only when the two match. (2) **Decommissioning was unauthenticated:** a device was dropped by every approver when its registry entry was merely *absent* — which a PAT holder could arrange (disarming remote unlock and wipe everywhere), as could a corrupt registry file (dropping everyone). It now takes an **authenticated tombstone** (MAC'd like an entry) written by *forget* / *purge*; absence, a corrupt file or a forged tombstone drop nobody. Approvers also apply tombstones from their background tick (once a minute), not only when the Security settings are open, so a forgotten device's prompts stop promptly. Residual: a writer can still *remove* a tombstone before an approver has seen it (an unauthenticated store can always lose data). (3) **Enrolment no longer leaves half a state:** invites are delivered first and the DEK wrapped last (a failed delivery used to leave "Enabled" with no approver listed, no PAT for the wipe watcher, and RUK holders that could not be removed one by one); adding approvers keeps the PAT readable while locked; a half-finished removal now says that the removed device can still unlock until it is run again. (4) **"Approvers must be Paranoid-OFF" is enforced on both ends:** turning Paranoid on now also drops the device's identity keys (still in plaintext on its disk, and invites in its mailbox were encrypted to them), re-publishes it as Paranoid and empties its mailbox; a protected device rotating its key no longer delivers to an approver whose registry entry says Paranoid or whose keys changed. (5) **The cached approver list is sealed:** it must stay readable while locked (the lock screen encrypts requests to those keys), so a disk writer could swap a key and receive the RUK through the next remote unlock. A copy encrypted under the DEK is now checked at every unlock; a mismatch turns remote unlock off and Settings says to re-key. This detects after the fact — while locked, nothing a disk writer cannot also forge is at hand. (6) **Requests:** one dated more than 2 minutes ahead is ignored (it used to wait on the approver for as long as its date said); a denial is remembered — that device's requests pause for 10 minutes and Settings says what an unexpected request means (its key is likely out). Not changed: the signed request/invite bytes still omit the ECIES IV and `epk.y` (not exploitable — AES-GCM authenticates the IV and `y` does not change the shared secret); canonicalising them would break signatures between app versions for no security gain. **Impact on prior conclusions:** Scenario 8's "fingerprint-confirmed", "decommission via the MAC-authenticated registry" and "approvers are Paranoid-OFF" are now true as written; "short-TTL, user-initiated" holds for requests dated ahead; the disk-writer residual is new and stated.)
 
@@ -41,7 +43,10 @@ updated" at the end and the corresponding rule in `CLAUDE.md`.
   `gtd25static.github.io`) — security does **not** rely on code secrecy.
 - **Sync backend:** the user's **own GitHub repository**, written/read via the
   GitHub Contents API using a stored Personal Access Token (PAT). Files: a
-  `snapshot` + `changelog` (+ optional periodic remote backups).
+  `snapshot` + `changelog` (+ optional periodic remote backups). With sync off
+  the local changelog keeps only each existing record's latest entry (since
+  2026-10-03; it used to keep up to 10,000 past versions, deleted records
+  included).
 - **Two independent crypto layers:**
   1. **Sync E2E encryption (always on when sync is configured):** sensitive fields
      are AES‑256‑GCM encrypted with a key = `PBKDF2-SHA256(syncPassword,
@@ -80,6 +85,8 @@ Encryption is **field-level**. Encrypted fields (`SENSITIVE_FIELDS`):
   `mimeType`) without decrypting anything. Safe to hide because every merge runs
   after decryption. **A device on an older build refuses to sync** ("update
   required") until it updates — it does not push, migrate or delete anything.
+  At rest, rows nothing had rewritten since kept it beside their ciphertext
+  until 2026-10-03, when the first unlock rewrites every such row once.
 - `task.discussionLog` is the follow-up discussion history (`{id, at, note}[]`).
   The free-text `note` is content, so the **whole array** is encrypted as a unit
   (the per-entry `at` timestamps are encrypted too — they are not exposed as
@@ -445,10 +452,14 @@ today's rates is a floor, not a ceiling — prefer margin above the gate.
   farm)**; 5 words buys decades of hardware‑improvement margin. An 8‑char
   "complex" password (~48 bits) falls in **months**, not years.
 - **The vault `passphrase`** should likewise be **≥ 4 diceware words**; the
-  attacker additionally needs the disk image first, and the security key is the
-  recommended tier when seizure is a live concern.
-- **The genuinely unbreakable tier is the security key** (hardware‑bound 256‑bit
-  PRF, no guessable secret). Prefer it where offline attack is a real concern.
+  attacker additionally needs the disk image first.
+- **A security key does not raise offline strength.** It is hardware-bound
+  (256-bit PRF, no guessable secret), but it *adds* a way in: the passphrase
+  wrap (slot 1) is always on the disk too, so against a disk image the vault is
+  exactly as strong as the passphrase. What the key buys is not typing the
+  passphrase (keyloggers, Scenario 5) — which lets a key-first user afford a very
+  long passphrase they rarely type. (Until 2026-10-03 this document called the key
+  the tier for seizure and offline attack.)
 - These figures assume *random* secrets. Human‑memorable, patterned, or
   dictionary‑derived passwords have far less entropy than their length suggests
   and can fall orders of magnitude faster (smart mask/rule attacks).
@@ -460,6 +471,10 @@ today's rates is a floor, not a ceiling — prefer margin above the gate.
   bits/word) and requires **> 1 year average crack time** at the rates above
   (~45.8 bits vault / ~49.2 bits sync — i.e. 4 random diceware words pass both).
   There are no composition rules; the common-password list still hard-fails.
+  Since 2026-10-03 patterns are priced at what they cost to guess — repeated
+  text, alphabet/digit sequences of 4+, keyboard rows of 5+, a known password
+  inside a longer secret (as one word) — after `passwordpasswordpassword`, the
+  alphabet, a keyboard row and `correcthorsebatterystaple` were found to pass.
   Residual: the word model is structural (no dictionary), so a rare or
   leet-mangled word can be overrated, and random unbroken letter strings are
   conservatively under-rated.
@@ -583,8 +598,8 @@ swap holds (see Scenario 3's sleep residual).
     *Re-key this device* mints a new DEK: the image stays readable to them,
     everything written afterwards is not (post-compromise security, §4). A
     passphrase change re-keys by default.
-  - **Mitigations in place:** Argon2id KDF, security-key tier (recommended for
-    real seizure risk), persistent-storage request, panic/failed-attempt wipe
+  - **Mitigations in place:** Argon2id KDF (the passphrase sets the offline
+    strength — a security key does not, see above), persistent-storage request, panic/failed-attempt wipe
     (note: wipes only help *before* imaging — a copied disk is immune). The wipe
     sets a `gtd25-wipe-pending` marker that survives until the IndexedDB
     deletion is **confirmed**: a deletion blocked by a second tab is retried on
@@ -609,8 +624,9 @@ swap holds (see Scenario 3's sleep residual).
 - **Stronger than the sync wire format on purpose:** the *entire* payload —
   including metadata — is inside `data.enc`, so an encrypted export leaks **no**
   metadata, unlike the sync snapshot (which leaves metadata plaintext). It does
-  **not** contain the PAT/syncPassword (export only carries tasks/lists/subtasks/
-  settings/pomodoro).
+  **not** contain the PAT/syncPassword (an export carries lists, tasks, subtasks,
+  mindmaps, Shared Folder links, settings, pomodoro and sound presets — no
+  credentials).
 - **Residual:** unencrypted export is still available by user choice (in Paranoid
   Mode the dialog *defaults* to encrypted but does not forbid plaintext). Strength
   is bounded by passphrase entropy; PBKDF2‑600k is weaker than the vault's
@@ -939,6 +955,13 @@ the decoy session's items would be uploaded into the real repository.
 A browser cannot prevent TLS MITM (no cert pinning). The proxy sees the decrypted
 GitHub API traffic.
 
+- **An interceptor that modifies traffic is a full compromise (🔴).** With a root
+  CA trusted by the device it can answer the app's own update checks with a
+  modified service worker and bundle (and a `version.json` that matches), which
+  then reads the DEK, the sync password and the PAT. Nothing in a browser can pin
+  `github.io`. Don't load or update the app — or reopen it with an update waiting —
+  on a network you know inspects TLS. The rest of this scenario assumes a proxy
+  that only reads.
 - **Both ON and OFF (identical wire format) — 🟠.** Exposed: the **PAT** (sent as
   `Authorization: Bearer …` on every request — unavoidable client-side), the
   **repo name**, all **plaintext metadata**, and the **ciphertext** content.
@@ -1010,12 +1033,18 @@ Captures keystrokes (and, in capable EDR, clipboard).
     be forced from the web. Keep a hardware key as the primary high-assurance factor.
   - **Enrolling more authenticators widens the unlock surface** (any one unlocks).
     Per-key removal/rotation is therefore important; remove a lost/retired key
-    promptly in Security settings (re-keying the vault is not required — dropping the
-    credential's wrapped-DEK entry revokes it).
+    promptly in Security settings — and **re-key**: dropping the credential's
+    wrapped-DEK entry stops it opening this device from now on, but it still opens
+    any image of the disk taken before (the app offers the re-key right after a
+    removal). Until 2026-10-03 this line said a re-key was not required.
   - **Recommendations:** on an untrusted machine use the **security key** as the
-    daily unlock; treat any passphrase/syncPassword typed there as **burned** and
-    rotate it on a trusted device; ideally perform setup (where the syncPassword
-    is chosen) on a trusted device.
+    daily unlock; treat any passphrase/syncPassword typed there as **burned**. The
+    sync password can be changed from another device; the vault passphrase is
+    per device, so changing it means typing it there again — re-key from that
+    machine only once it is trusted again. Ideally perform setup (where the
+    syncPassword is chosen) on a trusted device. Since 2026-10-03 the Settings
+    gates accept a touch of the security key instead of the passphrase (until
+    then every gated change made a key-only user type it).
 
 - **Unattended unlocked session (2026-09-22).** A keylogger is not needed to
   abuse an unlocked laptop left for a moment: until this date, whoever sat down
@@ -1258,7 +1287,14 @@ all.
   **nothing written from then on**. Old ciphertext in IndexedDB free space
   (Scenario 2's forensic residue) is unreadable without the old image *and* the
   old key — the crypto-shredding the secondary-passphrase re-init already
-  relied on.
+  relied on. Until 2026-10-03 this did **not** hold with remote unlock on: the
+  re-key kept the remote-unlock key, which the old image held under the old DEK,
+  so a DEK from a dump opened later images through it; the re-key now hands the
+  approvers a new one (or turns remote unlock off when it cannot). **What a
+  re-key does not rotate:** the sync password and the PAT, kept in
+  `vault.secrets` and carried over — whoever had the DEK read them too. After a
+  storage or memory copy, change the sync password and revoke the token as well
+  (Settings says so next to *Re-key*).
 - **On the wire — changing the sync password (complete since 2026-09-22).**
   Derives a new key at a new salt and rewrites everything the old key covered:
   the snapshot and changelog, every live Shared Folder blob (as one root commit
@@ -1291,7 +1327,12 @@ defends against it**:
 - **The build & deploy pipeline and dependency tree.** A poisoned dependency, a
   compromised CI step, or a tampered release artifact is full client compromise.
 - **The service worker.** It is same-origin, persistent, and intercepts navigations; a
-  malicious SW update is full compromise. (Updates are user-prompted and same-origin.)
+  malicious SW update is full compromise. The update prompt and the commit check
+  (`version.json`) are **not** controls against it: they read the same origin
+  and channel the attacker controls — a malicious deploy can ship a `version.json`
+  naming the running commit, the prompt then stays silent, and the waiting worker
+  activates at the next cold start. They detect accidental staleness only; real
+  assurance would need signed releases.
 - **The browser, OS, and any installed extensions.** Extensions with host access and
   local malware can read the heap while unlocked; these are **out of scope** unless
   separately mitigated (use a trusted device; that is the point of Paranoid Mode's
@@ -1307,7 +1348,10 @@ visible: `default-src 'self'`; `script-src 'self' 'wasm-unsafe-eval'`;
 `base-uri 'self'`; `form-action 'self'`. `img-src` allowed **any https host**
 until 2026-09-20, which left an injected script a beacon to anywhere it liked;
 nothing in the app loads a remote image, so it was removed and the exfiltration
-claim below now holds. `'unsafe-inline'` for styles remains, for runtime-injected
+claim below holds for images — not for exfiltration in general: `connect-src`
+allows `api.github.com`, where an injected script can write to a gist with its
+own token, and CSP does not govern top-level navigation or WebRTC; only
+`script-src` is a meaningful barrier. `'unsafe-inline'` for styles remains, for runtime-injected
 Tailwind. This raises the bar for injected-script and exfiltration attacks but
 cannot stop an attacker who can replace the served bundle itself. It is build-only (the dev server needs
 inline/eval for HMR).
@@ -1430,7 +1474,8 @@ syncPassword and prune old backups if the earlier plaintext exposure matters.
   for the browser's update job instead of a fixed timer, says so when nothing is
   registered to install updates or when the check did not complete, and compares
   the deployed commit against the running one, so a worker that is stuck — or
-  whose script the network is rewriting — can no longer report the device as
+  whose script the network is rewriting (when the rewrite does not also cover
+  `version.json`) — can no longer report the device as
   current. It mattered: **being able to tell whether you are running the build
   you think you are** is the first thing every other guarantee here rests on. If an update
   is detected while a Paranoid vault is **unlocked**, applying it is deferred until
@@ -1486,7 +1531,9 @@ syncPassword and prune old backups if the earlier plaintext exposure matters.
    trusted device, after typing the passphrase on a machine you do not trust, and
    whenever a copy of the device's storage plus the passphrase of that time may
    exist. Post-compromise security, not forward secrecy: what was copied stays
-   readable (§4). A passphrase change re-keys by default.
+   readable (§4). A passphrase change re-keys by default. When the reason is a
+   copy of storage or memory, **also change the sync password and revoke the
+   GitHub token** — a re-key carries both over, and the copy held them.
 
 ## 6. Summary matrix (content confidentiality)
 | # | Threat | Paranoid OFF | Paranoid ON |

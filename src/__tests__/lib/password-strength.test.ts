@@ -119,3 +119,38 @@ describe('formatCrackTime', () => {
     expect(formatCrackTime(1e15)).toBe('in centuries');
   });
 });
+
+describe('patterns a cracker tries first (threat-model review, batch 5)', () => {
+  // Each of these passed the vault gate (45.84 bits) and most the sync gate:
+  // the estimator only discounted a character repeating one of the previous two.
+  for (const weak of [
+    'passwordpasswordpassword',
+    'abcdefghijklmnopqrstuvwxyz',
+    'qwertyuiopasdfghjklzxcvbnm',
+    'correcthorsebatterystaple',
+    '12345678901234',
+    'a'.repeat(43),
+    'abcabcabcabcabcabcabcabc',
+    'zyxwvutsrqponmlkjihgfedcba',
+  ]) {
+    it(`refuses ${weak.length > 30 ? `${weak.slice(0, 12)}…` : weak}`, () => {
+      expect(checkSecretStrength(weak, 'vault').ok).toBe(false);
+      expect(checkSecretStrength(weak, 'sync').ok).toBe(false);
+    });
+  }
+
+  for (const good of [
+    'violet anchor 83 drift quartz lantern',
+    'copper meadow 41 silent harbor thistle',
+    'alpha rhino cactus velvet moon',
+    'the other passphrase 456',
+    'the real passphrase 123',
+    'security key test passphrase',
+    'amber canyon 62 hollow signal juniper',
+    'glacier ribbon 58 tender compass mosaic',
+  ]) {
+    it(`still accepts "${good}"`, () => {
+      expect(checkSecretStrength(good, 'vault').ok).toBe(true);
+    });
+  }
+});

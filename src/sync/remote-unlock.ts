@@ -335,6 +335,60 @@ export async function addApprovers(ctx: EnrollContext, approverDeviceIds: string
 }
 
 /**
+ * The approvers that may still receive a key. One that has since turned Paranoid
+ * (its entry says so) or replaced its identity no longer qualifies: a key sent to
+ * it would sit in a mailbox nobody empties, encrypted to a private key left in
+ * plaintext on that disk. One missing from the registry right now is kept —
+ * nothing says otherwise.
+ */
+function stillEligible(approvers: RemoteApproverInfo[], authentic: RegistryEntry[]): RemoteApproverInfo[] {
+  return approvers.filter((a) => {
+    const e = authentic.find((r) => r.deviceId === a.deviceId);
+    if (!e) return true;
+    return !e.paranoid && JSON.stringify(e.ecdhPub) === JSON.stringify(a.ecdhPub);
+  });
+}
+
+/**
+ * After a re-key (vault-rekey drops the remote-unlock key with the old DEK): hand
+ * the approvers a NEW remote-unlock key and wrap the new DEK under it — delivered
+ * first, wrapped last, as everywhere. The old key, which the approvers hold and
+ * whoever had the old DEK could read from any old image, opens nothing written
+ * from now on. Returns whether remote unlock works again; on any failure it is
+ * left off (the caller says so) rather than half-done.
+ */
+export async function reissueRemoteUnlock(ctx?: EnrollContext): Promise<boolean> {
+  const vault = await db.vault.get('vault');
+  const listed = vault?.remoteUnlock?.approvers ?? [];
+  if (listed.length === 0) return false;
+  const ruk = crypto.getRandomValues(new Uint8Array(32));
+  try {
+    const c = ctx ?? await buildEnrollContext();
+    const approvers = stillEligible(listed, await readAuthenticRegistry(c.pat, c.repo, c.macKey));
+    if (approvers.length === 0) throw new Error('No approver can receive the new key');
+    const identity = await ensureDeviceIdentity();
+    for (const a of approvers) {
+      const rukEcies = await eciesEncryptTo(a.ecdhPub, ruk);
+      const ts = Date.now();
+      const sig = await signPayload(identity.ecdsaPriv, inviteBytes(a.deviceId, { fromDeviceId: c.deviceId, ts, rukEcies }));
+      await postApproverInvite(c.pat, c.repo, a.deviceId, {
+        fromDeviceId: c.deviceId, fromName: c.deviceName, fromEcdsaPub: identity.ecdsaPub, rukEcies, ts, sig,
+      });
+    }
+    await wrapDekWithRuk(ruk);
+    await setRemoteApprovers(approvers);
+    await db.localSettings.update('local', { githubPat: c.pat });
+    return true;
+  } catch (err) {
+    recordError('remoteUnlock.reissue', err);
+    await disableRemoteUnlock();
+    return false;
+  } finally {
+    ruk.fill(0);
+  }
+}
+
+/**
  * Remove ONE approver and rotate the RUK, so the removed device's copy no longer
  * opens this vault. Requires the vault unlocked (the re-wrap needs the DEK).
  *
@@ -359,16 +413,8 @@ export async function removeApprover(ctx: EnrollContext, targetDeviceId: string)
   if (!approvers.some((a) => a.deviceId === targetDeviceId)) {
     throw new Error('That device is not one of this vault’s approvers');
   }
-  // An approver that has since turned Paranoid (its entry says so) or replaced its
-  // identity no longer qualifies: the new key is not sent to it — it would sit in a
-  // mailbox nobody empties, encrypted to a private key left in plaintext on that disk.
   const authentic = await readAuthenticRegistry(pat, repo, ctx.macKey).catch(() => [] as RegistryEntry[]);
-  const stillEligible = (a: RemoteApproverInfo) => {
-    const e = authentic.find((r) => r.deviceId === a.deviceId);
-    if (!e) return true; // not in the registry right now: nothing says otherwise
-    return !e.paranoid && JSON.stringify(e.ecdhPub) === JSON.stringify(a.ecdhPub);
-  };
-  const staying = approvers.filter((a) => a.deviceId !== targetDeviceId && stillEligible(a));
+  const staying = stillEligible(approvers.filter((a) => a.deviceId !== targetDeviceId), authentic);
 
   if (staying.length === 0) {
     // Nothing left to hold a rotated RUK; a lone wrap would just be dead weight.

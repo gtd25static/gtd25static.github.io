@@ -39,7 +39,7 @@ import { clampClipboardClearSeconds, DEFAULT_CLIPBOARD_CLEAR_SECONDS } from '../
 import { checkSecretStrength } from '../../lib/password-strength';
 import { PasswordStrengthBar } from '../ui/PasswordStrengthBar';
 import { ExportDialog } from './ExportDialog';
-import { requirePassphrase, updateSecuritySettings } from './passphrase-gate';
+import { requirePassphrase, requireOwner, updateSecuritySettings } from './passphrase-gate';
 
 function clampMinutes(value: string): number {
   const n = parseInt(value, 10);
@@ -102,7 +102,7 @@ function SecurityKeySection({ hasSecurityKey }: { hasSecurityKey: boolean }) {
   useEffect(() => { void reload(); }, [reload, hasSecurityKey]);
 
   async function handleAdd() {
-    if (await requirePassphrase('Your passphrase is needed to add a way to unlock this device.') === null) return;
+    if (!await requireOwner('Your passphrase is needed to add a way to unlock this device.')) return;
     setBusy(true);
     try {
       await addSecurityKey(label);
@@ -237,7 +237,7 @@ function SecondaryPassphraseSection() {
 
   async function save() {
     if (pass !== confirm) { toast('Passphrases do not match', 'error'); return; }
-    if (await requirePassphrase('Your passphrase is needed to change the secondary passphrase.') === null) return;
+    if (!await requireOwner('Your passphrase is needed to change the secondary passphrase.')) return;
     setBusy(true);
     try {
       await setSecondaryPassphrase(pass.trim());
@@ -254,7 +254,7 @@ function SecondaryPassphraseSection() {
 
   async function remove() {
     if (!await confirmDialog('Remove the secondary passphrase, if one is set?', { confirmLabel: 'Remove' })) return;
-    if (await requirePassphrase('Your passphrase is needed to remove the secondary passphrase.') === null) return;
+    if (!await requireOwner('Your passphrase is needed to remove the secondary passphrase.')) return;
     setBusy(true);
     try {
       await clearSecondaryPassphrase();
@@ -535,7 +535,7 @@ function UnlockLogView({ log }: { log: import('../../lib/unlock-audit').UnlockLo
         <Button size="sm" variant="secondary" onClick={async () => {
           // The log is the evidence of what happened while you were away; an
           // unattended session must not be able to erase it.
-          if (await requirePassphrase('Your passphrase is needed to clear the unlock log.') === null) return;
+          if (!await requireOwner('Your passphrase is needed to clear the unlock log.')) return;
           await clearUnlockLog();
           toast('Unlock log cleared', 'success');
         }}>
@@ -667,6 +667,8 @@ function rekeyDoneMessage(prefix: string, result: RekeyResult): string {
   const parts = [`${prefix}. Set the secondary passphrase again if you use one.`];
   const n = result.securityKeysDropped;
   if (n > 0) parts.push(`${n} security key${n === 1 ? '' : 's'} must be enrolled again.`);
+  if (result.remoteUnlock === 'rotated') parts.push('Your trusted devices get the new remote-unlock key the next time they open GTD25.');
+  if (result.remoteUnlock === 'turned-off') parts.push('Remote unlock was turned off (its key could not be renewed): set it up again.');
   return parts.join(' ');
 }
 
@@ -692,7 +694,7 @@ function ManageForm({ idleMinutes, maxAttempts, attemptWipeJustArmed, systemIdle
   async function handleSaveIdle() {
     const minutes = clampMinutes(idle);
     // A longer auto-lock loosens the device's protection (see passphrase-gate).
-    if (minutes > idleMinutes && await requirePassphrase('Your passphrase is needed to lengthen the auto-lock.') === null) {
+    if (minutes > idleMinutes && !await requireOwner('Your passphrase is needed to lengthen the auto-lock.')) {
       setIdle(String(idleMinutes));
       return;
     }
@@ -702,7 +704,7 @@ function ManageForm({ idleMinutes, maxAttempts, attemptWipeJustArmed, systemIdle
   }
 
   async function handleSaveAttempts() {
-    if (await requirePassphrase('Your passphrase is needed to change the failed-attempt wipe limit.') === null) return;
+    if (!await requireOwner('Your passphrase is needed to change the failed-attempt wipe limit.')) return;
     const n = Math.max(0, Math.min(50, parseInt(attempts, 10) || 0));
     await configureMaxUnlockAttempts(n);
     setAttempts(String(n));
@@ -749,7 +751,7 @@ function ManageForm({ idleMinutes, maxAttempts, attemptWipeJustArmed, systemIdle
       { confirmLabel: 'Disable', danger: true },
     );
     if (!ok) return;
-    if (await requirePassphrase('Your passphrase is needed to turn Paranoid Mode off.') === null) return;
+    if (!await requireOwner('Your passphrase is needed to turn Paranoid Mode off.')) return;
     setBusy(true);
     try {
       await disableParanoid();
@@ -863,7 +865,12 @@ function ManageForm({ idleMinutes, maxAttempts, attemptWipeJustArmed, systemIdle
           after removing a security key or a trusted device, or if a copy of this device's storage and
           your old passphrase may be in someone else's hands: what they copied stays readable to them,
           but nothing written from now on will be. Security keys must be enrolled again afterwards, and
-          the secondary passphrase, if you use one, set again.
+          the secondary passphrase, if you use one, set again; trusted devices get a new remote-unlock key.
+        </p>
+        <p data-rekey-sync-advice className="text-xs text-amber-600 dark:text-amber-400">
+          If the reason is a copy of this device's storage or memory, also change the sync password
+          (GitHub Sync) and revoke the GitHub token: both were in that copy, and a re-key does not
+          change them.
         </p>
         <Input id="rekey-current-passphrase" label="Current passphrase" type="password" value={rekeyPass} onChange={(e) => setRekeyPass(e.target.value)} placeholder="Your current passphrase" disabled={busy} />
         <Button size="sm" variant="danger" onClick={handleRekey} disabled={busy || !rekeyPass}>Re-key device</Button>
@@ -949,7 +956,7 @@ function RemoteUnlockSection() {
 
   async function confirm() {
     if (selected.size === 0) { toast('Select at least one device', 'error'); return; }
-    if (await requirePassphrase('Your passphrase is needed to let other devices unlock this one.') === null) return;
+    if (!await requireOwner('Your passphrase is needed to let other devices unlock this one.')) return;
     setBusy(true);
     try {
       const ctx = await buildEnrollContext();
@@ -977,7 +984,7 @@ function RemoteUnlockSection() {
       { confirmLabel: 'Remove', danger: true },
     );
     if (!ok) return;
-    if (await requirePassphrase('Your passphrase is needed to change which devices can unlock this one.') === null) return;
+    if (!await requireOwner('Your passphrase is needed to change which devices can unlock this one.')) return;
     setBusy(true);
     try {
       const ctx = await buildEnrollContext();
@@ -995,7 +1002,7 @@ function RemoteUnlockSection() {
   async function disable() {
     const ok = await confirmDialog('Turn off remote unlock? Trusted devices will no longer be able to unlock or wipe this device.', { confirmLabel: 'Turn off', danger: true });
     if (!ok) return;
-    if (await requirePassphrase('Your passphrase is needed to turn remote unlock off.') === null) return;
+    if (!await requireOwner('Your passphrase is needed to turn remote unlock off.')) return;
     setBusy(true);
     try { await disableRemoteUnlock(); toast('Remote unlock disabled', 'success'); setCandidates(null); await reload(); }
     finally { setBusy(false); }

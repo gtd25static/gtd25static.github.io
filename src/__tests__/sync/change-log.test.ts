@@ -672,6 +672,9 @@ describe('pruneChangelogIfSyncDisabled', () => {
 
     const now = Date.now();
     for (let i = 0; i < 5; i++) {
+      // The records exist: an entry for one purged from this device is dropped
+      // with sync off (see the at-rest hygiene tests), which is not what this checks.
+      await db.tasks.add({ id: `t${i}`, listId: 'l1', title: 'x', status: 'todo', order: i, createdAt: now, updatedAt: now } as never);
       await db.changeLog.add({
         id: `e${i}`, deviceId: 'd', timestamp: now + i,
         entityType: 'task', entityId: `t${i}`, operation: 'upsert',

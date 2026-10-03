@@ -13,17 +13,20 @@ import { db } from './index';
 import type { Vault, ChangeEntry } from './models';
 import type { KdfParams } from './vault-kdf';
 import type { VaultSecrets } from './vault';
-import { generateDek, wrapDek, generateGarbageSlot, importKekFromBytes } from './vault-crypto';
+import { generateDek, wrapDek, generateGarbageSlot } from './vault-crypto';
 import { createVerifier, encryptBlob, generateSalt } from '../sync/crypto';
 import { encryptRow, type Row } from './vault-middleware';
 import { CONTENT_TABLES, readContentRows, encryptContentRows } from './vault-content';
-import { b64encode } from '../sync/remote-unlock-crypto';
 
 export interface RekeyResult {
   /** Security keys that were enrolled: their wraps opened the old DEK, so they are gone. */
   securityKeysDropped: number;
-  /** Remote unlock was enrolled and stays so (same remote-unlock key, re-wrapping the new DEK). */
-  remoteUnlockKept: boolean;
+  /**
+   * Remote unlock after the re-key: 'none' (it was not enrolled), 'rotated' (a new
+   * remote-unlock key handed to the approvers — the old one opens nothing written
+   * from now on) or 'turned-off' (that could not be done; set it up again).
+   */
+  remoteUnlock: 'none' | 'rotated' | 'turned-off';
 }
 
 export interface RekeyInput {
@@ -33,8 +36,6 @@ export interface RekeyInput {
   newSalt: string;
   kdf: KdfParams;
   secrets: VaultSecrets | null;
-  /** The remote-unlock key, recovered under the old DEK — or null when not enrolled. */
-  ruk: Uint8Array | null;
 }
 
 /**
@@ -65,23 +66,21 @@ export async function rekeyVaultContent(input: RekeyInput): Promise<{ newDek: Cr
   // 3. The re-keyed vault row: slot 1 under the given KEK, slot 2 fresh garbage
   //    (the secondary passphrase's KEK is not at hand, so it has to be set again),
   //    security keys dropped for the same reason (each needs a touch to re-wrap),
-  //    remote unlock re-wrapped under the SAME remote-unlock key so the approvers
-  //    keep working — revoking one is removeApprover's job, which rotates that key.
-  const { vault, newKek, newSalt, kdf, secrets, ruk } = input;
+  //    and the remote-unlock key dropped too: the approvers hold a copy of it, and
+  //    whoever had the old DEK could read it from any old image — re-wrapping the
+  //    new DEK under it made the re-key worthless to such a person. The approver
+  //    list stays (sealed under the new DEK) so the caller can hand out a new key.
+  const { vault, newKek, newSalt, kdf, secrets } = input;
   const securityKeysDropped = vault.securityKeys?.length
     ?? (vault.webauthnCredentialId && vault.dekWrappedByPrf ? 1 : 0);
-  let remote: Pick<Vault, 'dekWrappedByRuk' | 'rukWrappedByDek' | 'remoteUnlock'> = {};
-  if (ruk) {
-    remote = {
-      dekWrappedByRuk: await wrapDek(await importKekFromBytes(ruk), newDek, 'ruk'),
-      rukWrappedByDek: await encryptBlob(newDek, b64encode(ruk)),
-      // The approver list's seal is re-made under the new DEK (see Vault.remoteUnlock).
-      remoteUnlock: vault.remoteUnlock && {
-        approvers: vault.remoteUnlock.approvers,
-        seal: await encryptBlob(newDek, JSON.stringify(vault.remoteUnlock.approvers)),
-      },
-    };
-  }
+  const remote: Pick<Vault, 'remoteUnlock'> = vault.dekWrappedByRuk && vault.remoteUnlock
+    ? {
+        remoteUnlock: {
+          approvers: vault.remoteUnlock.approvers,
+          seal: await encryptBlob(newDek, JSON.stringify(vault.remoteUnlock.approvers)),
+        },
+      }
+    : {};
   const newVault: Vault = {
     id: 'vault',
     dekWrappedByPass: await wrapDek(newKek, newDek, 'slot1'),
@@ -114,5 +113,5 @@ export async function rekeyVaultContent(input: RekeyInput): Promise<{ newDek: Cr
     await db.vault.put(newVault);
   });
 
-  return { newDek, result: { securityKeysDropped, remoteUnlockKept: !!ruk } };
+  return { newDek, result: { securityKeysDropped, remoteUnlock: vault.dekWrappedByRuk ? 'turned-off' : 'none' } };
 }

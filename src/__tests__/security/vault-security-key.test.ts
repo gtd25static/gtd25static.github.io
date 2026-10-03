@@ -214,3 +214,25 @@ describe('multiple security keys', () => {
     expect(getVaultSnapshot().hasSecurityKey).toBe(true);
   });
 });
+
+describe('confirmOwnerWithSecurityKey — the gates\' security-key proof (review batch 5)', () => {
+  it('confirms with an enrolled key and changes nothing', async () => {
+    const { confirmOwnerWithSecurityKey } = await import('../../db/vault');
+    await enableParanoid(PASSPHRASE);
+    await addSecurityKey();
+    const vaultBefore = JSON.stringify(await db.vault.get('vault'));
+    const localBefore = JSON.stringify(await db.localSettings.get('local'));
+    expect(await confirmOwnerWithSecurityKey()).toBe(true);
+    expect(JSON.stringify(await db.vault.get('vault'))).toBe(vaultBefore);
+    expect(JSON.stringify(await db.localSettings.get('local'))).toBe(localBefore);
+    expect(isUnlocked()).toBe(true);
+  });
+
+  it('is false without an enrolled key, and needs the vault unlocked', async () => {
+    const { confirmOwnerWithSecurityKey } = await import('../../db/vault');
+    await enableParanoid(PASSPHRASE);
+    expect(await confirmOwnerWithSecurityKey()).toBe(false);
+    lock();
+    await expect(confirmOwnerWithSecurityKey()).rejects.toThrow(/Unlock/);
+  });
+});

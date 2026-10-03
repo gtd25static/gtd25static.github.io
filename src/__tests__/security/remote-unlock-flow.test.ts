@@ -1236,3 +1236,40 @@ describe('this device\'s fingerprint, as the other side computes it (review batc
     expect(await ru.ownFingerprint()).toBe(await identityFingerprint(publicIdentityOf(phoneIdentity)));
   });
 });
+
+describe('a re-key hands the approvers a new remote-unlock key (review batch 5)', () => {
+  // The re-key kept the remote-unlock key, which the approvers hold and whoever
+  // had the old DEK could read from any old image: re-keying protected nothing
+  // from such a person while remote unlock was on.
+  it('the old key opens nothing; the approver picks up the new one and unlocks', async () => {
+    await enrollPair();
+    const oldRuk = b64decodeRuk(phoneLocal.remoteApproverFor![LAP].ruk);
+    await actAsLaptop();
+    const result = await vault.rekeyVault(PASS, undefined, {
+      remoteUnlockContext: { pat: PAT, repo: REPO, deviceId: LAP, deviceName: 'Work Laptop', macKey },
+    });
+    expect(result.remoteUnlock).toBe('rotated');
+    laptopLocal = await snapshotLocal();
+    vault.lock();
+    expect(await vault.unlockWithRemoteKey(oldRuk)).toBe(false);
+
+    await actAsPhone();
+    // A refreshed bond, not a new enrolment (0), but the RUK it holds changed.
+    expect(await ru.pollApproverInbox(PAT, REPO, PHONE, macKey)).toBe(0);
+    phoneLocal = await snapshotLocal();
+    expect(phoneLocal.remoteApproverFor![LAP].ruk).not.toBe(btoa(String.fromCharCode(...oldRuk)));
+
+    await actAsLaptop();
+    const { code } = await ru.requestRemoteUnlock(PAT, REPO, LAP);
+    await actAsPhone();
+    const pending = await ru.readPendingApproval(PAT, REPO, LAP);
+    expect(pending?.code).toBe(code);
+    await ru.approveRemoteUnlock(PAT, REPO, LAP, pending!.requestDigest);
+    await actAsLaptop();
+    expect((await ru.pollRemoteUnlock(PAT, REPO, LAP)).status).toBe('unlocked');
+  });
+});
+
+function b64decodeRuk(b64: string): Uint8Array {
+  return Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+}
