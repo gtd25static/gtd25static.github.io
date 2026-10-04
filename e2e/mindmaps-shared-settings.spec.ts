@@ -108,7 +108,7 @@ test('the Shared Folder says a text snippet needs sync instead of "try again"', 
     document.dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true }));
   });
   await page.getByRole('button', { name: 'Upload', exact: true }).click();
-  await expect(page.getByText(/set up sync in Settings/)).toBeVisible();
+  await expect(page.getByText(/set up sync \(or turn it back on\) in Settings/)).toBeVisible();
   await expect(page.getByText(/Please try again/)).toHaveCount(0);
 });
 
