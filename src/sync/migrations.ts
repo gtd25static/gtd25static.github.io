@@ -78,6 +78,16 @@ const migrations: RemoteMigration[] = [
     toVersion: 8,
     migrate: (data) => ({ ...data, syncVersion: 8 }),
   },
+  {
+    // v9 pads Shared Folder files on the wire (framed + Padmé length, new AAD).
+    // Nothing to rewrite: older files stay readable and gain the padding at the
+    // next sync-password change. The bump is the point — a v8 build cannot open
+    // a padded file, and its sync-password change would keep such files under
+    // the old key (counted unreadable), losing them; it must update first.
+    fromVersion: 8,
+    toVersion: 9,
+    migrate: (data) => ({ ...data, syncVersion: 9 }),
+  },
 ];
 
 export function runRemoteMigrations(data: SyncData, from: number, to: number): SyncData {

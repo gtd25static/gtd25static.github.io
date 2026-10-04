@@ -36,13 +36,13 @@ import {
   createBlobBase64, updateRef, type GitTreeEntry,
 } from './github-api';
 import {
-  deriveKey, generateSalt, createVerifier, checkVerifier, encryptBytes,
+  deriveKey, generateSalt, createVerifier, checkVerifier,
   cacheEncryptionKey, getCachedEncryptionKey, getCachedSalt,
 } from './crypto';
 import { syncNow, forcePush, endSyncSession, SYNC_LOCK_NAME } from './sync-engine';
 import { hasPendingEntries } from './change-log';
 import { getSyncPat, rememberSyncPassword, forgetSyncPassword } from './sync-credentials';
-import { BLOB_BRANCH, KEEP_PATH, KEEP_CONTENT_BASE64, blobPath, ensureBlobBranch, blobAad, decryptSharedBlob } from './shared-blobs';
+import { BLOB_BRANCH, KEEP_PATH, KEEP_CONTENT_BASE64, blobPath, ensureBlobBranch, sealSharedBlob, decryptSharedBlob } from './shared-blobs';
 import { overwriteAllBackups } from './remote-backups';
 import { publishOwnRegistryEntry } from './remote-unlock';
 import { squashDefaultBranch } from './history-compaction';
@@ -257,7 +257,7 @@ async function rotateBlobBranch(
       tree.push(await asIs());
       continue;
     }
-    const sha = await createBlobBase64(pat, repo, b64encode(await encryptBytes(newKey, plain, blobAad(blobId))));
+    const sha = await createBlobBase64(pat, repo, b64encode(await sealSharedBlob(newKey, plain, blobId)));
     tree.push({ path, mode: '100644', type: 'blob', sha });
     result.blobsRewritten++;
   }

@@ -6,7 +6,6 @@ import { createTaskList, updateTaskList, saveListSearch, deleteListSearch } from
 import { applyRemoteEntries } from '../../sync/change-log';
 import { encryptEntity, decryptEntity, SENSITIVE_FIELDS } from '../../sync/crypto';
 import { runRemoteMigrations } from '../../sync/migrations';
-import { SYNC_VERSION } from '../../sync/version';
 import { placeholderRow } from '../../lib/placeholder-content';
 import { MAX_SAVED_SEARCHES } from '../../lib/list-filter';
 import { enableParanoid, __resetVaultStateForTests } from '../../db/vault';
@@ -110,7 +109,7 @@ describe('sync of saved searches', () => {
   it('the v7 -> v8 migration rewrites nothing', () => {
     const lists = [{ id: 'l1', name: 'Work', type: 'tasks', order: 0, createdAt: 1, updatedAt: 1 }];
     const data = { syncVersion: 7, taskLists: lists, tasks: [], subtasks: [], settings: { theme: 'system' } } as unknown as SyncData;
-    const migrated = runRemoteMigrations(data, 7, SYNC_VERSION);
+    const migrated = runRemoteMigrations(data, 7, 8);
     expect(migrated.syncVersion).toBe(8);
     expect(migrated.taskLists).toBe(lists);
   });

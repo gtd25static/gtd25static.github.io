@@ -101,6 +101,13 @@ const localMigrations: LocalMigration[] = [
     toVersion: 8,
     migrate: async () => {},
   },
+  {
+    // No-op: v9 pads Shared Folder files on the wire; the local cache keeps
+    // plaintext bytes as before.
+    fromVersion: 8,
+    toVersion: 9,
+    migrate: async () => {},
+  },
 ];
 
 export async function runLocalMigrations(database: Gtd25DB, from: number, to: number): Promise<void> {

@@ -112,12 +112,63 @@ export function blobAad(blobId: string): Uint8Array {
   return new TextEncoder().encode(`sharedBlob:${blobId}`);
 }
 
+// --- Size padding on the wire ---
+// A file's exact size, readable off its upload by anyone inspecting the traffic,
+// says a lot about which file it is. Bytes are framed with their real length and
+// zero-padded before encryption to a Padmé length (Nikitin et al., "Reducing
+// Metadata Leakage from Encrypted Files and Communication with PURBs", 2019): the
+// length then reveals O(log log n) bits, for at most 6.25% more bytes above the
+// 4 KiB floor (3.1% from 64 KiB). Everything up to the floor — snippets, small
+// files — uploads at the same size. Padded files carry their own AAD, so a build
+// that predates padding fails to open one instead of showing the padding.
+
+const MIN_PADDED_BYTES = 4096;
+const LENGTH_PREFIX_BYTES = 4;
+
+function padme(length: number): number {
+  const exponent = 31 - Math.clz32(length); // floor(log2 length)
+  const bitsOfExponent = 32 - Math.clz32(exponent); // floor(log2 exponent) + 1
+  const step = 2 ** (exponent - bitsOfExponent);
+  return Math.ceil(length / step) * step;
+}
+
+/** Length of the framed, padded plaintext for a file of `size` bytes. */
+export function paddedLength(size: number): number {
+  return padme(Math.max(MIN_PADDED_BYTES, size + LENGTH_PREFIX_BYTES));
+}
+
+function blobAadV2(blobId: string): Uint8Array {
+  return new TextEncoder().encode(`sharedBlob:v2:${blobId}`);
+}
+
+/** Encrypt a shared file's bytes for the wire: framed, padded, bound to its id. */
+export async function sealSharedBlob(key: CryptoKey, plaintext: Uint8Array, blobId: string): Promise<Uint8Array> {
+  const framed = new Uint8Array(paddedLength(plaintext.length));
+  new DataView(framed.buffer).setUint32(0, plaintext.length);
+  framed.set(plaintext, LENGTH_PREFIX_BYTES);
+  return encryptBytes(key, framed, blobAadV2(blobId));
+}
+
 /**
- * Open a shared file's bytes from the wire: bound to its id, or — written before
- * 2026-10-03 — unbound (such files gain the binding at the next sync-password
- * change, which re-encrypts them all).
+ * Open a shared file's bytes from the wire: padded (since 2026-10-04), bound to
+ * its id without padding, or — written before 2026-10-03 — unbound. Older files
+ * gain the padding and the binding at the next sync-password change, which
+ * re-encrypts them all.
  */
 export async function decryptSharedBlob(key: CryptoKey, bytes: Uint8Array, blobId: string): Promise<Uint8Array> {
+  let framed: Uint8Array | null = null;
+  try {
+    framed = await decryptBytes(key, bytes, blobAadV2(blobId));
+  } catch {
+    // Not a padded file: try the older formats below.
+  }
+  if (framed) {
+    const length = framed.length >= LENGTH_PREFIX_BYTES
+      ? new DataView(framed.buffer, framed.byteOffset).getUint32(0)
+      : Infinity;
+    if (length > framed.length - LENGTH_PREFIX_BYTES) throw new Error('Shared file has an invalid length');
+    return framed.slice(LENGTH_PREFIX_BYTES, LENGTH_PREFIX_BYTES + length);
+  }
   try {
     return await decryptBytes(key, bytes, blobAad(blobId));
   } catch {
@@ -192,7 +243,7 @@ export async function uploadSharedBlob(blobId: string, plaintext: Uint8Array): P
   const creds = await getCredentials();
   if (!creds) throw new Error('Sync is not configured');
   const key = await requireSyncKey();
-  const ciphertext = await encryptBytes(key, plaintext, blobAad(blobId));
+  const ciphertext = await sealSharedBlob(key, plaintext, blobId);
   await ensureBlobBranch(creds);
   await putBinaryFile(creds.pat, creds.repo, blobPath(blobId), ciphertext, undefined, undefined, BLOB_BRANCH);
   await cacheBlobLocal(blobId, plaintext);

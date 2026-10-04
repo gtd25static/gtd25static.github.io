@@ -1,6 +1,8 @@
 # GTD25 — Security Review & Threat Model
 
-**Last updated:** 2026-10-04 (**Network footprint — batch 2 of 7: deleted shared files leave the blob branch's history.** (1) **Deleted files stayed downloadable.** A delete removed the file from the tip of `gtd25-blobs` with its own GET + DELETE; the compaction then found nothing at the tip to drop and returned without squashing, so every deleted file's ciphertext stayed reachable in the branch history for anyone holding the token — which a TLS-inspecting proxy sees on every request. A delete is now local (cached bytes dropped, compaction flagged), and the compaction after the next successful sync squashes whenever the tip holds a dead blob **or the branch has any history**; a skipped run (truncated listing, branch moved) keeps the deletion pending instead of forgetting it, as does a failed purge during "Wipe All Data". (2) **No request per file.** "Delete all" used to fire a GET (which for files up to 1 MB returns the whole ciphertext) and a DELETE per file at once, several failing with conflicts; it is now one branch rewrite. The 30-day purge no longer re-requests old paths. (3) The placeholder blob's content no longer names the app. **Impact:** Shared Folder §1 "History reclamation" and Scenario 7's "blob branch after deletes" now hold as written. New wording, not new risk: the bytes stay at the tip until the deleting device's next successful sync; the pre-existing residual of a just-uploaded file whose metadata has not arrived being dropped by another device's compaction is now stated.)
+**Last updated:** 2026-10-04 (**Network footprint — batch 3 of 7: Shared Folder file sizes padded on the wire, SYNC_VERSION 9.** A file's upload gave its size to the byte (decoded body − 28) — to a TLS-inspecting proxy and to anyone reading the repository — which is enough to recognise a known document. Files are now framed with their real length and padded to a Padmé length with a 4 KiB floor before encryption: everything up to 4 KiB looks alike, larger sizes are rounded (O(log log n) bits revealed, ≤ 6.25% overhead). Padded files use their own AAD; **SYNC_VERSION 9** stops older builds from syncing until they update, because an older build cannot open them and its sync-password change would strand them under the old key. Files uploaded before keep their exact size until the next sync-password change (which re-encrypts every file); what a proxy already logged keeps it for good. **Impact:** Shared Folder §1 "Residual leak" narrows from "approximate ciphertext size" to a size bucket; nothing about what is encrypted changes. §6 unchanged: the wire format stays identical with Paranoid on or off, since padding applies in both.)
+
+**Previously updated:** 2026-10-04 (**Network footprint — batch 2 of 7: deleted shared files leave the blob branch's history.** (1) **Deleted files stayed downloadable.** A delete removed the file from the tip of `gtd25-blobs` with its own GET + DELETE; the compaction then found nothing at the tip to drop and returned without squashing, so every deleted file's ciphertext stayed reachable in the branch history for anyone holding the token — which a TLS-inspecting proxy sees on every request. A delete is now local (cached bytes dropped, compaction flagged), and the compaction after the next successful sync squashes whenever the tip holds a dead blob **or the branch has any history**; a skipped run (truncated listing, branch moved) keeps the deletion pending instead of forgetting it, as does a failed purge during "Wipe All Data". (2) **No request per file.** "Delete all" used to fire a GET (which for files up to 1 MB returns the whole ciphertext) and a DELETE per file at once, several failing with conflicts; it is now one branch rewrite. The 30-day purge no longer re-requests old paths. (3) The placeholder blob's content no longer names the app. **Impact:** Shared Folder §1 "History reclamation" and Scenario 7's "blob branch after deletes" now hold as written. New wording, not new risk: the bytes stay at the tip until the deleting device's next successful sync; the pre-existing residual of a just-uploaded file whose metadata has not arrived being dropped by another device's compaction is now stated.)
 
 **Previously updated:** 2026-10-04 (**Network footprint — batch 1 of 7: no Shared Folder traffic while sync is off.** The Shared Folder read the token without asking whether sync was on, so with sync switched off it still uploaded, downloaded and deleted files on the backend. It now honours the same switch as the sync engine; cached files still open. The remote-wipe watcher (Scenario 8) is the one thing that still polls with sync off, by design. **Impact:** "sync off = no traffic" now holds, apart from that wipe watcher and the app-update checks.)
 
@@ -226,7 +228,17 @@ sharing; same single sync key as everything else).
   `gtd25-shared/{random-id}` (no extension → no type leak) on a **dedicated orphan
   branch `gtd25-blobs`**, kept off the default branch so blob churn never bloats the
   task/snapshot history. On the wire they are AES-GCM encrypted with the sync key
-  (`encryptBytes`).
+  (`encryptBytes`), bound to their id, and — since 2026-10-04 (**SYNC_VERSION 9**)
+  — **padded**: the bytes are framed with their real length and zero-padded to a
+  Padmé length (Nikitin et al., PURBs) with a 4 KiB floor. Every file up to 4 KiB
+  (snippets, small files) uploads at the same size; above that the size is
+  rounded so it reveals O(log log n) bits, for at most 6.25% more bytes (3.1%
+  from 64 KiB). Before, the upload gave each file's size to the byte (decoded
+  body − 28), which can be matched against known documents. Padded files carry
+  their own AAD (`sharedBlob:v2:{id}`), so an older build fails to open one
+  rather than showing the padding; v9 makes those builds stop syncing until they
+  update (an older build's sync-password change would otherwise keep padded
+  files under the old key, i.e. lose them).
 - **History reclamation:** deleting a file makes **no request**; it drops the
   cached bytes and flags a compaction. The compaction that follows the next
   successful sync **history-squashes `gtd25-blobs`** — rebuilds it as a single
@@ -266,7 +278,8 @@ sharing; same single sync key as everything else).
   folder makes no requests at all (since 2026-10-04 — it used to keep uploading,
   downloading and deleting files with the stored token); cached files still open.
 - **Size limits** (30 MB folder cap, per-item = remaining) are a client-side UX guard,
-  not a security control.
+  not a security control. They count the real (plaintext) size; on the wire the
+  folder takes up to ~6% more, plus the 4 KiB floor per small item.
 - **Ingestion paths:** upload button, drag & drop, the Web Share Target (see its
   stash residual below), and **clipboard paste** (Ctrl+V in the folder view —
   files/screenshots, URLs, or text). Pasted content is classified and shown in a
@@ -283,11 +296,16 @@ sharing; same single sync key as everything else).
   since 2026-10-04 the backend sees one branch rewrite, not a burst of a GET and a
   DELETE per file). Both are gated on an unlocked vault, and the at-rest middleware
   would refuse the write regardless.
-- **Residual leak (accepted):** an adversary who can read the backend (Scenario 7)
-  sees the **number** of blob objects and each one's **approximate ciphertext size**,
-  plus the count/timestamps of `sharedItem` metadata rows. This is the per-file-blob
+- **Residual leak (accepted):** an adversary who can read the backend (Scenario 7),
+  or who watches the traffic (Scenario 4), sees the **number** of blob objects, each
+  one's **padded size bucket** (exact size for files written before 2026-10-04,
+  until the next sync-password change re-encrypts them — what a proxy already
+  logged keeps the exact size), **when** each was uploaded or downloaded, plus the
+  count/timestamps of `sharedItem` metadata rows. This is the per-file-blob
   trade-off (chosen for efficient incremental sync); it never reveals filenames,
-  types, URLs, or content. "Wipe All Data" (gated behind a typed `yes` confirmation)
+  types, URLs, or content. Padding hides *which* file moved, not *that* one did:
+  large encrypted uploads to a personal repository remain conspicuous to an
+  inspecting proxy or DLP. "Wipe All Data" (gated behind a typed `yes` confirmation)
   clears local items/blobs, pushes an empty
   snapshot, **and history-squashes `gtd25-blobs` down to its placeholder** so blob
   bytes are purged from the branch (then GC'd by GitHub on its schedule); the
