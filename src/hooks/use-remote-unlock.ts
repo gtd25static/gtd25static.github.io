@@ -14,6 +14,10 @@ import {
 } from '../sync/remote-unlock';
 
 const SLOW_POLL_MS = 12_000;   // background cadence (wipe watch / invitations)
+// Wipe watch while the app is hidden: ~30 checks an hour instead of ~300 from a
+// window nobody is looking at. A wipe then lands within ~2.5 min (~16 s visible);
+// bringing the window forward checks at once.
+const HIDDEN_WIPE_POLL_MS = 120_000;
 const FAST_POLL_MS = 2_500;    // while an unlock request is pending — keeps approval snappy
 const REFOCUS_POLL_AFTER_MS = 60_000; // only force a poll on refocus after this long hidden
 const DECOMMISSION_CHECK_MS = 60_000; // how often the approver tick looks for forgotten devices
@@ -24,14 +28,15 @@ function isHidden(): boolean {
 
 // setInterval replacement that re-randomizes its delay each tick. In Paranoid Mode
 // jitterInterval spreads the cadence ±30% so the mailbox poll isn't a fixed-period
-// beacon; non-paranoid keeps the flat base interval. Does not fire immediately —
-// callers run() once up front, mirroring the previous setInterval behavior.
-function startJitteredInterval(run: () => void, baseMs: number): () => void {
+// beacon; non-paranoid keeps the flat base interval. The base may be a function,
+// read at each tick. Does not fire immediately — callers run() once up front,
+// mirroring the previous setInterval behavior.
+function startJitteredInterval(run: () => void, baseMs: number | (() => number)): () => void {
   let stopped = false;
   let timer: ReturnType<typeof setTimeout>;
   const loop = () => {
     if (stopped) return;
-    timer = setTimeout(() => { run(); loop(); }, jitterInterval(baseMs));
+    timer = setTimeout(() => { run(); loop(); }, jitterInterval(typeof baseMs === 'function' ? baseMs() : baseMs));
   };
   loop();
   return () => { stopped = true; clearTimeout(timer); };
@@ -187,9 +192,16 @@ export function useRemoteWipeCommands() {
   useEffect(() => {
     let stopped = false;
     const run = () => { if (!stopped) void tick(); };
+    const cadence = () => (isHidden() ? HIDDEN_WIPE_POLL_MS : SLOW_POLL_MS);
     run();
-    const stop = startJitteredInterval(run, SLOW_POLL_MS);
-    const onVis = () => { if (document.visibilityState === 'visible') run(); };
+    let stop = startJitteredInterval(run, cadence);
+    const onVis = () => {
+      if (document.visibilityState !== 'visible') return;
+      run();
+      // Back to the visible pace now, not when a hidden-length timer runs out.
+      stop();
+      stop = startJitteredInterval(run, cadence);
+    };
     document.addEventListener('visibilitychange', onVis);
     window.addEventListener('online', run);
     return () => {

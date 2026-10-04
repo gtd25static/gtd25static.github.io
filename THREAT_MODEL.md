@@ -1,6 +1,8 @@
 # GTD25 — Security Review & Threat Model
 
-**Last updated:** 2026-10-04 (**Network footprint — batch 5 of 7: the Paranoid idle probe stops re-downloading after each sync.** Scenario 4's "steady state is two bodyless 304s" held only between changes: the probe never learned the ETags a sync had read, so the first probe after every sync downloaded the changelog and the snapshot whole and then triggered a full sync that downloaded them again, and the push of an edit was followed by an unconditional second full pull. A successful sync now hands its ETags to the probe (a failed one does not, so nothing it read passes for applied); a 200 whose sha is the one the last sync applied — this device's own push — counts as unchanged; and the pull after a push goes through the same probe. About 3 full-body GETs per own edit instead of ~7, then 304s. **Impact:** Scenario 4's fingerprint description now holds; no change to what is sent or encrypted.)
+**Last updated:** 2026-10-04 (**Network footprint — batch 6 of 7: the remote-wipe watcher slows down while the app is hidden.** An enrolled Paranoid device polled its wipe mailbox every ~12 s forever — hidden and locked included — about 300 requests an hour (a steady 404) from a window nobody was looking at. Hidden, it now checks every ~2 minutes (±30%); becoming visible checks at once and returns to ~12 s. **Impact:** Scenario 8's remote wipe reaches a hidden app within ~2.5 min instead of ~16 s; visible apps are unchanged; delivery still needs the app open and online.)
+
+**Previously updated:** 2026-10-04 (**Network footprint — batch 5 of 7: the Paranoid idle probe stops re-downloading after each sync.** Scenario 4's "steady state is two bodyless 304s" held only between changes: the probe never learned the ETags a sync had read, so the first probe after every sync downloaded the changelog and the snapshot whole and then triggered a full sync that downloaded them again, and the push of an edit was followed by an unconditional second full pull. A successful sync now hands its ETags to the probe (a failed one does not, so nothing it read passes for applied); a 200 whose sha is the one the last sync applied — this device's own push — counts as unchanged; and the pull after a push goes through the same probe. About 3 full-body GETs per own edit instead of ~7, then 304s. **Impact:** Scenario 4's fingerprint description now holds; no change to what is sent or encrypted.)
 
 **Previously updated:** 2026-10-04 (**Network footprint — batch 4 of 7: large shared files get time to transfer.** Every GitHub request had a 15 s budget, so a shared file of tens of MB was aborted on slower links and each retry sent the whole file again — repeated large aborted uploads are both a failure and a pattern on the wire. Requests now get 15 s plus a second per 256 KiB of body (downloads: of the item's padded size, or of the folder cap when unknown); requests under 256 KiB keep exactly 15 s. **Impact:** the sync-password change (2026-09-25 entry, item 10) defers the idle auto-lock while it runs and called that "bounded, since every GitHub request times out after 15 s": its file transfers can now take up to about 3 minutes each before failing, so on a stalled network an unattended Paranoid device can stay unlocked behind the rotation dialog that much longer. A manual lock, the lock hotkey and lock-when-hidden still lock at once.)
 
@@ -1026,7 +1028,8 @@ GitHub API traffic.
   *shape*, and a custom app beaconing to a personal GitHub repo on a fixed cadence
   pattern-matches what security teams hunt for (exfiltration / C2). The tells:
   (a) the app brand `gtd25` in commit messages **and** file paths; (b) a perfectly
-  periodic poll (~2 GETs / 30 s, plus ~1 GET / 12 s if remote unlock is enrolled),
+  periodic poll (~2 GETs / 30 s, plus ~1 GET / 12 s if remote unlock is enrolled —
+  ~1 / 2 min while the app is hidden, since 2026-10-04),
   ~240–540 req/hr to one host forever; (c) regular opaque high-entropy uploads to a
   private repo — to DLP, encryption makes this *more* suspicious, not less.
   - **What Paranoid Mode does (2026-06-11) — 🟠→🟡 on the *fingerprint*, not the
@@ -1250,7 +1253,12 @@ locked device unwraps the DEK. Device identity keys are distributed via a regist
   protected device's app to be open and online** (it polls whether the vault is
   locked or unlocked; a powered-off/closed device receives the command on next open).
   It polls **even with sync switched off** — deliberately: turning sync off to keep
-  a device quiet must not silently disarm its remote wipe.
+  a device quiet must not silently disarm its remote wipe. Cadence: ~12 s (±30%)
+  while the app is visible, locked or not; **~2 min while it is hidden** (since
+  2026-10-04 — it used to be ~12 s hidden too, ~300 requests an hour from a window
+  nobody was looking at), with an immediate check when it becomes visible. So a
+  wipe sent to a hidden app lands within ~2.5 min instead of ~16 s (browsers
+  already throttle hidden tabs to about once a minute after 5 minutes).
   Before wiping, the protected device best-effort writes a **protected-device-signed**
   wipe confirmation (`gtd25-wipe-status-{deviceId}.json`) so the trusted device can
   show "wipe confirmed". Confirmation is not guaranteed: if the device loses network
