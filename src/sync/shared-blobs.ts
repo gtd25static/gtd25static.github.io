@@ -60,6 +60,9 @@ interface Creds { pat: string; repo: string }
 
 async function getCredentials(): Promise<Creds | null> {
   const local = await db.localSettings.get('local');
+  // Sync switched off means no file traffic either — the same switch the sync
+  // engine honours. Files already in the local cache still open.
+  if (!local?.syncEnabled) return null;
   // When Paranoid is on the PAT lives in the vault; read it the same way sync does.
   const { isParanoidFlagSet } = await import('../db/paranoid-flag');
   const { getVaultSecrets } = await import('../db/vault');
