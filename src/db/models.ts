@@ -242,6 +242,14 @@ export interface SyncMeta {
   // last compacted. Gate `maybeCompactBlobBranch`. See src/sync/shared-blobs.ts.
   pendingBlobDeletes?: number;
   lastBlobCompactionAt?: number;
+  // When a compaction last failed (e.g. force pushes refused): not retried on
+  // every sync. The one-time squash of the history an older version's
+  // file-by-file deletes left. And blobs on the branch no item here names, by
+  // when each was first seen — another device's upload whose metadata has not
+  // arrived — dropped as garbage only after a week.
+  blobCompactionFailedAt?: number;
+  blobHistorySweptAt?: number;
+  unknownBlobsSeenAt?: Record<string, number>;
   // Periodic squash of the sync repo's default branch to bound git history growth.
   lastMainSquashAt?: number;
   // A sync-password change in progress (see sync/key-rotation.ts): the new salt

@@ -72,4 +72,14 @@ describe('the deployed-build files', () => {
     expect(urls[0]).toMatch(/\/version\.json\?t=\d+$/);
     expect(urls[1]).toMatch(/\/changes\.json\?t=\d+$/);
   });
+
+  it('gives up on a file that never arrives instead of waiting forever', async () => {
+    const inits: RequestInit[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, init: RequestInit) => {
+      inits.push(init);
+      return { ok: false } as Response;
+    }));
+    await fetchDeployedChanges();
+    expect(inits[0].signal).toBeInstanceOf(AbortSignal);
+  });
 });

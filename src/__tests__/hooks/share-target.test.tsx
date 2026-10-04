@@ -19,7 +19,8 @@ const createTask = vi.fn().mockResolvedValue({ id: 't1' });
 const getOrCreateInbox = vi.fn().mockResolvedValue('inbox-1');
 // Sync-readiness gate: files can only be saved once sync is ready. Default ready.
 const canUpload = vi.fn<() => Promise<boolean>>().mockResolvedValue(true);
-vi.mock('../../sync/shared-blobs', () => ({ canUploadSharedBlob: () => canUpload() }));
+const blocker = vi.fn<() => Promise<'no-sync' | 'not-ready' | null>>().mockResolvedValue(null);
+vi.mock('../../sync/shared-blobs', () => ({ canUploadSharedBlob: () => canUpload(), sharedBlobBlocker: () => blocker() }));
 vi.mock('../../hooks/use-shared-items', () => ({
   createFileItem: (...a: unknown[]) => createFileItem(...a),
   createLinkItem: (...a: unknown[]) => createLinkItem(...a),
@@ -90,6 +91,8 @@ beforeEach(() => {
   getOrCreateInbox.mockClear();
   canUpload.mockReset();
   canUpload.mockResolvedValue(true);
+  blocker.mockReset();
+  blocker.mockResolvedValue(null);
   useAppState.setState({ selectedListId: null });
 });
 afterEach(() => { delete (globalThis as unknown as { caches?: unknown }).caches; });
@@ -155,6 +158,19 @@ describe('useShareTarget (Android share → destination prompt)', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('with sync switched off, says so at once and keeps the share — no wait, no "next time online"', async () => {
+    window.history.replaceState({}, '', '/?shareTarget=1');
+    const cache = installFakeCaches(fileMeta(), fileBlobs);
+    canUpload.mockResolvedValue(false);
+    blocker.mockResolvedValueOnce('no-sync');
+
+    render(<Harness />);
+    await waitFor(() => expect(vi.mocked(toast)).toHaveBeenCalledWith(expect.stringMatching(/turn sync on/i), 'info'));
+    expect(cache.wasDeleted()).toBe(false);
+    expect(screen.queryByText('to-folder')).toBeNull();
+    expect(createFileItem).not.toHaveBeenCalled();
   });
 
   it('defers (keeps the stash, no prompt) when sync never becomes ready — drops nothing', async () => {

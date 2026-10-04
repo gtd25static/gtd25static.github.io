@@ -119,4 +119,23 @@ describe('the idle probe after a sync', () => {
     expect(await syncNow()).toBe(-1); // stops after reading both files
     expect(await cheapIdleProbe()).toBe(true);
   });
+
+  it('keeps asking after a change it saw could not be applied', async () => {
+    // The probe used to keep the ETag of every 200 — including another device's
+    // change it had not applied. When the sync that followed failed (a network
+    // blip), every later probe got a 304 and the device stopped pulling until
+    // something else woke it.
+    await syncedOnce();
+    remote.set(CHANGELOG_FILE, {
+      data: JSON.stringify([makeChangeEntry({ deviceId: 'device-B', entityId: 'tB' })]), sha: `sha-${++shaCounter}`,
+    });
+    expect(await cheapIdleProbe()).toBe(true);
+
+    (getFile as Mock).mockRejectedValueOnce(new Error('network'));
+    expect(await syncNow()).toBe(-1);
+
+    expect(await cheapIdleProbe()).toBe(true);
+    expect(await syncNow()).toBe(0);
+    expect(await cheapIdleProbe()).toBe(false);
+  });
 });

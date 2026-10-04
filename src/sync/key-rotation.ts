@@ -32,19 +32,20 @@ import type { SyncData } from '../db/models';
 import { getVaultSecrets } from '../db/vault';
 import { isParanoidFlagSet } from '../db/paranoid-flag';
 import {
-  deleteFile, getFileSha, getBinaryFile, getRef, getCommit, getTree, createTree, createCommit,
+  deleteFile, getFile, getFileSha, getBinaryFile, getRef, getCommit, getTree, createTree, createCommit,
   createBlobBase64, updateRef, type GitTreeEntry,
 } from './github-api';
 import {
   deriveKey, generateSalt, createVerifier, checkVerifier,
   cacheEncryptionKey, getCachedEncryptionKey, getCachedSalt,
 } from './crypto';
-import { syncNow, forcePush, endSyncSession, SYNC_LOCK_NAME } from './sync-engine';
+import { syncNow, forcePush, endSyncSession, SYNC_LOCK_NAME, SNAPSHOT_FILE } from './sync-engine';
+import { isCompatibleVersion } from './version';
 import { hasPendingEntries } from './change-log';
 import { getSyncPat, rememberSyncPassword, forgetSyncPassword } from './sync-credentials';
 import {
   BLOB_BRANCH, KEEP_PATH, KEEP_CONTENT_BASE64, blobPath, ensureBlobBranch, sealSharedBlob, decryptSharedBlob,
-  sharedBlobDownloadTimeoutMs,
+  sharedBlobDownloadTimeoutMs, paddedLength, withBlobBranchLock, readableLiveBlobIds,
 } from './shared-blobs';
 import { overwriteAllBackups } from './remote-backups';
 import { publishOwnRegistryEntry } from './remote-unlock';
@@ -141,7 +142,7 @@ async function rotateHoldingLock(
 
   // 3. The Shared Folder's files.
   onProgress({ phase: 'files' });
-  const blobs = await rotateBlobBranch(creds, oldKey, newKey, onProgress);
+  const blobs = await withBlobBranchLock(() => rotateBlobBranch(creds, oldKey, newKey, onProgress));
 
   // 4. The commit point: from here on this device speaks the new key.
   onProgress({ phase: 'snapshot' });
@@ -196,6 +197,15 @@ async function deleteMigrationBackups(creds: Creds): Promise<void> {
   }
 }
 
+function remoteSyncVersion(snapshotJson: string): number | undefined {
+  try {
+    const version = (JSON.parse(snapshotJson) as SyncData).syncVersion;
+    return typeof version === 'number' ? version : undefined;
+  } catch {
+    return undefined; // unreadable: the snapshot push below has its own handling
+  }
+}
+
 async function opensWith(key: CryptoKey, bytes: Uint8Array, blobId: string): Promise<Uint8Array | null> {
   try {
     return await decryptSharedBlob(key, bytes, blobId);
@@ -220,11 +230,16 @@ async function rotateBlobBranch(
   const { pat, repo } = creds;
   const result = { blobsRewritten: 0, blobsUnreadable: 0 };
   const items = await db.sharedItems.toArray();
-  const live = [...new Set(items.filter((i) => !i.deletedAt && i.blobId).map((i) => i.blobId!))];
+  const liveIds = readableLiveBlobIds(items);
+  if (!liveIds) {
+    throw new Error("Some shared items can't be read on this device, so their files can't be carried over. Sync, then try again. Nothing was changed.");
+  }
+  const dead = new Set(items.filter((i) => i.deletedAt && i.blobId).map((i) => i.blobId!));
+  const sizeOf = new Map(items.filter((i) => i.blobId).map((i) => [i.blobId!, i.size]));
 
   let head = await getRef(pat, repo, BLOB_BRANCH);
   if (!head) {
-    if (live.length === 0) return result; // no branch, no files: nothing carries the old key
+    if (liveIds.size === 0) return result; // no branch, no files: nothing carries the old key
     await ensureBlobBranch(creds);
     head = await getRef(pat, repo, BLOB_BRANCH);
     if (!head) throw new Error('Could not create the shared-files branch');
@@ -233,6 +248,15 @@ async function rotateBlobBranch(
   const { entries, truncated } = await getTree(pat, repo, treeSha, true);
   if (truncated) throw new Error('Too many shared files to re-encrypt in one go');
   const onBranch = new Map(entries.filter((e) => e.type === 'blob').map((e) => [e.path, e] as const));
+  // Carried over: the live files, and any file on the branch not known deleted
+  // here — another device's upload whose item has not reached this device yet.
+  const live = [...new Set([
+    ...liveIds,
+    ...[...onBranch.keys()]
+      .filter((path) => path.startsWith(blobPath('')) && path !== KEEP_PATH)
+      .map((path) => path.slice(blobPath('').length))
+      .filter((blobId) => !dead.has(blobId)),
+  ])];
 
   const keep = onBranch.get(KEEP_PATH);
   const tree: GitTreeEntry[] = [
@@ -243,18 +267,22 @@ async function rotateBlobBranch(
     onProgress({ phase: 'files', done: index, total: live.length });
     const path = blobPath(blobId);
     const existing = onBranch.get(path);
+    const budget = sharedBlobDownloadTimeoutMs(sizeOf.get(blobId));
     const bytes = existing
-      ? await getBinaryFile(pat, repo, path, undefined, BLOB_BRANCH, sharedBlobDownloadTimeoutMs())
-      : await getBinaryFile(pat, repo, path, undefined, undefined, sharedBlobDownloadTimeoutMs()); // written before blobs had their own branch
+      ? await getBinaryFile(pat, repo, path, undefined, BLOB_BRANCH, budget)
+      : await getBinaryFile(pat, repo, path, undefined, undefined, budget); // written before blobs had their own branch
     if (!bytes) continue; // not on the remote: nothing to carry over
     if (!existing) legacyOnDefault.push(path);
     const asIs = async (): Promise<GitTreeEntry> =>
       existing ?? { path, mode: '100644', type: 'blob', sha: await createBlobBase64(pat, repo, b64encode(bytes)) };
-    if (await opensWith(newKey, bytes, blobId)) {
-      tree.push(await asIs()); // already rotated (a retry)
+    // Already rotated (a retry) — and padded: a file an older version rotated
+    // without padding is re-sealed (only a padded file is exactly this long).
+    const underNewKey = await opensWith(newKey, bytes, blobId);
+    if (underNewKey && bytes.length === paddedLength(underNewKey.length) + 28) {
+      tree.push(await asIs());
       continue;
     }
-    const plain = await opensWith(oldKey, bytes, blobId);
+    const plain = underNewKey ?? await opensWith(oldKey, bytes, blobId);
     if (!plain) {
       result.blobsUnreadable++;
       tree.push(await asIs());
@@ -272,6 +300,13 @@ async function rotateBlobBranch(
   const commit = await createCommit(pat, repo, { message: 'gtd25: re-encrypt shared files', tree: newTree, parents: [] });
   if ((await getRef(pat, repo, BLOB_BRANCH)) !== head) {
     throw new Error('Shared files changed while they were being re-encrypted. Nothing was changed; try again.');
+  }
+  // A newer version of the app may have moved the repository on meanwhile. Its
+  // devices would never get this key — the snapshot push below is refused over
+  // a newer version — so moving the files now would strand them under it.
+  const snapshot = await getFile(pat, repo, SNAPSHOT_FILE);
+  if (snapshot && !isCompatibleVersion(remoteSyncVersion(snapshot.data))) {
+    throw new Error('The repository was updated by a newer version of the app. Update this device, then change the password. Nothing was changed.');
   }
   await updateRef(pat, repo, BLOB_BRANCH, commit, true);
 

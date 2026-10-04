@@ -150,3 +150,96 @@ describe('Deleting shared files', () => {
     expect(apiCalls()).toEqual([]);
   });
 });
+
+describe('Compaction keeps what it cannot account for', () => {
+  // The compaction keeps only blobs this device knows to be live and drops the
+  // rest. It used to treat every blob it could not match to a readable item as
+  // garbage — so a row it could not decrypt, or another device's upload whose
+  // metadata had not arrived yet, lost its file for good.
+  beforeEach(async () => {
+    await setupSyncCredentials();
+  });
+
+  async function addFile(name: string, text: string) {
+    const item = await createFileItem(new File([text], name, { type: 'text/plain' }));
+    expect(item?.blobId).toBeDefined();
+    return item!;
+  }
+
+  async function dueRun(meta: Record<string, unknown> = {}) {
+    await db.syncMeta.update('sync-meta', { pendingBlobDeletes: 1, lastBlobCompactionAt: 0, ...meta });
+    vi.clearAllMocks();
+    await maybeCompactBlobBranch(PAT, REPO);
+  }
+
+  it('does nothing while an item row cannot be read', async () => {
+    const kept = await addFile('kept.txt', 'stays');
+    // What a locked vault or a failed decrypt hands back: no blobId to match.
+    await db.sharedItems.update(kept.id, { _decryptError: true, blobId: undefined } as never);
+    await dueRun();
+    expect(files()).toEqual([blobPath(kept.blobId!)]);
+    expect(api.updateRef).not.toHaveBeenCalled();
+  });
+
+  it('does nothing — not even a request — while the vault is locked', async () => {
+    const kept = await addFile('kept.txt', 'stays');
+    localStorage.setItem('gtd25-paranoid', '1'); // Paranoid, and no key in hand
+    try {
+      await dueRun();
+    } finally {
+      localStorage.removeItem('gtd25-paranoid');
+    }
+    expect(apiCalls()).toEqual([]);
+    expect(files()).toEqual([blobPath(kept.blobId!)]);
+  });
+
+  it("keeps another device's new file until its metadata could have arrived", async () => {
+    await addFile('mine.txt', 'mine');
+    fakeRepo.writeBytes(blobPath('theirs'), new Uint8Array(40), BLOB_BRANCH); // no item here yet
+    const start = Date.now();
+
+    await dueRun();
+    expect(files()).toContain(blobPath('theirs'));
+
+    vi.spyOn(Date, 'now').mockReturnValue(start + 24 * 60 * 60 * 1000);
+    await dueRun();
+    expect(files()).toContain(blobPath('theirs'));
+
+    vi.spyOn(Date, 'now').mockReturnValue(start + 8 * 24 * 60 * 60 * 1000);
+    await dueRun();
+    expect(files()).not.toContain(blobPath('theirs'));
+  });
+
+  it('drops a file deleted here at once', async () => {
+    const gone = await addFile('gone.txt', 'goes');
+    await deleteSharedItem(gone.id);
+    await maybeCompactBlobBranch(PAT, REPO);
+    expect(files()).toEqual([]);
+  });
+
+  it('does not rewrite the branch on a routine run with nothing to drop', async () => {
+    // Every rewrite is a forced ref update that an upload landing at the same
+    // moment can lose to; the routine 6-hour run used to make one whenever the
+    // branch had any history — that is, after every upload.
+    await addFile('a.txt', 'a');
+    await db.syncMeta.update('sync-meta', { blobHistorySweptAt: 1 });
+    await addFile('b.txt', 'b');
+    expect(fakeRepo.historyLength(BLOB_BRANCH)).toBeGreaterThan(1);
+
+    await dueRun({ pendingBlobDeletes: 0, blobHistorySweptAt: 1 });
+    expect(api.updateRef).not.toHaveBeenCalled();
+  });
+
+  it('backs off after a failed run instead of retrying on every sync', async () => {
+    const gone = await addFile('gone.txt', 'goes');
+    await deleteSharedItem(gone.id);
+    vi.mocked(api.updateRef).mockRejectedValueOnce(new Error('GitHub API error (updateRef): 422'));
+    await expect(maybeCompactBlobBranch(PAT, REPO)).rejects.toThrow(/422/);
+
+    vi.clearAllMocks();
+    await maybeCompactBlobBranch(PAT, REPO);
+    expect(apiCalls()).toEqual([]);
+    expect((await db.syncMeta.get('sync-meta'))?.pendingBlobDeletes).toBe(1);
+  });
+});
+

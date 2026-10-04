@@ -8,7 +8,7 @@ import { handleDbError } from '../lib/db-error';
 import { initFieldTimestamps, stampUpdatedFields } from '../sync/field-timestamps';
 import { encryptRow, getActiveAtRestKey } from '../db/vault-middleware';
 import { SYNC_VERSION } from '../sync/version';
-import { uploadSharedBlob, deleteSharedBlob, sharedBlobBlocker } from '../sync/shared-blobs';
+import { uploadSharedBlob, deleteSharedBlob, sharedBlobBlocker, withBlobBranchLock } from '../sync/shared-blobs';
 import { MAX_SHARED_FOLDER_BYTES } from '../lib/constants';
 import { isValidUrl } from '../lib/link-utils';
 import { toast } from '../components/ui/Toast';
@@ -96,7 +96,7 @@ async function putSharedItem(item: SharedItem): Promise<void> {
 async function checkCanUpload(): Promise<boolean> {
   const blocker = await sharedBlobBlocker().catch(() => 'not-ready' as const);
   if (blocker === 'no-sync') {
-    toast('Files and text are stored in your sync repository: set up sync in Settings to add them.', 'error');
+    toast('Files and text are stored in your sync repository: set up sync (or turn it back on) in Settings to add them.', 'error');
   } else if (blocker === 'not-ready') {
     toast('Sync is still starting — add it again in a moment.', 'info');
   }
@@ -164,23 +164,26 @@ export async function createFileItem(file: File): Promise<SharedItem | undefined
     const blobId = newId();
     // Upload bytes BEFORE persisting metadata: if upload fails we never record a
     // dangling item; a failure after upload leaves only a harmless orphan blob.
-    await uploadSharedBlob(blobId, bytes);
+    // Both under the branch lock, so no compaction here sees the bytes unnamed.
+    return await withBlobBranchLock(async () => {
+      await uploadSharedBlob(blobId, bytes);
 
-    const now = Date.now();
-    const item: SharedItem = {
-      id: newId(),
-      type: 'file',
-      name: file.name || 'file',
-      size: bytes.length,
-      blobId,
-      mimeType: file.type || 'application/octet-stream',
-      order: await nextOrder(),
-      createdAt: now,
-      updatedAt: now,
-    };
-    item.fieldTimestamps = initFieldTimestamps(item as unknown as Record<string, unknown>, now);
-    await putSharedItem(item);
-    return item;
+      const now = Date.now();
+      const item: SharedItem = {
+        id: newId(),
+        type: 'file',
+        name: file.name || 'file',
+        size: bytes.length,
+        blobId,
+        mimeType: file.type || 'application/octet-stream',
+        order: await nextOrder(),
+        createdAt: now,
+        updatedAt: now,
+      };
+      item.fieldTimestamps = initFieldTimestamps(item as unknown as Record<string, unknown>, now);
+      await putSharedItem(item);
+      return item;
+    });
   } catch (error) {
     handleDbError(error, 'add shared file');
     return undefined;
@@ -197,23 +200,25 @@ export async function createSnippetItem(name: string, text: string): Promise<Sha
     const bytes = new TextEncoder().encode(text);
     if (!(await checkFits(bytes.length))) return undefined;
     const blobId = newId();
-    await uploadSharedBlob(blobId, bytes);
+    return await withBlobBranchLock(async () => {
+      await uploadSharedBlob(blobId, bytes);
 
-    const now = Date.now();
-    const item: SharedItem = {
-      id: newId(),
-      type: 'snippet',
-      name: name.trim() || 'Snippet',
-      size: bytes.length,
-      blobId,
-      mimeType: 'text/plain',
-      order: await nextOrder(),
-      createdAt: now,
-      updatedAt: now,
-    };
-    item.fieldTimestamps = initFieldTimestamps(item as unknown as Record<string, unknown>, now);
-    await putSharedItem(item);
-    return item;
+      const now = Date.now();
+      const item: SharedItem = {
+        id: newId(),
+        type: 'snippet',
+        name: name.trim() || 'Snippet',
+        size: bytes.length,
+        blobId,
+        mimeType: 'text/plain',
+        order: await nextOrder(),
+        createdAt: now,
+        updatedAt: now,
+      };
+      item.fieldTimestamps = initFieldTimestamps(item as unknown as Record<string, unknown>, now);
+      await putSharedItem(item);
+      return item;
+    });
   } catch (error) {
     handleDbError(error, 'create shared snippet');
     return undefined;

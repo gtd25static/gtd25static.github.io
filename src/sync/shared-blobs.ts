@@ -17,6 +17,7 @@
 // `compactBlobBranch`) without ever rewriting the user's task/snapshot history.
 
 import { db } from '../db';
+import type { SharedItem } from '../db/models';
 import {
   getBinaryFile, putBinaryFile, transferTimeoutMs,
   getRef, createRef, updateRef, getCommit, getTree, createTree, createCommit, createBlobBase64,
@@ -278,8 +279,11 @@ export async function getSharedBlobBytes(blobId: string, size?: number): Promise
 }
 
 async function bumpPendingBlobDeletes(): Promise<void> {
-  const meta = await db.syncMeta.get('sync-meta');
-  await db.syncMeta.update('sync-meta', { pendingBlobDeletes: (meta?.pendingBlobDeletes ?? 0) + 1 });
+  // One transaction: two tabs deleting at once must each count.
+  await db.transaction('rw', db.syncMeta, async () => {
+    const meta = await db.syncMeta.get('sync-meta');
+    await db.syncMeta.update('sync-meta', { pendingBlobDeletes: (meta?.pendingBlobDeletes ?? 0) + 1 });
+  });
 }
 
 /**
@@ -295,6 +299,39 @@ export async function deleteSharedBlob(blobId: string): Promise<void> {
   await bumpPendingBlobDeletes();
 }
 
+const BLOB_BRANCH_LOCK = 'gtd25-blob-branch';
+
+/**
+ * Run `fn` holding this device's blob-branch lock (across tabs, through Web
+ * Locks; as is where they don't exist). It serialises the writes that can undo
+ * each other: an upload together with the write of its item, a compaction from
+ * reading the live files to its forced ref update, a sync-password change's
+ * rewrite, a wipe's purge. A compaction between an upload and its item would see
+ * the new file with nothing naming it; one force-pushing between another's ref
+ * re-read and update would undo that write.
+ */
+export async function withBlobBranchLock<T>(fn: () => Promise<T>): Promise<T> {
+  const locks = typeof navigator !== 'undefined' ? navigator.locks : undefined;
+  return locks ? locks.request(BLOB_BRANCH_LOCK, fn) : fn();
+}
+
+/**
+ * Blob ids of the live items — or null when any item row can't be read: a
+ * locked vault hands back ciphertext, a failed decrypt a quarantined
+ * placeholder, and such a row's file would look like garbage.
+ */
+export function readableLiveBlobIds(items: SharedItem[]): Set<string> | null {
+  const live = new Set<string>();
+  for (const item of items) {
+    const row = item as SharedItem & { _enc?: unknown; _decryptError?: unknown };
+    if (row._enc !== undefined || row._decryptError) return null;
+    if (item.deletedAt) continue;
+    if (item.type !== 'link' && !item.blobId) return null; // files and snippets have bytes
+    if (item.blobId) live.add(item.blobId);
+  }
+  return live;
+}
+
 /**
  * Reclaim repo space: rebuild the blob branch as a single ORPHAN commit that keeps
  * only the live blobs (reusing their existing git blob SHAs — no re-upload), then
@@ -302,18 +339,27 @@ export async function deleteSharedBlob(blobId: string): Promise<void> {
  * unreachable and GitHub GCs them on its own schedule.
  *
  * Safety: builds the keep-set from the branch's own tree, never dropping a blob in
- * `liveBlobIds`; re-reads the ref just before the force-update and aborts if the
- * branch moved (a concurrent upload), so a racing upload is never clobbered.
+ * `liveBlobIds` or one `spare` keeps; re-reads the ref just before the
+ * force-update and aborts if the branch moved (a concurrent upload). GitHub has
+ * no compare-and-swap on refs, so an upload from another device landing between
+ * that re-read and the update is still lost — which is why routine runs rewrite
+ * only when they drop something.
  *
- * Squashes whenever the tip holds a blob that is no longer live OR the branch has
- * any history at all (a file deleted from the tip by an older version, or by a
- * delete elsewhere, is still in that history).
+ * `spare` is asked about each blob that is neither live nor the placeholder.
+ * `squashHistory` (default on) also rewrites a branch whose tip holds nothing to
+ * drop but which has history — where a file deleted from the tip by an older
+ * version, one DELETE at a time, still lies.
  *
  * Returns the number of blob objects dropped from the tip tree (0 = nothing was
  * dropped, possibly after squashing history), or null when the run was skipped
  * (truncated listing, or the branch moved) and should be retried.
  */
-export async function compactBlobBranch(creds: Creds, liveBlobIds: Set<string>): Promise<number | null> {
+export async function compactBlobBranch(
+  creds: Creds,
+  liveBlobIds: Set<string>,
+  options: { spare?: (blobId: string) => boolean; squashHistory?: boolean } = {},
+): Promise<number | null> {
+  const { spare = () => false, squashHistory = true } = options;
   const head = await getRef(creds.pat, creds.repo, BLOB_BRANCH);
   if (!head) return 0;
 
@@ -326,10 +372,11 @@ export async function compactBlobBranch(creds: Creds, liveBlobIds: Set<string>):
 
   const blobs = entries.filter((e) => e.type === 'blob' && e.path.startsWith(`${BLOB_DIR}/`));
   let keepFile = blobs.find((e) => e.path === KEEP_PATH);
-  const liveOrKeep = (e: GitTreeEntry) => e.path === KEEP_PATH || liveBlobIds.has(basename(e.path));
-  const keep = blobs.filter(liveOrKeep);
+  const kept = (e: GitTreeEntry) =>
+    e.path === KEEP_PATH || liveBlobIds.has(basename(e.path)) || spare(basename(e.path));
+  const keep = blobs.filter(kept);
   const dropped = blobs.length - keep.length;
-  if (dropped === 0 && parents.length === 0) return 0;
+  if (dropped === 0 && !(squashHistory && parents.length > 0)) return 0;
 
   // Guarantee a non-empty tree (e.g. the wipe case where liveBlobIds is empty).
   if (!keepFile) {
@@ -358,6 +405,13 @@ export async function compactBlobBranch(creds: Creds, liveBlobIds: Set<string>):
 
 // Run a compaction at most this often when there are no fresh deletions to flush.
 const BLOB_COMPACTION_INTERVAL_MS = 6 * 60 * 60 * 1000; // 6h
+// After a failed run (force pushes refused, say), wait this long before the next
+// rather than retrying after every sync.
+const BLOB_COMPACTION_RETRY_MS = 60 * 60 * 1000; // 1h
+// A blob no item here names is another device's upload until shown otherwise:
+// its metadata follows within seconds — or whenever that device is next online.
+// Dropped as garbage only once unknown this long; a file deleted here goes at once.
+const UNKNOWN_BLOB_GRACE_MS = 7 * 24 * 60 * 60 * 1000;
 
 /**
  * Gated entry point called (fire-and-forget) at the end of a successful sync.
@@ -367,24 +421,52 @@ const BLOB_COMPACTION_INTERVAL_MS = 6 * 60 * 60 * 1000; // 6h
  * skipped run leaves the pending deletions in place for the next sync.
  */
 export async function maybeCompactBlobBranch(pat: string, repo: string): Promise<void> {
+  await withBlobBranchLock(() => compactIfDue({ pat, repo }));
+}
+
+async function compactIfDue(creds: Creds): Promise<void> {
   const meta = await db.syncMeta.get('sync-meta');
   const now = Date.now();
   const pending = meta?.pendingBlobDeletes ?? 0;
-  const last = meta?.lastBlobCompactionAt ?? 0;
-  if (pending === 0 && now - last < BLOB_COMPACTION_INTERVAL_MS) return;
+  if (pending === 0 && now - (meta?.lastBlobCompactionAt ?? 0) < BLOB_COMPACTION_INTERVAL_MS) return;
+  if (now - (meta?.blobCompactionFailedAt ?? 0) < BLOB_COMPACTION_RETRY_MS) return;
+  // A sync-password change in progress rewrites the branch itself.
+  if (meta?.keyRotation) return;
+  // Locked, the item rows are ciphertext: no blobId can be read and every file
+  // would look dead. (A lock can land between the sync and this run.)
+  if (isParanoidFlagSet() && !getActiveAtRestKey()) return;
 
   // Cheap local guard before any network: if this device knows of no shared items
   // and made no deletions, there's nothing authoritative to compact. (Runs only
   // after a successful sync, so an empty view means genuinely empty — never
   // "not yet pulled" — which also prevents an empty device from wiping the branch.)
-  const itemCount = await db.sharedItems.count();
-  if (pending === 0 && itemCount === 0) return;
-
   const items = await db.sharedItems.toArray();
-  const live = new Set<string>();
-  for (const it of items) if (!it.deletedAt && it.blobId) live.add(it.blobId);
+  if (pending === 0 && items.length === 0) return;
+  const live = readableLiveBlobIds(items);
+  if (!live) return; // a row this device can't read: its file must not look dead
 
-  if ((await compactBlobBranch({ pat, repo }, live)) === null) return;
+  const dead = new Set(items.filter((i) => i.deletedAt && i.blobId).map((i) => i.blobId!));
+  const firstSeen = meta?.unknownBlobsSeenAt ?? {};
+  const unknown: Record<string, number> = {};
+  const spare = (blobId: string) => {
+    if (dead.has(blobId)) return false;
+    unknown[blobId] = firstSeen[blobId] ?? now;
+    return now - unknown[blobId] < UNKNOWN_BLOB_GRACE_MS;
+  };
+
+  let result: number | null;
+  try {
+    result = await compactBlobBranch(creds, live, {
+      spare,
+      // History holds deleted bytes only where an older version deleted file by
+      // file: sweep it once, then rewrite only when something is dropped.
+      squashHistory: !meta?.blobHistorySweptAt,
+    });
+  } catch (err) {
+    await db.syncMeta.update('sync-meta', { blobCompactionFailedAt: now });
+    throw err;
+  }
+  if (result === null) return;
   // Clear only the deletions this run covered: one made while it ran was still
   // live when the keep-set was read, so it needs the next run.
   await db.transaction('rw', db.syncMeta, async () => {
@@ -392,6 +474,11 @@ export async function maybeCompactBlobBranch(pat: string, repo: string): Promise
     await db.syncMeta.update('sync-meta', {
       pendingBlobDeletes: Math.max(0, current - pending),
       lastBlobCompactionAt: now,
+      blobHistorySweptAt: meta?.blobHistorySweptAt ?? now,
+      blobCompactionFailedAt: undefined,
+      unknownBlobsSeenAt: Object.fromEntries(
+        Object.entries(unknown).filter(([, seenAt]) => now - seenAt < UNKNOWN_BLOB_GRACE_MS),
+      ),
     });
   });
 }

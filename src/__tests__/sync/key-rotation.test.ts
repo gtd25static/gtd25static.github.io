@@ -19,7 +19,7 @@ import {
   encryptSyncData, decryptSyncData, cacheEncryptionKey, getCachedSalt,
 } from '../../sync/crypto';
 import { syncNow, endSyncSession, SNAPSHOT_FILE, CHANGELOG_FILE } from '../../sync/sync-engine';
-import { BLOB_BRANCH, KEEP_PATH, blobPath, decryptSharedBlob, paddedLength } from '../../sync/shared-blobs';
+import { BLOB_BRANCH, KEEP_PATH, blobPath, blobAad, decryptSharedBlob, paddedLength, sealSharedBlob } from '../../sync/shared-blobs';
 import { BACKUP_FILES } from '../../sync/remote-backups';
 import { publishOwnRegistryEntry, readAuthenticRegistry } from '../../sync/remote-unlock';
 import { deriveRegistryMacKey } from '../../sync/remote-unlock-crypto';
@@ -191,6 +191,23 @@ describe('rotateSyncKey rotates the whole repo', () => {
     expect(mockEndSyncSession.mock.invocationCallOrder[0]).toBeLessThan(mockSyncNow.mock.invocationCallOrder[0]);
   });
 
+  it("gives each download the time its file's size needs, not the whole folder's", async () => {
+    await seed();
+    await rotateSyncKey(NEW_PW);
+    expect(fakeRepo.downloadTimeouts.length).toBeGreaterThan(0);
+    expect(new Set(fakeRepo.downloadTimeouts)).toEqual(new Set([15_000])); // small files
+  });
+
+  it('carries over — under the new key — a file whose item has not reached this device yet', async () => {
+    // Another device's upload: on the branch, but its metadata not pulled here.
+    // The rebuilt branch used to keep only files this device knew, so it was lost.
+    await seed();
+    fakeRepo.writeBytes(blobPath('b9'), await sealSharedBlob(oldKey, PLAIN.b1, 'b9'), BLOB_BRANCH);
+    await rotateSyncKey(NEW_PW);
+    const { key: newKey } = await newKeyFromRemote();
+    expect(await decryptSharedBlob(newKey, fakeRepo.readBytes(blobPath('b9'), BLOB_BRANCH)!, 'b9')).toEqual(PLAIN.b1);
+  });
+
   it('keeps a shared file neither key opens, and counts it', async () => {
     await seed({ unreadableB2: true });
     const before = fakeRepo.readBytes(blobPath('b2'), BLOB_BRANCH)!;
@@ -236,7 +253,44 @@ describe('rotateSyncKey refuses before touching anything', () => {
   });
 });
 
+describe('rotateSyncKey stops before moving the shared files', () => {
+  it('while a shared item cannot be read on this device', async () => {
+    // Its file would look like one nobody uses, and be left behind.
+    await seed();
+    await db.sharedItems.update('si-b1', { _decryptError: true } as never);
+    const blobBranchBefore = fakeRepo.refs.get(BLOB_BRANCH);
+    await expect(rotateSyncKey(NEW_PW)).rejects.toThrow(/can.t be read/);
+    expect(fakeRepo.refs.get(BLOB_BRANCH)).toBe(blobBranchBefore);
+  });
+
+  it('when a newer version of the app moved the repository on meanwhile', async () => {
+    // Its devices would never get this key: the snapshot push that follows is
+    // refused, and every file would be left under it.
+    await seed();
+    const snap = JSON.parse(fakeRepo.readText(SNAPSHOT_FILE)!) as SyncData;
+    fakeRepo.writeText(SNAPSHOT_FILE, JSON.stringify({ ...snap, syncVersion: SYNC_VERSION + 1 }));
+    const blobBranchBefore = fakeRepo.refs.get(BLOB_BRANCH);
+
+    await expect(rotateSyncKey(NEW_PW)).rejects.toThrow(/newer version/);
+    expect(fakeRepo.refs.get(BLOB_BRANCH)).toBe(blobBranchBefore);
+    expect(await decryptBytes(oldKey, fakeRepo.readBytes(blobPath('b1'), BLOB_BRANCH)!)).toEqual(PLAIN.b1);
+  });
+});
+
 describe('rotateSyncKey resumes', () => {
+  it('padding a file already under the new key but written without padding', async () => {
+    await seed();
+    const newSalt = generateSalt();
+    const newKey = await deriveKey(NEW_PW, newSalt);
+    await db.syncMeta.update('sync-meta', { keyRotation: { newSalt, newVerifier: await createVerifier(newKey), startedAt: 1 } });
+    fakeRepo.writeBytes(blobPath('b1'), await encryptBytes(newKey, PLAIN.b1, blobAad('b1')), BLOB_BRANCH);
+
+    await rotateSyncKey(NEW_PW);
+    const bytes = fakeRepo.readBytes(blobPath('b1'), BLOB_BRANCH)!;
+    expect(bytes.length).toBe(paddedLength(PLAIN.b1.length) + 28);
+    expect(await decryptSharedBlob(newKey, bytes, 'b1')).toEqual(PLAIN.b1);
+  });
+
   it('after dying between the shared files and the snapshot: same password completes, another is refused', async () => {
     await seed();
     const realPutFile = fakeRepo.api.putFile;

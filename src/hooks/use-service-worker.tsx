@@ -9,7 +9,9 @@ const UPDATE_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
 const MIN_UPDATE_CHECK_MS = 10 * 60 * 1000; // 10 minutes — debounce visibility checks
 // Paranoid Mode spaces background checks further: each is a request to the app's
 // host, and on a network that rewrites TLS a chance to be served another worker.
-// Kept under the jittered timer's 21-minute floor so the timer is never swallowed.
+// Kept under the jittered timer's 21-minute floor, so two timer ticks are never
+// too close; a focus- or sync-triggered check just before a tick still makes
+// that tick skip (checks then come at most ~1 h apart while visible).
 const PARANOID_MIN_UPDATE_CHECK_MS = 20 * 60 * 1000;
 const RELOAD_FALLBACK_MS = 12_000;          // only fires if controllerchange never does
 // registration.update() has no deadline of its own: a blocked or proxied network
@@ -116,6 +118,9 @@ function useServiceWorkerImpl(): ServiceWorkerApi {
   }, []);
 
   const checkForUpdate = useCallback(() => {
+    // Hidden (a sync finishing behind a minimised window, say): nobody is there
+    // to update, and becoming visible checks anyway.
+    if (document.visibilityState === 'hidden') return;
     const minGap = isParanoidFlagSet() ? PARANOID_MIN_UPDATE_CHECK_MS : MIN_UPDATE_CHECK_MS;
     if (Date.now() - lastCheckRef.current < minGap) return;
     void runCheck();
@@ -141,12 +146,12 @@ function useServiceWorkerImpl(): ServiceWorkerApi {
     document.addEventListener('visibilitychange', onVisibilityChange);
     // Check on window focus (covers standalone PWA restore).
     window.addEventListener('focus', checkForUpdate);
-    // Check about every 30 minutes (jittered in Paranoid Mode), but not while
-    // hidden: nobody is there to update, and becoming visible checks anyway.
+    // Check about every 30 minutes (jittered in Paranoid Mode); checkForUpdate
+    // itself skips while hidden.
     let timer: ReturnType<typeof setTimeout>;
     const schedule = () => {
       timer = setTimeout(() => {
-        if (document.visibilityState !== 'hidden') checkForUpdate();
+        checkForUpdate();
         schedule();
       }, jitterInterval(UPDATE_INTERVAL_MS));
     };

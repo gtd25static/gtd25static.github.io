@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 import { vi } from 'vitest';
-import { render } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import '../setup-component';
-import { ServiceWorkerProvider } from '../../hooks/use-service-worker';
+import { ServiceWorkerProvider, useServiceWorker } from '../../hooks/use-service-worker';
 import { GIT_COMMIT } from '../../lib/constants';
 
 // Background update checks go to the app's host: every one is a visible request
@@ -38,6 +38,12 @@ afterEach(() => {
 
 const MIN = 60_000;
 
+/** What a successful sync does: ask for a (debounced) check. */
+function SyncSuccess() {
+  const { checkForUpdate } = useServiceWorker();
+  return <button onClick={checkForUpdate}>sync done</button>;
+}
+
 describe('background update checks', () => {
   it('run on the 30-minute timer while the app is visible', async () => {
     render(<ServiceWorkerProvider><div /></ServiceWorkerProvider>);
@@ -70,5 +76,13 @@ describe('background update checks', () => {
     window.dispatchEvent(new Event('focus'));
     await vi.advanceTimersByTimeAsync(0);
     expect(update).toHaveBeenCalledTimes(2);
+  });
+
+  it('are not triggered by a sync that completes while the app is hidden', async () => {
+    visibility = 'hidden';
+    render(<ServiceWorkerProvider><SyncSuccess /></ServiceWorkerProvider>);
+    fireEvent.click(screen.getByRole('button', { name: 'sync done' }));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(update).not.toHaveBeenCalled();
   });
 });

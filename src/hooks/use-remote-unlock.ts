@@ -15,8 +15,9 @@ import {
 
 const SLOW_POLL_MS = 12_000;   // background cadence (wipe watch / invitations)
 // Wipe watch while the app is hidden: ~30 checks an hour instead of ~300 from a
-// window nobody is looking at. A wipe then lands within ~2.5 min (~16 s visible);
-// bringing the window forward checks at once.
+// window nobody is looking at. A wipe then lands typically within ~2.5 min, up to
+// ~4 with browser throttling (~16 s visible); bringing the window forward checks
+// at once.
 const HIDDEN_WIPE_POLL_MS = 120_000;
 const FAST_POLL_MS = 2_500;    // while an unlock request is pending — keeps approval snappy
 const REFOCUS_POLL_AFTER_MS = 60_000; // only force a poll on refocus after this long hidden

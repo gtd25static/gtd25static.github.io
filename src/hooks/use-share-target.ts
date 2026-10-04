@@ -3,7 +3,7 @@ import { toast } from '../components/ui/Toast';
 import { recordError } from '../lib/diagnostics';
 import { useAppState } from '../stores/app-state';
 import { createFileItem, createLinkItem, createSnippetItem } from './use-shared-items';
-import { canUploadSharedBlob } from '../sync/shared-blobs';
+import { canUploadSharedBlob, sharedBlobBlocker } from '../sync/shared-blobs';
 import { createTask } from './use-tasks';
 import { getOrCreateInbox } from './use-task-lists';
 import { extractUrl } from '../lib/link-utils';
@@ -181,6 +181,13 @@ export function useShareTarget(): ShareTargetApi {
         // prompt immediately: as an Inbox task they need no sync (text headed for
         // the Shared Folder is checked when that destination is picked).
         const needsBlobUpload = (meta.files?.length ?? 0) > 0;
+        // Sync not set up, or switched off: no wait would bring it up. Say what
+        // would, and keep the share for when it does (the stash's usual TTL).
+        if (needsBlobUpload && (await sharedBlobBlocker()) === 'no-sync') {
+          keepStash = true;
+          toast('Shared files are stored through sync — turn sync on in Settings, then open the app again to save them (kept for a day).', 'info');
+          return;
+        }
         if (needsBlobUpload && !(await waitUntil(canUploadSharedBlob, SYNC_READY_TIMEOUT_MS, SYNC_READY_POLL_MS))) {
           keepStash = true;
           toast('Sync isn’t ready yet — your shared content will be saved next time you open the app online', 'info');

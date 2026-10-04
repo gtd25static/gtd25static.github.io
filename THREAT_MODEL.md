@@ -1,8 +1,10 @@
 # GTD25 — Security Review & Threat Model
 
-**Last updated:** 2026-10-04 (**Network footprint — batch 7 of 7: update checks say less and run less.** (1) **`version.json` no longer carries commit subjects.** The background update check fetches it every ~30 minutes, after syncs and on focus — locked or not — and it listed the last 25 commit subjects ("…remote unlock and wipe", "…what a PAT holder could make devices do") to anyone reading the traffic. It now holds the build id and date only; the subjects are in a separate, non-precached `changes.json`, fetched once when an update is offered. (2) **Fewer checks.** The 30-minute timer is jittered in Paranoid Mode and skips while the app is hidden (becoming visible checks anyway); in Paranoid Mode checks triggered by focus or a sync are at least 20 minutes apart (10 otherwise). Each check is a request to the app's host and, on a network that rewrites TLS, a chance to be served a modified worker — fewer is better, but it is still **not a control** (TCB). (3) Scenario 4 now states the request rates per state, corrects its understatement of the approver poll (every Paranoid-OFF device with sync set up polls every 12 s while visible, enrolled or not), and replaces "renaming the paths is a deferred migration" with why it is not worth doing: every request carries `Origin: https://gtd25static.github.io`. **Impact:** Scenario 4's fingerprint bullet is rewritten; nothing about encryption or the sync wire format changes. An update from an older build shows no changelog that one time (it reads the old file).)
+**Last updated:** 2026-10-05 (**Network footprint — reliability review of batches 1–7, before release.** Four reviewers went over the seven batches; what they found, fixed here: (1) **A compaction could drop every shared file (pre-existing, high).** It read the items without checking they were readable; a compaction starting after the vault locked (it runs fire-and-forget at the end of a sync, so a lock can land first) saw only ciphertext — no `blobId` — and force-pushed a branch holding nothing but the placeholder; a quarantined row lost its file the same way. It now runs only when every item is readable, never locked, never during a sync-password change. (2) **Files of other devices.** Compaction and the sync-password change kept only blobs this device knew; another device's fresh upload, metadata not yet pulled, was dropped. Unknown blobs are now kept a week by compaction and carried over (re-encrypted) by the password change; a password change refuses while an item is unreadable. (3) **Fewer forced rewrites, one lock.** Batch 2 made routine runs rewrite whenever the branch had history (after every upload), widening the window in which a concurrent upload is lost; they now rewrite only when dropping something, plus a one-time sweep of history older versions left. Uploads, compactions, the password change's rewrite and a wipe's purge share a lock on this device. A failed compaction waits an hour before retrying. (4) **The idle probe could stop pulling (pre-existing, made more reachable by batch 5).** It kept the ETag of a change it had seen but not applied; if the sync that followed failed, every later probe got a 304 and the device stopped pulling until something else woke it. It now keeps ETags only for content already applied. (5) **Sync-password change:** stops before moving the files if a newer app version moved the repository on meanwhile (its devices would never get the key); pads, on resume, a file an older version re-encrypted without padding (so "files gain the padding at the next password change" holds); budgets each download by its own size. (6) **Update checks:** none while hidden — a sync finishing behind a minimised window used to trigger one; the changelog fetch gives up after 10 s. (7) An Android share of files with sync switched off now says to turn sync on (it waited 30 s and promised "next time you open the app online"). Wording corrected: hidden-app wipe latency is ~2.5 min typical, up to ~4; production's `version.json` carried one commit subject, not 25. **Impact:** Shared Folder §1 gains "what a compaction will not drop"; Scenario 4's probe claim now holds after failed syncs; no change to what is encrypted or to the wire format.)
 
-**Previously updated:** 2026-10-04 (**Network footprint — batch 6 of 7: the remote-wipe watcher slows down while the app is hidden.** An enrolled Paranoid device polled its wipe mailbox every ~12 s forever — hidden and locked included — about 300 requests an hour (a steady 404) from a window nobody was looking at. Hidden, it now checks every ~2 minutes (±30%); becoming visible checks at once and returns to ~12 s. **Impact:** Scenario 8's remote wipe reaches a hidden app within ~2.5 min instead of ~16 s; visible apps are unchanged; delivery still needs the app open and online.)
+**Previously updated:** 2026-10-04 (**Network footprint — batch 7 of 7: update checks say less and run less.** (1) **`version.json` no longer carries commit subjects.** The background update check fetches it every ~30 minutes, after syncs and on focus — locked or not — and it carried commit subjects ("…remote unlock and wipe", "…what a PAT holder could make devices do") to anyone reading the traffic. It now holds the build id and date only; the subjects are in a separate, non-precached `changes.json`, fetched once when an update is offered (with a 10 s limit). In practice production carried one subject, not 25: the deploy checks out a single commit. (2) **Fewer checks.** The 30-minute timer is jittered in Paranoid Mode; no check runs while the app is hidden — neither the timer nor a sync finishing behind a minimised window (becoming visible checks anyway); in Paranoid Mode checks triggered by focus or a sync are at least 20 minutes apart (10 otherwise). Each check is a request to the app's host and, on a network that rewrites TLS, a chance to be served a modified worker — fewer is better, but it is still **not a control** (TCB). (3) Scenario 4 now states the request rates per state, corrects its understatement of the approver poll (every Paranoid-OFF device with sync set up polls every 12 s while visible, enrolled or not), and replaces "renaming the paths is a deferred migration" with why it is not worth doing: every request carries `Origin: https://gtd25static.github.io`. **Impact:** Scenario 4's fingerprint bullet is rewritten; nothing about encryption or the sync wire format changes. An update from an older build shows no changelog that one time (it reads the old file).)
+
+**Previously updated:** 2026-10-04 (**Network footprint — batch 6 of 7: the remote-wipe watcher slows down while the app is hidden.** An enrolled Paranoid device polled its wipe mailbox every ~12 s forever — hidden and locked included — about 300 requests an hour (a steady 404) from a window nobody was looking at. Hidden, it now checks every ~2 minutes (±30%); becoming visible checks at once and returns to ~12 s. **Impact:** Scenario 8's remote wipe reaches a hidden app typically within ~2.5 min, up to ~4 min (before: ~16 s, ~1 min once hidden over 5 minutes); visible apps are unchanged; delivery still needs the app open and online.)
 
 **Previously updated:** 2026-10-04 (**Network footprint — batch 5 of 7: the Paranoid idle probe stops re-downloading after each sync.** Scenario 4's "steady state is two bodyless 304s" held only between changes: the probe never learned the ETags a sync had read, so the first probe after every sync downloaded the changelog and the snapshot whole and then triggered a full sync that downloaded them again, and the push of an edit was followed by an unconditional second full pull. A successful sync now hands its ETags to the probe (a failed one does not, so nothing it read passes for applied); a 200 whose sha is the one the last sync applied — this device's own push — counts as unchanged; and the pull after a push goes through the same probe. About 3 full-body GETs per own edit instead of ~7, then 304s. **Impact:** Scenario 4's fingerprint description now holds; no change to what is sent or encrypted.)
 
@@ -263,12 +265,23 @@ sharing; same single sync key as everything else).
   first). We make history *unreferenced*; GitHub reclaims the bytes on its own GC
   schedule (we can't force it), so the repo stops growing and shrinks eventually,
   not instantly — and a proxy that logged the upload keeps its copy regardless.
-  **Residual (pre-existing):** the compaction keeps only blobs this device knows
-  to be live, so a file another device uploaded but whose metadata has not
-  reached this device yet (it locked or went offline within seconds of adding
-  it) is dropped as garbage and can no longer be opened; and GitHub has no
-  compare-and-swap on refs, so an upload landing between the compaction's ref
-  re-read and its forced update is lost the same way.
+  **What a compaction will not drop (since 2026-10-05):** it runs only with every
+  shared item readable — never while the vault is locked (the rows are then
+  ciphertext, with no `blobId` to match: until this date a compaction that
+  started after a lock dropped **every** file and force-pushed the empty
+  branch), nor while a row is quarantined (a failed decrypt), nor during a
+  sync-password change. A file deleted here is dropped at once; a file on the
+  branch that no item here names — another device's upload whose metadata has
+  not arrived — is kept for a **week** before it counts as garbage (it used to
+  be dropped on sight). Uploads, compactions, a password change's rewrite and a
+  wipe's purge take one lock on this device (across tabs), so none of them
+  undoes another here. Routine runs rewrite the branch only when they drop
+  something (plus a one-time sweep of history older versions left): GitHub has
+  no compare-and-swap on refs, so an upload from **another** device landing
+  between a rewrite's ref re-read and its forced update is lost — that window
+  remains, now only around actual deletions. A failed run (force pushes refused,
+  say) waits an hour before the next. **Residual:** while a row stays
+  unreadable, deleted files stay on the backend (re-syncing repairs the row).
 - **Default-branch history is also bounded:** to stop the per-sync JSON commits
   (snapshot/changelog rewrites) from growing forever, the sync repo's **default
   branch is periodically (~monthly) history-squashed** to a single orphan commit
@@ -1042,10 +1055,11 @@ GitHub API traffic.
   suspicious, not less; (d) background update checks to the app's host (`sw.js`
   and `version.json`) — every ~30 min (jittered in Paranoid) and on focus/after a
   sync, at most every 10 min (20 in Paranoid), none while the app is hidden (since
-  2026-10-04; before, every 30 min regardless). `version.json` carried the last 25
-  commit subjects (e.g. "remote unlock and wipe") on every check until 2026-10-04;
-  it now names the build only, and the subjects are in `changes.json`, fetched once
-  when an update is offered.
+  2026-10-04; before, every 30 min regardless, and after any sync). `version.json`
+  carried the latest commit subject (e.g. "…remote unlock and wipe") on every
+  check until 2026-10-04 — up to 25 by design, one in practice because the deploy
+  checks out a single commit; it now names the build only, and the subjects are in
+  `changes.json`, fetched once when an update is offered.
   - **What Paranoid Mode does (2026-06-11) — 🟠→🟡 on the *fingerprint*, not the
     content:** (1) **neutralizes commit messages** to a generic `"update"` (the
     `"gtd25 sync: …"` brand no longer appears in PUT/DELETE/commit bodies); (2)
@@ -1274,8 +1288,10 @@ locked device unwraps the DEK. Device identity keys are distributed via a regist
   while the app is visible, locked or not; **~2 min while it is hidden** (since
   2026-10-04 — it used to be ~12 s hidden too, ~300 requests an hour from a window
   nobody was looking at), with an immediate check when it becomes visible. So a
-  wipe sent to a hidden app lands within ~2.5 min instead of ~16 s (browsers
-  already throttle hidden tabs to about once a minute after 5 minutes).
+  wipe sent to a hidden app typically lands within ~2.5 min, up to ~4 min (jitter,
+  plus Chrome's once-a-minute throttling of pages hidden over 5 minutes, plus a
+  slow request making the next check skip) — before, ~16 s, or ~1 min once the
+  page had been hidden over 5 minutes.
   Before wiping, the protected device best-effort writes a **protected-device-signed**
   wipe confirmation (`gtd25-wipe-status-{deviceId}.json`) so the trusted device can
   show "wipe confirmed". Confirmation is not guaranteed: if the device loses network

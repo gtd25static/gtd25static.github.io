@@ -26,11 +26,14 @@ function bytesFromBase64(b64: string): Uint8Array {
 class FakeRepo {
   objects = new Map<string, Obj>();
   refs = new Map<string, string>();
+  /** Time budgets callers passed to getBinaryFile, in call order. */
+  downloadTimeouts: Array<number | undefined> = [];
   private counter = 0;
 
   reset(): void {
     this.objects.clear();
     this.refs.clear();
+    this.downloadTimeouts = [];
     this.counter = 0;
   }
 
@@ -133,8 +136,10 @@ class FakeRepo {
       this.remove(path, branch ?? DEFAULT_BRANCH, sha),
     putBinaryFile: async (_pat: string, _repo: string, path: string, bytes: Uint8Array, sha?: string, _signal?: AbortSignal, branch?: string) =>
       this.writeBytes(path, bytes, branch ?? DEFAULT_BRANCH, sha),
-    getBinaryFile: async (_pat: string, _repo: string, path: string, _signal?: AbortSignal, ref?: string) =>
-      this.readBytes(path, ref ?? DEFAULT_BRANCH),
+    getBinaryFile: async (_pat: string, _repo: string, path: string, _signal?: AbortSignal, ref?: string, timeoutMs?: number) => {
+      this.downloadTimeouts.push(timeoutMs);
+      return this.readBytes(path, ref ?? DEFAULT_BRANCH);
+    },
     getFileSha: async (_pat: string, _repo: string, path: string, _signal?: AbortSignal, ref?: string) =>
       this.sha(path, ref ?? DEFAULT_BRANCH),
     getRef: async (_pat: string, _repo: string, branch: string) => this.refs.get(branch) ?? null,

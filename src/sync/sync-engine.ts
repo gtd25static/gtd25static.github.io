@@ -18,7 +18,7 @@ import { recordError } from '../lib/diagnostics';
 import { storeTheme } from '../lib/theme';
 import { classifySyncError, type SyncErrorInfo } from './sync-errors';
 import { prepareEntityRowsForAtRest, prepareSyncDataForAtRest } from './at-rest-writes';
-import { maybeCompactBlobBranch, compactBlobBranch } from './shared-blobs';
+import { maybeCompactBlobBranch, compactBlobBranch, withBlobBranchLock } from './shared-blobs';
 import { maybeSquashDefaultBranch } from './history-compaction';
 import {
   deriveKey,
@@ -480,12 +480,18 @@ export async function cheapIdleProbe(): Promise<boolean> {
       getFileConditional(creds.pat, creds.repo, CHANGELOG_FILE, probeChangelogEtag),
       getFileConditional(creds.pat, creds.repo, SNAPSHOT_FILE, probeSnapshotEtag),
     ]);
-    probeChangelogEtag = cl.status === 'absent' ? null : cl.etag;
-    probeSnapshotEtag = snap.status === 'absent' ? null : snap.etag;
     const lastSnapshotSha = (await db.syncMeta.get('sync-meta'))?.lastSnapshotSha;
     const applied = (file: ConditionalFile, sha: string | undefined) =>
       file.status === 'unchanged' || (file.status === 'ok' && !!sha && file.sha === sha);
-    return !(applied(cl, cachedChangelogSha) && applied(snap, lastSnapshotSha));
+    const changelogApplied = applied(cl, cachedChangelogSha);
+    const snapshotApplied = applied(snap, lastSnapshotSha);
+    // Remember an ETag only for content already applied. Keeping the ETag of a
+    // change not yet applied made every later probe a 304 if the sync that
+    // followed failed — and the device stopped pulling. A successful sync sets
+    // the ETags of what it applied.
+    if (changelogApplied && cl.status !== 'absent') probeChangelogEtag = cl.etag;
+    if (snapshotApplied && snap.status !== 'absent') probeSnapshotEtag = snap.etag;
+    return !(changelogApplied && snapshotApplied);
   } catch {
     return true; // any error → fall through to the real sync
   }
@@ -2001,7 +2007,7 @@ export async function wipeAllData() {
       // compaction retries (the item-count guard would otherwise never run it).
       let blobsPurged = false;
       try {
-        blobsPurged = (await compactBlobBranch(creds, new Set<string>())) !== null;
+        blobsPurged = (await withBlobBranchLock(() => compactBlobBranch(creds, new Set<string>()))) !== null;
       } catch (err) {
         recordError('sync.wipeBlobBranch', err);
       }

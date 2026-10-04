@@ -18,7 +18,7 @@ vi.mock('../../sync/github-api', () => ({
 
 import { db } from '../../db';
 import { resetDb } from '../helpers/db-helpers';
-import { setupSyncCredentials } from '../helpers/sync-helpers';
+import { setupSyncCredentials, makeSharedItem } from '../helpers/sync-helpers';
 import * as gh from '../../sync/github-api';
 import {
   compactBlobBranch, deleteSharedBlob, getSharedBlobBytes, maybeCompactBlobBranch, BLOB_BRANCH,
@@ -175,6 +175,7 @@ describe('maybeCompactBlobBranch gate', () => {
   });
 
   it('keeps the pending count when the run was skipped, so the next sync retries', async () => {
+    await db.sharedItems.add(makeSharedItem({ type: 'file', blobId: 'DEAD', deletedAt: 1 })); // deleted here
     await db.syncMeta.update('sync-meta', { pendingBlobDeletes: 3, lastBlobCompactionAt: 5 });
     mGetRef.mockResolvedValueOnce('head1').mockResolvedValueOnce('head2'); // moved mid-run
     mGetCommit.mockResolvedValue({ treeSha: 't1', parents: [] });
@@ -189,6 +190,7 @@ describe('maybeCompactBlobBranch gate', () => {
   });
 
   it('keeps a delete made while the compaction ran pending', async () => {
+    await db.sharedItems.add(makeSharedItem({ type: 'file', blobId: 'DEAD', deletedAt: 1 })); // deleted here
     await db.syncMeta.update('sync-meta', { pendingBlobDeletes: 1, lastBlobCompactionAt: 0 });
     mGetRef.mockResolvedValue('head1');
     mGetCommit.mockResolvedValue({ treeSha: 't1', parents: [] });

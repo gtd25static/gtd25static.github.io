@@ -28,7 +28,11 @@ export function changelogFor(info: VersionInfo, current: string): Array<{ h: str
 
 async function fetchDeployed(file: 'version.json' | 'changes.json'): Promise<VersionInfo | null> {
   try {
-    const response = await fetch(`${import.meta.env.BASE_URL}${file}?t=${Date.now()}`, { cache: 'no-store' });
+    // Bounded: a stalled fetch would otherwise hold the update prompt back.
+    const response = await fetch(`${import.meta.env.BASE_URL}${file}?t=${Date.now()}`, {
+      cache: 'no-store',
+      signal: AbortSignal.timeout(10_000),
+    });
     if (!response.ok) return null;
     return parseVersionInfo(await response.json());
   } catch {
