@@ -234,9 +234,9 @@ export async function deleteSharedItem(id: string): Promise<void> {
       fieldTimestamps: stampUpdatedFields(existing.fieldTimestamps, ['deletedAt'], now),
     };
     await putSharedItem(updated);
-    // Best-effort immediate blob removal so backend space is reclaimed promptly;
-    // purge also sweeps any that fail here. Metadata tombstone still syncs.
-    if (existing.blobId) void deleteSharedBlob(existing.blobId);
+    // Local only: the bytes leave the backend with the compaction that follows
+    // the next sync (one branch rewrite however many files are deleted).
+    if (existing.blobId) await deleteSharedBlob(existing.blobId);
   } catch (error) {
     handleDbError(error, 'delete shared item');
   }

@@ -42,7 +42,7 @@ import {
 import { syncNow, forcePush, endSyncSession, SYNC_LOCK_NAME } from './sync-engine';
 import { hasPendingEntries } from './change-log';
 import { getSyncPat, rememberSyncPassword, forgetSyncPassword } from './sync-credentials';
-import { BLOB_BRANCH, KEEP_PATH, blobPath, ensureBlobBranch, blobAad, decryptSharedBlob } from './shared-blobs';
+import { BLOB_BRANCH, KEEP_PATH, KEEP_CONTENT_BASE64, blobPath, ensureBlobBranch, blobAad, decryptSharedBlob } from './shared-blobs';
 import { overwriteAllBackups } from './remote-backups';
 import { publishOwnRegistryEntry } from './remote-unlock';
 import { squashDefaultBranch } from './history-compaction';
@@ -233,7 +233,7 @@ async function rotateBlobBranch(
 
   const keep = onBranch.get(KEEP_PATH);
   const tree: GitTreeEntry[] = [
-    keep ?? { path: KEEP_PATH, mode: '100644', type: 'blob', sha: await createBlobBase64(pat, repo, btoa('gtd25 shared folder blobs')) },
+    keep ?? { path: KEEP_PATH, mode: '100644', type: 'blob', sha: await createBlobBase64(pat, repo, KEEP_CONTENT_BASE64) },
   ];
   const legacyOnDefault: string[] = [];
   for (const [index, blobId] of live.entries()) {

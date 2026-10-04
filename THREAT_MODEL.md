@@ -1,6 +1,8 @@
 # GTD25 — Security Review & Threat Model
 
-**Last updated:** 2026-10-04 (**Network footprint — batch 1 of 7: no Shared Folder traffic while sync is off.** The Shared Folder read the token without asking whether sync was on, so with sync switched off it still uploaded, downloaded and deleted files on the backend. It now honours the same switch as the sync engine; cached files still open. The remote-wipe watcher (Scenario 8) is the one thing that still polls with sync off, by design. **Impact:** "sync off = no traffic" now holds, apart from that wipe watcher and the app-update checks.)
+**Last updated:** 2026-10-04 (**Network footprint — batch 2 of 7: deleted shared files leave the blob branch's history.** (1) **Deleted files stayed downloadable.** A delete removed the file from the tip of `gtd25-blobs` with its own GET + DELETE; the compaction then found nothing at the tip to drop and returned without squashing, so every deleted file's ciphertext stayed reachable in the branch history for anyone holding the token — which a TLS-inspecting proxy sees on every request. A delete is now local (cached bytes dropped, compaction flagged), and the compaction after the next successful sync squashes whenever the tip holds a dead blob **or the branch has any history**; a skipped run (truncated listing, branch moved) keeps the deletion pending instead of forgetting it, as does a failed purge during "Wipe All Data". (2) **No request per file.** "Delete all" used to fire a GET (which for files up to 1 MB returns the whole ciphertext) and a DELETE per file at once, several failing with conflicts; it is now one branch rewrite. The 30-day purge no longer re-requests old paths. (3) The placeholder blob's content no longer names the app. **Impact:** Shared Folder §1 "History reclamation" and Scenario 7's "blob branch after deletes" now hold as written. New wording, not new risk: the bytes stay at the tip until the deleting device's next successful sync; the pre-existing residual of a just-uploaded file whose metadata has not arrived being dropped by another device's compaction is now stated.)
+
+**Previously updated:** 2026-10-04 (**Network footprint — batch 1 of 7: no Shared Folder traffic while sync is off.** The Shared Folder read the token without asking whether sync was on, so with sync switched off it still uploaded, downloaded and deleted files on the backend. It now honours the same switch as the sync engine; cached files still open. The remote-wipe watcher (Scenario 8) is the one thing that still polls with sync off, by design. **Impact:** "sync off = no traffic" now holds, apart from that wipe watcher and the app-update checks.)
 
 **Previously updated:** 2026-10-03 (**Threat-model review — batch 5 of 5: re-key, the gate, secrets, retention, and claims the document could not keep.** (1) **A re-key protected nothing while remote unlock was on:** it kept the remote-unlock key, which every approver holds and which whoever had the old DEK could read (`rukWrappedByDek`) from any old image — so it unwrapped the new DEK from a later one. A re-key now drops that key and hands the approvers a **new** one (delivered first, wrapped last); without sync at hand remote unlock is left off and the result says so. **Impact:** §4's and Scenario 3's "a DEK lifted from memory opens nothing written afterwards" now holds with remote unlock enrolled. (2) **The same compromise had the sync password and the PAT** (both in `vault.secrets`), which a re-key carries over: Settings now says, next to *Re-key*, to also change the sync password and revoke the token when the reason is a copy of storage or memory (Recommendation 10 says so too). (3) **The gate accepts a security key:** gated changes made a security-key user type the passphrase on whatever machine they were on — exactly what the key is for avoiding (Scenario 5). Changes that need only proof now offer *Use security key* (an assertion that unwraps an enrolled key's DEK wrap; nothing written, counted or logged); those that need the passphrase itself (removing a key, whose follow-up re-key derives from it; changing or re-keying with it) still ask for it. (4) **The strength gate priced patterns as random:** `passwordpasswordpassword`, the alphabet, a keyboard row, `correcthorsebatterystaple`, `12345678901234` and 43 × `a` all passed. Repeated text, sequences, keyboard rows and a known password inside a longer one are now priced at what they cost to guess. (5) **At rest:** the first unlock after this update rewrites, once, every stored row that is not plain ciphertext — `fieldTimestamps` beside the ciphertext (rows untouched since SYNC_VERSION 7, so "now true" in §1 was true only for rewritten rows) or none at all (a row left in plaintext by the forged-`_enc` hole before batch 1); timestamps found both outside and inside a ciphertext are merged instead of the outside ones being dropped. With sync off the changelog no longer keeps past versions (up to 10,000, "deleted forever" records included): one entry per existing record. (6) **Claims corrected:** the update prompt is not a control against a malicious origin or an active TLS interceptor (the commit check reads the same channel); Scenario 4 now covers an interceptor that *modifies* traffic (full client compromise); the CSP does not close exfiltration to `api.github.com` (an attacker's own gist) or by navigation; a security key adds a way in and removes no passphrase wrap from the disk, so offline strength is the passphrase's; a removed security key still opens images taken before (re-key); exports also carry mindmaps, shared links and sound presets.)
 
@@ -225,12 +227,28 @@ sharing; same single sync key as everything else).
   branch `gtd25-blobs`**, kept off the default branch so blob churn never bloats the
   task/snapshot history. On the wire they are AES-GCM encrypted with the sync key
   (`encryptBytes`).
-- **History reclamation:** deleting a file removes it from the branch tip and flags
-  a compaction; the next sync **history-squashes `gtd25-blobs`** — rebuilds it as a
-  single orphan commit referencing only live blobs (reusing their git blob SHAs) and
-  force-updates the ref, so deleted/old blobs become unreachable. We make history
-  *unreferenced*; GitHub reclaims the bytes on its own GC schedule (we can't force
-  it), so the repo stops growing and shrinks eventually, not instantly.
+- **History reclamation:** deleting a file makes **no request**; it drops the
+  cached bytes and flags a compaction. The compaction that follows the next
+  successful sync **history-squashes `gtd25-blobs`** — rebuilds it as a single
+  orphan commit referencing only live blobs (reusing their git blob SHAs) and
+  force-updates the ref, so deleted/old blobs become unreachable. It squashes
+  whenever the tip holds a dead blob **or the branch has any history**, and a run
+  that is skipped (truncated listing, the branch moved meanwhile) keeps the
+  deletion pending for the next sync. **Until 2026-10-04 this did not happen:** a
+  delete first removed the file from the tip with its own GET + DELETE, the
+  compaction then found nothing at the tip to drop and never squashed — every
+  deleted file stayed downloadable from the branch history by anyone holding the
+  token. The bytes now stay at the tip only until the deleting device's next
+  successful sync (seconds while it is open; until its next unlock if it locks
+  first). We make history *unreferenced*; GitHub reclaims the bytes on its own GC
+  schedule (we can't force it), so the repo stops growing and shrinks eventually,
+  not instantly — and a proxy that logged the upload keeps its copy regardless.
+  **Residual (pre-existing):** the compaction keeps only blobs this device knows
+  to be live, so a file another device uploaded but whose metadata has not
+  reached this device yet (it locked or went offline within seconds of adding
+  it) is dropped as garbage and can no longer be opened; and GitHub has no
+  compare-and-swap on refs, so an upload landing between the compaction's ref
+  re-read and its forced update is lost the same way.
 - **Default-branch history is also bounded:** to stop the per-sync JSON commits
   (snapshot/changelog rewrites) from growing forever, the sync repo's **default
   branch is periodically (~monthly) history-squashed** to a single orphan commit
@@ -259,10 +277,11 @@ sharing; same single sync key as everything else).
   so a lock revokes it rather than leaving decrypted bytes resolvable at a
   same-origin `blob:` URL after the DEK is gone.
 - **Deletion has no undo.** Unlike tasks and mindmaps there is no Trash: a
-  deleted item is tombstoned and its backend blob removed. Since 2026-09-20 a
+  deleted item is tombstoned and its backend blob removed by the next compaction. Since 2026-09-20 a
   **"Delete all"** empties the whole folder behind one confirmation (it loops the
-  same per-item delete, so tombstones, change-log entries and blob cleanup are
-  unchanged). Both are gated on an unlocked vault, and the at-rest middleware
+  same per-item delete, so tombstones and change-log entries are unchanged — and
+  since 2026-10-04 the backend sees one branch rewrite, not a burst of a GET and a
+  DELETE per file). Both are gated on an unlocked vault, and the at-rest middleware
   would refuse the write regardless.
 - **Residual leak (accepted):** an adversary who can read the backend (Scenario 7)
   sees the **number** of blob objects and each one's **approximate ciphertext size**,
@@ -1102,7 +1121,8 @@ history**.
   - **Recommendations:** use a **strong, high-entropy syncPassword**; a PAT with
     **write** access also enables data destruction/tampering (use least
     privilege: fine-grained, the sync repository only). Repo history squashing is **automatic** (~monthly on the default
-    branch, plus the blob branch after deletes) — nothing to do by hand; it
+    branch, plus the blob branch after deletes — the latter only actually removed
+    deleted files from its history since 2026-10-04) — nothing to do by hand; it
     shrinks the standing ciphertext window but does not help against an attacker
     who already cloned or proxied it.
 

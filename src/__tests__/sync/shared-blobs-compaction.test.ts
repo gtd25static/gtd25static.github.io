@@ -44,9 +44,9 @@ beforeEach(async () => {
 });
 
 describe('compactBlobBranch', () => {
-  function tree(entries: ReturnType<typeof entry>[]) {
+  function tree(entries: ReturnType<typeof entry>[], parents: string[] = []) {
     mGetRef.mockResolvedValue('head1');
-    mGetCommit.mockResolvedValue({ treeSha: 't1' });
+    mGetCommit.mockResolvedValue({ treeSha: 't1', parents });
     mGetTree.mockResolvedValue({ entries, truncated: false });
     mCreateTree.mockResolvedValue('t2');
     mCreateCommit.mockResolvedValue('c2');
@@ -65,7 +65,7 @@ describe('compactBlobBranch', () => {
     expect(mUpdateRef).toHaveBeenCalledWith('p', 'u/r', BLOB_BRANCH, 'c2', true);
   });
 
-  it('does nothing when there is no garbage', async () => {
+  it('does nothing when there is no garbage and no history', async () => {
     tree([entry(KEEP, 'k'), entry('gtd25-shared/LIVE', 'l')]);
     const dropped = await compactBlobBranch(creds, new Set(['LIVE']));
     expect(dropped).toBe(0);
@@ -73,15 +73,31 @@ describe('compactBlobBranch', () => {
     expect(mUpdateRef).not.toHaveBeenCalled();
   });
 
-  it('aborts the force-update if the branch moved during compaction', async () => {
+  it('squashes a clean tip whose history still holds deleted files', async () => {
+    tree([entry(KEEP, 'k'), entry('gtd25-shared/LIVE', 'l')], ['older']);
+    const dropped = await compactBlobBranch(creds, new Set(['LIVE']));
+    expect(dropped).toBe(0);
+    const keptPaths = (mCreateTree.mock.calls[0][2] as Array<{ path: string }>).map((e) => e.path).sort();
+    expect(keptPaths).toEqual([KEEP, 'gtd25-shared/LIVE']);
+    expect(mCreateCommit.mock.calls[0][2].parents).toEqual([]);
+    expect(mUpdateRef).toHaveBeenCalledWith('p', 'u/r', BLOB_BRANCH, 'c2', true);
+  });
+
+  it('reports a skipped run (null) if the branch moved during compaction', async () => {
     mGetRef.mockResolvedValueOnce('head1').mockResolvedValueOnce('head2');
-    mGetCommit.mockResolvedValue({ treeSha: 't1' });
+    mGetCommit.mockResolvedValue({ treeSha: 't1', parents: [] });
     mGetTree.mockResolvedValue({ entries: [entry(KEEP, 'k'), entry('gtd25-shared/DEAD', 'd')], truncated: false });
     mCreateTree.mockResolvedValue('t2');
     mCreateCommit.mockResolvedValue('c2');
 
-    const dropped = await compactBlobBranch(creds, new Set());
-    expect(dropped).toBe(0);
+    expect(await compactBlobBranch(creds, new Set())).toBeNull();
+    expect(mUpdateRef).not.toHaveBeenCalled();
+  });
+
+  it('reports a skipped run (null) when the tree listing is truncated', async () => {
+    tree([entry(KEEP, 'k'), entry('gtd25-shared/DEAD', 'd')]);
+    mGetTree.mockResolvedValue({ entries: [entry(KEEP, 'k')], truncated: true });
+    expect(await compactBlobBranch(creds, new Set())).toBeNull();
     expect(mUpdateRef).not.toHaveBeenCalled();
   });
 
@@ -103,10 +119,19 @@ describe('compactBlobBranch', () => {
 
 describe('deleteSharedBlob', () => {
   it('increments syncMeta.pendingBlobDeletes (the compaction gate)', async () => {
-    await deleteSharedBlob('X'); // no creds configured -> remote no-op, but counter bumps
+    await deleteSharedBlob('X');
     await deleteSharedBlob('Y');
     const meta = await db.syncMeta.get('sync-meta');
     expect(meta?.pendingBlobDeletes).toBe(2);
+  });
+
+  it('makes no request even with sync set up — compaction removes the bytes', async () => {
+    await setupSyncCredentials();
+    await db.sharedBlobs.put({ id: 'X', data: new Uint8Array([1]), cachedAt: 1 });
+    await deleteSharedBlob('X');
+    expect(await db.sharedBlobs.get('X')).toBeUndefined();
+    expect(gh.getFileSha).not.toHaveBeenCalled();
+    expect(gh.deleteFile).not.toHaveBeenCalled();
   });
 });
 
@@ -146,5 +171,32 @@ describe('maybeCompactBlobBranch gate', () => {
     const meta = await db.syncMeta.get('sync-meta');
     expect(meta?.pendingBlobDeletes).toBe(0);
     expect(meta?.lastBlobCompactionAt).toBeGreaterThan(0);
+  });
+
+  it('keeps the pending count when the run was skipped, so the next sync retries', async () => {
+    await db.syncMeta.update('sync-meta', { pendingBlobDeletes: 3, lastBlobCompactionAt: 5 });
+    mGetRef.mockResolvedValueOnce('head1').mockResolvedValueOnce('head2'); // moved mid-run
+    mGetCommit.mockResolvedValue({ treeSha: 't1', parents: [] });
+    mGetTree.mockResolvedValue({ entries: [entry(KEEP, 'k'), entry('gtd25-shared/DEAD', 'd')], truncated: false });
+    mCreateTree.mockResolvedValue('t2');
+    mCreateCommit.mockResolvedValue('c2');
+
+    await maybeCompactBlobBranch('p', 'u/r');
+    const meta = await db.syncMeta.get('sync-meta');
+    expect(meta?.pendingBlobDeletes).toBe(3);
+    expect(meta?.lastBlobCompactionAt).toBe(5);
+  });
+
+  it('keeps a delete made while the compaction ran pending', async () => {
+    await db.syncMeta.update('sync-meta', { pendingBlobDeletes: 1, lastBlobCompactionAt: 0 });
+    mGetRef.mockResolvedValue('head1');
+    mGetCommit.mockResolvedValue({ treeSha: 't1', parents: [] });
+    mGetTree.mockResolvedValue({ entries: [entry(KEEP, 'k'), entry('gtd25-shared/DEAD', 'd')], truncated: false });
+    mCreateTree.mockImplementation(async () => { await deleteSharedBlob('LATE'); return 't2'; });
+    mCreateCommit.mockResolvedValue('c2');
+    mUpdateRef.mockResolvedValue(undefined);
+
+    await maybeCompactBlobBranch('p', 'u/r');
+    expect((await db.syncMeta.get('sync-meta'))?.pendingBlobDeletes).toBe(1);
   });
 });

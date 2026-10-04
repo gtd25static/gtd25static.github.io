@@ -1983,12 +1983,16 @@ export async function wipeAllData() {
       await resetRemoteChangelog(creds.pat, creds.repo, signal);
 
       // Purge all shared-folder blob bytes: history-squash the blob branch down to
-      // only its placeholder. Best-effort — a failure here must not abort the wipe.
+      // only its placeholder. Best-effort — a failure here must not abort the wipe;
+      // a skipped or failed run leaves a deletion pending so the next sync's
+      // compaction retries (the item-count guard would otherwise never run it).
+      let blobsPurged = false;
       try {
-        await compactBlobBranch(creds, new Set<string>());
+        blobsPurged = (await compactBlobBranch(creds, new Set<string>())) !== null;
       } catch (err) {
         recordError('sync.wipeBlobBranch', err);
       }
+      if (!blobsPurged) await db.syncMeta.update('sync-meta', { pendingBlobDeletes: 1 });
     }
 
     await db.syncMeta.update('sync-meta', {

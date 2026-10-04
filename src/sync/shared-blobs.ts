@@ -18,7 +18,7 @@
 
 import { db } from '../db';
 import {
-  getBinaryFile, putBinaryFile, getFileSha, deleteFile,
+  getBinaryFile, putBinaryFile,
   getRef, createRef, updateRef, getCommit, getTree, createTree, createCommit, createBlobBase64,
   type GitTreeEntry,
 } from './github-api';
@@ -33,6 +33,10 @@ export const KEEP_PATH = `${BLOB_DIR}/.gtd25-keep`;
 export const blobPath = (blobId: string) => `${BLOB_DIR}/${blobId}`;
 
 const basename = (path: string) => path.slice(path.lastIndexOf('/') + 1);
+
+// The placeholder that keeps the blob branch's tree non-empty. Neutral content:
+// it travels in a request body, and it used to name the app and the feature.
+export const KEEP_CONTENT_BASE64 = btoa('\n');
 
 // Thrown when no sync key is available (sync not set up, or Paranoid vault locked).
 // Callers surface this as "unlock / set up sync to open this item".
@@ -81,7 +85,7 @@ export async function ensureBlobBranch(creds: Creds): Promise<void> {
   if (blobBranchEnsured) return;
   const head = await getRef(creds.pat, creds.repo, BLOB_BRANCH);
   if (head) { blobBranchEnsured = true; return; }
-  const keepSha = await createBlobBase64(creds.pat, creds.repo, btoa('gtd25 shared folder blobs'));
+  const keepSha = await createBlobBase64(creds.pat, creds.repo, KEEP_CONTENT_BASE64);
   const treeSha = await createTree(creds.pat, creds.repo, [
     { path: KEEP_PATH, mode: '100644', type: 'blob', sha: keepSha },
   ]);
@@ -218,22 +222,16 @@ async function bumpPendingBlobDeletes(): Promise<void> {
 }
 
 /**
- * Remove a blob from the blob branch tip and the local cache, and flag the folder
- * for history compaction. Best-effort on remote (the metadata tombstone still
- * syncs; the next compaction purges the bytes from history regardless).
+ * Forget a deleted file's bytes on this device and flag the folder for
+ * compaction. No request: the compaction after the next successful sync rebuilds
+ * the blob branch without them — tip and history in one step, however many files
+ * were deleted. (A per-file DELETE used to clean the tip only, which left the
+ * compaction nothing to drop, so it never squashed and the deleted bytes stayed
+ * reachable in the history.)
  */
 export async function deleteSharedBlob(blobId: string): Promise<void> {
   await db.sharedBlobs.delete(blobId);
   await bumpPendingBlobDeletes();
-  const creds = await getCredentials();
-  if (!creds) return;
-  try {
-    const sha = await getFileSha(creds.pat, creds.repo, blobPath(blobId), undefined, BLOB_BRANCH);
-    if (sha) await deleteFile(creds.pat, creds.repo, blobPath(blobId), sha, undefined, BLOB_BRANCH);
-  } catch (err) {
-    // Non-fatal: compaction will drop it from history even if this tip removal fails.
-    console.warn(`Failed to delete shared blob ${blobId}:`, err);
-  }
 }
 
 /**
@@ -246,17 +244,23 @@ export async function deleteSharedBlob(blobId: string): Promise<void> {
  * `liveBlobIds`; re-reads the ref just before the force-update and aborts if the
  * branch moved (a concurrent upload), so a racing upload is never clobbered.
  *
- * Returns the number of blob objects dropped from the tip tree (0 = nothing to do).
+ * Squashes whenever the tip holds a blob that is no longer live OR the branch has
+ * any history at all (a file deleted from the tip by an older version, or by a
+ * delete elsewhere, is still in that history).
+ *
+ * Returns the number of blob objects dropped from the tip tree (0 = nothing was
+ * dropped, possibly after squashing history), or null when the run was skipped
+ * (truncated listing, or the branch moved) and should be retried.
  */
-export async function compactBlobBranch(creds: Creds, liveBlobIds: Set<string>): Promise<number> {
+export async function compactBlobBranch(creds: Creds, liveBlobIds: Set<string>): Promise<number | null> {
   const head = await getRef(creds.pat, creds.repo, BLOB_BRANCH);
   if (!head) return 0;
 
-  const { treeSha } = await getCommit(creds.pat, creds.repo, head);
+  const { treeSha, parents } = await getCommit(creds.pat, creds.repo, head);
   const { entries, truncated } = await getTree(creds.pat, creds.repo, treeSha, true);
   if (truncated) {
     console.warn('Blob branch tree truncated — skipping compaction this round');
-    return 0;
+    return null;
   }
 
   const blobs = entries.filter((e) => e.type === 'blob' && e.path.startsWith(`${BLOB_DIR}/`));
@@ -264,11 +268,11 @@ export async function compactBlobBranch(creds: Creds, liveBlobIds: Set<string>):
   const liveOrKeep = (e: GitTreeEntry) => e.path === KEEP_PATH || liveBlobIds.has(basename(e.path));
   const keep = blobs.filter(liveOrKeep);
   const dropped = blobs.length - keep.length;
-  if (dropped === 0) return 0;
+  if (dropped === 0 && parents.length === 0) return 0;
 
   // Guarantee a non-empty tree (e.g. the wipe case where liveBlobIds is empty).
   if (!keepFile) {
-    const keepSha = await createBlobBase64(creds.pat, creds.repo, btoa('gtd25 shared folder blobs'));
+    const keepSha = await createBlobBase64(creds.pat, creds.repo, KEEP_CONTENT_BASE64);
     keepFile = { path: KEEP_PATH, mode: '100644', type: 'blob', sha: keepSha };
     keep.push(keepFile);
   }
@@ -285,7 +289,7 @@ export async function compactBlobBranch(creds: Creds, liveBlobIds: Set<string>):
   const head2 = await getRef(creds.pat, creds.repo, BLOB_BRANCH);
   if (head2 !== head) {
     console.warn('Blob branch changed during compaction — skipping force-update');
-    return 0;
+    return null;
   }
   await updateRef(creds.pat, creds.repo, BLOB_BRANCH, newCommit, true);
   return dropped;
@@ -297,8 +301,9 @@ const BLOB_COMPACTION_INTERVAL_MS = 6 * 60 * 60 * 1000; // 6h
 /**
  * Gated entry point called (fire-and-forget) at the end of a successful sync.
  * Compacts when this device has pending blob deletions, or periodically to sweep
- * garbage from deletions made on other devices. Stamps state after a successful
- * attempt (even if nothing was dropped) so we don't refetch the tree every sync.
+ * garbage from deletions made on other devices. Stamps state after a completed
+ * run (even if nothing was dropped) so we don't refetch the tree every sync; a
+ * skipped run leaves the pending deletions in place for the next sync.
  */
 export async function maybeCompactBlobBranch(pat: string, repo: string): Promise<void> {
   const meta = await db.syncMeta.get('sync-meta');
@@ -318,6 +323,14 @@ export async function maybeCompactBlobBranch(pat: string, repo: string): Promise
   const live = new Set<string>();
   for (const it of items) if (!it.deletedAt && it.blobId) live.add(it.blobId);
 
-  await compactBlobBranch({ pat, repo }, live);
-  await db.syncMeta.update('sync-meta', { pendingBlobDeletes: 0, lastBlobCompactionAt: now });
+  if ((await compactBlobBranch({ pat, repo }, live)) === null) return;
+  // Clear only the deletions this run covered: one made while it ran was still
+  // live when the keep-set was read, so it needs the next run.
+  await db.transaction('rw', db.syncMeta, async () => {
+    const current = (await db.syncMeta.get('sync-meta'))?.pendingBlobDeletes ?? 0;
+    await db.syncMeta.update('sync-meta', {
+      pendingBlobDeletes: Math.max(0, current - pending),
+      lastBlobCompactionAt: now,
+    });
+  });
 }

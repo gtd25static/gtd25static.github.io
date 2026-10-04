@@ -32,9 +32,9 @@ export async function purgeOldTrashItems() {
   const expired = (row: { id: string; deletedAt?: number }) =>
     !!row.deletedAt && row.deletedAt < cutoff && (arrivals[row.id] ?? 0) < cutoff;
 
-  // Shared items first: collect blobIds to remove from the backend + local cache
-  // before the metadata rows are hard-deleted. Done outside the entity transaction
-  // because deleting a backend blob is a network call.
+  // Shared items first: drop any cached bytes and flag a compaction (no request
+  // here — it sweeps whatever an older version's per-file delete left behind)
+  // before the metadata rows are hard-deleted.
   const oldShared = await db.sharedItems.filter(expired).toArray();
   if (oldShared.length > 0) {
     const { deleteSharedBlob } = await import('../sync/shared-blobs');
