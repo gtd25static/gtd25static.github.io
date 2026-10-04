@@ -1,6 +1,8 @@
 # GTD25 — Security Review & Threat Model
 
-**Last updated:** 2026-10-04 (**Network footprint — batch 6 of 7: the remote-wipe watcher slows down while the app is hidden.** An enrolled Paranoid device polled its wipe mailbox every ~12 s forever — hidden and locked included — about 300 requests an hour (a steady 404) from a window nobody was looking at. Hidden, it now checks every ~2 minutes (±30%); becoming visible checks at once and returns to ~12 s. **Impact:** Scenario 8's remote wipe reaches a hidden app within ~2.5 min instead of ~16 s; visible apps are unchanged; delivery still needs the app open and online.)
+**Last updated:** 2026-10-04 (**Network footprint — batch 7 of 7: update checks say less and run less.** (1) **`version.json` no longer carries commit subjects.** The background update check fetches it every ~30 minutes, after syncs and on focus — locked or not — and it listed the last 25 commit subjects ("…remote unlock and wipe", "…what a PAT holder could make devices do") to anyone reading the traffic. It now holds the build id and date only; the subjects are in a separate, non-precached `changes.json`, fetched once when an update is offered. (2) **Fewer checks.** The 30-minute timer is jittered in Paranoid Mode and skips while the app is hidden (becoming visible checks anyway); in Paranoid Mode checks triggered by focus or a sync are at least 20 minutes apart (10 otherwise). Each check is a request to the app's host and, on a network that rewrites TLS, a chance to be served a modified worker — fewer is better, but it is still **not a control** (TCB). (3) Scenario 4 now states the request rates per state, corrects its understatement of the approver poll (every Paranoid-OFF device with sync set up polls every 12 s while visible, enrolled or not), and replaces "renaming the paths is a deferred migration" with why it is not worth doing: every request carries `Origin: https://gtd25static.github.io`. **Impact:** Scenario 4's fingerprint bullet is rewritten; nothing about encryption or the sync wire format changes. An update from an older build shows no changelog that one time (it reads the old file).)
+
+**Previously updated:** 2026-10-04 (**Network footprint — batch 6 of 7: the remote-wipe watcher slows down while the app is hidden.** An enrolled Paranoid device polled its wipe mailbox every ~12 s forever — hidden and locked included — about 300 requests an hour (a steady 404) from a window nobody was looking at. Hidden, it now checks every ~2 minutes (±30%); becoming visible checks at once and returns to ~12 s. **Impact:** Scenario 8's remote wipe reaches a hidden app within ~2.5 min instead of ~16 s; visible apps are unchanged; delivery still needs the app open and online.)
 
 **Previously updated:** 2026-10-04 (**Network footprint — batch 5 of 7: the Paranoid idle probe stops re-downloading after each sync.** Scenario 4's "steady state is two bodyless 304s" held only between changes: the probe never learned the ETags a sync had read, so the first probe after every sync downloaded the changelog and the snapshot whole and then triggered a full sync that downloaded them again, and the push of an edit was followed by an unconditional second full pull. A successful sync now hands its ETags to the probe (a failed one does not, so nothing it read passes for applied); a 200 whose sha is the one the last sync applied — this device's own push — counts as unchanged; and the pull after a push goes through the same probe. About 3 full-body GETs per own edit instead of ~7, then 304s. **Impact:** Scenario 4's fingerprint description now holds; no change to what is sent or encrypted.)
 
@@ -1028,10 +1030,22 @@ GitHub API traffic.
   *shape*, and a custom app beaconing to a personal GitHub repo on a fixed cadence
   pattern-matches what security teams hunt for (exfiltration / C2). The tells:
   (a) the app brand `gtd25` in commit messages **and** file paths; (b) a perfectly
-  periodic poll (~2 GETs / 30 s, plus ~1 GET / 12 s if remote unlock is enrolled —
-  ~1 / 2 min while the app is hidden, since 2026-10-04),
-  ~240–540 req/hr to one host forever; (c) regular opaque high-entropy uploads to a
-  private repo — to DLP, encryption makes this *more* suspicious, not less.
+  periodic poll (~2 GETs / 30 s while the app is visible and unlocked; the sync
+  poll stops while hidden or locked), ~240 req/hr to one host; on an enrolled
+  Paranoid device the wipe watcher adds ~1 GET / 12 s while visible, ~1 / 2 min
+  while hidden (since 2026-10-04; ~1 / 12 s before, hidden or not); and **every
+  Paranoid-OFF device with sync set up** — enrolled or not — polls its approver
+  inbox, plus one request per device it manages, every 12 s while visible, plus a
+  registry read once a minute when it manages any (this line used to say "only if
+  remote unlock is enrolled", which understated it); (c) regular opaque
+  high-entropy uploads to a private repo — to DLP, encryption makes this *more*
+  suspicious, not less; (d) background update checks to the app's host (`sw.js`
+  and `version.json`) — every ~30 min (jittered in Paranoid) and on focus/after a
+  sync, at most every 10 min (20 in Paranoid), none while the app is hidden (since
+  2026-10-04; before, every 30 min regardless). `version.json` carried the last 25
+  commit subjects (e.g. "remote unlock and wipe") on every check until 2026-10-04;
+  it now names the build only, and the subjects are in `changes.json`, fetched once
+  when an update is offered.
   - **What Paranoid Mode does (2026-06-11) — 🟠→🟡 on the *fingerprint*, not the
     content:** (1) **neutralizes commit messages** to a generic `"update"` (the
     `"gtd25 sync: …"` brand no longer appears in PUT/DELETE/commit bodies); (2)
@@ -1043,10 +1057,13 @@ GitHub API traffic.
     that downloaded them again: ~7 full-body GETs per own edit, now ~3). Non-paranoid devices are
     unchanged. This defeats cheap brand/periodicity heuristics and stops a benign
     tool from being *misclassified* as malware.
-  - **Residuals (honest):** the **URL paths** still contain `gtd25-snapshot.json` /
-    `gtd25-changelog.json` and branch `gtd25-blobs` (a filename/branch rename is a
-    deferred backend migration), so the brand is still visible *in the path* under
-    MITM; the **inherent shape** (regular encrypted blobs to a personal cloud repo)
+  - **Residuals (honest):** the app's identity cannot be hidden by code: every API
+    request carries `Origin: https://gtd25static.github.io` (and a `Referer` to
+    match), and DNS/SNI show that host on every load and update check — its public
+    repository then describes the app. Renaming the `gtd25-*` paths and the
+    `gtd25-blobs` branch would therefore buy nothing and is **not planned**; only
+    serving the app from a neutral origin would. The **URL paths** keep the brand
+    under MITM; the **inherent shape** (regular encrypted blobs to a personal cloud repo)
     cannot be made innocent against a competent analyst who decrypts/inspects; and
     the **PAT/repo/metadata** exposures above are unchanged. The only robust
     mitigation on a genuinely hostile/monitored network is **not syncing there**

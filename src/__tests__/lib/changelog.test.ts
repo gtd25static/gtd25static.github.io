@@ -1,4 +1,4 @@
-import { changelogFor, parseVersionInfo, type VersionInfo } from '../../lib/changelog';
+import { changelogFor, parseVersionInfo, fetchDeployedVersion, fetchDeployedChanges, type VersionInfo } from '../../lib/changelog';
 
 describe('changelogFor', () => {
   const log = [
@@ -55,5 +55,21 @@ describe('parseVersionInfo', () => {
   it('defaults a missing/non-string message to empty', () => {
     expect(parseVersionInfo({ commit: 'abc' })?.message).toBe('');
     expect(parseVersionInfo({ commit: 'abc', message: 42 })?.message).toBe('');
+  });
+});
+
+describe('the deployed-build files', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('reads the build id from version.json and the changelog from changes.json', async () => {
+    const urls: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      urls.push(url);
+      return { ok: true, json: async () => ({ commit: 'abc', message: 'm', log: [{ h: 'abc', s: 'm' }] }) } as Response;
+    }));
+    expect((await fetchDeployedVersion())?.commit).toBe('abc');
+    expect((await fetchDeployedChanges())?.log).toEqual([{ h: 'abc', s: 'm' }]);
+    expect(urls[0]).toMatch(/\/version\.json\?t=\d+$/);
+    expect(urls[1]).toMatch(/\/changes\.json\?t=\d+$/);
   });
 });

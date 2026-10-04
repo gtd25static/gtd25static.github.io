@@ -1,6 +1,6 @@
 // Pure helpers for the in-app update changelog (what a pending update contains).
 // Kept out of the component so they're unit-testable and defensive against a
-// malformed version.json from the network.
+// malformed version.json / changes.json from the network.
 
 export interface VersionInfo {
   commit: string;
@@ -26,20 +26,33 @@ export function changelogFor(info: VersionInfo, current: string): Array<{ h: str
   return info.message ? [{ h: info.commit, s: info.message }] : [];
 }
 
-/**
- * The build the server is serving right now. version.json is deliberately kept
- * out of the precache, so this reads past the service worker: it describes what
- * a pending update contains, and — when its commit disagrees with the running
- * one — that the worker never picked the new build up. Null when unreachable.
- */
-export async function fetchDeployedVersion(): Promise<VersionInfo | null> {
+async function fetchDeployed(file: 'version.json' | 'changes.json'): Promise<VersionInfo | null> {
   try {
-    const response = await fetch(`${import.meta.env.BASE_URL}version.json?t=${Date.now()}`, { cache: 'no-store' });
+    const response = await fetch(`${import.meta.env.BASE_URL}${file}?t=${Date.now()}`, { cache: 'no-store' });
     if (!response.ok) return null;
     return parseVersionInfo(await response.json());
   } catch {
     return null;
   }
+}
+
+/**
+ * The build the server is serving right now. version.json is deliberately kept
+ * out of the precache, so this reads past the service worker: when its commit
+ * disagrees with the running one, the worker never picked the new build up. It
+ * names the build only — the background check polls it. Null when unreachable.
+ */
+export function fetchDeployedVersion(): Promise<VersionInfo | null> {
+  return fetchDeployed('version.json');
+}
+
+/**
+ * What the deployed build contains: its commit and recent commit subjects
+ * (changes.json, also outside the precache). Fetched only when an update is
+ * offered. Null when unreachable.
+ */
+export function fetchDeployedChanges(): Promise<VersionInfo | null> {
+  return fetchDeployed('changes.json');
 }
 
 /** Validate/normalize an untrusted version.json payload; null if unusable. */

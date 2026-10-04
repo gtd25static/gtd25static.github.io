@@ -58,6 +58,14 @@ describe('AppUpdatePrompt', () => {
     expect(screen.queryByText('current')).not.toBeInTheDocument();    // stops at current (dev)
   });
 
+  it('reads the changelog from changes.json, not from the version file the background check polls', async () => {
+    render(<AppUpdatePrompt />);
+    expect(await screen.findByText('New thing')).toBeInTheDocument();
+    const urls = (global.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls.map(([url]) => String(url));
+    expect(urls.some((u) => u.includes('changes.json'))).toBe(true);
+    expect(urls.some((u) => u.includes('version.json'))).toBe(false);
+  });
+
   it('"Update now" applies the update', async () => {
     const user = userEvent.setup();
     render(<AppUpdatePrompt />);

@@ -2,9 +2,15 @@ import { useEffect, useCallback, useRef, createContext, useContext, type ReactNo
 import { useRegisterSW } from 'virtual:pwa-register/react';
 import { GIT_COMMIT } from '../lib/constants';
 import { fetchDeployedVersion } from '../lib/changelog';
+import { isParanoidFlagSet } from '../db/paranoid-flag';
+import { jitterInterval } from '../sync/poll-jitter';
 
 const UPDATE_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
 const MIN_UPDATE_CHECK_MS = 10 * 60 * 1000; // 10 minutes — debounce visibility checks
+// Paranoid Mode spaces background checks further: each is a request to the app's
+// host, and on a network that rewrites TLS a chance to be served another worker.
+// Kept under the jittered timer's 21-minute floor so the timer is never swallowed.
+const PARANOID_MIN_UPDATE_CHECK_MS = 20 * 60 * 1000;
 const RELOAD_FALLBACK_MS = 12_000;          // only fires if controllerchange never does
 // registration.update() has no deadline of its own: a blocked or proxied network
 // can leave it pending for as long as the page lives. Past this we report a
@@ -110,7 +116,8 @@ function useServiceWorkerImpl(): ServiceWorkerApi {
   }, []);
 
   const checkForUpdate = useCallback(() => {
-    if (Date.now() - lastCheckRef.current < MIN_UPDATE_CHECK_MS) return;
+    const minGap = isParanoidFlagSet() ? PARANOID_MIN_UPDATE_CHECK_MS : MIN_UPDATE_CHECK_MS;
+    if (Date.now() - lastCheckRef.current < minGap) return;
     void runCheck();
   }, [runCheck]);
 
@@ -134,12 +141,20 @@ function useServiceWorkerImpl(): ServiceWorkerApi {
     document.addEventListener('visibilitychange', onVisibilityChange);
     // Check on window focus (covers standalone PWA restore).
     window.addEventListener('focus', checkForUpdate);
-    // Check every 30 minutes.
-    const interval = setInterval(checkForUpdate, UPDATE_INTERVAL_MS);
+    // Check about every 30 minutes (jittered in Paranoid Mode), but not while
+    // hidden: nobody is there to update, and becoming visible checks anyway.
+    let timer: ReturnType<typeof setTimeout>;
+    const schedule = () => {
+      timer = setTimeout(() => {
+        if (document.visibilityState !== 'hidden') checkForUpdate();
+        schedule();
+      }, jitterInterval(UPDATE_INTERVAL_MS));
+    };
+    schedule();
     return () => {
       document.removeEventListener('visibilitychange', onVisibilityChange);
       window.removeEventListener('focus', checkForUpdate);
-      clearInterval(interval);
+      clearTimeout(timer);
     };
   }, [checkForUpdate]);
 

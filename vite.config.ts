@@ -9,7 +9,7 @@ function git(cmd: string): string {
 }
 
 const gitCommit = git('git rev-parse --short HEAD')
-// Commit subjects ship inside version.json, so a subject naming the secondary
+// Commit subjects ship inside changes.json, so a subject naming the secondary
 // passphrase's cover would put a telltale word in the bundle (the e2e "shipped
 // bundle names none of this" test): such subjects are left out.
 // (The last pattern: one shipped subject pointed at this filter itself.)
@@ -61,8 +61,10 @@ function cspPlugin(): Plugin {
   }
 }
 
-// Emit a NON-precached version.json describing this build, so a running (older)
-// client can fetch the live one and show what the pending update contains.
+// Emit two NON-precached files describing this build. version.json names the
+// build only: the background update check polls it, so it carries nothing a
+// network observer could read anything into. changes.json holds the commit
+// subjects, fetched only when an update is offered, to show what it contains.
 function versionJsonPlugin(): Plugin {
   return {
     name: 'gtd25-version-json',
@@ -70,12 +72,12 @@ function versionJsonPlugin(): Plugin {
       this.emitFile({
         type: 'asset',
         fileName: 'version.json',
-        source: JSON.stringify({
-          commit: gitCommit,
-          message: gitMessage,
-          builtAt: new Date().toISOString(),
-          log: gitLog,
-        }),
+        source: JSON.stringify({ commit: gitCommit, builtAt: new Date().toISOString() }),
+      })
+      this.emitFile({
+        type: 'asset',
+        fileName: 'changes.json',
+        source: JSON.stringify({ commit: gitCommit, message: gitMessage, log: gitLog }),
       })
     },
   }
@@ -98,9 +100,10 @@ export default defineConfig({
       registerType: 'prompt',
       includeAssets: [],
       injectManifest: {
-        // Keep version.json out of the precache so the update check fetches the
-        // LIVE file from the network (the new build's metadata), not a cached copy.
-        globIgnores: ['**/version.json'],
+        // Keep version.json / changes.json out of the precache so the update check
+        // fetches the LIVE files from the network (the new build's metadata), not
+        // a cached copy.
+        globIgnores: ['**/version.json', '**/changes.json'],
       },
       manifest: {
         name: 'GTD25 - Task Manager',

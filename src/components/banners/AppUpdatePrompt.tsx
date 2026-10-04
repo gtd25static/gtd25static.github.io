@@ -3,7 +3,7 @@ import { onVersionIncompatible, offVersionIncompatible, onSyncSuccess, offSyncSu
 import { useServiceWorker } from '../../hooks/use-service-worker';
 import { useVault } from '../../hooks/use-vault';
 import { GIT_COMMIT } from '../../lib/constants';
-import { changelogFor, fetchDeployedVersion, type VersionInfo } from '../../lib/changelog';
+import { changelogFor, fetchDeployedChanges, type VersionInfo } from '../../lib/changelog';
 import { Button } from '../ui/Button';
 
 const PARANOID_UPDATE_NOTICE_KEY = 'gtd25-paranoid-update-notice';
@@ -71,7 +71,7 @@ export function AppUpdatePrompt() {
   const [deferUntilLocked, setDeferUntilLocked] = useState(false);
   const [updateInstalledNoticeVisible, setUpdateInstalledNoticeVisible] = useState(() => readCompletedParanoidUpdateNotice());
 
-  // Fetch the LIVE version.json (cache-busted, bypassing the SW) to show what the
+  // Fetch the LIVE changes.json (cache-busted, bypassing the SW) to show what the
   // pending update contains — for BOTH a detected new build and a sync-required
   // update. Best-effort: omitted if offline / not deployed yet.
   useEffect(() => {
@@ -79,7 +79,7 @@ export function AppUpdatePrompt() {
     setVersionChecked(false);
     if (!needRefresh && !syncIncompat) return;
     let active = true;
-    fetchDeployedVersion()
+    fetchDeployedChanges()
       .then((v) => { if (active && v) setInfo(v); }) // the changelog is optional
       .finally(() => { if (active) setVersionChecked(true); });
     return () => { active = false; };
