@@ -13,6 +13,7 @@ vi.mock('../../sync/github-api', () => ({
   createTree: vi.fn(),
   createCommit: vi.fn(),
   createBlobBase64: vi.fn(),
+  transferTimeoutMs: vi.fn(() => 15_000),
 }));
 
 import { db } from '../../db';

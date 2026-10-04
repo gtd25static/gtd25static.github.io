@@ -64,7 +64,7 @@ describe('SharedImagePreview', () => {
     render(<SharedImagePreview item={item()} filename="shot.png" onClose={() => {}} />);
     const img = await screen.findByRole('img');
     expect(img).toHaveAttribute('src', 'blob:fake-url');
-    expect(getSharedBlobBytes).toHaveBeenCalledWith('b1');
+    expect(getSharedBlobBytes).toHaveBeenCalledWith('b1', item().size);
     expect(anchorClicks).toBe(0);
   });
 
@@ -110,7 +110,7 @@ describe('SharedItemCard routing', () => {
     fireEvent.click(screen.getByRole('button', { name: 'doc.pdf' }));
     await waitFor(() => expect(anchorClicks).toBe(1));
     expect(document.querySelector('dialog')).toBeNull();
-    expect(getSharedBlobBytes).toHaveBeenCalledWith('b1');
+    expect(getSharedBlobBytes).toHaveBeenCalledWith('b1', item().size);
   });
 });
 

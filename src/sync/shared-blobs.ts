@@ -18,7 +18,7 @@
 
 import { db } from '../db';
 import {
-  getBinaryFile, putBinaryFile,
+  getBinaryFile, putBinaryFile, transferTimeoutMs,
   getRef, createRef, updateRef, getCommit, getTree, createTree, createCommit, createBlobBase64,
   type GitTreeEntry,
 } from './github-api';
@@ -26,6 +26,7 @@ import { encryptBytes, decryptBytes, getCachedEncryptionKey } from './crypto';
 import { getActiveAtRestKey } from '../db/vault-middleware';
 import { isParanoidFlagSet } from '../db/paranoid-flag';
 import { recordError } from '../lib/diagnostics';
+import { MAX_SHARED_FOLDER_BYTES } from '../lib/constants';
 
 const BLOB_DIR = 'gtd25-shared';
 export const BLOB_BRANCH = 'gtd25-blobs';
@@ -249,8 +250,16 @@ export async function uploadSharedBlob(blobId: string, plaintext: Uint8Array): P
   await cacheBlobLocal(blobId, plaintext);
 }
 
-/** Return a blob's plaintext bytes — from the local cache, else download + cache. */
-export async function getSharedBlobBytes(blobId: string): Promise<Uint8Array> {
+/** Time budget for downloading a file of `size` bytes (unknown: the folder cap). */
+export function sharedBlobDownloadTimeoutMs(size?: number): number {
+  return transferTimeoutMs(paddedLength(size ?? MAX_SHARED_FOLDER_BYTES) + 28);
+}
+
+/**
+ * Return a blob's plaintext bytes — from the local cache, else download + cache.
+ * `size` (the item's) sizes the download's time budget.
+ */
+export async function getSharedBlobBytes(blobId: string, size?: number): Promise<Uint8Array> {
   const cached = await readBlobLocal(blobId);
   if (cached) return cached;
 
@@ -259,8 +268,9 @@ export async function getSharedBlobBytes(blobId: string): Promise<Uint8Array> {
   const key = await requireSyncKey();
   // Prefer the blob branch; fall back to the default branch for any legacy blob
   // written before blobs moved to their own branch.
-  let ciphertext = await getBinaryFile(creds.pat, creds.repo, blobPath(blobId), undefined, BLOB_BRANCH);
-  if (!ciphertext) ciphertext = await getBinaryFile(creds.pat, creds.repo, blobPath(blobId));
+  const timeoutMs = sharedBlobDownloadTimeoutMs(size);
+  let ciphertext = await getBinaryFile(creds.pat, creds.repo, blobPath(blobId), undefined, BLOB_BRANCH, timeoutMs);
+  if (!ciphertext) ciphertext = await getBinaryFile(creds.pat, creds.repo, blobPath(blobId), undefined, undefined, timeoutMs);
   if (!ciphertext) throw new Error(`Blob ${blobId} not found on remote`);
   const plaintext = await decryptSharedBlob(key, ciphertext, blobId);
   await cacheBlobLocal(blobId, plaintext);

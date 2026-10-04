@@ -20,22 +20,38 @@ function commitMessage(branded: string): string {
   return isParanoidFlagSet() ? GENERIC_COMMIT_MESSAGE : branded;
 }
 
+const BASE_TIMEOUT_MS = 15_000;
+
+/**
+ * Time budget for a request moving `bytes` over the wire: 15 s, plus a second per
+ * 256 KiB (a ~2 Mbit/s floor) — a shared file of tens of MB used to be aborted at
+ * 15 s on slower links, and every retry sent it whole again. Below 256 KiB this
+ * is the plain 15 s.
+ */
+export function transferTimeoutMs(bytes: number): number {
+  return BASE_TIMEOUT_MS + Math.floor(bytes / 262_144) * 1000;
+}
+
 // Low-level fetch against a full api.github.com URL, with auth, timeout and
 // rate-limit detection. Used by both the Contents helpers and the Git Data API
-// helpers (which live under /git/... rather than /contents/...).
+// helpers (which live under /git/... rather than /contents/...). The timeout
+// scales with the request body unless the caller sets one (a download's size is
+// only known to the caller).
 async function apiFetch(
   pat: string,
   url: string,
   options?: RequestInit,
   signal?: AbortSignal,
   keepalive?: boolean,
+  timeoutMs?: number,
 ) {
+  const budget = timeoutMs ?? transferTimeoutMs(typeof options?.body === 'string' ? options.body.length : 0);
   // keepalive requests outlive the page — skip timeout/abort signal
   const fetchSignal = keepalive
     ? undefined
     : signal
-      ? AbortSignal.any([AbortSignal.timeout(15_000), signal])
-      : AbortSignal.timeout(15_000);
+      ? AbortSignal.any([AbortSignal.timeout(budget), signal])
+      : AbortSignal.timeout(budget);
   const resp = await fetch(url, {
     ...options,
     cache: 'no-store',
@@ -73,8 +89,9 @@ async function githubFetch(
   options?: RequestInit,
   signal?: AbortSignal,
   keepalive?: boolean,
+  timeoutMs?: number,
 ) {
-  return apiFetch(pat, `https://api.github.com/repos/${repo}/contents/${path}`, options, signal, keepalive);
+  return apiFetch(pat, `https://api.github.com/repos/${repo}/contents/${path}`, options, signal, keepalive, timeoutMs);
 }
 
 function utf8ToBase64(str: string): string {
@@ -330,6 +347,7 @@ export async function getBinaryFile(
   path: string,
   signal?: AbortSignal,
   ref?: string,
+  timeoutMs?: number,
 ): Promise<Uint8Array | null> {
   const resp = await githubFetch(
     pat,
@@ -337,6 +355,8 @@ export async function getBinaryFile(
     ref ? `${path}?ref=${encodeURIComponent(ref)}` : path,
     { headers: { Accept: 'application/vnd.github.raw' } },
     signal,
+    false,
+    timeoutMs,
   );
   if (resp.status === 404) return null;
   if (!resp.ok) throw new Error(`GitHub API error: ${resp.status}`);

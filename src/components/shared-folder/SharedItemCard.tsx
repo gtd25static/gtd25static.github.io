@@ -73,7 +73,7 @@ export function SharedItemCard({ item }: { item: SharedItem }) {
     if (!item.blobId) return;
     setBusy(true);
     try {
-      const bytes = await getSharedBlobBytes(item.blobId);
+      const bytes = await getSharedBlobBytes(item.blobId, item.size);
       // Copy into a fresh ArrayBuffer so the Blob owns a clean, correctly-sized buffer.
       const buf = bytes.slice().buffer;
       // Always opaque bytes: the type is whatever the uploader's file said, and a

@@ -1,4 +1,4 @@
-import { getFile, RateLimitError } from '../../sync/github-api';
+import { getFile, getBinaryFile, putBinaryFile, transferTimeoutMs, RateLimitError } from '../../sync/github-api';
 
 describe('RateLimitError', () => {
   it('has correct properties', () => {
@@ -50,5 +50,50 @@ describe('getFile — files over 1 MB', () => {
       ? new Response(null, { status: 502 })
       : new Response(JSON.stringify({ content: '', encoding: 'none', sha: 's', size: 2_000_000 }), { status: 200 }))));
     await expect(getFile('tok', 'me/repo', 'gtd25-changelog.json')).rejects.toThrow(/502/);
+  });
+});
+
+describe('request timeouts', () => {
+  // A 15 s budget for every request aborted large shared files on slower links —
+  // and each retry sent the whole file again. Transfers now get time in
+  // proportion to their size; everything else keeps 15 s.
+  let timeouts: number[];
+
+  beforeEach(() => {
+    timeouts = [];
+    const real = AbortSignal.timeout.bind(AbortSignal);
+    vi.spyOn(AbortSignal, 'timeout').mockImplementation((ms: number) => { timeouts.push(ms); return real(ms); });
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(
+      JSON.stringify({ content: { sha: 'new-sha' }, sha: 'file-sha', encoding: 'base64' }), { status: 200 },
+    )));
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it('scales with size: about a second per 256 KiB on top of 15 s', () => {
+    expect(transferTimeoutMs(0)).toBe(15_000);
+    expect(transferTimeoutMs(262_143)).toBe(15_000);
+    expect(transferTimeoutMs(262_144)).toBe(16_000);
+    expect(transferTimeoutMs(42_000_000)).toBe(175_000);
+  });
+
+  it('gives a 2 MB upload more than 15 s', async () => {
+    await putBinaryFile('tok', 'me/repo', 'gtd25-shared/x', new Uint8Array(2_000_000), undefined, undefined, 'b');
+    expect(timeouts).toHaveLength(1);
+    expect(timeouts[0]).toBeGreaterThan(15_000);
+  });
+
+  it('gives a download the time its caller asks for', async () => {
+    await getBinaryFile('tok', 'me/repo', 'gtd25-shared/x', undefined, 'b', 90_000);
+    expect(timeouts).toEqual([90_000]);
+  });
+
+  it('keeps 15 s for ordinary requests', async () => {
+    await getFile('tok', 'me/repo', 'gtd25-changelog.json').catch(() => {}); // only the budget matters here
+    await getBinaryFile('tok', 'me/repo', 'gtd25-shared/x');
+    expect(timeouts).toEqual([15_000, 15_000]);
   });
 });

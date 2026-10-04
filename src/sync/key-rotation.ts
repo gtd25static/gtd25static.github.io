@@ -42,7 +42,10 @@ import {
 import { syncNow, forcePush, endSyncSession, SYNC_LOCK_NAME } from './sync-engine';
 import { hasPendingEntries } from './change-log';
 import { getSyncPat, rememberSyncPassword, forgetSyncPassword } from './sync-credentials';
-import { BLOB_BRANCH, KEEP_PATH, KEEP_CONTENT_BASE64, blobPath, ensureBlobBranch, sealSharedBlob, decryptSharedBlob } from './shared-blobs';
+import {
+  BLOB_BRANCH, KEEP_PATH, KEEP_CONTENT_BASE64, blobPath, ensureBlobBranch, sealSharedBlob, decryptSharedBlob,
+  sharedBlobDownloadTimeoutMs,
+} from './shared-blobs';
 import { overwriteAllBackups } from './remote-backups';
 import { publishOwnRegistryEntry } from './remote-unlock';
 import { squashDefaultBranch } from './history-compaction';
@@ -241,8 +244,8 @@ async function rotateBlobBranch(
     const path = blobPath(blobId);
     const existing = onBranch.get(path);
     const bytes = existing
-      ? await getBinaryFile(pat, repo, path, undefined, BLOB_BRANCH)
-      : await getBinaryFile(pat, repo, path); // written before blobs had their own branch
+      ? await getBinaryFile(pat, repo, path, undefined, BLOB_BRANCH, sharedBlobDownloadTimeoutMs())
+      : await getBinaryFile(pat, repo, path, undefined, undefined, sharedBlobDownloadTimeoutMs()); // written before blobs had their own branch
     if (!bytes) continue; // not on the remote: nothing to carry over
     if (!existing) legacyOnDefault.push(path);
     const asIs = async (): Promise<GitTreeEntry> =>

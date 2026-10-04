@@ -7,6 +7,7 @@ import { fakeRepo } from '../helpers/fake-repo';
 import { deriveKey, generateSalt, cacheEncryptionKey, encryptBytes, decryptBytes } from '../../sync/crypto';
 import {
   paddedLength, sealSharedBlob, decryptSharedBlob, blobAad, uploadSharedBlob, blobPath, BLOB_BRANCH,
+  sharedBlobDownloadTimeoutMs,
 } from '../../sync/shared-blobs';
 
 // A file's exact size, readable off its upload by anyone inspecting the traffic,
@@ -95,5 +96,13 @@ describe('uploads', () => {
     const larger = fakeRepo.readBytes(blobPath('larger'), BLOB_BRANCH)!;
     expect(small.length).toBe(4096 + 28);
     expect(larger.length).toBe(small.length);
+  });
+});
+
+describe('download time budget', () => {
+  it('follows the item size, and the folder cap when it is not known', () => {
+    expect(sharedBlobDownloadTimeoutMs(100)).toBe(15_000);
+    expect(sharedBlobDownloadTimeoutMs(10_000_000)).toBeGreaterThan(50_000);
+    expect(sharedBlobDownloadTimeoutMs()).toBeGreaterThan(sharedBlobDownloadTimeoutMs(10_000_000));
   });
 });

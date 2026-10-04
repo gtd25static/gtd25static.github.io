@@ -43,7 +43,7 @@ export function SharedImagePreview({ item, filename, onClose }: {
     void (async () => {
       try {
         if (!item.blobId) throw new Error('missing blob');
-        const bytes = await getSharedBlobBytes(item.blobId);
+        const bytes = await getSharedBlobBytes(item.blobId, item.size);
         if (!active) return;
         const loaded = new Blob([bytes.slice().buffer], { type: item.mimeType || 'application/octet-stream' });
         objectUrl = URL.createObjectURL(loaded);

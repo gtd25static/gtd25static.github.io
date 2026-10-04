@@ -121,6 +121,7 @@ class FakeRepo {
       constructor(resetAtMs?: number) { super('rate limited'); this.name = 'RateLimitError'; this.resetAtMs = resetAtMs; }
     },
     testConnection: async () => true,
+    transferTimeoutMs: (bytes: number) => 15_000 + Math.floor(bytes / 262_144) * 1000,
     getFile: async (_pat: string, _repo: string, path: string) => {
       const sha = this.sha(path);
       return sha ? { data: this.readText(path)!, sha } : null;
