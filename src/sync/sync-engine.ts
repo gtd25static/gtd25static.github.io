@@ -1,7 +1,7 @@
 import { db } from '../db';
 import type { SyncData, Settings, ChangeEntry } from '../db/models';
 import type { ImportData } from '../db/export-import';
-import { getFile, getFileConditional, putFile, deleteFile, RateLimitError } from './github-api';
+import { getFile, getFileConditional, putFile, deleteFile, RateLimitError, type ConditionalFile } from './github-api';
 import { jitterInterval } from './poll-jitter';
 import { cleanupSoftDeletes, archiveOldCompleted } from './conflict-resolution';
 import { applyRemoteEntries as applyRemoteEntriesToDb, getPendingEntries, clearPendingEntries, clearEntriesByIds, pendingEntryCount, recordChangeBatch, isKnownEntityType } from './change-log';
@@ -464,9 +464,12 @@ let probeSnapshotEtag: string | null = null;
 /**
  * Returns true when a full syncNow() is warranted — remote changed, a file is
  * absent, we have pending local pushes, or anything is uncertain. Returns false
- * only when BOTH changelog and snapshot are definitively unchanged (304) and
- * nothing is pending, letting the idle tick skip the heavier full sync. The
- * default on any doubt is true, so this can only save work, never lose changes.
+ * only when BOTH changelog and snapshot are definitively the versions the last
+ * successful sync applied (a 304 against the ETags it read, or a 200 whose sha
+ * it already knows — this device's own push changes the changelog after that
+ * sync read it) and nothing is pending, letting the idle tick skip the heavier
+ * full sync. The default on any doubt is true, so this can only save work,
+ * never lose changes.
  */
 export async function cheapIdleProbe(): Promise<boolean> {
   try {
@@ -479,7 +482,10 @@ export async function cheapIdleProbe(): Promise<boolean> {
     ]);
     probeChangelogEtag = cl.status === 'absent' ? null : cl.etag;
     probeSnapshotEtag = snap.status === 'absent' ? null : snap.etag;
-    return !(cl.status === 'unchanged' && snap.status === 'unchanged');
+    const lastSnapshotSha = (await db.syncMeta.get('sync-meta'))?.lastSnapshotSha;
+    const applied = (file: ConditionalFile, sha: string | undefined) =>
+      file.status === 'unchanged' || (file.status === 'ok' && !!sha && file.sha === sha);
+    return !(applied(cl, cachedChangelogSha) && applied(snap, lastSnapshotSha));
   } catch {
     return true; // any error → fall through to the real sync
   }
@@ -514,8 +520,10 @@ async function onBatchTimerFired(batchSize: number) {
     schedulerState = 'batching';
     schedulerTimer = setTimeout(() => onBatchTimerFired(BATCH_SIZE), jitterInterval(BATCH_INTERVAL_MS));
   } else {
-    // All pushed — final pull then back to idle
-    await syncNow();
+    // All pushed — final pull then back to idle. Through the idle gate: in
+    // Paranoid Mode that is a probe recognising our own push (no second full
+    // download), and a full sync only if another device wrote meanwhile.
+    await idlePollOnce();
     startIdlePoll();
   }
 }
@@ -1438,6 +1446,11 @@ async function runSync(manual = false, pushLimit?: number): Promise<number> {
     // Update flushOnHide cache with current sync state
     cachedCreds = creds;
     cachedChangelogSha = finalChangelogSha;
+    // The idle probe asks "changed since this sync?" against what this run read
+    // and applied — set only here, on success, so what a failed run read never
+    // passes for applied.
+    probeChangelogEtag = remoteChangelogFile?.etag ?? null;
+    probeSnapshotEtag = remoteSnapshotFile?.etag ?? null;
     cachedRemoteEntries = finalRemoteEntries;
     cachedChangelogTimestamp = Date.now();
 

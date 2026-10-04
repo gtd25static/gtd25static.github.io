@@ -181,11 +181,14 @@ export async function getFile(
   repo: string,
   path: string,
   signal?: AbortSignal,
-): Promise<{ data: string; sha: string } | null> {
+): Promise<{ data: string; sha: string; etag?: string } | null> {
   const resp = await githubFetch(pat, repo, path, undefined, signal);
   if (resp.status === 404) return null;
   if (!resp.ok) throw new Error(`GitHub API error: ${resp.status}`);
-  return decodeContentsResponse(pat, repo, path, await resp.json(), signal);
+  // The ETag lets a later conditional GET (the Paranoid idle probe) ask whether
+  // the file changed since this read.
+  const etag = resp.headers.get('ETag') ?? undefined;
+  return { ...(await decodeContentsResponse(pat, repo, path, await resp.json(), signal)), etag };
 }
 
 // The snapshot and changelog are written by whoever holds the PAT, and parsed
