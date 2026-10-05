@@ -169,6 +169,18 @@ describe('safety copies when storage is full', () => {
     expect(getLocalBackups().map((b) => b.timestamp).sort()).toEqual([base - 3000, base - 2000]);
   });
 
+  it('a burst of changes on a full storage keeps the oldest pre-change copy of the day (the one before the burst)', async () => {
+    const base = Date.now();
+    await copyAt(base - 3000, 'change'); // before the first reset of the burst
+    await copyAt(base - 2000, 'change');
+    await copyAt(base - 1000, 'change');
+    capBackups(3);
+    expect(await copyAt(base, 'change')).toBe(true);
+    const kept = getLocalBackups().map((b) => b.timestamp);
+    expect(kept).toContain(base - 3000);
+    expect(kept).toContain(base);
+  });
+
   it('turning Paranoid off keeps why each copy was taken', async () => {
     await enableParanoid(PASS);
     await createLocalBackup({ reason: 'change' });
@@ -234,5 +246,40 @@ describe('open sync conflicts and the vault key', () => {
     lock();
     expect(await unlockWithPassphrase('the other passphrase 456')).toBe(true);
     expect(await db.syncConflicts.count()).toBe(0);
+  });
+});
+
+describe('final review: Paranoid local', () => {
+  it('counting unreadable rows before a disable opens no bypass window', async () => {
+    await enableParanoid(PASS);
+    await corruptRow('t2');
+    const middleware = await import('../../db/vault-middleware');
+    const bypass = vi.spyOn(middleware, 'setMigrationBypass');
+    expect(await migration.countUnreadableAtRest()).toBe(1);
+    expect(bypass).not.toHaveBeenCalled();
+  });
+
+  it('a wipe stops the diagnostics log from being written back afterwards', async () => {
+    const diagnostics = await import('../../lib/diagnostics');
+    diagnostics.recordError('vault.before', new Error('pre-wipe history'));
+    diagnostics.haltErrorPersistence();
+    diagnostics.recordError('vault.after', new Error('after the wipe'));
+    expect(localStorage.getItem('gtd25-diagnostics-log')).toBeNull(); // nothing written back
+    expect(diagnostics.getErrorLog().map((e) => e.context)).toEqual(['vault.after']); // no pre-wipe history
+  });
+
+  it('the boot-time limit check says when it wiped, so the app does not open on', async () => {
+    await enableParanoid(PASS);
+    await db.vault.update('vault', { maxUnlockAttempts: 3, failedUnlockAttempts: 3 });
+    expect(await enforceFailedAttemptLimit()).toBe(true);
+    await db.vault.update('vault', { failedUnlockAttempts: 0 });
+    expect(await enforceFailedAttemptLimit()).toBe(false);
+  });
+
+  it('lowering the attempt limit to the failures already counted does not wipe at the next start', async () => {
+    await enableParanoid(PASS);
+    await db.vault.update('vault', { maxUnlockAttempts: 10, failedUnlockAttempts: 4 });
+    await vaultModule.configureMaxUnlockAttempts(3);
+    expect((await db.vault.get('vault'))?.failedUnlockAttempts).toBe(0);
   });
 });

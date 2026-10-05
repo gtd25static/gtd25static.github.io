@@ -16,7 +16,7 @@ import {
 import { encryptBlob, decryptBlob } from './crypto';
 import { importKekFromBytes } from '../db/vault-crypto';
 import { isParanoidFlagSet } from '../db/paranoid-flag';
-import { wrapDekWithRuk, stageNextRuk, promoteNextRuk, discardNextRuk, unlockWithRemoteKey, clearRemoteUnlock, getVaultSecrets, getRukRaw, isRemoteUnlockEnrolled, isUnlocked, setRemoteApprovers } from '../db/vault';
+import { wrapDekWithRuk, stageNextRuk, promoteNextRuk, discardNextRuk, getStagedRukRaw, unlockWithRemoteKey, clearRemoteUnlock, getVaultSecrets, getRukRaw, isRemoteUnlockEnrolled, isUnlocked, setRemoteApprovers } from '../db/vault';
 export { isRemoteUnlockEnrolled } from '../db/vault'; // re-exported so the UI imports it from one place
 import { getCachedSalt } from './crypto';
 import { deriveRegistryMacKey } from './remote-unlock-crypto';
@@ -109,7 +109,7 @@ export async function buildRegistryEntry(
 
 /** True only if the entry's MAC verifies under the syncPassword-derived key. */
 export async function isAuthenticEntry(e: RegistryEntry | RegistryTombstone, macKey: CryptoKey): Promise<boolean> {
-  if ('removed' in e) return false;
+  if (!e || typeof e !== 'object' || 'removed' in e) return false; // a primitive in the file is nobody
   if (!e || typeof e.mac !== 'string' || !e.deviceId || !e.ecdhPub || !e.ecdsaPub) return false;
   return verifyRegistryMac(macKey, e.mac, registryEntryBytes({
     deviceId: e.deviceId, name: e.name, ecdhPub: e.ecdhPub, ecdsaPub: e.ecdsaPub,
@@ -154,7 +154,7 @@ export async function remacRegistry(pat: string, repo: string, oldMacKey: Crypto
     if (!existing || !reg) return;
     let changed = false;
     for (const [id, e] of Object.entries(reg)) {
-      if (!e) continue;
+      if (!e || typeof e !== 'object') continue;
       if (await isAuthenticTombstone(e, oldMacKey)) {
         const t = e as RegistryTombstone;
         reg[id] = { ...t, mac: await registryMac(newMacKey, tombstoneBytes(t.deviceId, t.removedAt)) };
@@ -406,7 +406,9 @@ export async function reissueRemoteUnlock(ctx?: EnrollContext): Promise<boolean>
     const approvers = stillEligible(listed, await readAuthenticRegistry(c.pat, c.repo, c.macKey));
     if (approvers.length === 0) throw new Error('No approver can receive the new key');
     const identity = await ensureDeviceIdentity();
-    await stageNextRuk(ruk); // opens the vault for whoever gets it, even if the hand-out dies
+    const staged = await getStagedRukRaw(); // an earlier interrupted hand-out: reuse what some may hold
+    if (staged) ruk.set(staged);
+    else await stageNextRuk(ruk); // opens the vault for whoever gets it, even if the hand-out dies
     for (const a of approvers) {
       const rukEcies = await eciesEncryptTo(a.ecdhPub, ruk);
       const ts = Date.now();
@@ -465,12 +467,16 @@ export async function removeApprover(ctx: EnrollContext, targetDeviceId: string)
   }
 
   const identity = await ensureDeviceIdentity();
-  const ruk = crypto.getRandomValues(new Uint8Array(32));
+  // A retry after an interrupted removal hands out the key already staged: some
+  // approvers hold it, and a fresh one replaced it before reaching them — then,
+  // if nobody was reached, was discarded, leaving them a key that opened nothing.
+  const staged = await getStagedRukRaw();
+  const ruk = staged ?? crypto.getRandomValues(new Uint8Array(32));
   let delivered = 0;
   try {
     // Staged first: an approver handed the new key can unlock with it even if
     // this dies before the end (it used to hold a key that opened nothing).
-    await stageNextRuk(ruk);
+    if (!staged) await stageNextRuk(ruk);
     for (const a of staying) {
       const rukEcies = await eciesEncryptTo(a.ecdhPub, ruk);
       const ts = Date.now();
@@ -488,7 +494,7 @@ export async function removeApprover(ctx: EnrollContext, targetDeviceId: string)
     // still can as well until this runs again (retrying is safe: a fresh RUK
     // with a newer timestamp wins). "Nothing was changed" would be a lie.
     recordError('remoteUnlock.removeApprover.partial', err);
-    if (delivered === 0) await discardNextRuk().catch((e) => recordError('remoteUnlock.removeApprover.discard', e));
+    if (delivered === 0 && !staged) await discardNextRuk().catch((e) => recordError('remoteUnlock.removeApprover.discard', e));
     throw new Error(delivered === 0
       ? 'Could not reach the trusted devices — nothing was changed, remote unlock still works as before.'
       : `Interrupted after handing the new key to ${delivered} of ${staying.length} device(s). Until you run this again the device you are removing can still unlock this one — the vault itself is unaffected, and retrying is safe.`);
@@ -761,7 +767,7 @@ async function readRegistryKeys(pat: string, repo: string, macKey: CryptoKey | n
     if (!reg) return { present: false, ids: new Set<string>(), seenAt, tombstoned };
     if (macKey) {
       for (const e of Object.values(reg)) {
-        if (!e) continue;
+        if (!e || typeof e !== 'object') continue; // a primitive in the file is nobody
         if (await isAuthenticTombstone(e, macKey)) tombstoned.add(e.deviceId);
         else if ('updatedAt' in e && Number.isFinite(e.updatedAt) && await isAuthenticEntry(e, macKey)) seenAt.set(e.deviceId, e.updatedAt);
       }

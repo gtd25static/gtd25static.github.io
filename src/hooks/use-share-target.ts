@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import { toast } from '../components/ui/Toast';
 import { recordError } from '../lib/diagnostics';
 import { useAppState } from '../stores/app-state';
-import { createFileItem, createLinkItem, createSnippetItem } from './use-shared-items';
+import { createFileItem, createLinkItem, createSnippetItem, sharedFolderHasRoomFor } from './use-shared-items';
 import { canUploadSharedBlob, sharedBlobBlocker } from '../sync/shared-blobs';
 import { createTask } from './use-tasks';
 import { getOrCreateInbox } from './use-task-lists';
@@ -68,7 +68,7 @@ async function clearStash(): Promise<void> {
  * does not offer the saved parts twice. Best effort — the worst case is a
  * duplicate, never a loss.
  */
-async function dropFromStash(part: { fileIndex: number } | { text: true }): Promise<void> {
+async function dropFromStash(part: { fileIndex: number } | { text: true } | { notice: true }): Promise<void> {
   try {
     if (!(await caches.has(SHARE_CACHE))) return;
     const cache = await caches.open(SHARE_CACHE);
@@ -79,12 +79,32 @@ async function dropFromStash(part: { fileIndex: number } | { text: true }): Prom
     const metaRes = await cache.match(SHARE_META_PATH);
     if (!metaRes) return;
     const meta = (await metaRes.json()) as SharedPayloadMeta;
-    await cache.put(SHARE_META_PATH, new Response(JSON.stringify({ ...meta, title: '', url: '', text: '' }), {
+    // The text part, or the one-time "files too large" notice once shown.
+    const next = 'text' in part ? { ...meta, title: '', url: '', text: '' } : { ...meta, skippedFiles: 0 };
+    await cache.put(SHARE_META_PATH, new Response(JSON.stringify(next), {
       headers: { 'Content-Type': 'application/json' },
     }));
   } catch (err) {
     recordError('shareTarget.dropFromStash', err);
   }
+}
+
+/**
+ * Save one stashed file. A file that cannot fit the folder at all is dropped
+ * from the stash too (offered again at every start, it also kept every new
+ * share out as "busy" for a day); only a failure that may pass is kept.
+ */
+async function saveStashedFile(file: File, fileIndex: number): Promise<'saved' | 'refused' | 'failed'> {
+  const fits = await sharedFolderHasRoomFor(file.size).catch(() => true);
+  if (await createFileItem(file)) { // enforces the quota + toasts on failure
+    await dropFromStash({ fileIndex });
+    return 'saved';
+  }
+  if (!fits) {
+    await dropFromStash({ fileIndex });
+    return 'refused';
+  }
+  return 'failed';
 }
 
 function cleanUrl(): void {
@@ -97,12 +117,9 @@ interface SaveOutcome { saved: number; failed: number }
 async function saveToSharedFolder({ files, stashIndexes, title, url, text }: PendingShare): Promise<SaveOutcome> {
   const outcome: SaveOutcome = { saved: 0, failed: 0 };
   for (const [i, file] of files.entries()) {
-    if (await createFileItem(file)) { // enforces the quota + toasts on failure
-      outcome.saved++;
-      await dropFromStash({ fileIndex: stashIndexes?.[i] ?? i });
-    } else {
-      outcome.failed++;
-    }
+    const result = await saveStashedFile(file, stashIndexes?.[i] ?? i);
+    if (result === 'saved') outcome.saved++;
+    else if (result === 'failed') outcome.failed++;
   }
   const link = url || extractUrl(text);
   if (link || text || title) {
@@ -138,9 +155,10 @@ async function saveToInbox({ files, stashIndexes, title, url, text }: PendingSha
   if (files.length > 0) {
     const inboxId = await getOrCreateInbox();
     for (const [i, file] of files.entries()) {
-      if (!(await createFileItem(file))) { failed++; continue; }
+      const result = await saveStashedFile(file, stashIndexes?.[i] ?? i);
+      if (result === 'failed') failed++;
+      if (result !== 'saved') continue;
       filesSaved++;
-      await dropFromStash({ fileIndex: stashIndexes?.[i] ?? i });
       const task = await createTask(inboxId, {
         title: file.name,
         description: 'Attached file — saved in the Shared Folder',
@@ -224,7 +242,10 @@ export function useShareTarget(): ShareTargetApi {
         // dropped — and so a mixed share isn't half-saved. Link and text shares
         // prompt immediately: as an Inbox task they need no sync (text headed for
         // the Shared Folder is checked when that destination is picked).
-        const needsBlobUpload = (meta.files?.length ?? 0) > 0;
+        // Files still stashed — the ones a previous start saved are gone from it.
+        let filesLeft = 0;
+        for (let i = 0; i < (meta.files?.length ?? 0); i++) if (await cache.match(shareFilePath(i))) filesLeft++;
+        const needsBlobUpload = filesLeft > 0;
         // Sync not set up, or switched off: no wait would bring it up. Say what
         // would, and keep the share for when it does (the stash's usual TTL).
         if (needsBlobUpload && (await sharedBlobBlocker()) === 'no-sync') {
@@ -256,6 +277,7 @@ export function useShareTarget(): ShareTargetApi {
         }
         if (meta.skippedFiles) {
           toast(`${meta.skippedFiles} shared file${meta.skippedFiles === 1 ? ' was' : 's were'} too large to receive`, 'error');
+          await dropFromStash({ notice: true }); // said once, not at every start
         }
 
         // Hand over to the destination prompt. The stash stays until the user

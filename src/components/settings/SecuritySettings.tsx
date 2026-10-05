@@ -761,7 +761,7 @@ function ManageForm({ idleMinutes, maxAttempts, attemptWipeJustArmed, systemIdle
         // Rows nothing can open: dropped by the disable — asked first, not after.
         setBusy(false);
         const drop = await confirmDialog(
-          `${e.count} item${e.count === 1 ? '' : 's'} on this device can't be read (corrupt, or written under another key) and will be dropped. If sync holds them, they come back on the next sync. Turn Paranoid Mode off anyway?`,
+          `${e.count} item${e.count === 1 ? '' : 's'} on this device can't be read (corrupt, or written under another key) and will be dropped. If the synced copy holds them, Force Pull brings them back; changes of theirs not yet synced are lost. Turn Paranoid Mode off anyway?`,
           { confirmLabel: 'Drop and disable', danger: true },
         );
         if (!drop) return;

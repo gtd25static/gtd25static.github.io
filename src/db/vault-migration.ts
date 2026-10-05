@@ -116,14 +116,18 @@ async function tryDecryptRow(table: string, key: CryptoKey, row: Row): Promise<R
 }
 
 /**
- * How many stored rows `key` cannot open (corrupt, or written under another key)
- * — what a disable would have to drop. Read-only.
+ * How many stored rows the active key cannot open (corrupt, or written under
+ * another key) — what a disable would have to drop. Read through the
+ * middleware, which quarantines exactly those (`_decryptError`, the same
+ * decrypt as decryptAllAtRest): reading raw opened the module-wide bypass, and
+ * a sync merging in this tab meanwhile read ciphertext rows and wrote them back
+ * holding only their base — their content gone. Read-only.
  */
-export async function countUnreadableAtRest(key: CryptoKey): Promise<number> {
+export async function countUnreadableAtRest(): Promise<number> {
   let unreadable = 0;
   for (const table of encryptedTables()) {
-    const raw = await readRaw(table);
-    for (const row of raw) if ((await tryDecryptRow(table.name, key, row)) === UNREADABLE) unreadable++;
+    const rows = (await table.toArray()) as Row[];
+    unreadable += rows.filter((r) => r._decryptError === true).length;
   }
   return unreadable;
 }

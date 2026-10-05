@@ -1,7 +1,10 @@
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../db';
 import type { ChangeEntry, DiscussionEntry, SyncConflict } from '../db/models';
-import { conflictTable, type ConflictEntityType } from '../sync/conflicts';
+import { conflictTable, conflictSuperseded, type ConflictEntityType } from '../sync/conflicts';
+import { withSyncLock } from '../sync/sync-lock';
+import { toast } from '../components/ui/Toast';
+import { MAX_TITLE_LENGTH } from '../lib/constants';
 import { stampUpdatedFields } from '../sync/field-timestamps';
 import { ensureDeviceId } from '../sync/change-log';
 import { SYNC_VERSION } from '../sync/version';
@@ -15,14 +18,48 @@ const TABLE_NAME: Record<ConflictEntityType, string> = {
   mindmapFolder: 'mindmapFolders', mindmap: 'mindmaps', mindmapNode: 'mindmapNodes',
 };
 
-/** The open sync conflicts, oldest first. */
+/**
+ * The open sync conflicts, oldest first — without the ones that no longer stand
+ * (edited again since, item gone, too old): a stale card used to stay until the
+ * next successful sync, and picking a version on it overwrote the newer edit.
+ */
 export function useConflicts(): SyncConflict[] {
-  return useLiveQuery(
-    async () => (await db.syncConflicts.orderBy('detectedAt').toArray())
-      .filter((c) => !(c as { _decryptError?: boolean })._decryptError),
-    [],
-    [],
-  ) ?? [];
+  return useLiveQuery(async () => {
+    const open = (await db.syncConflicts.orderBy('detectedAt').toArray())
+      .filter((c) => !(c as { _decryptError?: boolean })._decryptError);
+    const current: SyncConflict[] = [];
+    for (const c of open) {
+      if (!conflictSuperseded(c, await conflictTable(c.entityType).get(c.entityId))) current.push(c);
+    }
+    return current;
+  }, [], []) ?? [];
+}
+
+/** A text the user wrote or picked, made to fit the field as any edit would; null if it cannot. */
+function fitValue(field: string, value: unknown): unknown | null {
+  if (typeof value !== 'string') return value;
+  if (field === 'title' || field === 'name' || field === 'label') {
+    const text = value.trim().slice(0, MAX_TITLE_LENGTH);
+    return text ? text : null; // these may not be empty
+  }
+  return value;
+}
+
+/** Bring back a deleted item the way the Trash does: with its parents, and what was deleted with it. */
+async function restoreItem(entityType: ConflictEntityType, id: string, row: Record<string, unknown>): Promise<void> {
+  switch (entityType) {
+    case 'task': return (await import('./use-tasks')).restoreTask(id);
+    case 'subtask': return (await import('./use-subtasks')).restoreSubtask(id);
+    case 'taskList': return (await import('./use-task-lists')).restoreTaskList(id);
+    case 'mindmap': return (await import('./use-mindmaps')).restoreMindmap(id);
+    case 'mindmapFolder': return (await import('./use-mindmaps')).restoreMindmapFolder(id);
+    case 'mindmapNode': {
+      const mindmaps = await import('./use-mindmaps');
+      const map = await db.mindmaps.get(String(row.mapId));
+      if (map?.deletedAt) await mindmaps.restoreMindmap(map.id);
+      return mindmaps.restoreMindmapNodeSubtree([id]);
+    }
+  }
 }
 
 /** What the user picked: one side's version, a version they wrote, or — for a delete — restore or not. */
@@ -37,6 +74,12 @@ export type ConflictChoice = { keep: 'local' | 'remote' } | { value: unknown } |
  * Safari — see updateTask).
  */
 export async function resolveConflict(conflict: SyncConflict, choice: ConflictChoice): Promise<void> {
+  // Under the sync lock: a sync merge landing between the read and the write
+  // below would be overwritten here.
+  await withSyncLock(() => resolveConflictLocked(conflict, choice));
+}
+
+async function resolveConflictLocked(conflict: SyncConflict, choice: ConflictChoice): Promise<void> {
   try {
     const table = conflictTable(conflict.entityType);
     const row = await table.get(conflict.entityId);
@@ -48,25 +91,34 @@ export async function resolveConflict(conflict: SyncConflict, choice: ConflictCh
       return;
     }
 
+    const now = Date.now();
     let changes: Record<string, unknown>;
     if (conflict.kind === 'field') {
-      const value = 'value' in choice
+      const picked = 'value' in choice
         ? choice.value
         : 'keep' in choice ? (choice.keep === 'local' ? conflict.localValue : conflict.remoteValue) : undefined;
       if (conflict.field.startsWith('discussionLog:')) {
         const entryId = conflict.field.slice('discussionLog:'.length);
         const log = (row.discussionLog ?? []) as DiscussionEntry[];
-        const note = typeof value === 'string' && value.trim() ? value : undefined;
-        changes = { discussionLog: log.map((e) => (e.id === entryId ? { ...e, note } : e)) };
+        const note = typeof picked === 'string' && picked.trim() ? picked : undefined;
+        // editedAt closes the conflict on the other device (sync/conflicts.ts).
+        changes = { discussionLog: log.map((e) => (e.id === entryId ? { ...e, note, editedAt: now } : e)) };
       } else {
+        const value = fitValue(conflict.field, picked);
+        if (value === null) {
+          toast('That can’t be empty — pick a version or write one.', 'error');
+          return;
+        }
         changes = { [conflict.field]: value };
       }
+    } else if ('restore' in choice && choice.restore) {
+      await restoreItem(conflict.entityType, conflict.entityId, row);
+      await db.syncConflicts.bulkDelete(sameSpot);
+      return;
     } else {
-      const restore = 'restore' in choice && choice.restore;
-      changes = { deletedAt: restore ? undefined : (row.deletedAt ?? Date.now()) };
+      changes = { deletedAt: row.deletedAt ?? now };
     }
 
-    const now = Date.now();
     const updated: Record<string, unknown> = {
       ...row,
       ...changes,

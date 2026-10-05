@@ -137,7 +137,7 @@ describe('rotateSyncKey rotates the whole repo', () => {
     expect(await checkVerifier(newKey, snapshot.encryptionVerifier!)).toBe(true);
     expect(await checkVerifier(oldKey, snapshot.encryptionVerifier!)).toBe(false);
     expect((await decryptSyncData(newKey, snapshot)).tasks[0].title).toBe('TASK_TITLE');
-    expect(fakeRepo.readText(CHANGELOG_FILE)).toBe('[]');
+    expect(JSON.parse(fakeRepo.readText(CHANGELOG_FILE)!)).toEqual([]);
   });
 
   it('drops the migration backups and writes none under the old key', async () => {
@@ -406,10 +406,16 @@ describe('rotateSyncKey across devices and failures (reliability review)', () =>
     expect(fakeRepo.sha(ROTATION_MARKER_FILE)).toBeNull();
   });
 
-  it('forgetting an unfinished change also clears the remote mark', async () => {
+  it('forgetting an unfinished change also clears its remote mark — and only its own', async () => {
     await seed();
-    await db.syncMeta.update('sync-meta', { keyRotation: { newSalt: generateSalt(), newVerifier: 'x', startedAt: 1 } });
-    fakeRepo.writeText(ROTATION_MARKER_FILE, JSON.stringify({ newSalt: 'x', newVerifier: 'x', startedAt: 1 }));
+    const pin = { newSalt: generateSalt(), newVerifier: 'x', startedAt: 1 };
+    await db.syncMeta.update('sync-meta', { keyRotation: pin });
+    fakeRepo.writeText(ROTATION_MARKER_FILE, JSON.stringify({ newSalt: 'another-change', newVerifier: 'y', startedAt: 2 }));
+    await discardUnfinishedRotation();
+    expect(fakeRepo.sha(ROTATION_MARKER_FILE)).not.toBeNull(); // another change's mark stays
+
+    await db.syncMeta.update('sync-meta', { keyRotation: pin });
+    fakeRepo.writeText(ROTATION_MARKER_FILE, JSON.stringify(pin));
     await discardUnfinishedRotation();
     expect(fakeRepo.sha(ROTATION_MARKER_FILE)).toBeNull();
   });
@@ -480,5 +486,118 @@ describe('rotateSyncKey across devices and failures (reliability review)', () =>
     await rotateSyncKey(NEW_PW);
     expect(fakeRepo.sha(MIGRATION_BACKUP)).toBeNull();
     expect(await hasUnfinishedRotation()).toBe(false);
+  });
+});
+
+describe('rotateSyncKey — final review', () => {
+  it('a retry after the commit point still has the old key: tier backups keep their content, every entry and tombstone is re-MACed', async () => {
+    await seed();
+    const oldMac = await deriveRegistryMacKey(OLD_PW, oldSalt);
+    const reg = JSON.parse(fakeRepo.readText(REGISTRY_PATH)!) as Record<string, unknown>;
+    reg['device-B'] = await buildRegistryEntry('device-B', 'Phone', { ecdhPub: { kty: 'EC' }, ecdsaPub: { kty: 'EC' } } as never, false, oldMac);
+    fakeRepo.writeText(REGISTRY_PATH, JSON.stringify(reg), 'main', fakeRepo.sha(REGISTRY_PATH)!);
+    const realPutFile = fakeRepo.api.putFile;
+    vi.spyOn(fakeRepo.api, 'putFile').mockImplementation(async (pat, repo, path, content, sha) => {
+      if (path === BACKUP_FILES.hourly) throw new Error('GitHub API error: 502'); // step 5, after the commit
+      return realPutFile(pat, repo, path, content, sha);
+    });
+    await expect(rotateSyncKey(NEW_PW)).rejects.toThrow();
+    vi.restoreAllMocks();
+    mockSyncNow.mockResolvedValue(0);
+
+    await rotateSyncKey(NEW_PW); // the resume: this device now holds only the new key
+    const { key: newKey, salt } = await newKeyFromRemote();
+    for (const path of Object.values(BACKUP_FILES)) {
+      const backup = JSON.parse(fakeRepo.readText(path)!) as SyncData & { backedUpAt: number };
+      expect(backup.backedUpAt, path).toBe(1); // its own restore point, not today's snapshot
+      expect((await decryptSyncData(newKey, backup)).tasks[0].title).toBe('TASK_TITLE');
+    }
+    const authentic = await readAuthenticRegistry(PAT, REPO, await deriveRegistryMacKey(NEW_PW, salt));
+    expect(authentic.map((e) => e.deviceId).sort()).toEqual(['device-A', 'device-B']);
+    expect((await db.localSettings.get('local'))?.previousEncryptionPassword).toBeUndefined(); // forgotten once done
+  });
+
+  it('what another device compacted into the snapshot while the files moved is kept, not overwritten', async () => {
+    await seed();
+    const realCreateTree = fakeRepo.api.createTree;
+    vi.spyOn(fakeRepo.api, 'createTree').mockImplementationOnce(async (pat, repo, entries) => {
+      const snap = await decryptSyncData(oldKey, JSON.parse(fakeRepo.readText(SNAPSHOT_FILE)!));
+      snap.tasks.push({ id: 't-b', listId: 'l1', title: 'COMPACTED_ON_B', status: 'todo', order: 1, createdAt: 2, updatedAt: 2, fieldTimestamps: { title: 2 } } as Task);
+      fakeRepo.writeText(SNAPSHOT_FILE, JSON.stringify(await encryptSyncData(oldKey, snap)), 'main', fakeRepo.sha(SNAPSHOT_FILE)!);
+      return realCreateTree(pat, repo, entries);
+    });
+    await rotateSyncKey(NEW_PW);
+    const { key: newKey } = await newKeyFromRemote();
+    const titles = (await decryptSyncData(newKey, JSON.parse(fakeRepo.readText(SNAPSHOT_FILE)!))).tasks.map((t) => t.title);
+    expect(titles).toContain('COMPACTED_ON_B');
+  });
+
+  it('a reset made elsewhere while the files moved stops the change before its commit point', async () => {
+    await seed();
+    const realCreateTree = fakeRepo.api.createTree;
+    vi.spyOn(fakeRepo.api, 'createTree').mockImplementationOnce(async (pat, repo, entries) => {
+      const snap = await decryptSyncData(oldKey, JSON.parse(fakeRepo.readText(SNAPSHOT_FILE)!));
+      fakeRepo.writeText(SNAPSHOT_FILE, JSON.stringify(await encryptSyncData(oldKey, { ...snap, tasks: [], wipedAt: Date.now() })), 'main', fakeRepo.sha(SNAPSHOT_FILE)!);
+      return realCreateTree(pat, repo, entries);
+    });
+    await expect(rotateSyncKey(NEW_PW)).rejects.toThrow();
+    expect((JSON.parse(fakeRepo.readText(SNAPSHOT_FILE)!) as SyncData).encryptionSalt).toBe(oldSalt);
+  });
+
+  it('a leftover mark of a change that did commit does not block the next one', async () => {
+    await seed();
+    // The remote is on oldSalt; a mark naming oldSalt is a finished change's leftover.
+    fakeRepo.writeText(ROTATION_MARKER_FILE, JSON.stringify({ newSalt: oldSalt, newVerifier: await createVerifier(oldKey), startedAt: 1 }));
+    await rotateSyncKey(NEW_PW);
+    const { salt } = await newKeyFromRemote();
+    expect(salt).not.toBe(oldSalt);
+    expect(fakeRepo.sha(ROTATION_MARKER_FILE)).toBeNull();
+  });
+
+  it('another device\'s unfinished change shows here (banner + Forget) when a different password is tried', async () => {
+    await seed();
+    const otherSalt = generateSalt();
+    fakeRepo.writeText(ROTATION_MARKER_FILE, JSON.stringify({ newSalt: otherSalt, newVerifier: await createVerifier(await deriveKey(OTHER_PW, otherSalt)), startedAt: 1 }));
+    await expect(rotateSyncKey(NEW_PW)).rejects.toThrow(/another device/);
+    expect(await hasUnfinishedRotation()).toBe(true);
+    // Forget removes that mark (it is the one the local pin names).
+    await discardUnfinishedRotation();
+    expect(fakeRepo.sha(ROTATION_MARKER_FILE)).toBeNull();
+    expect(await hasUnfinishedRotation()).toBe(false);
+  });
+
+  it('forgetting keeps the pin when the remote mark cannot be removed', async () => {
+    await seed();
+    const pin = { newSalt: generateSalt(), newVerifier: 'v', startedAt: 1 };
+    await db.syncMeta.update('sync-meta', { keyRotation: pin });
+    fakeRepo.writeText(ROTATION_MARKER_FILE, JSON.stringify(pin));
+    vi.spyOn(fakeRepo.api, 'deleteFile').mockRejectedValueOnce(new Error('GitHub API error deleting: 502'));
+    await expect(discardUnfinishedRotation()).rejects.toThrow();
+    expect(await hasUnfinishedRotation()).toBe(true);
+  });
+
+  it('two devices starting at once: the second gets a plain message and no stale pin', async () => {
+    await seed();
+    const realPutFile = fakeRepo.api.putFile;
+    vi.spyOn(fakeRepo.api, 'putFile').mockImplementation(async (pat, repo, path, content, sha) => {
+      if (path === ROTATION_MARKER_FILE && !sha) {
+        const s2 = generateSalt();
+        fakeRepo.writeText(ROTATION_MARKER_FILE, JSON.stringify({ newSalt: s2, newVerifier: await createVerifier(await deriveKey(OTHER_PW, s2)), startedAt: 2 }));
+        throw new Error('CONFLICT');
+      }
+      return realPutFile(pat, repo, path, content, sha);
+    });
+    await expect(rotateSyncKey(NEW_PW)).rejects.toThrow(/another device/);
+    expect(await hasUnfinishedRotation()).toBe(false);
+  });
+
+  it('the re-keyed changelog never keeps the bytes it had (a stale PUT with the old sha must fail)', async () => {
+    await seed();
+    const before = fakeRepo.sha(CHANGELOG_FILE);
+    const beforeText = fakeRepo.readText(CHANGELOG_FILE);
+    await rotateSyncKey(NEW_PW);
+    expect(beforeText).toBe('[]');
+    expect(fakeRepo.readText(CHANGELOG_FILE)).not.toBe('[]');
+    expect(fakeRepo.sha(CHANGELOG_FILE)).not.toBe(before);
   });
 });

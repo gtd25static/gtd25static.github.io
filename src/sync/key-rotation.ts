@@ -38,7 +38,7 @@
 
 import { db } from '../db';
 import type { SyncData } from '../db/models';
-import { getVaultSecrets } from '../db/vault';
+import { getVaultSecrets, holdVaultLock } from '../db/vault';
 import { isParanoidFlagSet } from '../db/paranoid-flag';
 import {
   deleteFile, getFile, putFile, getFileSha, getBinaryFile, getRef, getCommit, getTree, createTree, createCommit,
@@ -48,10 +48,13 @@ import {
   deriveKey, generateSalt, createVerifier, checkVerifier,
   cacheEncryptionKey, getCachedEncryptionKey, getCachedSalt,
 } from './crypto';
-import { syncNow, forcePushHoldingLock, endSyncSession, rekeyRemoteChangelog, SYNC_LOCK_NAME, SNAPSHOT_FILE } from './sync-engine';
+import { syncNow, forcePushHoldingLock, endSyncSession, rekeyRemoteChangelog, SYNC_LOCK_NAME, SNAPSHOT_FILE, ROTATION_MARKER_FILE } from './sync-engine';
 import { isCompatibleVersion } from './version';
 import { hasPendingEntries } from './change-log';
-import { getSyncPat, rememberSyncPassword, forgetSyncPassword } from './sync-credentials';
+import {
+  getSyncPat, rememberSyncPassword, forgetSyncPassword,
+  rememberPreviousSyncPassword, getPreviousSyncPassword, forgetPreviousSyncPassword,
+} from './sync-credentials';
 import {
   BLOB_BRANCH, KEEP_PATH, KEEP_CONTENT_BASE64, blobPath, ensureBlobBranch, sealSharedBlob, decryptSharedBlob,
   sharedBlobDownloadTimeoutMs, paddedLength, withBlobBranchLock, readableLiveBlobIds,
@@ -77,7 +80,7 @@ interface Creds { pat: string; repo: string }
 
 /** The pending rotation, on the remote: the new salt and a verifier of the new key
  *  (what the snapshot itself carries once the rotation commits — nothing secret). */
-export const ROTATION_MARKER_FILE = 'gtd25-key-rotation.json';
+export { ROTATION_MARKER_FILE };
 interface RotationPin { newSalt: string; newVerifier: string; startedAt: number }
 
 function parsePin(json: string): RotationPin | null {
@@ -108,18 +111,21 @@ export async function hasUnfinishedRotation(): Promise<boolean> {
  * unreadable (counted, never dropped).
  */
 export async function discardUnfinishedRotation(): Promise<void> {
-  await db.syncMeta.update('sync-meta', { keyRotation: undefined });
-  // The remote mark too, or the next change (here or elsewhere) would resume it.
-  try {
-    const local = await db.localSettings.get('local');
-    const pat = await getSyncPat();
-    if (pat && local?.githubRepo) {
-      const marker = await getFile(pat, local.githubRepo, ROTATION_MARKER_FILE);
-      if (marker) await deleteFile(pat, local.githubRepo, ROTATION_MARKER_FILE, marker.sha);
+  const pin = (await db.syncMeta.get('sync-meta'))?.keyRotation;
+  // The remote mark first, and only the one this pin names (never another
+  // change started since): left behind, every later change, on any device, was
+  // refused as "started on another device". If it cannot be removed, the pin
+  // stays and so does the banner — try again.
+  const local = await db.localSettings.get('local');
+  const pat = await getSyncPat();
+  if (pin && pat && local?.githubRepo) {
+    const marker = await getFile(pat, local.githubRepo, ROTATION_MARKER_FILE);
+    if (marker && parsePin(marker.data)?.newSalt === pin.newSalt) {
+      await deleteFile(pat, local.githubRepo, ROTATION_MARKER_FILE, marker.sha);
     }
-  } catch (err) {
-    recordError('keyRotation.discardMarker', err);
   }
+  await db.syncMeta.update('sync-meta', { keyRotation: undefined });
+  await forgetPreviousSyncPassword();
 }
 
 export async function rotateSyncKey(
@@ -146,18 +152,32 @@ export async function rotateSyncKey(
   if (await hasPendingEntries()) {
     throw new Error('Some changes are not synced yet. Try again once the sync completes.');
   }
-  const oldKey = getCachedEncryptionKey();
-  const oldSalt = getCachedSalt();
+  let oldKey = getCachedEncryptionKey();
+  let oldSalt = getCachedSalt();
+  let previousPassword = oldPassword;
+  // A retry after the commit point synced under the NEW key (stored at step 4):
+  // the old one comes from what the change stored when it started. Taken from
+  // the cache, step 5 re-encrypted nothing — tier backups were overwritten with
+  // today's snapshot, the registry stayed under the old MAC, old-key changelog
+  // entries were dropped.
+  const previous = (await db.syncMeta.get('sync-meta'))?.keyRotation ? await getPreviousSyncPassword() : null;
+  if (previous) {
+    oldKey = await deriveKey(previous.password, previous.salt);
+    oldSalt = previous.salt;
+    previousPassword = previous.password;
+  }
   if (!oldKey || !oldSalt) throw new Error('The current sync key is not available. Sync once, then try again.');
 
   // Nobody else syncs this repo from this browser while the rotation runs.
-  const keys: Keys = { newPassword, oldPassword, oldKey, oldSalt };
+  const keys: Keys = { newPassword, oldPassword: previousPassword, oldKey, oldSalt };
   // A critical section too: an update applied in another tab must not reload
-  // this one half-way (lib/critical-section).
+  // this one half-way (lib/critical-section). And the vault does not lock under
+  // it (Paranoid Mode): a lock in the middle used to abort it with the files
+  // already moved, or leave the vault holding a password the remote did not have.
   const locks = typeof navigator !== 'undefined' ? navigator.locks : undefined;
-  return inCriticalSection<RotationResult>(async () => locks
+  return inCriticalSection<RotationResult>(() => holdVaultLock(async () => (locks
     ? await locks.request(SYNC_LOCK_NAME, () => rotateHoldingLock(creds, keys, onProgress))
-    : await rotateHoldingLock(creds, keys, onProgress));
+    : await rotateHoldingLock(creds, keys, onProgress))));
 }
 
 async function rotateHoldingLock(
@@ -168,27 +188,47 @@ async function rotateHoldingLock(
   // 2. The new key: pinned now, or the pin of an unfinished rotation — this
   //    device's, or the one the remote mark carries (started on another device).
   const marker = await getFile(creds.pat, creds.repo, ROTATION_MARKER_FILE);
-  const remotePin = marker ? parsePin(marker.data) : null;
+  let remotePin = marker ? parsePin(marker.data) : null;
+  // A mark naming the key the remote is already on is the leftover of a change
+  // that committed (its last delete failed): it used to block every later
+  // change, on every device, for good.
+  if (marker && remotePin && remotePin.newSalt === oldSalt && await checkVerifier(oldKey, remotePin.newVerifier)) {
+    await deleteFile(creds.pat, creds.repo, ROTATION_MARKER_FILE, marker.sha);
+    remotePin = null;
+  }
   const localPin = (await db.syncMeta.get('sync-meta'))?.keyRotation ?? null;
+  // Another device's unfinished change is this device's too: pinned here, the
+  // Settings banner (and its "Forget it") shows it, whatever password is typed.
+  if (remotePin && localPin?.newSalt !== remotePin.newSalt) await db.syncMeta.update('sync-meta', { keyRotation: remotePin });
   const pin = remotePin ?? localPin;
   const newSalt = pin?.newSalt ?? generateSalt();
   const newKey = await deriveKey(newPassword, newSalt);
   if (pin) {
     if (!(await checkVerifier(newKey, pin.newVerifier))) {
       throw new Error(remotePin && remotePin.newSalt !== localPin?.newSalt
-        ? 'A password change started on another device did not finish. Enter the same new password chosen there to complete it, or forget that change first (shared files it already re-encrypted would stay unreadable).'
+        ? 'A password change started on another device did not finish. Enter the same new password chosen there to complete it, or use "Forget it" (shared files it already re-encrypted would stay unreadable).'
         : 'A previous password change did not finish. Enter the same new password you chose then to complete it, or discard that change first.');
     }
-    if (localPin?.newSalt !== pin.newSalt) await db.syncMeta.update('sync-meta', { keyRotation: pin });
   } else {
     await db.syncMeta.update('sync-meta', {
       keyRotation: { newSalt, newVerifier: await createVerifier(newKey), startedAt: Date.now() },
     });
+    // What a retry after the commit point needs to open the old-key leftovers.
+    if (oldPassword) await rememberPreviousSyncPassword(oldPassword, oldSalt);
   }
   if (!remotePin) {
     const pinned = (await db.syncMeta.get('sync-meta'))!.keyRotation!;
-    // Created only if absent: two devices starting at once — one of them stops here.
-    await putFile(creds.pat, creds.repo, ROTATION_MARKER_FILE, JSON.stringify(pinned), marker?.sha);
+    try {
+      // Created only if absent: two devices starting at once — one of them stops here.
+      await putFile(creds.pat, creds.repo, ROTATION_MARKER_FILE, JSON.stringify(pinned));
+    } catch (err) {
+      if (!(err instanceof Error && err.message === 'CONFLICT')) throw err;
+      if (!pin) {
+        await db.syncMeta.update('sync-meta', { keyRotation: undefined });
+        await forgetPreviousSyncPassword();
+      }
+      throw new Error('A password change was just started on another device. Finish it there — or forget it there — then try again.');
+    }
   }
 
   // 3. The Shared Folder's files.
@@ -230,6 +270,8 @@ async function rotateHoldingLock(
   leftovers += await deleteLegacyBlobCopies(creds);
   await rekeyAllBackups(creds.pat, creds.repo, oldKey, newKey, newSalt, encrypted);
   onProgress({ phase: 'registry' });
+  // Unknown when the old password was never stored ("remember" unticked): other
+  // devices' entries and tombstones then wait for them to republish.
   if (oldPassword) {
     // Every device's entry and every tombstone, not just this device's: a
     // forgotten (maybe stolen) device's tombstone stopped counting otherwise.
@@ -238,7 +280,10 @@ async function rotateHoldingLock(
   await publishOwnRegistryEntry(); // MAC under the new key; false when this device has none to publish
   if (leftovers > 0) throw new Error(`The password was changed, but ${leftovers} old copy(s) could not be deleted. Change the password again with the same new password to finish.`);
   const finishedMarker = await getFile(creds.pat, creds.repo, ROTATION_MARKER_FILE);
-  if (finishedMarker) await deleteFile(creds.pat, creds.repo, ROTATION_MARKER_FILE, finishedMarker.sha);
+  // Only this change's mark — never another one started since.
+  if (finishedMarker && parsePin(finishedMarker.data)?.newSalt === newSalt) {
+    await deleteFile(creds.pat, creds.repo, ROTATION_MARKER_FILE, finishedMarker.sha);
+  }
   onProgress({ phase: 'history' });
   let historySquashed = false;
   try {
@@ -251,6 +296,7 @@ async function rotateHoldingLock(
     ...(historySquashed ? { lastMainSquashAt: Date.now() } : {}),
     keyRotation: undefined,
   });
+  await forgetPreviousSyncPassword();
   return { ...blobs, historySquashed };
 }
 

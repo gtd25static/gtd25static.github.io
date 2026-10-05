@@ -51,7 +51,12 @@ function loadPersistedErrors(): LoggedError[] {
   }
 }
 
+// Set by a wipe: the in-memory log (loaded at start, still holding the wiped
+// session's history) must not be written back by a later recordError.
+let persistenceHalted = false;
+
 function persistErrors(): void {
+  if (persistenceHalted) return;
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(errorLog));
   } catch { /* quota / private mode / worker — the in-memory log still works */ }
@@ -117,6 +122,14 @@ export function recordError(context: string, err: unknown): void {
 
 export function getErrorLog(): readonly LoggedError[] {
   return errorLog;
+}
+
+/** A wipe: drop the log here and on disk, and write nothing more for this page's life. */
+export function haltErrorPersistence(): void {
+  persistenceHalted = true;
+  errorLog.length = 0;
+  try { localStorage.removeItem(STORAGE_KEY); } catch { /* nothing persisted */ }
+  for (const l of listeners) l();
 }
 
 export function clearErrorLog(): void {

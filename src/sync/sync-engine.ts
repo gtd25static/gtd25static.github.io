@@ -4,8 +4,8 @@ import type { ImportData } from '../db/export-import';
 import { getFile, getFileConditional, putFile, deleteFile, RateLimitError, type ConditionalFile } from './github-api';
 import { jitterInterval } from './poll-jitter';
 import { cleanupSoftDeletes, archiveOldCompleted } from './conflict-resolution';
-import { applyRemoteEntries as applyRemoteEntriesToDb, pendingIdsAddedSince, getPendingEntries, getPendingIds, clearEntriesByIds, pendingEntryCount, isKnownEntityType } from './change-log';
-import { mergeEntity, stampUpdatedFields, capFutureTimestamps, MAX_FUTURE_SKEW_MS } from './field-timestamps';
+import { applyRemoteEntries as applyRemoteEntriesToDb, notePushedEntries, pendingIdsAddedSince, getPendingEntries, getPendingIds, clearEntriesByIds, pendingEntryCount, isKnownEntityType } from './change-log';
+import { mergeEntity, stampUpdatedFields, capFutureTimestamps, MAX_FUTURE_SKEW_MS, withoutLocalSyncFields } from './field-timestamps';
 import { noteRemoteDeletions, noteRemoteDeletionsInTx } from '../db/purge';
 import { toast } from '../components/ui/Toast';
 import { SYNC_VERSION, isCompatibleVersion, needsMigration } from './version';
@@ -18,7 +18,7 @@ import { recordError } from '../lib/diagnostics';
 import { storeTheme } from '../lib/theme';
 import { classifySyncError, type SyncErrorInfo } from './sync-errors';
 import { prepareEntityRowsForAtRest, prepareSyncDataForAtRest, prepareConflictRowsForAtRest } from './at-rest-writes';
-import { detectConflicts, isConflictEntity, advanceBase, effectiveBase, sweepConflictsSafely } from './conflicts';
+import { detectConflicts, isConflictEntity, advanceBase, effectiveBase, sweepConflictsSafely, openConflictSpots, mergeIntoSpot } from './conflicts';
 import { maybeCompactBlobBranch, compactBlobBranch, withBlobBranchLock } from './shared-blobs';
 import { maybeSquashDefaultBranch } from './history-compaction';
 import {
@@ -80,14 +80,19 @@ async function reconcileEntitiesOnce(snapshot: SyncData): Promise<number | null>
   const pendingBefore = new Set(await getPendingIds());
   // Records this moves into the Trash: their 30 days run from now (db/purge).
   const newlyDeleted: string[] = [];
-  // Snapshot rows carry no writer's base: only an edit still waiting here is
-  // known to be unseen (sync/conflicts.ts).
-  const conflicts = new Map<string, SyncConflict>();
+  // Snapshot rows carry no writer's base: only a change of the field not yet
+  // pushed is known to be unseen (sync/conflicts.ts).
   const since = (await db.syncMeta.get('sync-meta'))?.conflictBaseSince ?? 0;
-  const pendingEntities = new Set((await getPendingEntries()).map((e) => e.entityId));
+  const spots = await openConflictSpots([
+    ...snapshot.taskLists, ...snapshot.tasks, ...snapshot.subtasks,
+    ...(snapshot.mindmapFolders ?? []), ...(snapshot.mindmaps ?? []), ...(snapshot.mindmapNodes ?? []),
+  ].map((r) => r.id));
+  const conflicts = new Map<string, SyncConflict>();
   // Helper: reconcile a collection using field-level merge. Crypto for Paranoid
   // at-rest storage is done before the write transaction so Safari cannot
   // auto-close the transaction during a crypto.subtle await.
+  // Rows that took a change from the snapshot (base-only writes are not "pulled").
+  let mergedCount = 0;
   async function reconcileCollection<T extends { id: string; updatedAt: number }>(
     table: import('dexie').Table<T, string>,
     remoteEntities: T[],
@@ -100,23 +105,32 @@ async function reconcileEntitiesOnce(snapshot: SyncData): Promise<number | null>
     const now = Date.now();
     for (const remoteRow of remoteEntities) {
       // Timestamps beyond the skew tolerance are capped (see capFutureTimestamps).
-      const { _base: _theirs, ...remoteFields } = capFutureTimestamps(remoteRow as unknown as Record<string, unknown>, now);
+      const remoteFields = withoutLocalSyncFields(capFutureTimestamps(remoteRow as unknown as Record<string, unknown>, now));
       const remote = remoteFields as unknown as T;
       const remoteFT = remoteFields.fieldTimestamps as Record<string, number> | undefined;
       const local = localMap.get(remote.id);
       if (!local) {
         if ((remote as { deletedAt?: number }).deletedAt) newlyDeleted.push(remote.id);
         toPut.push({ ...remote, _base: remoteFT ? { ...remoteFT } : undefined } as T);
+        mergedCount++;
       } else {
         const row = local as unknown as Record<string, unknown>;
-        if (isConflictEntity(entityType) && pendingEntities.has(remote.id)) {
-          for (const c of detectConflicts(entityType, row, remoteFields, null, { localPending: true, since })) conflicts.set(c.id, c);
+        if (isConflictEntity(entityType)) {
+          for (const c of detectConflicts(entityType, row, remoteFields, null, { since })) {
+            const merged = mergeIntoSpot(spots, c);
+            conflicts.set(merged.id, merged);
+          }
         }
-        const nextBase = advanceBase(effectiveBase(row, since), remoteFT);
+        const currentBase = effectiveBase(row, since);
+        const nextBase = advanceBase(currentBase, remoteFT);
         const merged = mergeEntity(row, remoteFields, remote.updatedAt);
         if (merged?.deletedAt && !(local as { deletedAt?: number }).deletedAt) newlyDeleted.push(remote.id);
-        if (merged) toPut.push({ ...merged, _base: nextBase } as unknown as T);
-        else if (nextBase !== row._base) toPut.push({ ...local, _base: nextBase } as T);
+        if (merged) {
+          toPut.push({ ...merged, _base: nextBase } as unknown as T);
+          mergedCount++;
+        } else if (nextBase !== currentBase && !row._decryptError) {
+          toPut.push({ ...local, _base: nextBase } as T); // what is known to be there: not "pulled"
+        }
       }
     }
     return toPut;
@@ -144,9 +158,9 @@ async function reconcileEntitiesOnce(snapshot: SyncData): Promise<number | null>
   ]);
 
   const conflictRows = await prepareConflictRowsForAtRest([...conflicts.values()]);
-  const changed = taskLists.length + tasks.length + subtasks.length + sharedItems.length
+  const writes = taskLists.length + tasks.length + subtasks.length + sharedItems.length
     + mindmapFolders.length + mindmaps.length + mindmapNodes.length;
-  if (changed === 0 && conflictRows.length === 0) return 0;
+  if (writes === 0 && conflictRows.length === 0) return 0;
   const written = await db.transaction('rw', [db.taskLists, db.tasks, db.subtasks, db.sharedItems, db.mindmapFolders, db.mindmaps, db.mindmapNodes, db.changeLog, db.syncConflicts], async () => {
     if (await pendingIdsAddedSince(pendingBefore)) return false;
     if (conflictRows.length > 0) await db.syncConflicts.bulkPut(conflictRows);
@@ -161,7 +175,7 @@ async function reconcileEntitiesOnce(snapshot: SyncData): Promise<number | null>
   });
   if (!written) return null;
   await noteRemoteDeletions(newlyDeleted);
-  return changed;
+  return mergedCount;
 }
 
 /** Pomodoro settings and sound presets: snapshot-only, row-level last-writer-wins. */
@@ -197,6 +211,12 @@ async function reconcileSnapshotOnlyData(snapshot: SyncData): Promise<void> {
  */
 interface ReplaceExtras {
   clearPendingIds?: string[];
+  /** A reset at this time: pending changes made up to it are what it replaced. */
+  dropPendingUpTo?: number;
+  /** Refuse (ReplaceRacedError) if a local edit was recorded since these ids were read. */
+  pendingBefore?: Set<string>;
+  /** The rows carry bases computed by the caller (a reset adopted under local edits). */
+  keepBase?: boolean;
   syncMeta?: Partial<SyncMeta>;
   pomodoroSettings?: PomodoroSettings;
   soundPresets?: SoundPreset[];
@@ -220,10 +240,17 @@ function withOwnBase<T extends EntityCollections>(data: T): T {
   };
 }
 
-/** Rows as they go to the remote: a device's `_base` is its own, never synced. */
+/** A local edit landed while a whole-state replace was being prepared: it retries. */
+class ReplaceRacedError extends Error {
+  constructor() {
+    super('A local edit landed during the replace');
+    this.name = 'ReplaceRacedError';
+  }
+}
+
+/** Rows as they go to the remote: a device's `_base` / `_pushed` are its own, never synced. */
 function withoutBase<T extends EntityCollections>(data: T): T {
-  const strip = <R extends { _base?: unknown }>(rows: R[] | undefined) =>
-    rows?.map((r) => { if (!('_base' in r)) return r; const { _base: _mine, ...rest } = r; return rest as R; });
+  const strip = <R,>(rows: R[] | undefined) => rows?.map((r) => withoutLocalSyncFields(r));
   return {
     ...data,
     taskLists: strip(data.taskLists)!, tasks: strip(data.tasks)!, subtasks: strip(data.subtasks)!,
@@ -244,8 +271,12 @@ async function replaceLocalEntitiesFromSnapshot(
     snapshot.mindmapFolders ?? [], snapshot.mindmaps ?? [], snapshot.mindmapNodes ?? []]
     .flatMap((rows) => (rows as Array<{ id: string; deletedAt?: number }>).filter((r) => r.deletedAt).map((r) => r.id));
   // Everything a replace writes is the state everyone now shares: each row's
-  // base is its own field timestamps (sync/conflicts.ts) unless set already.
-  snapshot = withOwnBase(snapshot);
+  // base is its own field timestamps (sync/conflicts.ts) — whatever base a row
+  // arrived with was another device's (an import of an export carried one).
+  snapshot = extras.keepBase ? withOwnBase(snapshot) : withOwnBase(withoutBase(snapshot));
+  // Cached file bytes of items the new state no longer lists (another device's
+  // wipe, a restore): nothing would ever read or remove them.
+  const keptBlobs = snapshot.sharedItems ? new Set(snapshot.sharedItems.map((i) => i.blobId).filter(Boolean)) : null;
   // Bootstrap / force-pull / ZIP import / backup-restore can all carry pre-v5
   // data with the removed 'working' status — normalize before writing locally.
   const prepared = await prepareSyncDataForAtRest({
@@ -272,8 +303,9 @@ async function replaceLocalEntitiesFromSnapshot(
     : [[], [], []];
   await db.transaction('rw', [
     db.taskLists, db.tasks, db.subtasks, db.sharedItems, db.mindmapFolders, db.mindmaps, db.mindmapNodes,
-    db.changeLog, db.syncMeta, db.pomodoroSettings, db.soundPresets, db.localSettings, db.sharedBlobs,
+    db.changeLog, db.syncMeta, db.pomodoroSettings, db.soundPresets, db.localSettings, db.sharedBlobs, db.syncConflicts,
   ], async () => {
+    if (extras.pendingBefore && await pendingIdsAddedSince(extras.pendingBefore)) throw new ReplaceRacedError();
     await db.taskLists.clear();
     await db.tasks.clear();
     await db.subtasks.clear();
@@ -293,14 +325,28 @@ async function replaceLocalEntitiesFromSnapshot(
       if (mindmapNodes.length > 0) await db.mindmapNodes.bulkPut(mindmapNodes);
     }
     if (extras.clearSharedBlobs) await db.sharedBlobs.clear();
+    else if (keptBlobs) {
+      const orphaned = ((await db.sharedBlobs.toCollection().primaryKeys()) as string[]).filter((id) => !keptBlobs.has(id));
+      if (orphaned.length) await db.sharedBlobs.bulkDelete(orphaned);
+    }
+    // Open conflicts were about the state just replaced (both versions of
+    // content that may be gone): they go with it.
+    await db.syncConflicts.clear();
     if (extras.clearPendingIds?.length) await db.changeLog.bulkDelete(extras.clearPendingIds);
+    if (extras.dropPendingUpTo !== undefined) {
+      // Keys only (timestamp index): no decryption inside the transaction.
+      const replaced = await db.changeLog.where('timestamp').belowOrEqual(extras.dropPendingUpTo).primaryKeys();
+      if (replaced.length) await db.changeLog.bulkDelete(replaced as string[]);
+    }
     if (extras.pomodoroSettings) await db.pomodoroSettings.put(extras.pomodoroSettings);
     if (extras.soundPresets && extras.soundPresets.length > 0) {
       await db.soundPresets.clear();
       await db.soundPresets.bulkPut(extras.soundPresets);
     }
     if (extras.syncMeta) {
-      await db.syncMeta.update('sync-meta', { ...extras.syncMeta, pendingChanges: (await db.changeLog.count()) > 0 });
+      await db.syncMeta.update('sync-meta', {
+        ...extras.syncMeta, initialUploadAt: undefined, initialUploadRepo: undefined, pendingChanges: (await db.changeLog.count()) > 0,
+      });
     }
     await noteRemoteDeletionsInTx(inTrash);
   });
@@ -1022,12 +1068,30 @@ async function resetRemoteChangelog(pat: string, repo: string, signal: AbortSign
 
 const FORCE_PUSH_GUARD_MIN = 10;
 
+/** Every row of an uploaded snapshot as a pushed change, for notePushedEntries. */
+function snapshotAsPushed(snapshot: SyncData): ChangeEntry[] {
+  const kinds: Array<[ChangeEntry['entityType'], Array<{ id: string; fieldTimestamps?: Record<string, number> }> | undefined]> = [
+    ['taskList', snapshot.taskLists], ['task', snapshot.tasks], ['subtask', snapshot.subtasks],
+    ['sharedItem', snapshot.sharedItems], ['mindmapFolder', snapshot.mindmapFolders],
+    ['mindmap', snapshot.mindmaps], ['mindmapNode', snapshot.mindmapNodes],
+  ];
+  return kinds.flatMap(([entityType, rows]) => (rows ?? [])
+    .filter((r) => r.fieldTimestamps)
+    .map((r) => ({
+      id: '', deviceId: '', timestamp: 0, entityType, entityId: r.id, operation: 'upsert' as const,
+      data: { fieldTimestamps: r.fieldTimestamps } as Record<string, unknown>,
+    })));
+}
+
 /** Entries whose row predates `_base` get the implicit one (sync/conflicts.ts) before they leave. */
 async function withWriterBase(entries: ChangeEntry[]): Promise<ChangeEntry[]> {
   const since = (await db.syncMeta.get('sync-meta'))?.conflictBaseSince ?? 0;
-  return entries.map((e) => (!e.data || e.data._base
-    ? e
-    : { ...e, data: { ...e.data, _base: effectiveBase(e.data, since) } }));
+  return entries.map((e) => {
+    if (!e.data) return e;
+    // `_pushed` is this device's own; `_base` goes, filled in for an older row.
+    const { _pushed: _mine, ...data } = e.data;
+    return { ...e, data: data._base ? data : { ...data, _base: effectiveBase(data, since) } };
+  });
 }
 
 /** Items that are not in the Trash — readable without decrypting (deletedAt is plaintext). */
@@ -1037,13 +1101,53 @@ function liveItemCount(data: SyncData): number {
     + live(data.mindmapFolders) + live(data.mindmaps) + live(data.mindmapNodes);
 }
 
+/** The remote snapshot (decrypted) with its changelog folded in, minus what a reset superseded. */
+async function remoteWithChangelog(
+  creds: { pat: string; repo: string }, encKey: CryptoKey, encrypted: SyncData, signal?: AbortSignal,
+): Promise<SyncData> {
+  const plain = encrypted.encryptionSalt ? await decryptSyncData(encKey, encrypted) : { ...encrypted };
+  const file = await getFile(creds.pat, creds.repo, CHANGELOG_FILE, signal);
+  const parsed = file ? safeParseJson<ChangeEntry[]>(file.data, 'changelog (fold)') : null;
+  const superseded = new Set(plain.supersededEntryIds ?? []);
+  const entries = parsed?.ok && Array.isArray(parsed.value) ? parsed.value.filter((e) => !superseded.has(e.id)) : [];
+  applyEntriesToSnapshot(plain, await decryptChangeEntries(encKey, entries, { allowPlaintext: !encrypted.encryptionSalt }));
+  return plain;
+}
+
 /** This device's first upload, cut after its snapshot: marked, and the snapshot opens with our key. */
-async function isOwnInterruptedUpload(snapshotJson: string): Promise<boolean> {
-  if (!(await db.syncMeta.get('sync-meta'))?.initialUploadAt) return false;
+async function isOwnInterruptedUpload(snapshotJson: string, repo: string): Promise<boolean> {
+  const meta = await db.syncMeta.get('sync-meta');
+  if (!meta?.initialUploadAt || meta.initialUploadRepo !== repo) return false;
   const parsed = safeParseJson<SyncData>(snapshotJson, 'snapshot (own upload)');
   if (!parsed.ok || !parsed.value.encryptionSalt || !parsed.value.encryptionVerifier) return false;
   const key = await resolveEncryptionKey(parsed.value.encryptionSalt);
   return key !== 'needs-password' && checkVerifier(key, parsed.value.encryptionVerifier);
+}
+
+/** The file a sync-password change in progress leaves on the remote (see key-rotation). */
+export const ROTATION_MARKER_FILE = 'gtd25-key-rotation.json';
+
+/**
+ * Whether what this device would encrypt now opens on the remote: no
+ * sync-password change in progress, and the remote snapshot still under the
+ * cached key. A device that has not noticed a change yet (its next sync would)
+ * used to upload a shared file, or write a backup tier, under the old key —
+ * unreadable to everyone once the change finished. A conditional GET against
+ * the last sync's ETag (a free 304) in the usual case. Errors say yes: the
+ * write that follows fails on its own if the network is down.
+ */
+export async function remoteKeyIsCurrent(): Promise<boolean> {
+  try {
+    const creds = await getCredentials();
+    if (!creds) return false;
+    if (await getFile(creds.pat, creds.repo, ROTATION_MARKER_FILE)) return false;
+    const snap = await getFileConditional(creds.pat, creds.repo, SNAPSHOT_FILE, probeSnapshotEtag);
+    if (snap.status !== 'ok') return true;
+    const parsed = safeParseJson<SyncData>(snap.data, 'snapshot (key check)');
+    return !parsed.ok || !parsed.value.encryptionSalt || parsed.value.encryptionSalt === getCachedSalt();
+  } catch {
+    return true;
+  }
 }
 
 /**
@@ -1067,7 +1171,11 @@ export async function rekeyRemoteChangelog(
     const underOld = await decryptChangeEntries(oldKey, entries.filter((e) => e.operation !== 'delete' && !newIds.has(e.id)));
     const readable = new Map([...underNew, ...underOld].map((e) => [e.id, e]));
     const kept = entries.filter((e) => e.operation === 'delete' || readable.has(e.id)).map((e) => readable.get(e.id) ?? e);
-    const content = JSON.stringify(await encryptChangeEntries(newKey, kept));
+    let content = JSON.stringify(await encryptChangeEntries(newKey, kept));
+    // Never the bytes it had: GitHub's sha is the content's, so an empty "[]"
+    // rewritten as "[]" kept its sha, and a device still on the old key could
+    // PUT old-key entries onto it with the sha it had cached — unreadable to all.
+    if (file && file.data.trim() === content) content += '\n';
     try {
       await putFile(pat, repo, CHANGELOG_FILE, content, file?.sha, signal);
       return;
@@ -1230,16 +1338,18 @@ async function runSync(manual = false, pushLimit?: number): Promise<number> {
         const snapshotContent = JSON.stringify(localData);
         // Marked first: cut between the snapshot and the changelog, the next
         // sync recognises its own upload and finishes it (see below).
-        await db.syncMeta.update('sync-meta', { initialUploadAt: Date.now() });
+        await db.syncMeta.update('sync-meta', { initialUploadAt: Date.now(), initialUploadRepo: creds.repo });
         await putFile(creds.pat, creds.repo, SNAPSHOT_FILE, snapshotContent, undefined, signal);
       }
       await putFile(creds.pat, creds.repo, CHANGELOG_FILE, '[]', undefined, signal);
       await clearEntriesByIds(local.pendingIds);
+      if (hasData) await notePushedEntries(snapshotAsPushed(local.snapshot));
       await db.syncMeta.update('sync-meta', {
         lastPulledAt: Date.now(),
         lastPushedAt: Date.now(),
         pendingChanges: (await pendingEntryCount()) > 0,
         initialUploadAt: undefined,
+        initialUploadRepo: undefined,
       });
       lastSyncCompletedAt = Date.now();
       reportProgress('done', 'Sync complete', 1.0);
@@ -1259,13 +1369,13 @@ async function runSync(manual = false, pushLimit?: number): Promise<number> {
       const hasLocalData = local.taskLists.length > 0 || local.tasks.length > 0 ||
         local.subtasks.length > 0 || (local.mindmaps?.length ?? 0) > 0 ||
         (local.sharedItems?.length ?? 0) > 0;
-      if (hasLocalData && await isOwnInterruptedUpload(remoteSnapshotFile.data)) {
+      if (hasLocalData && await isOwnInterruptedUpload(remoteSnapshotFile.data, creds.repo)) {
         // This device's first upload, cut after its snapshot: finish it. The
         // snapshot holds this device's data, so the normal sync below only
         // pushes what was edited since.
         changelogSha = await putFile(creds.pat, creds.repo, CHANGELOG_FILE, '[]', undefined, signal);
         hasRemoteChangelog = true;
-        await db.syncMeta.update('sync-meta', { initialUploadAt: undefined, lastPulledAt: Date.now() });
+        await db.syncMeta.update('sync-meta', { initialUploadAt: undefined, initialUploadRepo: undefined, lastPulledAt: Date.now() });
       } else if (hasLocalData) {
         recordSyncMessage(
           'missingChangelog',
@@ -1426,9 +1536,10 @@ async function runSync(manual = false, pushLimit?: number): Promise<number> {
         const pending = await getPendingEntries();
         const postReset = pending.filter((e) => e.timestamp > remoteWipedAt);
         await createLocalBackup();
-        snapshot = withOwnBase(snapshot); // the remote state, before this device's own edits go on top
+        snapshot = withOwnBase(withoutBase(snapshot)); // the remote state, before this device's own edits go on top
         applyEntriesToSnapshot(snapshot, postReset);
         await replaceLocalEntitiesFromSnapshot(snapshot, {
+          keepBase: true,
           clearPendingIds: pending.filter((e) => e.timestamp <= remoteWipedAt).map((e) => e.id),
           pomodoroSettings: snapshot.pomodoroSettings,
           soundPresets: snapshot.soundPresets,
@@ -1584,6 +1695,16 @@ async function runSync(manual = false, pushLimit?: number): Promise<number> {
             reportError('Sync conflict', { category: 'conflict', message: `Exceeded ${MAX_RETRIES} retries while pushing changelog` }, 0.8);
             return -1;
           }
+          // Someone else wrote the changelog. If they also reset the repository
+          // or changed its key, these entries belong to the state before: pushed
+          // onto the new changelog they would be applied over the reset (or be
+          // unreadable to everyone). Stop; the next sync adopts or asks.
+          const snapNow = await getFile(creds.pat, creds.repo, SNAPSHOT_FILE, signal);
+          const snapParsed = snapNow ? safeParseJson<SyncData>(snapNow.data, 'snapshot (conflict retry)') : null;
+          if (snapParsed?.ok && (snapParsed.value.wipedAt !== remoteWipedAt || snapParsed.value.encryptionSalt !== remoteSalt)) {
+            recordSyncMessage('conflict', 'The repository was reset or re-keyed during this sync; trying again');
+            return -1;
+          }
           // Re-fetch changelog and merge
           const fresh = await getFile(creds.pat, creds.repo, CHANGELOG_FILE, signal);
           const freshParsed = fresh
@@ -1618,6 +1739,7 @@ async function runSync(manual = false, pushLimit?: number): Promise<number> {
         // Only the entries just pushed: an edit recorded while the PUT was on
         // the wire is still pending (a wholesale clear used to drop it here).
         await clearEntriesByIds(pendingEntries.map((e) => e.id));
+        await notePushedEntries(pendingEntries);
       }
     }
 
@@ -1631,6 +1753,8 @@ async function runSync(manual = false, pushLimit?: number): Promise<number> {
       lastPushedAt: pendingEntries.length > 0 ? Date.now() : undefined,
       lastSnapshotSha: reconciledSnapshotSha ?? undefined,
       pendingChanges: remaining > 0,
+      initialUploadAt: undefined,
+      initialUploadRepo: undefined,
     });
 
     // Lightweight pomodoro push: sync pomodoro data to snapshot without waiting for compaction.
@@ -1694,8 +1818,9 @@ async function runSync(manual = false, pushLimit?: number): Promise<number> {
     cachedRemoteEntries = finalRemoteEntries;
     cachedChangelogTimestamp = Date.now();
 
-    // Reset error backoff on success
+    // Reset error backoff on success — and a rate-limit pause a manual sync outlived.
     consecutiveErrors = 0;
+    pausedUntil = 0;
 
     lastSyncCompletedAt = Date.now();
     // Accumulate counts across batch cycle so the final done report includes totals
@@ -1740,7 +1865,10 @@ async function runSync(manual = false, pushLimit?: number): Promise<number> {
       const waitMin = Math.ceil(waitMs / 60_000);
       reportError(`Rate limited — retrying in ${waitMin}m`, { category: 'rate-limited', message: err.message, retryAtMs: err.resetAtMs });
       const alreadyPaused = Date.now() < pausedUntil;
-      pausedUntil = Math.max(pausedUntil, err.resetAtMs + 1000); // 1s buffer
+      // The reset time is on the server's clock; this device's may be off by
+      // hours, which would stretch the pause by as much (getClockSkewMs > 0:
+      // this device is ahead).
+      pausedUntil = Math.max(pausedUntil, err.resetAtMs + (getClockSkewMs() ?? 0) + 1000); // 1s buffer
       if (!alreadyPaused || manual) toast(`Rate limited — retrying in ${waitMin}m`, 'error');
       clearSchedulerTimer(); // the poll that hit the limit does not re-arm
       schedulerState = 'idle';
@@ -1996,10 +2124,11 @@ interface ForcePushOptions {
 /**
  * Force push under the cross-tab sync lock (a sync in another tab used to run
  * alongside it) and as a critical section (an update applied in another tab
- * used to reload this one half-way).
+ * used to reload this one half-way). The critical section is always taken
+ * first, everywhere: taken in both orders, a queued update could deadlock them.
  */
 export function forcePush(options: ForcePushOptions = {}): Promise<SyncData | null> {
-  return withSyncLock(() => inCriticalSection(() => forcePushHoldingLock(options)));
+  return inCriticalSection(() => withSyncLock(() => forcePushHoldingLock(options)));
 }
 
 /** forcePush for a caller that already holds the sync lock (the key rotation). */
@@ -2048,6 +2177,19 @@ export async function forcePushHoldingLock(options: ForcePushOptions = {}): Prom
       await backupRemoteSnapshot(creds.pat, creds.repo, existing.data, existingSnapshot.syncVersion ?? SYNC_VERSION);
     }
 
+    // A key rotation's commit point: what other devices wrote while its files
+    // were being re-encrypted (a compaction folds their entries into the
+    // snapshot) is merged in, not overwritten; a reset made meanwhile stops it
+    // before anything changes (its retry adopts the reset first).
+    if (rekeyChangelogFrom && existingSnapshot && existingSnapshot.encryptionSalt !== getCachedSalt()) {
+      const meta = await db.syncMeta.get('sync-meta');
+      if (existingSnapshot.wipedAt && existingSnapshot.wipedAt !== meta?.lastWipeSeenAt) {
+        recordSyncMessage('forcePush.resetDuringRotation', 'The repository was reset while the password was changing');
+        return null;
+      }
+      await reconcileFromSnapshot(await decryptSyncData(rekeyChangelogFrom, existingSnapshot));
+    }
+
     const local = await getLocalSnapshotWithPendingIds();
     let localData = local.snapshot;
 
@@ -2056,9 +2198,14 @@ export async function forcePushHoldingLock(options: ForcePushOptions = {}): Prom
     // never pulled, one with a single auto-created Inbox). Force push is
     // destructive and propagates to every device — never let it silently shrink
     // the remote. (Only an exactly-empty device used to be caught.)
-    if (existingSnapshot) {
+    // Not at a key rotation's commit point: it synced first and checked nothing
+    // was pending, and refusing there strands the shared files it already moved.
+    if (existingSnapshot && !replacingKey) {
       const localCount = liveItemCount(localData);
-      const remoteCount = liveItemCount(existingSnapshot);
+      // The remote as devices see it: its snapshot with its changelog on top —
+      // deletes wait there until compaction, and counting the bare snapshot
+      // refused a push right after deleting a project.
+      const remoteCount = liveItemCount(await remoteWithChangelog(creds, encKey, existingSnapshot, signal));
       if (remoteCount > 0 && (localCount === 0 || (remoteCount >= FORCE_PUSH_GUARD_MIN && localCount < remoteCount / 2))) {
         reportProgress('error', 'Force push refused', 0);
         toast(`Force push refused: this device holds ${localCount} item(s), the remote ${remoteCount}. Pull first, or delete on the device that has them.`, 'error');
@@ -2066,6 +2213,7 @@ export async function forcePushHoldingLock(options: ForcePushOptions = {}): Prom
       }
     }
 
+    const pushedRows = snapshotAsPushed(localData);
     // Always encrypt before pushing
     const salt = getCachedSalt()!;
     localData.encryptionSalt = salt;
@@ -2096,6 +2244,7 @@ export async function forcePushHoldingLock(options: ForcePushOptions = {}): Prom
 
     // Clear the pending changes the snapshot carried — not one made since.
     await clearEntriesByIds(local.pendingIds);
+    await notePushedEntries(pushedRows);
 
     await db.syncMeta.update('sync-meta', {
       lastPushedAt: Date.now(),
@@ -2121,7 +2270,7 @@ export async function forcePushHoldingLock(options: ForcePushOptions = {}): Prom
 
 /** Force pull under the cross-tab sync lock, as a critical section (see forcePush). */
 export function forcePull(): Promise<void> {
-  return withSyncLock(() => inCriticalSection(() => forcePullHoldingLock()));
+  return inCriticalSection(() => withSyncLock(() => forcePullHoldingLock()));
 }
 
 /**
@@ -2132,16 +2281,19 @@ export function forcePull(): Promise<void> {
  * — a failure there left the bare snapshot with the old pending changes, which
  * the next sync pushed over every device.
  */
-async function forcePullHoldingLock(): Promise<void> {
+async function forcePullHoldingLock(attempt = 1): Promise<void> {
   const signal = await waitForSyncLock();
-
-  // Everything below replaces local state wholesale. Take a device-local safety
-  // copy first so a mis-click is recoverable (Settings → Backups).
-  await createLocalBackupOrWarn();
-  // The pending changes this pull discards: those made before it started.
-  const discardedPendingIds = await getPendingIds();
+  let raced = false;
 
   try {
+    // Everything below replaces local state wholesale. Take a device-local safety
+    // copy first so a mis-click is recoverable (Settings → Backups).
+    if (attempt === 1) await createLocalBackupOrWarn();
+    // The pending changes this pull discards: those made before it started. One
+    // made while it runs would keep its pending entry over a replaced row: the
+    // replace then refuses, and the pull starts again with it included.
+    const discardedPendingIds = await getPendingIds();
+
     const creds = await getCredentials();
     if (!creds) return;
 
@@ -2205,6 +2357,7 @@ async function forcePullHoldingLock(): Promise<void> {
 
     reportProgress('applying', 'Applying data...', 0.6);
     await replaceLocalEntitiesFromSnapshot(snapshot, {
+      pendingBefore: new Set(discardedPendingIds),
       clearPendingIds: discardedPendingIds,
       pomodoroSettings: snapshot.pomodoroSettings,
       soundPresets: snapshot.soundPresets,
@@ -2220,18 +2373,23 @@ async function forcePullHoldingLock(): Promise<void> {
     toast('Force pull complete', 'success');
   } catch (err) {
     if (err instanceof DOMException && err.name === 'AbortError') return;
+    if (err instanceof ReplaceRacedError && attempt < 3) {
+      raced = true;
+      return;
+    }
     console.error('Force pull failed:', err);
     recordError('sync.forcePull', err);
     reportError('Force pull failed', classifySyncError(err));
     toast('Force pull failed', 'error');
   } finally {
     releaseSyncLock(signal);
+    if (raced) await forcePullHoldingLock(attempt + 1);
   }
 }
 
 /** Wipe all data, here and (with sync) everywhere — under the cross-tab sync lock, as a critical section. */
 export function wipeAllData(): Promise<void> {
-  return withSyncLock(() => inCriticalSection(() => wipeAllDataHoldingLock()));
+  return inCriticalSection(() => withSyncLock(() => wipeAllDataHoldingLock()));
 }
 
 async function wipeAllDataHoldingLock(): Promise<void> {
@@ -2269,8 +2427,10 @@ async function wipeAllDataHoldingLock(): Promise<void> {
         if (p.ok) await backupRemoteSnapshot(creds.pat, creds.repo, remoteKey.existing.data, p.value.syncVersion ?? SYNC_VERSION);
       }
       // Flagged before the first remote write: however this is cut short, the
-      // next sync's compaction still purges the shared files' bytes.
-      await db.syncMeta.update('sync-meta', { pendingBlobDeletes: 1 });
+      // next sync's compaction still purges the shared files' bytes — every one,
+      // without the grace it gives files it does not know (with no items left,
+      // each file would look like another device's fresh upload).
+      await db.syncMeta.update('sync-meta', { pendingBlobDeletes: 1, blobPurgeAll: true });
       wipedAt = await replaceRemoteSnapshot(creds, signal, remoteKey, empty);
       remoteDone = true;
     }
@@ -2279,6 +2439,7 @@ async function wipeAllDataHoldingLock(): Promise<void> {
     // short, lists gone and their tasks kept).
     await replaceLocalEntitiesFromSnapshot(empty, {
       clearPendingIds: pendingIds,
+      dropPendingUpTo: wipedAt,
       clearSharedBlobs: true,
       syncMeta: { lastPushedAt: Date.now(), ...(wipedAt ? { lastWipeSeenAt: wipedAt } : {}) },
     });
@@ -2289,7 +2450,7 @@ async function wipeAllDataHoldingLock(): Promise<void> {
       // only its placeholder. Best-effort — the flag set above retries it.
       try {
         if ((await withBlobBranchLock(() => compactBlobBranch(creds, new Set<string>()))) !== null) {
-          await db.syncMeta.update('sync-meta', { pendingBlobDeletes: 0 });
+          await db.syncMeta.update('sync-meta', { pendingBlobDeletes: 0, blobPurgeAll: undefined });
         }
       } catch (err) {
         recordError('sync.wipeBlobBranch', err);
@@ -2330,14 +2491,24 @@ async function replaceRemoteSnapshot(
     : [];
   const wipedAt = Date.now();
   const snapshot = await encryptSyncData(encKey, {
-    ...plain,
+    ...withoutBase(plain), // a device's own bookkeeping never goes up (an import of an export carried it)
     syncVersion: SYNC_VERSION,
     wipedAt,
     supersededEntryIds: supersededEntryIds.length > 0 ? supersededEntryIds : undefined,
     encryptionSalt: getCachedSalt()!,
     encryptionVerifier: await createVerifier(encKey),
   });
-  await putFile(creds.pat, creds.repo, SNAPSHOT_FILE, JSON.stringify(snapshot), existing?.sha, signal);
+  try {
+    await putFile(creds.pat, creds.repo, SNAPSHOT_FILE, JSON.stringify(snapshot), existing?.sha, signal);
+  } catch (err) {
+    // A reply lost on the way back (a timeout on a large body) after the write
+    // landed: the remote is reset, so this is the commit point all the same —
+    // reporting "nothing was changed" was false, and the next sync adopted it.
+    if ((err instanceof DOMException && err.name === 'AbortError') || (err instanceof Error && err.message === 'CONFLICT')) throw err;
+    const now = await getFile(creds.pat, creds.repo, SNAPSHOT_FILE, signal).catch(() => null);
+    const landed = now ? safeParseJson<SyncData>(now.data, 'snapshot (reset check)') : null;
+    if (!landed?.ok || landed.value.wipedAt !== wipedAt) throw err;
+  }
   try {
     await resetRemoteChangelog(creds.pat, creds.repo, signal);
   } catch (err) {
@@ -2347,13 +2518,21 @@ async function replaceRemoteSnapshot(
   return wipedAt;
 }
 
-/** The remote snapshot a replace is about to overwrite, decrypted — or null. */
-async function decryptedRemote(remoteKey: { encKey: CryptoKey; existing: { data: string } | null }): Promise<SyncData | null> {
+/**
+ * The remote a replace is about to overwrite, decrypted, with its changelog
+ * folded in (recent edits of the collections it carries over have not reached
+ * the snapshot yet, and the reset supersedes the changelog) — or null.
+ */
+async function decryptedRemote(
+  creds: { pat: string; repo: string },
+  remoteKey: { encKey: CryptoKey; existing: { data: string } | null },
+  signal?: AbortSignal,
+): Promise<SyncData | null> {
   if (!remoteKey.existing) return null;
   const parsed = safeParseJson<SyncData>(remoteKey.existing.data, 'existing snapshot (carry over)');
   if (!parsed.ok) return null;
   try {
-    return await decryptSyncData(remoteKey.encKey, parsed.value);
+    return await remoteWithChangelog(creds, remoteKey.encKey, parsed.value, signal);
   } catch (err) {
     recordError('sync.carryOver', err);
     return null;
@@ -2365,6 +2544,8 @@ function mergeById<T extends { id: string; updatedAt: number }>(...copies: Array
   const byId = new Map<string, T>();
   for (const rows of copies) {
     for (const row of rows ?? []) {
+      // A row this device could not read is a placeholder, not a version.
+      if ((row as { _decryptError?: boolean })._decryptError) continue;
       const current = byId.get(row.id);
       if (!current || (row.updatedAt ?? 0) >= (current.updatedAt ?? 0)) byId.set(row.id, row);
     }
@@ -2374,7 +2555,7 @@ function mergeById<T extends { id: string; updatedAt: number }>(...copies: Array
 
 /** Import a backup, here and (with sync) everywhere — under the cross-tab sync lock, as a critical section. */
 export function importData(data: ImportData): Promise<void> {
-  return withSyncLock(() => inCriticalSection(() => importDataHoldingLock(data)));
+  return inCriticalSection(() => withSyncLock(() => importDataHoldingLock(data)));
 }
 
 async function importDataHoldingLock(data: ImportData): Promise<void> {
@@ -2431,7 +2612,7 @@ async function importDataHoldingLock(data: ImportData): Promise<void> {
     // pre-v3 backups, the mind maps.
     const pendingIds = await getPendingIds();
     const local = await getLocalSnapshot();
-    const remotePlain = remoteKey ? await decryptedRemote(remoteKey) : null;
+    const remotePlain = creds && remoteKey ? await decryptedRemote(creds, remoteKey, signal) : null;
     const theme = data.settings?.theme ?? (localStorage.getItem('gtd25-theme') as Settings['theme']) ?? 'system';
     const replacement: SyncData = {
       syncVersion: SYNC_VERSION,
@@ -2459,6 +2640,7 @@ async function importDataHoldingLock(data: ImportData): Promise<void> {
     }
     await replaceLocalEntitiesFromSnapshot(replacement, {
       clearPendingIds: pendingIds,
+      dropPendingUpTo: wipedAt,
       pomodoroSettings: data.pomodoroSettings,
       soundPresets: data.soundPresets,
       syncMeta: { lastPulledAt: Date.now(), lastPushedAt: Date.now(), ...(wipedAt ? { lastWipeSeenAt: wipedAt } : {}) },
@@ -2509,7 +2691,7 @@ export function __resetForTesting() {
 
 /** Restore a remote tier backup everywhere — under the cross-tab sync lock, as a critical section. */
 export function restoreFromBackup(tier: BackupTier): Promise<void> {
-  return withSyncLock(() => inCriticalSection(() => restoreFromBackupHoldingLock(tier)));
+  return inCriticalSection(() => withSyncLock(() => restoreFromBackupHoldingLock(tier)));
 }
 
 async function restoreFromBackupHoldingLock(tier: BackupTier): Promise<void> {
@@ -2567,7 +2749,7 @@ async function restoreFromBackupHoldingLock(tier: BackupTier): Promise<void> {
     const pendingIds = await getPendingIds();
     const needsCarry = !backupData.sharedItems || !backupData.mindmaps;
     const local = needsCarry ? await getLocalSnapshot() : null;
-    const remotePlain = needsCarry ? await decryptedRemote(remoteKey) : null;
+    const remotePlain = needsCarry ? await decryptedRemote(creds, remoteKey, signal) : null;
     const restored: SyncData = {
       syncVersion: SYNC_VERSION,
       taskLists: backupData.taskLists,
@@ -2589,6 +2771,7 @@ async function restoreFromBackupHoldingLock(tier: BackupTier): Promise<void> {
     remoteDone = true;
     await replaceLocalEntitiesFromSnapshot(restored, {
       clearPendingIds: pendingIds,
+      dropPendingUpTo: wipedAt,
       pomodoroSettings: backupData.pomodoroSettings,
       soundPresets: backupData.soundPresets,
       syncMeta: { lastPulledAt: Date.now(), lastPushedAt: Date.now(), lastWipeSeenAt: wipedAt },

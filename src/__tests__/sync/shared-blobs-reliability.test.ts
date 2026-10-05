@@ -47,3 +47,9 @@ it('an upload that reached GitHub succeeds even when the local cache cannot be w
   await expect(uploadSharedBlob('b1', new Uint8Array([1, 2, 3]))).resolves.toBeUndefined();
   expect(fakeRepo.readBytes(blobPath('b1'), BLOB_BRANCH)).not.toBeNull();
 });
+
+it('no upload under a key the remote is leaving: a sync-password change in progress refuses it', async () => {
+  fakeRepo.writeText('gtd25-key-rotation.json', JSON.stringify({ newSalt: 's', newVerifier: 'v', startedAt: 1 }));
+  await expect(uploadSharedBlob('b2', new Uint8Array([1]))).rejects.toThrow(/sync password is changing/);
+  expect(fakeRepo.readBytes(blobPath('b2'), BLOB_BRANCH)).toBeNull();
+});

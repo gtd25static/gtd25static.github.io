@@ -1,5 +1,5 @@
 import { vi, type Mock } from 'vitest';
-import { makeSyncData } from '../helpers/sync-helpers';
+import { makeSyncData, resetSyncState, setupSyncCredentials } from '../helpers/sync-helpers';
 import {
   maybeCreateBackups,
   listRemoteBackups,
@@ -16,6 +16,8 @@ vi.mock('../../sync/github-api', async (importOriginal) => {
     putFile: vi.fn(),
     deleteFile: vi.fn(),
     testConnection: vi.fn(),
+    // The key check before writing (remoteKeyIsCurrent): the snapshot unchanged.
+    getFileConditional: vi.fn(async () => ({ status: 'unchanged', etag: 'e' })),
   };
 });
 
@@ -54,8 +56,11 @@ import { getFile, putFile } from '../../sync/github-api';
 const mockGetFile = getFile as Mock;
 const mockPutFile = putFile as Mock;
 
-beforeEach(() => {
+beforeEach(async () => {
   vi.clearAllMocks();
+  // Sync set up, so the key check before writing a tier can pass.
+  await resetSyncState();
+  await setupSyncCredentials();
   __resetForTesting();
   localStorage.removeItem('gtd25-backup-hourly-at');
   localStorage.removeItem('gtd25-backup-daily-at');
@@ -154,7 +159,8 @@ describe('maybeCreateBackups — localStorage staleness', () => {
     mockPutFile.mockResolvedValue('sha');
 
     await maybeCreateBackups('pat', 'repo', mockEncKey());
-    expect(mockGetFile).toHaveBeenCalledTimes(3);
+    const tierReads = mockGetFile.mock.calls.filter((c) => Object.values(BACKUP_FILES).includes(c[2]));
+    expect(tierReads).toHaveLength(3); // (plus the key check's read of the rotation mark)
   });
 });
 
@@ -297,6 +303,20 @@ describe('maybeCreateBackups — Paranoid Mode', () => {
     await pending;
 
     expect(mockGetFile).not.toHaveBeenCalled();
+    expect(mockPutFile).not.toHaveBeenCalled();
+  });
+});
+
+describe('a key the remote no longer uses (reliability review)', () => {
+  it('writes no tier while a sync-password change is in progress or done elsewhere', async () => {
+    vi.useFakeTimers();
+    // A sync-password change in progress: its mark is on the remote.
+    mockGetFile.mockImplementation(async (_p: string, _r: string, path: string) =>
+      (path === 'gtd25-key-rotation.json' ? { data: '{}', sha: 'm' } : null));
+    const run = maybeCreateBackups('pat', 'u/r', {} as CryptoKey);
+    await vi.advanceTimersByTimeAsync(31_000);
+    await run;
+    vi.useRealTimers();
     expect(mockPutFile).not.toHaveBeenCalled();
   });
 });

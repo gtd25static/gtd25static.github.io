@@ -14,6 +14,7 @@ import { toast } from '../../components/ui/Toast';
 const createFileItem = vi.fn().mockResolvedValue({ id: 'f1' });
 const createLinkItem = vi.fn().mockResolvedValue({ id: 'l1' });
 const createSnippetItem = vi.fn().mockResolvedValue({ id: 's1' });
+const hasRoom = vi.fn<(bytes: number) => Promise<boolean>>().mockResolvedValue(true);
 const captureToInbox = vi.fn().mockResolvedValue(undefined);
 const createTask = vi.fn().mockResolvedValue({ id: 't1' });
 const getOrCreateInbox = vi.fn().mockResolvedValue('inbox-1');
@@ -25,6 +26,7 @@ vi.mock('../../hooks/use-shared-items', () => ({
   createFileItem: (...a: unknown[]) => createFileItem(...a),
   createLinkItem: (...a: unknown[]) => createLinkItem(...a),
   createSnippetItem: (...a: unknown[]) => createSnippetItem(...a),
+  sharedFolderHasRoomFor: (n: number) => hasRoom(n),
   formatBytes: (n: number) => `${n} B`,
 }));
 vi.mock('../../hooks/use-tasks', () => ({ createTask: (...a: unknown[]) => createTask(...a) }));
@@ -92,6 +94,9 @@ beforeEach(() => {
   getOrCreateInbox.mockClear();
   canUpload.mockReset();
   canUpload.mockResolvedValue(true);
+  hasRoom.mockReset();
+  hasRoom.mockResolvedValue(true);
+  vi.mocked(toast).mockClear();
   blocker.mockReset();
   blocker.mockResolvedValue(null);
   useAppState.setState({ selectedListId: null });
@@ -138,6 +143,34 @@ describe('useShareTarget (Android share → destination prompt)', () => {
     expect(cache.wasDeleted()).toBe(false);
     expect(cache.entries()).not.toContain(shareFilePath(0));
     expect(cache.entries()).toContain(shareFilePath(1));
+  });
+
+  it('a file that can never fit (the folder is full) is not offered again', async () => {
+    window.history.replaceState({}, '', '/?shareTarget=1');
+    const cache = installFakeCaches(fileMeta(), fileBlobs);
+    hasRoom.mockResolvedValue(false);
+    createFileItem.mockResolvedValueOnce(undefined); // createFileItem refuses (and says why)
+    render(<Harness />);
+    fireEvent.click(await screen.findByText('to-folder'));
+    await waitFor(() => expect(cache.wasDeleted()).toBe(true));
+    expect(toast).not.toHaveBeenCalledWith(expect.stringMatching(/offered again/), 'error');
+  });
+
+  it('the "too large to receive" notice is shown once, not at every start the share is offered', async () => {
+    window.history.replaceState({}, '', '/?shareTarget=1');
+    const cache = installFakeCaches(fileMeta({ skippedFiles: 2 }), fileBlobs);
+    render(<Harness />);
+    await screen.findByText('to-folder');
+    await waitFor(async () => expect((await cache.store[SHARE_META_PATH].json!() as SharedPayloadMeta).skippedFiles).toBeFalsy());
+  });
+
+  it('when only the text is left (its files saved earlier), it does not wait for sync', async () => {
+    window.history.replaceState({}, '', '/?shareTarget=1');
+    installFakeCaches(fileMeta({ text: 'just a note' }), {}); // meta still lists a file; the cache no longer has it
+    canUpload.mockResolvedValue(false);
+    blocker.mockResolvedValue('not-ready');
+    render(<Harness />);
+    expect(await screen.findByText('to-inbox', {}, { timeout: 2000 })).toBeInTheDocument();
   });
 
   it('choosing Inbox for a file stores the bytes in the Shared Folder AND adds a pointer task', async () => {

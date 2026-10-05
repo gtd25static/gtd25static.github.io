@@ -16,6 +16,7 @@ import { db } from '../db';
 import { lock } from '../db/vault';
 import { signalOtherTabs } from './tab-channel';
 import { closeAllNotifications } from './notifications';
+import { haltErrorPersistence } from './diagnostics';
 
 // Deliberately survives clearWebStorage (see skip below): it is the retry
 // breadcrumb for a wipe whose IndexedDB deletion could not be confirmed.
@@ -110,6 +111,9 @@ async function wipeDevice(closeOptions: { disableAutoOpen: boolean }): Promise<v
   try { localStorage.setItem(WIPE_PENDING_KEY, String(Date.now())); } catch { /* no storage — proceed */ }
 
   await closeAllNotifications(); // nudges quote task titles; they would outlive the data
+  // The diagnostics log in memory still holds the session's history: any error
+  // after this point (a closed database, say) used to write all of it back.
+  haltErrorPersistence();
   const idbOutcome = await deleteIndexedDb(closeOptions);
   clearWebStorage();
   await clearCaches();

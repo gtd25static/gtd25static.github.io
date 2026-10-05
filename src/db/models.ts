@@ -42,6 +42,8 @@ export interface TaskList {
   // Local only: per field, the newest timestamp known to be on the remote
   // (sync/conflicts.ts). Rides in this device's change entries as their base.
   _base?: Record<string, number>;
+  // Local only: per field, the newest timestamp this device has pushed.
+  _pushed?: Record<string, number>;
 }
 
 export interface TaskLink {
@@ -55,6 +57,8 @@ export interface DiscussionEntry {
   id: string;
   at: number; // when the topic was discussed
   note?: string; // optional outcome / what was said
+  // When the note was settled after two devices edited it at once (sync/conflicts.ts).
+  editedAt?: number;
 }
 
 export interface Task {
@@ -113,6 +117,8 @@ export interface Task {
   // Local only: per field, the newest timestamp known to be on the remote
   // (sync/conflicts.ts). Rides in this device's change entries as their base.
   _base?: Record<string, number>;
+  // Local only: per field, the newest timestamp this device has pushed.
+  _pushed?: Record<string, number>;
 }
 
 export interface Subtask {
@@ -141,6 +147,8 @@ export interface Subtask {
   // Local only: per field, the newest timestamp known to be on the remote
   // (sync/conflicts.ts). Rides in this device's change entries as their base.
   _base?: Record<string, number>;
+  // Local only: per field, the newest timestamp this device has pushed.
+  _pushed?: Record<string, number>;
 }
 
 export type SharedItemType = 'link' | 'file' | 'snippet';
@@ -168,6 +176,8 @@ export interface SharedItem {
   // Local only: per field, the newest timestamp known to be on the remote
   // (sync/conflicts.ts). Rides in this device's change entries as their base.
   _base?: Record<string, number>;
+  // Local only: per field, the newest timestamp this device has pushed.
+  _pushed?: Record<string, number>;
 }
 
 // Mindmaps: hierarchical node diagrams organized in nested folders. All three
@@ -188,6 +198,8 @@ export interface MindmapFolder {
   // Local only: per field, the newest timestamp known to be on the remote
   // (sync/conflicts.ts). Rides in this device's change entries as their base.
   _base?: Record<string, number>;
+  // Local only: per field, the newest timestamp this device has pushed.
+  _pushed?: Record<string, number>;
 }
 
 export interface Mindmap {
@@ -206,6 +218,8 @@ export interface Mindmap {
   // Local only: per field, the newest timestamp known to be on the remote
   // (sync/conflicts.ts). Rides in this device's change entries as their base.
   _base?: Record<string, number>;
+  // Local only: per field, the newest timestamp this device has pushed.
+  _pushed?: Record<string, number>;
 }
 
 // A single node of a mindmap. The map's root is the node with no parentId;
@@ -234,6 +248,8 @@ export interface MindmapNode {
   // Local only: per field, the newest timestamp known to be on the remote
   // (sync/conflicts.ts). Rides in this device's change entries as their base.
   _base?: Record<string, number>;
+  // Local only: per field, the newest timestamp this device has pushed.
+  _pushed?: Record<string, number>;
 }
 
 // Device-local cache of a Shared Folder blob's bytes (NEVER synced). `data` holds
@@ -277,9 +293,13 @@ export interface SyncMeta {
   // completes: an upload cut between its snapshot and its changelog is finished
   // by the next sync instead of being refused as an incomplete remote.
   initialUploadAt?: number;
+  initialUploadRepo?: string;
   // When this device started recording `_base` (sync/conflicts.ts): a row
   // without one takes its field timestamps up to here as its base.
   conflictBaseSince?: number;
+  // A wipe's purge of every Shared Folder file's bytes is still to do (set before
+  // the wipe's first remote write; compaction then drops every file, no grace).
+  blobPurgeAll?: boolean;
   // When that squash last failed: retried once a day, not after every sync.
   mainSquashFailedAt?: number;
   // A sync-password change in progress (see sync/key-rotation.ts): the new salt
@@ -318,6 +338,12 @@ export interface LocalSettings {
   syncIntervalMs: number;
   deviceId?: string;
   encryptionPassword?: string;
+  // The sync password and salt from before an unfinished sync-password change
+  // (sync/key-rotation.ts): a retry after its commit point needs the old key.
+  // Kept only until the change completes or is forgotten; in the vault instead
+  // when Paranoid Mode is on.
+  previousEncryptionPassword?: string;
+  previousEncryptionSalt?: string;
   appliedSyncVersion?: number;
   changelogPruned?: boolean;
   // Nudge notifications (device-local; not synced)

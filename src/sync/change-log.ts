@@ -1,12 +1,16 @@
+import type { Table } from 'dexie';
 import { db } from '../db';
 import type { ChangeEntry, SyncConflict } from '../db/models';
 import { newId } from '../lib/id';
 import { SYNC_VERSION } from './version';
 import { migrateEntryData } from './migrations';
-import { mergeEntity, stampUpdatedFields, capFutureTimestamps, MAX_FUTURE_SKEW_MS } from './field-timestamps';
+import { mergeEntity, stampUpdatedFields, capFutureTimestamps, MAX_FUTURE_SKEW_MS, withoutLocalSyncFields } from './field-timestamps';
 import { noteRemoteDeletions } from '../db/purge';
 import { prepareEntityRowsForAtRest, prepareConflictRowsForAtRest } from './at-rest-writes';
-import { detectConflicts, detectDeleteConflict, isConflictEntity, advanceBase, effectiveBase } from './conflicts';
+import {
+  detectConflicts, detectDeleteConflict, isConflictEntity, advanceBase, effectiveBase,
+  openConflictSpots, mergeIntoSpot, staleWriterUpdates,
+} from './conflicts';
 import type { Subtask, Task, TaskList, SharedItem, MindmapFolder, Mindmap, MindmapNode } from '../db/models';
 
 type EntityRow = TaskList | Task | Subtask | SharedItem | MindmapFolder | Mindmap | MindmapNode;
@@ -131,6 +135,49 @@ function validateEntityShape(data: Record<string, unknown> | undefined, entityTy
 const MAX_APPLY_ATTEMPTS = 3;
 
 /**
+ * Remember, per item, the field timestamps this device has pushed (`_pushed`,
+ * sync/conflicts.ts): a snapshot that later carries them back — compacted, or
+ * refined by someone who saw them — is what the remote got from here, not a
+ * concurrent edit. Called after a push (and with every row after a whole-snapshot
+ * upload). Best effort: if local edits keep landing under it, it gives up — the
+ * cost is a conflict card that should not have been.
+ */
+export async function notePushedEntries(entries: ChangeEntry[]): Promise<void> {
+  const stamps = new Map<string, { entityType: ChangeEntry['entityType']; entityId: string; at: Record<string, number> }>();
+  for (const e of entries) {
+    if (!isKnownEntityType(e.entityType)) continue;
+    const at = e.operation === 'delete'
+      ? { deletedAt: e.timestamp }
+      : (e.data?.fieldTimestamps as Record<string, number> | undefined);
+    if (!at) continue;
+    const key = `${e.entityType}:${e.entityId}`;
+    const current = stamps.get(key);
+    stamps.set(key, { entityType: e.entityType, entityId: e.entityId, at: advanceBase(current?.at, at) ?? at });
+  }
+  if (stamps.size === 0) return;
+  for (let attempt = 1; attempt <= MAX_APPLY_ATTEMPTS; attempt++) {
+    const pendingBefore = new Set(await getPendingIds());
+    const byTable = new Map<ChangeEntry['entityType'], EntityRow[]>();
+    for (const { entityType, entityId, at } of stamps.values()) {
+      const row = await tableForEntity[entityType]().get(entityId) as unknown as Record<string, unknown> | undefined;
+      if (!row || row._decryptError) continue;
+      const next = advanceBase(row._pushed as Record<string, number> | undefined, at);
+      if (next === row._pushed) continue;
+      byTable.set(entityType, [...(byTable.get(entityType) ?? []), { ...row, _pushed: next } as unknown as EntityRow]);
+    }
+    if (byTable.size === 0) return;
+    const prepared = await Promise.all([...byTable].map(async ([entityType, rows]) =>
+      [entityType, await prepareEntityRowsForAtRest(tableNameForEntity[entityType] as 'tasks', rows as Task[])] as const));
+    const written = await db.transaction('rw', [...prepared.map(([t]) => tableForEntity[t]()), db.changeLog], async () => {
+      if (await pendingIdsAddedSince(pendingBefore)) return false;
+      for (const [entityType, rows] of prepared) await (tableForEntity[entityType]() as unknown as Table<unknown, string>).bulkPut(rows as unknown[]);
+      return true;
+    });
+    if (written) return;
+  }
+}
+
+/**
  * Pending-entry ids recorded since `before` was taken. Every local edit records
  * its entry in the same transaction as its row, so a new id means a row may have
  * changed after the merge read it. Keys only: nothing is decrypted, so this is
@@ -176,9 +223,16 @@ async function applyRemoteEntriesOnce(entries: ChangeEntry[]): Promise<boolean> 
   // Records this sync moves into the Trash: their 30 days run from now, here.
   const newlyDeleted: string[] = [];
   // Concurrent edits found on the way (sync/conflicts.ts), recorded with the rows.
-  const conflicts = new Map<string, SyncConflict>();
+  // One card per spot (item + field): a spot already open gets the newer version
+  // instead of a second card — and a later edit from a writer that still had
+  // not seen ours updates it rather than sweeping it away.
   const since = (await db.syncMeta.get('sync-meta'))?.conflictBaseSince ?? 0;
-  const pendingEntities = new Set((await getPendingEntries()).map((e) => e.entityId));
+  const spots = await openConflictSpots(sorted.map((e) => e.entityId));
+  const conflicts = new Map<string, SyncConflict>();
+  const record = (found: SyncConflict) => {
+    const merged = mergeIntoSpot(spots, found);
+    conflicts.set(merged.id, merged);
+  };
   const localState: Record<ChangeEntry['entityType'], Map<string, EntityRow | null>> = {
     taskList: new Map<string, EntityRow | null>(),
     task: new Map<string, EntityRow | null>(),
@@ -223,10 +277,8 @@ async function applyRemoteEntriesOnce(entries: ChangeEntry[]): Promise<boolean> 
         // without field timestamps (pre-v5 data) keep the row-level rule.
         const row = existing as unknown as Record<string, unknown>;
         if (isConflictEntity(entry.entityType)) {
-          const conflict = detectDeleteConflict(entry.entityType, row, entry.timestamp, {
-            localPending: pendingEntities.has(entry.entityId), since,
-          });
-          if (conflict) conflicts.set(conflict.id, conflict);
+          const conflict = detectDeleteConflict(entry.entityType, row, entry.timestamp, { since });
+          if (conflict) record(conflict);
         }
         const currentBase = effectiveBase(row, since);
         const nextBase = advanceBase(currentBase, { deletedAt: entry.timestamp });
@@ -242,7 +294,7 @@ async function applyRemoteEntriesOnce(entries: ChangeEntry[]): Promise<boolean> 
             _base: nextBase,
           };
           setChanged(entry.entityType, entry.entityId, updated as EntityRow);
-        } else if (nextBase !== row._base) {
+        } else if (nextBase !== currentBase && !row._decryptError) {
           setChanged(entry.entityType, entry.entityId, { ...existing, _base: nextBase } as EntityRow);
         }
       }
@@ -267,24 +319,25 @@ async function applyRemoteEntriesOnce(entries: ChangeEntry[]): Promise<boolean> 
       if (isConflictEntity(entry.entityType)) {
         // The writer's base rides in the entry (pushed with one filled in).
         const writerBase = (remote._base ?? {}) as Record<string, number>;
-        for (const conflict of detectConflicts(entry.entityType, row, remote, writerBase, {
-          localPending: pendingEntities.has(entry.entityId), since,
-        })) conflicts.set(conflict.id, conflict);
+        for (const conflict of detectConflicts(entry.entityType, row, remote, writerBase, { since })) record(conflict);
+        for (const updated of staleWriterUpdates(spots, entry.entityId, remote, writerBase)) record(updated);
       }
       // What this device now knows to be on the remote — even when the merge
-      // itself changes nothing (this side's value is newer).
-      const nextBase = advanceBase(effectiveBase(row, since), remoteFT);
+      // itself changes nothing (this side's value is newer). A row whose base
+      // does not move is not rewritten (a whole re-encryption in Paranoid Mode).
+      const currentBase = effectiveBase(row, since);
+      const nextBase = advanceBase(currentBase, remoteFT);
       const merged = mergeEntity(row, remote, entry.timestamp);
       if (merged) {
         if (merged.deletedAt && !existing.deletedAt) newlyDeleted.push(entry.entityId);
         setChanged(entry.entityType, entry.entityId, { ...merged, _base: nextBase } as unknown as EntityRow);
-      } else if (nextBase !== row._base) {
+      } else if (nextBase !== currentBase && !row._decryptError) {
         setChanged(entry.entityType, entry.entityId, { ...existing, _base: nextBase } as EntityRow);
       }
     } else {
       if (data?.deletedAt) newlyDeleted.push(entry.entityId);
       // New here: everything in it came from the remote (the writer's own base is its business).
-      const { _base: _theirs, ...fresh } = remote;
+      const fresh = withoutLocalSyncFields(remote);
       setChanged(entry.entityType, entry.entityId, { ...fresh, _base: remoteFT ? { ...remoteFT } : undefined } as unknown as EntityRow);
     }
   }

@@ -985,6 +985,39 @@ describe('remote unlock: removing one approver', () => {
     expect(await vault.unlockWithRemoteKey(fresh)).toBe(true);
   });
 
+  it('a retry of an interrupted removal hands out the SAME staged key (one approver already holds it)', async () => {
+    await enrollTwoApprovers();
+    await actAsLaptop();
+    const promote = vi.spyOn(vault, 'promoteNextRuk').mockRejectedValueOnce(new Error('tab killed'));
+    await expect(ru.removeApprover({ pat: PAT, repo: REPO, deviceId: LAP, deviceName: 'Work Laptop', macKey }, PHONE2)).rejects.toThrow();
+    promote.mockRestore();
+    await actAsPhone();
+    await ru.pollApproverInbox(PAT, REPO, PHONE, macKey);
+    phoneLocal = await snapshotLocal();
+    const held = rukBytes(phoneLocal.remoteApproverFor![LAP]!.ruk);
+
+    // The retry cannot reach the phone this time.
+    await actAsLaptop();
+    failPutPaths.add(ru.approverInboxPath(PHONE));
+    await expect(ru.removeApprover({ pat: PAT, repo: REPO, deviceId: LAP, deviceName: 'Work Laptop', macKey }, PHONE2)).rejects.toThrow();
+    vault.lock();
+    expect(await vault.unlockWithRemoteKey(held)).toBe(true); // what the phone holds still opens
+  });
+
+  it('the key to hand to new approvers comes from the staged slot when that is all an interrupted re-issue left', async () => {
+    await enrollTwoApprovers();
+    await actAsLaptop();
+    await vault.clearRemoteUnlock();
+    const ruk = crypto.getRandomValues(new Uint8Array(32));
+    await vault.stageNextRuk(ruk);
+    expect(Array.from((await vault.getRukRaw())!)).toEqual(Array.from(ruk));
+  });
+
+  it('a registry entry that is not an object (a corrupt or hostile file) is skipped, not thrown on', async () => {
+    files[ru.REGISTRY_PATH] = { data: JSON.stringify({ x: 7, y: 'str', z: true }), sha: 's' };
+    await expect(ru.readAuthenticRegistry(PAT, REPO, macKey)).resolves.toEqual([]);
+  });
+
   it('a completed removal leaves no staged key behind', async () => {
     await enrollTwoApprovers();
     await actAsLaptop();

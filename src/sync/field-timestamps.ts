@@ -8,9 +8,17 @@
 // `_enc` (ciphertext) and `_decryptError` (a quarantined row) are encryption
 // bookkeeping, never data: a merge that adopted a remote `_enc` on the strength of
 // its timestamp made the at-rest layer store the decrypted row verbatim.
-// `_base` is each device's own record of what it has seen from the remote
-// (sync/conflicts.ts): never merged from another device's row.
-const EXCLUDED_FIELDS = new Set(['id', 'createdAt', 'updatedAt', 'fieldTimestamps', '_enc', '_decryptError', '_base']);
+// `_base` / `_pushed` are each device's own record of what it has seen from, and
+// sent to, the remote (sync/conflicts.ts): never merged from another device's row.
+const EXCLUDED_FIELDS = new Set(['id', 'createdAt', 'updatedAt', 'fieldTimestamps', '_enc', '_decryptError', '_base', '_pushed']);
+
+/** A row without the fields that are only this device's sync bookkeeping. */
+export function withoutLocalSyncFields<T>(row: T): T {
+  const r = row as Record<string, unknown>;
+  if (!('_base' in r) && !('_pushed' in r)) return row;
+  const { _base: _seen, _pushed: _sent, ...rest } = r;
+  return rest as T;
+}
 
 // Fields merged as id-keyed unions instead of whole-value LWW. discussionLog
 // entries are appended independently on different devices; whole-field LWW
@@ -149,8 +157,8 @@ export function mergeEntity(
   if (!localFT || !remoteFT) {
     const localUpdatedAt = (local.updatedAt as number) ?? 0;
     if (remoteTimestamp >= localUpdatedAt) {
-      const { _enc: _ciphertext, _decryptError: _quarantined, _base: _theirs, ...row } = remote;
-      return local._base ? { ...row, _base: local._base } : row;
+      const { _enc: _ciphertext, _decryptError: _quarantined, _base: _theirs, _pushed: _theirsSent, ...row } = remote;
+      return { ...row, ...(local._base ? { _base: local._base } : {}), ...(local._pushed ? { _pushed: local._pushed } : {}) };
     }
     return null;
   }

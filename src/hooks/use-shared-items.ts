@@ -104,6 +104,11 @@ async function checkCanUpload(): Promise<boolean> {
 }
 
 // Reject items that don't fit the remaining quota. Returns true if it fit.
+/** Whether a file of `bytes` fits the Shared Folder now (no message). */
+export async function sharedFolderHasRoomFor(bytes: number): Promise<boolean> {
+  return bytes <= MAX_SHARED_FOLDER_BYTES - await currentUsedBytes();
+}
+
 async function checkFits(bytes: number): Promise<boolean> {
   const used = await currentUsedBytes();
   const remaining = MAX_SHARED_FOLDER_BYTES - used;

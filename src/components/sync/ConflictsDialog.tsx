@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useId, useState } from 'react';
 import { Modal } from '../ui/Modal';
 import { Button } from '../ui/Button';
 import { useConflicts, resolveConflict, type ConflictChoice } from '../../hooks/use-conflicts';
@@ -45,6 +45,9 @@ function ValueView({ value }: { value: unknown }) {
 function ConflictCard({ conflict }: { conflict: SyncConflict }) {
   const [editing, setEditing] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // Every card has the same buttons: they point at their card's heading so a
+  // screen reader says which item and field they decide.
+  const headingId = useId();
   const choose = async (choice: ConflictChoice) => {
     setBusy(true);
     try {
@@ -57,10 +60,12 @@ function ConflictCard({ conflict }: { conflict: SyncConflict }) {
 
   return (
     <li className="rounded-xl border border-zinc-200 p-3 dark:border-zinc-700">
-      <div className="text-sm font-medium text-zinc-800 dark:text-zinc-100">
-        {TYPE_LABEL[conflict.entityType]}: <span data-redact="true">“{conflict.label || 'untitled'}”</span>
+      <div id={headingId}>
+        <div className="text-sm font-medium text-zinc-800 dark:text-zinc-100">
+          {TYPE_LABEL[conflict.entityType]}: <span data-redact="true">“{conflict.label || 'untitled'}”</span>
+        </div>
+        <div className="mb-2 text-xs text-zinc-500 dark:text-zinc-400">{fieldLabel(conflict)}</div>
       </div>
-      <div className="mb-2 text-xs text-zinc-500 dark:text-zinc-400">{fieldLabel(conflict)}</div>
 
       {conflict.kind === 'field' ? (
         <>
@@ -89,24 +94,24 @@ function ConflictCard({ conflict }: { conflict: SyncConflict }) {
                 data-redact="true"
               />
               <div className="flex flex-wrap gap-2">
-                <Button size="sm" disabled={busy} onClick={() => choose({ value: editing })}>Keep this version</Button>
-                <Button size="sm" variant="ghost" disabled={busy} onClick={() => setEditing(null)}>Cancel</Button>
+                <Button aria-describedby={headingId} size="sm" disabled={busy} onClick={() => choose({ value: editing })}>Keep this version</Button>
+                <Button aria-describedby={headingId} size="sm" variant="ghost" disabled={busy} onClick={() => setEditing(null)}>Cancel</Button>
               </div>
             </div>
           ) : (
             <div className="mt-2 flex flex-wrap gap-2">
-              <Button size="sm" variant="secondary" disabled={busy} onClick={() => choose({ keep: 'local' })}>Keep this device’s</Button>
-              <Button size="sm" variant="secondary" disabled={busy} onClick={() => choose({ keep: 'remote' })}>Keep the other device’s</Button>
+              <Button aria-describedby={headingId} size="sm" variant="secondary" disabled={busy} onClick={() => choose({ keep: 'local' })}>Keep this device’s</Button>
+              <Button aria-describedby={headingId} size="sm" variant="secondary" disabled={busy} onClick={() => choose({ keep: 'remote' })}>Keep the other device’s</Button>
               {isText(conflict) && (
-                <Button size="sm" variant="ghost" disabled={busy} onClick={() => setEditing(typeof shown === 'string' ? shown : '')}>Edit…</Button>
+                <Button aria-describedby={headingId} size="sm" variant="ghost" disabled={busy} onClick={() => setEditing(typeof shown === 'string' ? shown : '')}>Edit…</Button>
               )}
             </div>
           )}
         </>
       ) : (
         <div className="flex flex-wrap gap-2">
-          <Button size="sm" variant="secondary" disabled={busy} onClick={() => choose({ restore: true })}>Restore it</Button>
-          <Button size="sm" variant="secondary" disabled={busy} onClick={() => choose({ restore: false })}>Keep it deleted</Button>
+          <Button aria-describedby={headingId} size="sm" variant="secondary" disabled={busy} onClick={() => choose({ restore: true })}>Restore it</Button>
+          <Button aria-describedby={headingId} size="sm" variant="secondary" disabled={busy} onClick={() => choose({ restore: false })}>Keep it deleted</Button>
         </div>
       )}
     </li>

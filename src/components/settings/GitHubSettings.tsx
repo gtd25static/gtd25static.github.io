@@ -211,8 +211,13 @@ export function GitHubSettings() {
       { confirmLabel: 'Forget it', danger: true },
     );
     if (!ok) return;
-    await discardUnfinishedRotation();
-    toast('Unfinished password change forgotten', 'info');
+    try {
+      await discardUnfinishedRotation();
+      toast('Unfinished password change forgotten', 'info');
+    } catch (e) {
+      recordError('sync.discardRotation', e);
+      toast('Could not reach GitHub to forget it there — nothing was forgotten. Try again when online.', 'error');
+    }
   }
 
   async function warnIfTokenReachesTooFar(token: string) {

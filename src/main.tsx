@@ -51,11 +51,16 @@ takeCaptureFromUrl();
 // Then make the Paranoid flag agree with the vault, which a crash in the middle
 // of an enable or disable can leave out of step — before the first render, so
 // the lock screen (or its absence) is right from the first paint.
-// A failed-attempt limit reached just before a crash is enforced here too.
-void retryPendingWipe().finally(() => enforceFailedAttemptLimit()).finally(() => reconcileParanoidFlag()).finally(() => {
+// A failed-attempt limit reached just before a crash is enforced here too — and
+// when it wipes, nothing else runs (the page reloads; reading the closed
+// database on the way used to log errors, and with them the wiped history).
+void (async () => {
+  await retryPendingWipe().catch(() => undefined);
+  if (await enforceFailedAttemptLimit()) return;
+  await reconcileParanoidFlag().catch(() => undefined);
   createRoot(document.getElementById('root')!).render(
     <StrictMode>
       <App />
     </StrictMode>,
   );
-});
+})();

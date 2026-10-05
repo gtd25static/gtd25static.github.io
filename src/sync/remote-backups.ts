@@ -6,7 +6,7 @@ import {
   createVerifier,
   checkVerifier,
 } from './crypto';
-import { getLocalSnapshot } from './sync-engine';
+import { getLocalSnapshot, remoteKeyIsCurrent } from './sync-engine';
 import { SYNC_VERSION } from './version';
 import { isParanoidFlagSet } from '../db/paranoid-flag';
 import type { SyncData } from '../db/models';
@@ -106,6 +106,10 @@ export async function maybeCreateBackups(
   }
 
   if (tiersToWrite.length === 0) return;
+  // Not under a key the remote no longer uses: written after a sync-password
+  // change (the jitter above is long enough), an old-key tier at the tip opened
+  // with the old password again and with the new one not at all.
+  if (!(await remoteKeyIsCurrent())) return;
 
   // Create encrypted snapshot once
   const localData = await getLocalSnapshot();
@@ -159,8 +163,13 @@ export async function rekeyAllBackups(
     }
     if (backup?.encryptionVerifier && backup.encryptionSalt === newSalt && await checkVerifier(newKey, backup.encryptionVerifier)) continue;
     let next: SyncData & { backedUpAt: number };
+    let plain: SyncData | null = null;
     if (backup?.encryptionVerifier && await checkVerifier(oldKey, backup.encryptionVerifier)) {
-      const plain = await decryptSyncData(oldKey, backup);
+      // A corrupt row in it would throw here and keep the change pending for
+      // ever: such a tier is treated as one neither key opens.
+      plain = await decryptSyncData(oldKey, backup).catch(() => null);
+    }
+    if (plain && backup) {
       const reencrypted = await encryptSyncData(newKey, { ...plain, encryptionSalt: newSalt, encryptionVerifier: newVerifier });
       next = { ...reencrypted, backedUpAt: backup.backedUpAt ?? Date.now() };
     } else {

@@ -72,11 +72,12 @@ describe('detection (pure)', () => {
     expect(detectConflicts('task', asEntity(edited(base, TB, { status: 'done' })), asEntity(edited(base, TA, { status: 'todo' as never, order: 3 })), base._base!)).toEqual([]);
   });
 
-  it('a snapshot row (no writer base) counts only against an edit still waiting to be pushed', () => {
+  it('a snapshot row (no writer base) counts only against a change of the field not yet pushed', () => {
     const a = edited(row(), TA, { title: 'A title' });
     const b = edited(row(), TB, { title: 'B title' });
-    expect(detectConflicts('task', asEntity(b), asEntity(a), null)).toEqual([]);
-    expect(detectConflicts('task', asEntity(b), asEntity(a), null, { localPending: true })).toHaveLength(1);
+    expect(detectConflicts('task', asEntity(b), asEntity(a), null)).toHaveLength(1);
+    const bPushed = { ...b, _pushed: { title: TB } } as Task;
+    expect(detectConflicts('task', asEntity(bPushed), asEntity(a), null)).toEqual([]);
   });
 
   it('a row older than `_base` takes its timestamps up to the upgrade as its base (no false conflicts)', () => {
@@ -100,12 +101,12 @@ describe('detection (pure)', () => {
     expect(found[0]).toMatchObject({ field: 'discussionLog:n1', localValue: 'B note', remoteValue: 'A note' });
   });
 
-  it('deleted there, edited here: a conflict when the edit is unseen (pending, or after the delete)', () => {
+  it('deleted there, edited here: a conflict when the edit is not yet pushed', () => {
     const mine = edited(row(), TB, { title: 'B title' });
-    expect(detectDeleteConflict('task', asEntity(mine), TA, { localPending: true })).toMatchObject({ kind: 'deleted-remotely' });
-    expect(detectDeleteConflict('task', asEntity(mine), TA)).toMatchObject({ kind: 'deleted-remotely' }); // edited after the delete
-    expect(detectDeleteConflict('task', asEntity(edited(row(), TA, { title: 'x' })), TB)).toBeNull(); // the deleter may have seen it
-    expect(detectDeleteConflict('task', asEntity(row()), TA, { localPending: true })).toBeNull(); // nothing edited here
+    expect(detectDeleteConflict('task', asEntity(mine), TA)).toMatchObject({ kind: 'deleted-remotely' });
+    const pushed = { ...edited(row(), TA, { title: 'x' }), _pushed: { title: TA } } as Task;
+    expect(detectDeleteConflict('task', asEntity(pushed), TB)).toBeNull(); // the deleter may have seen it
+    expect(detectDeleteConflict('task', asEntity(row()), TA)).toBeNull(); // nothing edited here
   });
 
   it('deleted here, edited there (unseen): a conflict', () => {

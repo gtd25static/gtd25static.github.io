@@ -165,10 +165,15 @@ function writeWithRoom(key: string, serialized: string, reason: BackupReason): b
   };
   if (!tryWrite()) {
     const older = listBackupKeys().filter((k) => k !== key).reverse(); // oldest first
+    // The oldest pre-change copy of the last day is never evicted: in a burst of
+    // replacements (repeated remote resets) it holds the data from before the
+    // first one — exactly what PRE_CHANGE_HOLD_MS keeps it for.
+    const since = Date.now() - PRE_CHANGE_HOLD_MS;
+    const held = older.find((k) => reasonOf(k) === 'change' && parseInt(k.replace(BACKUP_KEY_PREFIX, ''), 10) >= since);
     const evictable = [
       ...older.filter((k) => reasonOf(k) === 'boot'),
       // A copy taken before a change may make room only for a newer such copy.
-      ...(reason === 'change' ? older.filter((k) => reasonOf(k) === 'change') : []),
+      ...(reason === 'change' ? older.filter((k) => reasonOf(k) === 'change' && k !== held) : []),
     ];
     let stored = false;
     for (const victim of evictable) {

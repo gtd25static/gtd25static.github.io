@@ -262,6 +262,14 @@ export async function sharedBlobBlocker(): Promise<'no-sync' | 'not-ready' | nul
 export async function uploadSharedBlob(blobId: string, plaintext: Uint8Array): Promise<void> {
   const creds = await getCredentials();
   if (!creds) throw new Error('Sync is not configured');
+  // Under a key the remote no longer uses (a sync-password change in progress,
+  // or finished on another device and not noticed here yet), the file would be
+  // unreadable to everyone.
+  const { remoteKeyIsCurrent, syncNow } = await import('./sync-engine');
+  if (!(await remoteKeyIsCurrent())) {
+    void syncNow(); // picks up the new key (or asks for the new password)
+    throw new Error('The sync password is changing or was changed on another device. Try again in a moment.');
+  }
   const key = await requireSyncKey();
   const ciphertext = await sealSharedBlob(key, plaintext, blobId);
   await ensureBlobBranch(creds);
@@ -466,8 +474,11 @@ async function compactIfDue(creds: Creds): Promise<void> {
   const dead = new Set(items.filter((i) => i.deletedAt && i.blobId).map((i) => i.blobId!));
   const firstSeen = meta?.unknownBlobsSeenAt ?? {};
   const unknown: Record<string, number> = {};
+  // After this device's wipe every file not listed now goes, at once: with the
+  // folder empty they would all look like another device's fresh uploads.
+  const purgeAll = !!meta?.blobPurgeAll;
   const spare = (blobId: string) => {
-    if (dead.has(blobId)) return false;
+    if (purgeAll || dead.has(blobId)) return false;
     unknown[blobId] = firstSeen[blobId] ?? now;
     return now - unknown[blobId] < UNKNOWN_BLOB_GRACE_MS;
   };
@@ -494,6 +505,7 @@ async function compactIfDue(creds: Creds): Promise<void> {
       lastBlobCompactionAt: now,
       blobHistorySweptAt: meta?.blobHistorySweptAt ?? now,
       blobCompactionFailedAt: undefined,
+      blobPurgeAll: undefined,
       unknownBlobsSeenAt: Object.fromEntries(
         Object.entries(unknown).filter(([, seenAt]) => now - seenAt < UNKNOWN_BLOB_GRACE_MS),
       ),

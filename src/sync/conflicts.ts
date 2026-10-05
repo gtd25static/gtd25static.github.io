@@ -16,9 +16,14 @@
 //   - the writer had not seen ours (remote._base[f] < local[f]),
 //   - and the values differ.
 // Both devices run this on the other's entry, so both see the conflict. A
-// snapshot row (folded in by compaction) carries no writer's base: there only an
-// edit still waiting to be pushed is known to be unseen, so only then is it
-// flagged — after compaction, the device that pushed first may miss it.
+// snapshot row (folded in by compaction) carries no writer's base: there only a
+// change of that very field still waiting to be pushed is known to be unseen —
+// "changed since what the remote has", where what the remote has includes this
+// device's own pushes (`_pushed`, see notePushedEntries). Counting the pushes
+// (and whole-item pending) used to raise false conflicts: a status change while
+// the title someone refined after seeing ours came back, or our own earlier
+// value coming back through compaction shown as "another device's". After
+// compaction, the device whose edit was already pushed may miss a conflict.
 //
 // Rows older than this feature have no `_base`. Taking that as "nothing seen"
 // would make every field look edited here and every remote edit a conflict, so
@@ -83,6 +88,11 @@ export function advanceBase(current: Timestamps | undefined, remoteFT: Timestamp
   return next ?? current;
 }
 
+/** What the remote is known to hold: the base, raised by this device's own pushes. */
+function knownToRemote(row: Entity, since: number): Timestamps {
+  return advanceBase(effectiveBase(row, since), row._pushed as Timestamps | undefined) ?? {};
+}
+
 /** A label for the conflict list: the item's title, name or node label. */
 export function labelOf(row: Entity): string | undefined {
   const label = row.title ?? row.name ?? row.label;
@@ -105,8 +115,82 @@ function concurrent(field: string, local: Entity, localBaseAll: Timestamps, remo
   return true;
 }
 
+/**
+ * A stable id for one detection — a hash, so the stored key (plaintext even in
+ * Paranoid Mode) does not name the field or the edit times. cyrb53: not a secret,
+ * only deterministic.
+ */
 function idOf(entityType: string, entityId: string, field: string, localAt: number, remoteAt: number): string {
-  return `${entityType}:${entityId}:${field}:${localAt}:${remoteAt}`;
+  const text = `${entityType}:${entityId}:${field}:${localAt}:${remoteAt}`;
+  let h1 = 0xdeadbeef;
+  let h2 = 0x41c6ce57;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text.charCodeAt(i);
+    h1 = Math.imul(h1 ^ ch, 2654435761);
+    h2 = Math.imul(h2 ^ ch, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  return `c${(4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(36)}`;
+}
+
+/** Open conflicts by spot (item + field), for the items of a batch. */
+export type ConflictSpots = Map<string, SyncConflict>;
+
+const spotOf = (c: Pick<SyncConflict, 'entityId' | 'field'>) => `${c.entityId}\u0000${c.field}`;
+
+export async function openConflictSpots(entityIds: string[]): Promise<ConflictSpots> {
+  const spots: ConflictSpots = new Map();
+  const ids = [...new Set(entityIds)];
+  if (ids.length === 0) return spots;
+  for (const c of await db.syncConflicts.where('entityId').anyOf(ids).toArray()) {
+    if (!(c as { _decryptError?: boolean })._decryptError) spots.set(spotOf(c), c);
+  }
+  return spots;
+}
+
+/**
+ * Record a detection in its spot: a new card, or the open one updated to each
+ * side's newest version (one card per spot, however many entries arrive).
+ */
+export function mergeIntoSpot(spots: ConflictSpots, found: SyncConflict): SyncConflict {
+  const open = spots.get(spotOf(found));
+  if (!open) {
+    spots.set(spotOf(found), found);
+    return found;
+  }
+  const remoteNewer = found.remoteAt >= open.remoteAt;
+  const localNewer = found.localAt >= open.localAt;
+  const merged: SyncConflict = {
+    ...open,
+    localValue: localNewer ? found.localValue : open.localValue,
+    localAt: Math.max(open.localAt, found.localAt),
+    remoteValue: remoteNewer ? found.remoteValue : open.remoteValue,
+    remoteAt: Math.max(open.remoteAt, found.remoteAt),
+    label: found.label ?? open.label,
+  };
+  merged.applied = merged.remoteAt > merged.localAt ? 'remote' : 'local';
+  spots.set(spotOf(merged), merged);
+  return merged;
+}
+
+/**
+ * An open conflict on a field the incoming entry changed again, written by a
+ * device that still had not seen this side's version: the card follows it
+ * (its newer remote version). Left alone, the end-of-sync sweep took the newer
+ * stamp for a decision and closed the card — on the device whose version lost.
+ */
+export function staleWriterUpdates(
+  spots: ConflictSpots, entityId: string, remote: Entity, writerBase: Timestamps,
+): SyncConflict[] {
+  const out: SyncConflict[] = [];
+  for (const open of spots.values()) {
+    if (open.entityId !== entityId || open.kind !== 'field' || open.field.startsWith('discussionLog:')) continue;
+    const at = ft(remote)[open.field] ?? 0;
+    if (at <= open.remoteAt || (writerBase[open.field] ?? 0) >= open.localAt) continue;
+    out.push({ ...open, remoteValue: remote[open.field], remoteAt: at, label: labelOf(remote) ?? open.label });
+  }
+  return out;
 }
 
 function changedFields(entityType: ConflictEntityType, row: Entity, base: Timestamps): string[] {
@@ -118,21 +202,19 @@ function changedFields(entityType: ConflictEntityType, row: Entity, base: Timest
 /**
  * The conflicts between a local row and an incoming version of it.
  * `remoteBase`: the incoming row's `_base` when it came in a change entry; null
- * for a snapshot row — the caller then passes `localPending` (an edit of this
- * item is still waiting to be pushed: unseen by anyone), and nothing is flagged
- * without it.
+ * for a snapshot row — then only a change of the field not yet pushed counts
+ * (see the header).
  */
 export function detectConflicts(
   entityType: ConflictEntityType,
   local: Entity,
   remote: Entity,
   remoteBase: Timestamps | null,
-  opts: { localPending?: boolean; now?: number; since?: number } = {},
+  opts: { now?: number; since?: number } = {},
 ): SyncConflict[] {
   if (local._decryptError || remote._decryptError) return []; // a placeholder is not a version
-  if (!remoteBase && !opts.localPending) return [];
   const now = opts.now ?? Date.now();
-  const localBase = effectiveBase(local, opts.since ?? 0);
+  const localBase = remoteBase ? effectiveBase(local, opts.since ?? 0) : knownToRemote(local, opts.since ?? 0);
   const entityId = String(local.id);
   const label = labelOf(local) ?? labelOf(remote);
   const out: SyncConflict[] = [];
@@ -202,20 +284,20 @@ export function detectConflicts(
 
 /**
  * A delete entry (no data) for an item edited here. A delete entry carries no
- * writer's base, so the edit counts as unseen when it is still waiting to be
- * pushed, or was made after the delete.
+ * writer's base, so only an edit not yet pushed is known to be unseen (an edit
+ * already pushed may have been seen by the deleter; comparing clocks to guess
+ * was unreliable across devices).
  */
 export function detectDeleteConflict(
   entityType: ConflictEntityType,
   local: Entity,
   deletedAt: number,
-  opts: { localPending?: boolean; now?: number; since?: number } = {},
+  opts: { now?: number; since?: number } = {},
 ): SyncConflict | null {
   if (local._decryptError || local.deletedAt) return null;
-  const edits = changedFields(entityType, local, effectiveBase(local, opts.since ?? 0));
+  const edits = changedFields(entityType, local, knownToRemote(local, opts.since ?? 0));
   if (edits.length === 0) return null;
   const editedAt = Math.max(...edits.map((f) => ft(local)[f] ?? 0));
-  if (!opts.localPending && editedAt <= deletedAt) return null;
   const entityId = String(local.id);
   return {
     id: idOf(entityType, entityId, '', editedAt, deletedAt), entityType, entityId, field: '', kind: 'deleted-remotely',
@@ -233,10 +315,19 @@ export function detectDeleteConflict(
 export function conflictSuperseded(conflict: SyncConflict, row: Entity | undefined, now = Date.now()): boolean {
   if (!row) return true;
   if (now - conflict.detectedAt > CONFLICT_MAX_AGE_MS) return true;
-  const field = conflict.kind === 'field'
-    ? (conflict.field.startsWith('discussionLog:') ? 'discussionLog' : conflict.field)
-    : 'deletedAt';
-  return (ft(row)[field] ?? 0) > Math.max(conflict.localAt, conflict.remoteAt);
+  const after = Math.max(conflict.localAt, conflict.remoteAt);
+  if (conflict.field.startsWith('discussionLog:')) {
+    // One note of a log merged as a union: the log's own stamp moves with every
+    // note appended anywhere, so only this note decides — gone, resolved (its
+    // editedAt), or rewritten to a third version.
+    const entryId = conflict.field.slice('discussionLog:'.length);
+    const entry = ((row.discussionLog ?? []) as DiscussionEntry[]).find((e) => e.id === entryId);
+    if (!entry) return true;
+    if ((entry.editedAt ?? 0) > after) return true;
+    return entry.note !== conflict.localValue && entry.note !== conflict.remoteValue;
+  }
+  const field = conflict.kind === 'field' ? conflict.field : 'deletedAt';
+  return (ft(row)[field] ?? 0) > after;
 }
 
 /** The table each conflict-capable entity lives in. */

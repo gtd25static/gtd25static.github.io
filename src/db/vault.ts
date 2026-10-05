@@ -41,6 +41,9 @@ export { DEFAULT_MAX_ATTEMPTS };   // re-exported: the value lives in lib/consta
 export interface VaultSecrets {
   githubPat?: string;
   syncPassword?: string;
+  // See LocalSettings.previousEncryptionPassword.
+  previousSyncPassword?: string;
+  previousSyncSalt?: string;
 }
 export type { RekeyResult };
 
@@ -245,9 +248,27 @@ export async function setVaultSecrets(patch: VaultSecrets): Promise<void> {
   });
 }
 
+// Operations that must not be cut by a lock (a sync-password change): a lock
+// asked for meanwhile waits for them, as during a re-key.
+let lockHolds = 0;
+
+/** Run `fn` with this tab's vault lock deferred until it ends (then honoured). */
+export async function holdVaultLock<T>(fn: () => Promise<T>): Promise<T> {
+  lockHolds++;
+  try {
+    return await fn();
+  } finally {
+    lockHolds--;
+    if (lockHolds === 0 && !rekeying && lockDeferredByRekey) {
+      lockDeferredByRekey = false;
+      lockThisTab();
+    }
+  }
+}
+
 /** Drop the keys held by THIS tab. */
 function lockThisTab(): void {
-  if (rekeying) { lockDeferredByRekey = true; return; }
+  if (rekeying || lockHolds > 0) { lockDeferredByRekey = true; return; }
   currentDek = null;
   currentSecrets = null;
   if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
@@ -258,7 +279,7 @@ function lockThisTab(): void {
 /** End of a re-key window: honour a lock that arrived during it. */
 function endRekeyWindow(): void {
   rekeying = false;
-  if (!lockDeferredByRekey) return;
+  if (!lockDeferredByRekey || lockHolds > 0) return;
   lockDeferredByRekey = false;
   lockThisTab();
 }
@@ -305,7 +326,10 @@ export async function enableParanoid(passphrase: string, idleMinutes = DEFAULT_I
   // Snapshot current sync credentials into the vault (encrypted with the DEK) up
   // front, so an enable resumed after a crash still has them.
   const local = await db.localSettings.get('local');
-  const secrets: VaultSecrets = { githubPat: local?.githubPat, syncPassword: local?.encryptionPassword };
+  const secrets: VaultSecrets = {
+    githubPat: local?.githubPat, syncPassword: local?.encryptionPassword,
+    previousSyncPassword: local?.previousEncryptionPassword, previousSyncSalt: local?.previousEncryptionSalt,
+  };
 
   await db.vault.put({
     id: 'vault',
@@ -370,6 +394,8 @@ async function completeEnable(): Promise<void> {
     paranoidMaxUnlockAttempts: vault?.maxUnlockAttempts ?? DEFAULT_MAX_ATTEMPTS,
     githubPat: undefined,
     encryptionPassword: undefined,
+    previousEncryptionPassword: undefined,
+    previousEncryptionSalt: undefined,
     // A Paranoid device must NOT be a remote-unlock approver — drop any approver
     // secrets it held (enforcement, alongside the runtime refusals in remote-unlock)
     // and the identity they were sent to: its private keys stay in plaintext on
@@ -427,7 +453,7 @@ export async function disableParanoid(opts: { dropUnreadable?: boolean } = {}): 
   // disable (decryptAllAtRest), so say so first — once 'decrypting' is set, the
   // disable resumes at every unlock.
   if (!opts.dropUnreadable) {
-    const unreadable = await countUnreadableAtRest(currentDek);
+    const unreadable = await countUnreadableAtRest();
     if (unreadable > 0) throw new UnreadableRowsError(unreadable);
   }
   await inCriticalSection(async () => {
@@ -452,6 +478,8 @@ async function completeDisable(): Promise<void> {
     paranoidEnabled: false,
     githubPat: restored?.githubPat,
     encryptionPassword: restored?.syncPassword,
+    previousEncryptionPassword: restored?.previousSyncPassword,
+    previousEncryptionSalt: restored?.previousSyncSalt,
   });
   // Lower the flag BEFORE the vault goes, then decrypt once more. Without the
   // flag no tab has an at-rest key (vault-middleware), so nothing is encrypted
@@ -762,15 +790,17 @@ export async function incrementFailedAttempts(): Promise<{ count: number; max: n
  * committed the wipe's marker — wipes now. Nothing re-derived the decision from
  * the persisted counter, so the next correct passphrase simply reset it.
  */
-export async function enforceFailedAttemptLimit(): Promise<void> {
+export async function enforceFailedAttemptLimit(): Promise<boolean> {
   try {
     const vault = await db.vault.get('vault');
     const max = vault?.maxUnlockAttempts ?? 0;
-    if (!vault || max <= 0 || (vault.failedUnlockAttempts ?? 0) < max) return;
+    if (!vault || max <= 0 || (vault.failedUnlockAttempts ?? 0) < max) return false;
     const { panicWipe } = await import('../lib/panic-wipe'); // dynamic: avoids an import cycle
     await panicWipe();
+    return true; // the page reloads: nothing else may open the database meanwhile
   } catch (err) {
     recordError('vault.attemptLimit', err);
+    return false;
   }
 }
 
@@ -1065,6 +1095,14 @@ export async function stageNextRuk(rukRaw: Uint8Array): Promise<void> {
   });
 }
 
+/** The staged RUK, when one is staged (an interrupted hand-out), or null. */
+export async function getStagedRukRaw(): Promise<Uint8Array | null> {
+  if (!currentDek) return null;
+  const vault = await db.vault.get('vault');
+  if (!vault?.rukNextWrappedByDek) return null;
+  return b64decode(await decryptBlob(currentDek, vault.rukNextWrappedByDek));
+}
+
 /** A staged RUK nobody received: drop it. */
 export async function discardNextRuk(): Promise<void> {
   await db.vault.update('vault', { dekWrappedByRukNext: undefined, rukNextWrappedByDek: undefined });
@@ -1086,8 +1124,11 @@ export async function promoteNextRuk(rukRaw: Uint8Array): Promise<void> {
 export async function getRukRaw(): Promise<Uint8Array | null> {
   if (!currentDek) return null;
   const vault = await db.vault.get('vault');
-  if (!vault?.rukWrappedByDek) return null;
-  return b64decode(await decryptBlob(currentDek, vault.rukWrappedByDek));
+  // An interrupted re-issue leaves only the staged key: approvers added now get
+  // it too (and with it, remote unlock works for everyone again).
+  const wrapped = vault?.rukWrappedByDek ?? vault?.rukNextWrappedByDek;
+  if (!wrapped) return null;
+  return b64decode(await decryptBlob(currentDek, wrapped));
 }
 
 /** Unlock using a remote-unlock key (RUK) relayed from a trusted device. */
@@ -1098,13 +1139,16 @@ export async function unlockWithRemoteKey(rukRaw: Uint8Array): Promise<boolean> 
   let dek: CryptoKey | null = null;
   // The current key, or one staged by an interrupted hand-out (see stageNextRuk).
   if (vault.dekWrappedByRuk) dek = await unwrapDek(kek, vault.dekWrappedByRuk, 'ruk').catch(() => null);
+  const fromMainSlot = dek !== null;
   if (!dek && vault.dekWrappedByRukNext) dek = await unwrapDek(kek, vault.dekWrappedByRukNext, 'ruk-next').catch(() => null);
   if (!dek) {
     await registerFailedAttempt('remote', false); // logged, but never wipes (see above)
     return false; // wrong RUK
   }
   const ok = await finishUnlock(vault, dek, 'remote');
-  if (ok && vault.dekWrappedByRuk && isLegacyWrap(vault.dekWrappedByRuk)) {
+  // Rebinding a legacy main wrap uses the key presented — only if that key IS
+  // the main one (a staged key would replace it, locking out its holders).
+  if (ok && fromMainSlot && vault.dekWrappedByRuk && isLegacyWrap(vault.dekWrappedByRuk)) {
     // Bind a pre-binding wrap to its slot now that its KEK is in hand (see vault-crypto).
     try {
       await db.vault.update('vault', { dekWrappedByRuk: await wrapDek(kek, dek, 'ruk') });
@@ -1256,7 +1300,7 @@ export async function rekeyVault(
   try {
     // Holding the sync lock (a sync writing between the content read and the
     // swap was lost) and as a critical section (an update's reload must wait).
-    const { newDek, result } = await withSyncLock(() => inCriticalSection(() => rekeyVaultContent({
+    const { newDek, result } = await inCriticalSection(() => withSyncLock(() => rekeyVaultContent({
       vault, newKek, newSalt, kdf: kdfParams, secrets: currentSecrets,
     })));
     currentDek = newDek;
@@ -1312,7 +1356,10 @@ export async function verifyAtRestIntegrity(): Promise<{ total: number; unreadab
 export async function configureMaxUnlockAttempts(n: number): Promise<void> {
   const max = Math.max(0, Math.floor(n));
   if (await db.vault.get('vault')) {
-    await db.vault.update('vault', { maxUnlockAttempts: max });
+    // The count restarts with the new limit (the owner is unlocked, so it is
+    // theirs to set): a limit lowered to failures already counted — say from
+    // another, locked tab — wiped at the next start without another wrong guess.
+    await db.vault.update('vault', { maxUnlockAttempts: max, failedUnlockAttempts: 0 });
   }
   // An explicit choice supersedes the "we armed it for you" notice.
   await patchLocalSettings({ paranoidMaxUnlockAttempts: max, paranoidAttemptWipeArmedNotice: undefined });
@@ -1325,6 +1372,7 @@ export function __resetVaultStateForTests(): void {
   lastUnlockFailure = null;
   rekeying = false;
   lockDeferredByRekey = false;
+  lockHolds = 0;
   if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
   idleTimeoutMs = DEFAULT_IDLE_MINUTES * 60_000;
   emit();
