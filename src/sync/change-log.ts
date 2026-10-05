@@ -150,7 +150,38 @@ function validateEntityShape(data: Record<string, unknown> | undefined, entityTy
   return true;
 }
 
-export async function applyRemoteEntries(entries: ChangeEntry[]) {
+// How many times a merge is recomputed when local edits keep landing under it.
+const MAX_APPLY_ATTEMPTS = 3;
+
+/**
+ * Pending-entry ids recorded since `before` was taken. Every local edit records
+ * its entry in the same transaction as its row, so a new id means a row may have
+ * changed after the merge read it. Keys only: nothing is decrypted, so this is
+ * safe inside a write transaction (Safari, Paranoid Mode).
+ */
+export async function pendingIdsAddedSince(before: Set<string>): Promise<boolean> {
+  const now = (await db.changeLog.toCollection().primaryKeys()) as string[];
+  return now.some((id) => !before.has(id));
+}
+
+/**
+ * Merge remote entries into the local rows. The merge reads the rows, computes,
+ * pre-encrypts (Paranoid) and only then writes — a local edit committed in that
+ * window used to be overwritten by the merge of the row as it was before it (the
+ * edit reverted on this device while its pending entry still reached the
+ * others). Such a write is now abandoned and the merge recomputed from fresh
+ * rows. Returns false if edits kept landing and nothing was written; the next
+ * sync re-applies the entries (they are re-read from the remote each time).
+ */
+export async function applyRemoteEntries(entries: ChangeEntry[]): Promise<boolean> {
+  for (let attempt = 1; attempt <= MAX_APPLY_ATTEMPTS; attempt++) {
+    if (await applyRemoteEntriesOnce(entries)) return true;
+  }
+  return false;
+}
+
+async function applyRemoteEntriesOnce(entries: ChangeEntry[]): Promise<boolean> {
+  const pendingBefore = new Set(await getPendingIds());
   // Sort by timestamp ascending so later entries win
   // Remote entries are written by whoever can write the repository. An unknown
   // kind is skipped (a forged `entityType` used to throw and stop every sync on
@@ -267,9 +298,10 @@ export async function applyRemoteEntries(entries: ChangeEntry[]) {
   ]);
 
   if (taskLists.length === 0 && tasks.length === 0 && subtasks.length === 0 && sharedItems.length === 0
-    && mindmapFolders.length === 0 && mindmaps.length === 0 && mindmapNodes.length === 0) return;
+    && mindmapFolders.length === 0 && mindmaps.length === 0 && mindmapNodes.length === 0) return true;
 
-  await db.transaction('rw', [db.taskLists, db.tasks, db.subtasks, db.sharedItems, db.mindmapFolders, db.mindmaps, db.mindmapNodes], async () => {
+  const written = await db.transaction('rw', [db.taskLists, db.tasks, db.subtasks, db.sharedItems, db.mindmapFolders, db.mindmaps, db.mindmapNodes, db.changeLog], async () => {
+    if (await pendingIdsAddedSince(pendingBefore)) return false;
     if (taskLists.length > 0) {
       await db.taskLists.bulkPut(taskLists);
     }
@@ -291,13 +323,21 @@ export async function applyRemoteEntries(entries: ChangeEntry[]) {
     if (mindmapNodes.length > 0) {
       await db.mindmapNodes.bulkPut(mindmapNodes);
     }
+    return true;
   });
+  if (!written) return false;
   await noteRemoteDeletions(newlyDeleted);
+  return true;
 }
 
 export async function getPendingEntries(limit?: number): Promise<ChangeEntry[]> {
   const query = db.changeLog.orderBy('timestamp');
   return limit != null ? query.limit(limit).toArray() : query.toArray();
+}
+
+/** Ids of every pending entry (keys only: nothing is decrypted). */
+export async function getPendingIds(): Promise<string[]> {
+  return (await db.changeLog.toCollection().primaryKeys()) as string[];
 }
 
 export async function clearPendingEntries(): Promise<void> {

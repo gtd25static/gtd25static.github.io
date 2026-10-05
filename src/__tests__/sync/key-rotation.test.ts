@@ -13,16 +13,16 @@ import { db } from '../../db';
 import type { SyncData, TaskList, Task } from '../../db/models';
 import { resetSyncState, setupSyncCredentials, makeSharedItem, makeChangeEntry } from '../helpers/sync-helpers';
 import { fakeRepo } from '../helpers/fake-repo';
-import { rotateSyncKey, hasUnfinishedRotation, discardUnfinishedRotation } from '../../sync/key-rotation';
+import { rotateSyncKey, hasUnfinishedRotation, discardUnfinishedRotation, ROTATION_MARKER_FILE } from '../../sync/key-rotation';
 import {
   deriveKey, generateSalt, createVerifier, checkVerifier, encryptBytes, decryptBytes,
-  encryptSyncData, decryptSyncData, cacheEncryptionKey, getCachedSalt,
+  encryptSyncData, decryptSyncData, cacheEncryptionKey, getCachedSalt, encryptChangeEntries, decryptChangeEntries,
 } from '../../sync/crypto';
 import { syncNow, endSyncSession, SNAPSHOT_FILE, CHANGELOG_FILE } from '../../sync/sync-engine';
 import { BLOB_BRANCH, KEEP_PATH, blobPath, blobAad, decryptSharedBlob, paddedLength, sealSharedBlob } from '../../sync/shared-blobs';
 import { BACKUP_FILES } from '../../sync/remote-backups';
-import { publishOwnRegistryEntry, readAuthenticRegistry } from '../../sync/remote-unlock';
-import { deriveRegistryMacKey } from '../../sync/remote-unlock-crypto';
+import { publishOwnRegistryEntry, readAuthenticRegistry, buildRegistryEntry, REGISTRY_PATH, type RegistryTombstone } from '../../sync/remote-unlock';
+import { deriveRegistryMacKey, registryMac, verifyRegistryMac } from '../../sync/remote-unlock-crypto';
 import { SYNC_VERSION } from '../../sync/version';
 
 // Changing the sync password rotates everything in the repo that the old key
@@ -148,17 +148,23 @@ describe('rotateSyncKey rotates the whole repo', () => {
     }
   });
 
-  it('rewrites the three tier backups under the new key', async () => {
+  it('re-encrypts each tier backup as it was — its own content and time, not today\'s snapshot', async () => {
     await seed();
-    const started = Date.now();
+    // The weekly restore point is older than the current data.
+    const weekly = JSON.parse(fakeRepo.readText(BACKUP_FILES.weekly)!) as SyncData;
+    const plainWeekly = await decryptSyncData(oldKey, weekly);
+    plainWeekly.tasks = [{ ...plainWeekly.tasks[0], title: 'LAST_WEEK_TITLE' }];
+    fakeRepo.writeText(BACKUP_FILES.weekly, JSON.stringify({ ...(await encryptSyncData(oldKey, plainWeekly)), backedUpAt: 7 }));
+
     await rotateSyncKey(NEW_PW);
     const { key: newKey, salt } = await newKeyFromRemote();
     for (const [tier, path] of Object.entries(BACKUP_FILES)) {
       const backup = JSON.parse(fakeRepo.readText(path)!) as SyncData & { backedUpAt: number };
       expect(backup.encryptionSalt, tier).toBe(salt);
-      expect(backup.backedUpAt).toBeGreaterThanOrEqual(started);
-      expect((await decryptSyncData(newKey, backup)).tasks[0].title).toBe('TASK_TITLE');
-      expect(Number(localStorage.getItem(`gtd25-backup-${tier}-at`))).toBe(backup.backedUpAt);
+      expect(await checkVerifier(newKey, backup.encryptionVerifier!), tier).toBe(true);
+      expect(backup.backedUpAt, tier).toBe(tier === 'weekly' ? 7 : 1);
+      const title = (await decryptSyncData(newKey, backup)).tasks[0].title;
+      expect(title, tier).toBe(tier === 'weekly' ? 'LAST_WEEK_TITLE' : 'TASK_TITLE');
     }
   });
 
@@ -298,7 +304,9 @@ describe('rotateSyncKey resumes', () => {
       if (path === SNAPSHOT_FILE) throw new Error('GitHub API error: 500');
       return realPutFile(pat, repo, path, content, sha);
     });
-    await expect(rotateSyncKey(NEW_PW)).rejects.toThrow(/could not be rewritten/);
+    const failure = rotateSyncKey(NEW_PW);
+    await expect(failure).rejects.toThrow(/already re-encrypted/);
+    await expect(failure).rejects.not.toThrow(/Nothing was changed/);
     vi.restoreAllMocks();
     mockSyncNow.mockResolvedValue(0);
 
@@ -356,6 +364,121 @@ describe('rotateSyncKey resumes', () => {
     await db.syncMeta.update('sync-meta', { keyRotation: { newSalt: generateSalt(), newVerifier: 'x', startedAt: 1 } });
     expect(await hasUnfinishedRotation()).toBe(true);
     await discardUnfinishedRotation();
+    expect(await hasUnfinishedRotation()).toBe(false);
+  });
+});
+
+describe('rotateSyncKey across devices and failures (reliability review)', () => {
+  it('marks the rotation on the remote before the files move, and clears the mark at the end', async () => {
+    await seed();
+    const realUpdateRef = fakeRepo.api.updateRef;
+    let markedWhenFilesMoved = false;
+    vi.spyOn(fakeRepo.api, 'updateRef').mockImplementation(async (pat, repo, branch, sha, force) => {
+      if (branch === BLOB_BRANCH) markedWhenFilesMoved = fakeRepo.sha(ROTATION_MARKER_FILE) !== null;
+      return realUpdateRef(pat, repo, branch, sha, force);
+    });
+    await rotateSyncKey(NEW_PW);
+    expect(markedWhenFilesMoved).toBe(true);
+    expect(fakeRepo.sha(ROTATION_MARKER_FILE)).toBeNull();
+  });
+
+  it('a second device finishes the change from the remote mark with the same password, and refuses another', async () => {
+    await seed();
+    const realPutFile = fakeRepo.api.putFile;
+    vi.spyOn(fakeRepo.api, 'putFile').mockImplementation(async (pat, repo, path, content, sha) => {
+      if (path === SNAPSHOT_FILE) throw new Error('GitHub API error: 500');
+      return realPutFile(pat, repo, path, content, sha);
+    });
+    await expect(rotateSyncKey(NEW_PW)).rejects.toThrow(/already re-encrypted/);
+    vi.restoreAllMocks();
+    mockSyncNow.mockResolvedValue(0);
+
+    // The same repo seen from a device that never held the local pin.
+    await db.syncMeta.update('sync-meta', { keyRotation: undefined });
+    cacheEncryptionKey(oldKey, oldSalt);
+    await expect(rotateSyncKey(OTHER_PW)).rejects.toThrow(/another device|did not finish/);
+    expect((JSON.parse(fakeRepo.readText(SNAPSHOT_FILE)!) as SyncData).encryptionSalt).toBe(oldSalt);
+
+    const result = await rotateSyncKey(NEW_PW);
+    expect(result.blobsUnreadable).toBe(0);
+    const { key: newKey } = await newKeyFromRemote();
+    expect(await decryptSharedBlob(newKey, fakeRepo.readBytes(blobPath('b1'), BLOB_BRANCH)!, 'b1')).toEqual(PLAIN.b1);
+    expect(fakeRepo.sha(ROTATION_MARKER_FILE)).toBeNull();
+  });
+
+  it('forgetting an unfinished change also clears the remote mark', async () => {
+    await seed();
+    await db.syncMeta.update('sync-meta', { keyRotation: { newSalt: generateSalt(), newVerifier: 'x', startedAt: 1 } });
+    fakeRepo.writeText(ROTATION_MARKER_FILE, JSON.stringify({ newSalt: 'x', newVerifier: 'x', startedAt: 1 }));
+    await discardUnfinishedRotation();
+    expect(fakeRepo.sha(ROTATION_MARKER_FILE)).toBeNull();
+  });
+
+  it('finishes when the snapshot landed but the step after it failed (the push "failed" after the commit point)', async () => {
+    await seed();
+    const realPutFile = fakeRepo.api.putFile;
+    let failed = false;
+    vi.spyOn(fakeRepo.api, 'putFile').mockImplementation(async (pat, repo, path, content, sha) => {
+      if (path === CHANGELOG_FILE && !failed) { failed = true; throw new Error('GitHub API error: 502'); }
+      return realPutFile(pat, repo, path, content, sha);
+    });
+    await rotateSyncKey(NEW_PW);
+    const { salt } = await newKeyFromRemote();
+    expect(salt).not.toBe(oldSalt);
+    expect(getCachedSalt()).toBe(salt); // this device on the key the remote now has
+    expect((await db.localSettings.get('local'))?.encryptionPassword).toBe(NEW_PW);
+    expect(await hasUnfinishedRotation()).toBe(false);
+  });
+
+  it('keeps — under the new key — changes another device pushed while the files were moving', async () => {
+    await seed();
+    const realCreateTree = fakeRepo.api.createTree;
+    const pushed = makeChangeEntry({ deviceId: 'device-B', entityType: 'task', entityId: 't1' });
+    pushed.data = { ...pushed.data!, id: 't1', title: 'EDITED_ON_B' };
+    vi.spyOn(fakeRepo.api, 'createTree').mockImplementationOnce(async (pat, repo, entries) => {
+      const sha = fakeRepo.sha(CHANGELOG_FILE)!;
+      fakeRepo.writeText(CHANGELOG_FILE, JSON.stringify(await encryptChangeEntries(oldKey, [pushed])), 'main', sha);
+      return realCreateTree(pat, repo, entries);
+    });
+    await rotateSyncKey(NEW_PW);
+    const { key: newKey } = await newKeyFromRemote();
+    const entries = await decryptChangeEntries(newKey, JSON.parse(fakeRepo.readText(CHANGELOG_FILE)!));
+    expect(entries.map((e) => e.id)).toContain(pushed.id);
+    expect(entries.find((e) => e.id === pushed.id)!.data!.title).toBe('EDITED_ON_B');
+  });
+
+  it("re-MACs the other devices' entries and the tombstones under the new key", async () => {
+    await seed();
+    const oldMac = await deriveRegistryMacKey(OLD_PW, oldSalt);
+    const reg = JSON.parse(fakeRepo.readText(REGISTRY_PATH)!) as Record<string, unknown>;
+    const ids = { ecdhPub: { kty: 'EC' }, ecdsaPub: { kty: 'EC' } } as never;
+    reg['device-B'] = await buildRegistryEntry('device-B', 'Phone', ids, false, oldMac);
+    const removedAt = 1234;
+    reg['device-C'] = { deviceId: 'device-C', removed: true, removedAt, mac: await registryMac(oldMac, new TextEncoder().encode(`registry-tombstone|device-C|${removedAt}`)) };
+    fakeRepo.writeText(REGISTRY_PATH, JSON.stringify(reg), 'main', fakeRepo.sha(REGISTRY_PATH)!);
+
+    await rotateSyncKey(NEW_PW);
+    const { salt } = await newKeyFromRemote();
+    const newMac = await deriveRegistryMacKey(NEW_PW, salt);
+    const authentic = await readAuthenticRegistry(PAT, REPO, newMac);
+    expect(authentic.map((e) => e.deviceId).sort()).toEqual(['device-A', 'device-B']);
+    const tomb = (JSON.parse(fakeRepo.readText(REGISTRY_PATH)!) as Record<string, RegistryTombstone>)['device-C'];
+    expect(await verifyRegistryMac(newMac, tomb.mac, new TextEncoder().encode(`registry-tombstone|device-C|${removedAt}`))).toBe(true);
+  });
+
+  it('keeps the pin when an old-key leftover could not be deleted, so a retry finishes it', async () => {
+    await seed();
+    const realDelete = fakeRepo.api.deleteFile;
+    vi.spyOn(fakeRepo.api, 'deleteFile').mockImplementation(async (pat, repo, path, sha, signal, branch) => {
+      if (path === MIGRATION_BACKUP) throw new Error('GitHub API error deleting: 502');
+      return realDelete(pat, repo, path, sha, signal, branch);
+    });
+    await expect(rotateSyncKey(NEW_PW)).rejects.toThrow(/could not be deleted/);
+    expect(await hasUnfinishedRotation()).toBe(true);
+    vi.restoreAllMocks();
+    mockSyncNow.mockResolvedValue(0);
+    await rotateSyncKey(NEW_PW);
+    expect(fakeRepo.sha(MIGRATION_BACKUP)).toBeNull();
     expect(await hasUnfinishedRotation()).toBe(false);
   });
 });

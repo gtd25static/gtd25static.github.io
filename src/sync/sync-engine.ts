@@ -4,7 +4,7 @@ import type { ImportData } from '../db/export-import';
 import { getFile, getFileConditional, putFile, deleteFile, RateLimitError, type ConditionalFile } from './github-api';
 import { jitterInterval } from './poll-jitter';
 import { cleanupSoftDeletes, archiveOldCompleted } from './conflict-resolution';
-import { applyRemoteEntries as applyRemoteEntriesToDb, getPendingEntries, clearPendingEntries, clearEntriesByIds, pendingEntryCount, recordChangeBatch, isKnownEntityType } from './change-log';
+import { applyRemoteEntries as applyRemoteEntriesToDb, pendingIdsAddedSince, getPendingEntries, getPendingIds, clearPendingEntries, clearEntriesByIds, pendingEntryCount, recordChangeBatch, isKnownEntityType } from './change-log';
 import { mergeEntity, stampUpdatedFields, capFutureTimestamps, MAX_FUTURE_SKEW_MS } from './field-timestamps';
 import { noteRemoteDeletions } from '../db/purge';
 import { toast } from '../components/ui/Toast';
@@ -52,15 +52,30 @@ const SYNC_TIMEOUT_MS = 45_000;
 // it is still alive: endSyncSession() (the vault locking) aborts it, and what it
 // already holds must then never reach the disk. Shadowing the import keeps each
 // call site as it was and makes the check impossible to forget at a new one.
-async function applyRemoteEntries(entries: ChangeEntry[]): Promise<void> {
+async function applyRemoteEntries(entries: ChangeEntry[]): Promise<boolean> {
   syncAbort?.signal.throwIfAborted();
   return applyRemoteEntriesToDb(entries);
 }
 
 // --- Snapshot reconciliation (catches compaction gaps) ---
-// Returns how many entities it changed here, for the "↓ n" the indicator shows.
-async function reconcileFromSnapshot(snapshot: SyncData): Promise<number> {
+// Returns how many entities it changed here, for the "↓ n" the indicator shows —
+// or null when local edits kept landing under the merge and nothing was written
+// (see applyRemoteEntries in change-log): the caller must then not record the
+// snapshot as seen, so the next sync reconciles it again.
+async function reconcileFromSnapshot(snapshot: SyncData): Promise<number | null> {
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const changed = await reconcileEntitiesOnce(snapshot);
+    if (changed !== null) {
+      await reconcileSnapshotOnlyData(snapshot);
+      return changed;
+    }
+  }
+  return null;
+}
+
+async function reconcileEntitiesOnce(snapshot: SyncData): Promise<number | null> {
   syncAbort?.signal.throwIfAborted();
+  const pendingBefore = new Set(await getPendingIds());
   // Records this moves into the Trash: their 30 days run from now (db/purge).
   const newlyDeleted: string[] = [];
   // Helper: reconcile a collection using field-level merge. Crypto for Paranoid
@@ -116,7 +131,11 @@ async function reconcileFromSnapshot(snapshot: SyncData): Promise<number> {
     prepareEntityRowsForAtRest('mindmapNodes', mindmapNodesToPut),
   ]);
 
-  await db.transaction('rw', [db.taskLists, db.tasks, db.subtasks, db.sharedItems, db.mindmapFolders, db.mindmaps, db.mindmapNodes], async () => {
+  const changed = taskLists.length + tasks.length + subtasks.length + sharedItems.length
+    + mindmapFolders.length + mindmaps.length + mindmapNodes.length;
+  if (changed === 0) return 0;
+  const written = await db.transaction('rw', [db.taskLists, db.tasks, db.subtasks, db.sharedItems, db.mindmapFolders, db.mindmaps, db.mindmapNodes, db.changeLog], async () => {
+    if (await pendingIdsAddedSince(pendingBefore)) return false;
     if (taskLists.length > 0) await db.taskLists.bulkPut(taskLists);
     if (tasks.length > 0) await db.tasks.bulkPut(tasks);
     if (subtasks.length > 0) await db.subtasks.bulkPut(subtasks);
@@ -124,11 +143,15 @@ async function reconcileFromSnapshot(snapshot: SyncData): Promise<number> {
     if (mindmapFolders.length > 0) await db.mindmapFolders.bulkPut(mindmapFolders);
     if (mindmaps.length > 0) await db.mindmaps.bulkPut(mindmaps);
     if (mindmapNodes.length > 0) await db.mindmapNodes.bulkPut(mindmapNodes);
+    return true;
   });
+  if (!written) return null;
   await noteRemoteDeletions(newlyDeleted);
-  const changed = taskLists.length + tasks.length + subtasks.length + sharedItems.length
-    + mindmapFolders.length + mindmaps.length + mindmapNodes.length;
+  return changed;
+}
 
+/** Pomodoro settings and sound presets: snapshot-only, row-level last-writer-wins. */
+async function reconcileSnapshotOnlyData(snapshot: SyncData): Promise<void> {
   // Reconcile pomodoro settings (outside entity transaction)
   if (snapshot.pomodoroSettings) {
     const local = await db.pomodoroSettings.get('pomodoro');
@@ -149,7 +172,6 @@ async function reconcileFromSnapshot(snapshot: SyncData): Promise<number> {
       }
     }
   }
-  return changed;
 }
 
 async function replaceLocalEntitiesFromSnapshot(snapshot: Pick<SyncData, 'taskLists' | 'tasks' | 'subtasks' | 'sharedItems' | 'mindmapFolders' | 'mindmaps' | 'mindmapNodes'>): Promise<void> {
@@ -273,6 +295,12 @@ let batchDeadline: number | null = null;
 // --- Error backoff state ---
 let consecutiveErrors = 0;
 let rateLimitTimer: ReturnType<typeof setTimeout> | null = null;
+// No automatic sync before this (a rate limit's reset). A manual sync still goes.
+let pausedUntil = 0;
+// Bumped by every scheduler transition: an idle poll re-arms only if nothing
+// replaced it meanwhile. It used to re-arm whenever the state read 'idle', so a
+// poll in flight across a network flap or a hide left a chain nothing could stop.
+let pollGeneration = 0;
 let lastErrorToastAt = 0;
 
 // --- Version incompatibility callbacks ---
@@ -415,7 +443,14 @@ async function waitForSyncLock(): Promise<AbortSignal> {
   }
 }
 
-function releaseSyncLock() {
+/**
+ * Release the lock — only by its holder. After a force-reset (an operation over
+ * SYNC_TIMEOUT_MS), the old operation's `finally` used to clear the NEW holder's
+ * lock and abort controller: a third operation could then start alongside it,
+ * and endSyncSession() could no longer abort it.
+ */
+function releaseSyncLock(signal: AbortSignal | null) {
+  if (!signal || syncAbort?.signal !== signal) return;
   syncStartedAt = null;
   syncAbort = null;
 }
@@ -440,6 +475,7 @@ export function endSyncSession(): void {
 // --- Scheduler functions ---
 
 function clearSchedulerTimer() {
+  pollGeneration++;
   if (schedulerTimer) {
     clearTimeout(schedulerTimer);
     schedulerTimer = null;
@@ -447,11 +483,17 @@ function clearSchedulerTimer() {
 }
 
 function getBackoffInterval(): number {
+  // A rate limit: nothing before its reset.
+  const paused = Math.max(0, pausedUntil - Date.now());
   // jitterInterval applies ±30% only in Paranoid Mode (else identity) so the idle
   // poll doesn't fire on a fixed grid that a network monitor can fingerprint.
-  if (consecutiveErrors === 0) return jitterInterval(POLL_INTERVAL_MS);
+  if (consecutiveErrors === 0) return Math.max(paused, jitterInterval(POLL_INTERVAL_MS));
   // Exponential backoff: 30s → 60s → 120s → 240s → 300s (cap at 5 min)
-  return jitterInterval(Math.min(POLL_INTERVAL_MS * Math.pow(2, consecutiveErrors), 300_000));
+  return Math.max(paused, jitterInterval(Math.min(POLL_INTERVAL_MS * Math.pow(2, consecutiveErrors), 300_000)));
+}
+
+function isHidden(): boolean {
+  return typeof document !== 'undefined' && document.visibilityState === 'hidden';
 }
 
 // --- Conditional-GET idle probe (Paranoid-only steady-state poll) ---
@@ -509,14 +551,14 @@ function startIdlePoll() {
   batchAccum = null;
   batchDeadline = null;
   schedulerState = 'idle';
-  const interval = getBackoffInterval();
+  if (isHidden()) return; // the visibility handler restarts it
+  const generation = pollGeneration;
+  const current = () => generation === pollGeneration && schedulerState === 'idle' && !isHidden();
   schedulerTimer = setTimeout(async function poll() {
-    if (schedulerState !== 'idle') return;
+    if (!current()) return;
     await idlePollOnce();
-    if (schedulerState === 'idle') {
-      schedulerTimer = setTimeout(poll, getBackoffInterval());
-    }
-  }, interval);
+    if (current()) schedulerTimer = setTimeout(poll, getBackoffInterval());
+  }, getBackoffInterval());
 }
 
 async function onBatchTimerFired(batchSize: number) {
@@ -570,6 +612,8 @@ export function scheduleSyncDebounced() {
   notifyLocalChange();
 }
 
+const KEEPALIVE_CONTENT_LIMIT = 45_000;
+
 async function flushOnHide() {
   if (!cachedCreds || !cachedChangelogSha || !hasEncryptionKey()) return;
   // Skip flush if cached state is stale (>60s since last sync).
@@ -582,8 +626,13 @@ async function flushOnHide() {
     const encrypted = await encryptChangeEntries(encKey, pending);
     const updatedChangelog = [...cachedRemoteEntries, ...encrypted];
     const content = JSON.stringify(updatedChangelog);
+    // Browsers refuse a keepalive body over 64 KiB, and this one carries the
+    // whole changelog base64-encoded (~1.37×): skip rather than fail unseen —
+    // the entries are safe here and go with the next sync.
+    if (content.length > KEEPALIVE_CONTENT_LIMIT) return;
     // Fire-and-forget PUT with keepalive — browser completes it after page suspends
-    putFile(cachedCreds.pat, cachedCreds.repo, CHANGELOG_FILE, content, cachedChangelogSha, undefined, { keepalive: true });
+    putFile(cachedCreds.pat, cachedCreds.repo, CHANGELOG_FILE, content, cachedChangelogSha, undefined, { keepalive: true })
+      .catch((err) => recordError('sync.flushOnHide', err));
   } catch {
     // Best-effort — data is safe in local IndexedDB
   }
@@ -596,19 +645,21 @@ function handleVisibilityChange() {
     schedulerState = 'idle';
     flushOnHide(); // single keepalive PUT, no GETs needed
   } else {
-    // Visible — skip sync if we synced recently
-    if (Date.now() - lastSyncCompletedAt < MIN_RESYNC_INTERVAL_MS) {
+    // Visible — skip sync if we synced recently, or while rate limited
+    if (Date.now() - lastSyncCompletedAt < MIN_RESYNC_INTERVAL_MS || Date.now() < pausedUntil) {
       startIdlePoll();
       return;
     }
-    syncNow().then(() => startIdlePoll());
+    const generation = pollGeneration;
+    syncNow().then(() => { if (generation === pollGeneration) startIdlePoll(); });
   }
 }
 
 function handleOnline() {
-  if (schedulerState === 'stopped') return;
+  if (schedulerState === 'stopped' || Date.now() < pausedUntil) return;
+  const generation = pollGeneration;
   syncNow().then(() => {
-    if (schedulerState === 'idle') startIdlePoll();
+    if (generation === pollGeneration && schedulerState === 'idle') startIdlePoll();
   });
 }
 
@@ -646,9 +697,19 @@ async function getCredentials() {
 }
 
 export async function getLocalSnapshot(): Promise<SyncData> {
-  const { taskLists, tasks, subtasks, sharedItems, mindmapFolders, mindmaps, mindmapNodes } = await db.transaction(
+  return (await getLocalSnapshotWithPendingIds()).snapshot;
+}
+
+/**
+ * The local state plus the ids of the pending changes it already reflects, read
+ * in one transaction. A whole-snapshot upload may then clear exactly those: an
+ * edit recorded after the read is not in the upload and must stay pending (they
+ * used to be cleared wholesale, and such an edit never reached another device).
+ */
+async function getLocalSnapshotWithPendingIds(): Promise<{ snapshot: SyncData; pendingIds: string[] }> {
+  const { taskLists, tasks, subtasks, sharedItems, mindmapFolders, mindmaps, mindmapNodes, pendingIds } = await db.transaction(
     'r',
-    [db.taskLists, db.tasks, db.subtasks, db.sharedItems, db.mindmapFolders, db.mindmaps, db.mindmapNodes],
+    [db.taskLists, db.tasks, db.subtasks, db.sharedItems, db.mindmapFolders, db.mindmaps, db.mindmapNodes, db.changeLog],
     async () => ({
       taskLists: await db.taskLists.toArray(),
       tasks: await db.tasks.toArray(),
@@ -657,6 +718,7 @@ export async function getLocalSnapshot(): Promise<SyncData> {
       mindmapFolders: await db.mindmapFolders.toArray(),
       mindmaps: await db.mindmaps.toArray(),
       mindmapNodes: await db.mindmapNodes.toArray(),
+      pendingIds: await getPendingIds(),
     }),
   );
   const settings: Settings = {
@@ -665,9 +727,12 @@ export async function getLocalSnapshot(): Promise<SyncData> {
   const pomodoroSettings = await db.pomodoroSettings.get('pomodoro') ?? undefined;
   const soundPresets = await db.soundPresets.toArray();
   return {
-    syncVersion: SYNC_VERSION, taskLists, tasks, subtasks, sharedItems,
-    mindmapFolders, mindmaps, mindmapNodes, settings,
-    pomodoroSettings, soundPresets,
+    snapshot: {
+      syncVersion: SYNC_VERSION, taskLists, tasks, subtasks, sharedItems,
+      mindmapFolders, mindmaps, mindmapNodes, settings,
+      pomodoroSettings, soundPresets,
+    },
+    pendingIds,
   };
 }
 
@@ -743,7 +808,7 @@ async function resolveEncryptionKey(
   return key;
 }
 
-async function migrateFromLegacy(pat: string, repo: string): Promise<SyncData | null> {
+async function migrateFromLegacy(pat: string, repo: string): Promise<{ data: SyncData; sha: string } | null> {
   // Check if legacy file exists and new files don't
   const [legacy, snapshot] = await Promise.all([
     getFile(pat, repo, LEGACY_FILE),
@@ -755,16 +820,9 @@ async function migrateFromLegacy(pat: string, repo: string): Promise<SyncData | 
   // Parse legacy data for the caller to encrypt and write
   const parsed = safeParseJson<SyncData>(legacy.data, 'legacy sync data');
   if (!parsed.ok) return null;
-  const legacyData = parsed.value;
-
-  // Delete legacy file
-  try {
-    await deleteFile(pat, repo, LEGACY_FILE, legacy.sha);
-  } catch {
-    // Non-critical, leave it
-  }
-
-  return legacyData;
+  // The caller deletes the legacy file once the new snapshot is written: deleted
+  // here, first, a crash or a missing password in between lost it.
+  return { data: parsed.value, sha: legacy.sha };
 }
 
 // --- Remote backup before migration ---
@@ -884,6 +942,37 @@ async function resetRemoteChangelog(pat: string, repo: string, signal: AbortSign
 }
 
 /**
+ * Rewrite the remote changelog under `newKey`: entries already under it are
+ * kept, entries under `oldKey` re-encrypted, any other dropped (nobody can read
+ * them). A key rotation used to empty it at the commit point, discarding what
+ * other devices pushed while the shared files were being re-encrypted — those
+ * devices had already cleared the entries as pushed, so nobody else ever got
+ * them. Re-applying an entry the snapshot already reflects is a no-op. Retried
+ * on a concurrent write; idempotent, so a resumed rotation may run it again.
+ */
+export async function rekeyRemoteChangelog(
+  pat: string, repo: string, oldKey: CryptoKey, newKey: CryptoKey, signal?: AbortSignal,
+): Promise<void> {
+  for (let attempt = 1; ; attempt++) {
+    const file = await getFile(pat, repo, CHANGELOG_FILE, signal);
+    const parsed = file ? safeParseJson<ChangeEntry[]>(file.data, 'changelog (re-key)') : null;
+    const entries = parsed?.ok && Array.isArray(parsed.value) ? parsed.value : [];
+    const underNew = await decryptChangeEntries(newKey, entries.filter((e) => e.operation !== 'delete'));
+    const newIds = new Set(underNew.map((e) => e.id));
+    const underOld = await decryptChangeEntries(oldKey, entries.filter((e) => e.operation !== 'delete' && !newIds.has(e.id)));
+    const readable = new Map([...underNew, ...underOld].map((e) => [e.id, e]));
+    const kept = entries.filter((e) => e.operation === 'delete' || readable.has(e.id)).map((e) => readable.get(e.id) ?? e);
+    const content = JSON.stringify(await encryptChangeEntries(newKey, kept));
+    try {
+      await putFile(pat, repo, CHANGELOG_FILE, content, file?.sha, signal);
+      return;
+    } catch (err) {
+      if (!(err instanceof Error && err.message === 'CONFLICT') || attempt >= MAX_RETRIES) throw err;
+    }
+  }
+}
+
+/**
  * One sync at a time across the WHOLE app, not just this tab. Two tabs share one
  * IndexedDB, so both read the same pending changelog and would push the same
  * entries twice — the remote survives it (entries are id-keyed and applying them
@@ -911,12 +1000,15 @@ export async function syncNow(manual = false, pushLimit?: number): Promise<numbe
 }
 
 async function runSync(manual = false, pushLimit?: number): Promise<number> {
+  // Rate limited: automatic syncs wait for the reset (GitHub may block a client
+  // that keeps calling while limited); a sync the user asked for still goes.
+  if (!manual && Date.now() < pausedUntil) return -1;
   const signal = acquireSyncLock();
   if (!signal) return -1;
 
   // Skip network calls when offline
   if (typeof navigator !== 'undefined' && navigator.onLine === false) {
-    releaseSyncLock();
+    releaseSyncLock(signal);
     return -1;
   }
 
@@ -927,14 +1019,18 @@ async function runSync(manual = false, pushLimit?: number): Promise<number> {
 
     reportProgress('connecting', 'Connecting...', 0.1);
 
-    // Legacy migration (skip after first check per session)
-    let legacyData: SyncData | null = null;
+    // Legacy migration (checked until done, then never again)
+    let legacy: { data: SyncData; sha: string } | null = null;
     if (!legacyChecked) {
-      legacyData = await migrateFromLegacy(creds.pat, creds.repo);
-      legacyChecked = true;
-      localStorage.setItem('gtd25-legacy-checked', '1');
+      legacy = await migrateFromLegacy(creds.pat, creds.repo);
+      if (!legacy) {
+        legacyChecked = true;
+        localStorage.setItem('gtd25-legacy-checked', '1');
+      }
     }
-    if (legacyData) {
+    if (legacy) {
+      const legacyData = legacy.data;
+      const legacyPendingIds = await getPendingIds();
       // Encrypt and write as new snapshot
       const encKey = await resolveEncryptionKey();
       if (encKey === 'needs-password') return -1;
@@ -945,11 +1041,18 @@ async function runSync(manual = false, pushLimit?: number): Promise<number> {
       const encrypted = await encryptSyncData(encKey, legacyData);
       await putFile(creds.pat, creds.repo, SNAPSHOT_FILE, JSON.stringify(encrypted), undefined, signal);
       await putFile(creds.pat, creds.repo, CHANGELOG_FILE, '[]', undefined, signal);
-      await clearPendingEntries();
+      try {
+        await deleteFile(creds.pat, creds.repo, LEGACY_FILE, legacy.sha);
+      } catch {
+        // Non-critical, leave it: with a snapshot present it is never read again
+      }
+      legacyChecked = true;
+      localStorage.setItem('gtd25-legacy-checked', '1');
+      await clearEntriesByIds(legacyPendingIds);
       await db.syncMeta.update('sync-meta', {
         lastPulledAt: Date.now(),
         lastPushedAt: Date.now(),
-        pendingChanges: false,
+        pendingChanges: (await pendingEntryCount()) > 0,
       });
       lastSyncCompletedAt = Date.now();
       reportProgress('done', 'Sync complete', 1.0);
@@ -1008,7 +1111,8 @@ async function runSync(manual = false, pushLimit?: number): Promise<number> {
     }
 
     if (!remoteSnapshotFile && !remoteChangelogFile) {
-      let localData = await getLocalSnapshot();
+      const local = await getLocalSnapshotWithPendingIds();
+      let localData = local.snapshot;
       const hasData = localData.taskLists.length > 0 || localData.tasks.length > 0 || localData.subtasks.length > 0;
       if (hasData) {
         // Encryption is always required
@@ -1022,11 +1126,11 @@ async function runSync(manual = false, pushLimit?: number): Promise<number> {
         await putFile(creds.pat, creds.repo, SNAPSHOT_FILE, snapshotContent, undefined, signal);
       }
       await putFile(creds.pat, creds.repo, CHANGELOG_FILE, '[]', undefined, signal);
-      await clearPendingEntries();
+      await clearEntriesByIds(local.pendingIds);
       await db.syncMeta.update('sync-meta', {
         lastPulledAt: Date.now(),
         lastPushedAt: Date.now(),
-        pendingChanges: false,
+        pendingChanges: (await pendingEntryCount()) > 0,
       });
       lastSyncCompletedAt = Date.now();
       reportProgress('done', 'Sync complete', 1.0);
@@ -1105,7 +1209,7 @@ async function runSync(manual = false, pushLimit?: number): Promise<number> {
     if (remoteSnapshotFile && hasRemoteChangelog) {
       const syncMeta = await db.syncMeta.get('sync-meta');
       if (!syncMeta?.lastPulledAt) {
-        releaseSyncLock();
+        releaseSyncLock(signal);
         await forcePull();
         const afterPull = await db.syncMeta.get('sync-meta');
         return afterPull?.lastPulledAt ? 0 : -1;
@@ -1277,16 +1381,22 @@ async function runSync(manual = false, pushLimit?: number): Promise<number> {
     // absorbed by compaction while this device was offline or between syncs.
     // What it brings in counts as pulled too (the indicator showed only "↑").
     let pulledFromSnapshot = 0;
-    if (remoteSnapshotFile) {
-      const syncMeta = await db.syncMeta.get('sync-meta');
-      if (remoteSnapshotFile.sha !== syncMeta?.lastSnapshotSha) {
-        const reconParsed = safeParseJson<SyncData>(remoteSnapshotFile.data, 'snapshot (reconcile)');
-        if (reconParsed.ok) {
-          const snapshotData = remoteSalt
-            ? await decryptSyncData(encKey, reconParsed.value)
-            : reconParsed.value;
-          pulledFromSnapshot = await reconcileFromSnapshot(snapshotData);
-        }
+    // The snapshot this run has fully reconciled (null: not yet — see below).
+    let reconciledSnapshotSha = (await db.syncMeta.get('sync-meta'))?.lastSnapshotSha ?? null;
+    if (remoteSnapshotFile && remoteSnapshotFile.sha !== reconciledSnapshotSha) {
+      const reconParsed = safeParseJson<SyncData>(remoteSnapshotFile.data, 'snapshot (reconcile)');
+      let reconciled: number | null = 0;
+      if (reconParsed.ok) {
+        const snapshotData = remoteSalt
+          ? await decryptSyncData(encKey, reconParsed.value)
+          : reconParsed.value;
+        reconciled = await reconcileFromSnapshot(snapshotData);
+      }
+      // Local edits kept landing under the merge: leave the snapshot unseen so
+      // the next sync reconciles it again.
+      if (reconciled !== null) {
+        pulledFromSnapshot = reconciled;
+        reconciledSnapshotSha = remoteSnapshotFile.sha;
         await db.syncMeta.update('sync-meta', { lastSnapshotSha: remoteSnapshotFile.sha });
       }
     }
@@ -1294,9 +1404,16 @@ async function runSync(manual = false, pushLimit?: number): Promise<number> {
     // Get our pending local changes (optionally limited for batch pushes)
     let pendingEntries = await getPendingEntries(pushLimit);
 
-    // Deduplicate: a previous flushOnHide may have pushed entries that weren't cleared locally
+    // Deduplicate: a previous flushOnHide may have pushed entries that weren't
+    // cleared locally. Only a remote copy that opens under the repository's key
+    // counts as pushed: a keepalive PUT that landed across a key rotation (its
+    // cached sha matched again) left old-key copies nobody can read, and clearing
+    // the pending originals lost those edits.
     if (pendingEntries.length > 0 && remoteEntries.length > 0) {
-      const remoteIds = new Set(remoteEntries.map((e) => e.id));
+      const pendingIdSet = new Set(pendingEntries.map((e) => e.id));
+      const remoteCopies = remoteEntries.filter((e) => pendingIdSet.has(e.id));
+      const readable = await decryptChangeEntries(encKey, remoteCopies, { allowPlaintext: !remoteSalt });
+      const remoteIds = new Set(readable.map((e) => e.id));
       const dupes = pendingEntries.filter((e) => remoteIds.has(e.id));
       if (dupes.length > 0) {
         await clearEntriesByIds(dupes.map((e) => e.id));
@@ -1315,10 +1432,12 @@ async function runSync(manual = false, pushLimit?: number): Promise<number> {
       const entriesToPush = await encryptChangeEntries(encKey, pendingEntries);
 
       // Re-encrypt existing remote entries if first-time encryption
-      // (they are plaintext from before encryption was enabled)
-      let remoteToWrite = remoteEntries;
-      if (!remoteSalt && remoteEntries.length > 0) {
-        remoteToWrite = await encryptChangeEntries(encKey, remoteEntries);
+      // (they are plaintext from before encryption was enabled). An unreadable
+      // remote copy of an entry pushed again here is replaced by this one.
+      const pushIds = new Set(entriesToPush.map((e) => e.id));
+      let remoteToWrite = remoteEntries.filter((e) => !pushIds.has(e.id));
+      if (!remoteSalt && remoteToWrite.length > 0) {
+        remoteToWrite = await encryptChangeEntries(encKey, remoteToWrite);
       }
 
       // Append our entries to the remote changelog
@@ -1378,12 +1497,9 @@ async function runSync(manual = false, pushLimit?: number): Promise<number> {
       if (pushed) {
         finalChangelogSha = currentSha;
         finalRemoteEntries = [...remoteToWrite, ...entriesToPush];
-        if (pushLimit != null) {
-          // Batch push — only clear the entries we just pushed
-          await clearEntriesByIds(pendingEntries.map((e) => e.id));
-        } else {
-          await clearPendingEntries();
-        }
+        // Only the entries just pushed: an edit recorded while the PUT was on
+        // the wire is still pending (a wholesale clear used to drop it here).
+        await clearEntriesByIds(pendingEntries.map((e) => e.id));
       }
     }
 
@@ -1395,7 +1511,7 @@ async function runSync(manual = false, pushLimit?: number): Promise<number> {
     await db.syncMeta.update('sync-meta', {
       lastPulledAt: Date.now(),
       lastPushedAt: pendingEntries.length > 0 ? Date.now() : undefined,
-      lastSnapshotSha: remoteSnapshotFile?.sha,
+      lastSnapshotSha: reconciledSnapshotSha ?? undefined,
       pendingChanges: remaining > 0,
     });
 
@@ -1502,16 +1618,19 @@ async function runSync(manual = false, pushLimit?: number): Promise<number> {
       const waitMs = Math.max(0, err.resetAtMs - Date.now());
       const waitMin = Math.ceil(waitMs / 60_000);
       reportError(`Rate limited — retrying in ${waitMin}m`, { category: 'rate-limited', message: err.message, retryAtMs: err.resetAtMs });
-      toast(`Rate limited — retrying in ${waitMin}m`, 'error');
-      clearSchedulerTimer();
-      schedulerState = 'idle'; // pause polling
+      const alreadyPaused = Date.now() < pausedUntil;
+      pausedUntil = Math.max(pausedUntil, err.resetAtMs + 1000); // 1s buffer
+      if (!alreadyPaused || manual) toast(`Rate limited — retrying in ${waitMin}m`, 'error');
+      clearSchedulerTimer(); // the poll that hit the limit does not re-arm
+      schedulerState = 'idle';
       if (rateLimitTimer) clearTimeout(rateLimitTimer);
       rateLimitTimer = setTimeout(() => {
         rateLimitTimer = null;
         if (schedulerState !== 'stopped') {
-          syncNow().then(() => startIdlePoll());
+          const generation = pollGeneration;
+          syncNow().then(() => { if (generation === pollGeneration) startIdlePoll(); });
         }
-      }, waitMs + 1000); // 1s buffer
+      }, Math.max(0, pausedUntil - Date.now()));
       return -1;
     }
 
@@ -1529,14 +1648,17 @@ async function runSync(manual = false, pushLimit?: number): Promise<number> {
         toast('GitHub unavailable — will keep retrying', 'error');
         lastErrorToastAt = Date.now();
       }
-    } else {
+    } else if (manual || consecutiveErrors === 1) {
+      // Once per failure streak (the sync indicator keeps showing the error):
+      // a lasting failure — a revoked token — used to toast on every retry and
+      // every return to the app.
       toast('Sync failed', 'error');
     }
 
     reportError(msg, errorInfo);
     return -1;
   } finally {
-    releaseSyncLock();
+    releaseSyncLock(signal);
   }
 }
 
@@ -1726,8 +1848,15 @@ async function compactSnapshot(pat: string, repo: string, encKey: CryptoKey) {
  * the remote snapshot to the migration backup file; a key rotation turns it off,
  * since that copy would be old-key ciphertext.
  */
-export async function forcePush(options: { backupExisting?: boolean } = {}): Promise<SyncData | null> {
-  const { backupExisting = true } = options;
+export async function forcePush(options: {
+  backupExisting?: boolean;
+  /** The commit point of a key rotation: write under the new (cached) key, and
+   *  carry the remote changelog over re-encrypted from this old key instead of
+   *  emptying it — what other devices pushed meanwhile is kept. */
+  rekeyChangelogFrom?: CryptoKey;
+} = {}): Promise<SyncData | null> {
+  const { backupExisting = true, rekeyChangelogFrom } = options;
+  const replacingKey = !!rekeyChangelogFrom;
   const signal = await waitForSyncLock();
 
   try {
@@ -1741,31 +1870,37 @@ export async function forcePush(options: { backupExisting?: boolean } = {}): Pro
 
     if (refuseWriteOverNewerRemote(existing?.data, 'forcePush')) return null;
 
-    // Backup current remote snapshot before overwriting
-    if (existing && backupExisting) {
-      const existingParsed = safeParseJson<SyncData>(existing.data, 'existing snapshot (force push backup)');
-      if (existingParsed.ok) {
-        await backupRemoteSnapshot(creds.pat, creds.repo, existing.data, existingParsed.value.syncVersion ?? SYNC_VERSION);
-      }
-    }
-
     // If key is already cached (e.g. password was just changed), use it directly.
     // Otherwise resolve from remote salt + saved password.
+    const existingParsed = existing ? safeParseJson<SyncData>(existing.data, 'existing snapshot (force push)') : null;
+    const existingSnapshot = existingParsed?.ok ? existingParsed.value : undefined;
     let encKey: CryptoKey;
     if (hasEncryptionKey()) {
       encKey = getCachedEncryptionKey()!;
     } else {
-      let existingSalt: string | undefined;
-      if (existing) {
-        const p = safeParseJson<SyncData>(existing.data, 'existing snapshot (force push salt)');
-        existingSalt = p.ok ? p.value.encryptionSalt : undefined;
-      }
-      const encResult = await resolveEncryptionKey(existingSalt);
+      const encResult = await resolveEncryptionKey(existingSnapshot?.encryptionSalt);
       if (encResult === 'needs-password') return null;
       encKey = encResult;
     }
+    // Only under the key the repository is encrypted with — unless this push is
+    // the commit point of a key rotation. A device still on an old password (or
+    // a mistyped one) used to re-key the whole repository here, leaving the
+    // Shared Folder and the backups under a key no device held any more.
+    if (!replacingKey && existingSnapshot?.encryptionVerifier
+      && !(await checkVerifier(encKey, existingSnapshot.encryptionVerifier))) {
+      recordSyncMessage('forcePush.wrongKey', "This device's sync key does not open the repository");
+      reportError('Force push refused', { category: 'wrong-password', message: "This device's sync password does not open the repository" });
+      toast("Force push refused: this device's sync password doesn't open the repository. Enter the current password first.", 'error');
+      return null;
+    }
 
-    let localData = await getLocalSnapshot();
+    // Backup current remote snapshot before overwriting
+    if (existing && backupExisting && existingSnapshot) {
+      await backupRemoteSnapshot(creds.pat, creds.repo, existing.data, existingSnapshot.syncVersion ?? SYNC_VERSION);
+    }
+
+    const local = await getLocalSnapshotWithPendingIds();
+    let localData = local.snapshot;
 
     // Data-loss guard: refuse to overwrite a POPULATED remote with an EMPTY local
     // database (e.g. a mis-click right after a wipe, before pulling). Force push
@@ -1788,6 +1923,9 @@ export async function forcePush(options: { backupExisting?: boolean } = {}): Pro
     const salt = getCachedSalt()!;
     localData.encryptionSalt = salt;
     localData.encryptionVerifier = await createVerifier(encKey);
+    // Keep wipedAt (as compaction does): a device offline through a reset must
+    // still adopt it when it comes back, force push or not.
+    if (existingSnapshot?.wipedAt) localData.wipedAt = existingSnapshot.wipedAt;
     localData = await encryptSyncData(encKey, localData);
 
     const content = JSON.stringify(localData);
@@ -1799,16 +1937,20 @@ export async function forcePush(options: { backupExisting?: boolean } = {}): Pro
 
     reportProgress('pushing', 'Clearing changelog...', 0.8);
 
-    // Clear changelog
-    const changelog = await getFile(creds.pat, creds.repo, CHANGELOG_FILE, signal);
-    await putFile(creds.pat, creds.repo, CHANGELOG_FILE, '[]', changelog?.sha, signal);
+    if (rekeyChangelogFrom) {
+      await rekeyRemoteChangelog(creds.pat, creds.repo, rekeyChangelogFrom, encKey, signal);
+    } else {
+      // Clear changelog
+      const changelog = await getFile(creds.pat, creds.repo, CHANGELOG_FILE, signal);
+      await putFile(creds.pat, creds.repo, CHANGELOG_FILE, '[]', changelog?.sha, signal);
+    }
 
-    // Clear local change log
-    await clearPendingEntries();
+    // Clear the pending changes the snapshot carried — not one made since.
+    await clearEntriesByIds(local.pendingIds);
 
     await db.syncMeta.update('sync-meta', {
       lastPushedAt: Date.now(),
-      pendingChanges: false,
+      pendingChanges: (await pendingEntryCount()) > 0,
       pomodoroSyncedAt: Date.now(),
     });
     lastSyncCompletedAt = Date.now();
@@ -1824,7 +1966,7 @@ export async function forcePush(options: { backupExisting?: boolean } = {}): Pro
     toast('Force push failed', 'error');
     return null;
   } finally {
-    releaseSyncLock();
+    releaseSyncLock(signal);
   }
 }
 
@@ -1929,7 +2071,7 @@ export async function forcePull() {
     reportError('Force pull failed', classifySyncError(err));
     toast('Force pull failed', 'error');
   } finally {
-    releaseSyncLock();
+    releaseSyncLock(signal);
   }
 }
 
@@ -2027,7 +2169,7 @@ export async function wipeAllData() {
     recordError('sync.wipeAllData', err);
     toast('Wipe failed', 'error');
   } finally {
-    releaseSyncLock();
+    releaseSyncLock(signal);
   }
 }
 
@@ -2162,7 +2304,7 @@ export async function importData(data: ImportData) {
     recordError('sync.importData', err);
     toast('Import failed', 'error');
   } finally {
-    releaseSyncLock();
+    releaseSyncLock(signal);
   }
 }
 
@@ -2178,6 +2320,8 @@ export function __resetForTesting() {
   probeChangelogEtag = null;
   probeSnapshotEtag = null;
   consecutiveErrors = 0;
+  pausedUntil = 0;
+  pollGeneration = 0;
   if (rateLimitTimer) { clearTimeout(rateLimitTimer); rateLimitTimer = null; }
   lastErrorToastAt = 0;
   lastSyncCompletedAt = 0;
@@ -2294,6 +2438,6 @@ export async function restoreFromBackup(tier: BackupTier) {
     recordError('sync.restoreFromBackup', err);
     toast('Restore failed', 'error');
   } finally {
-    releaseSyncLock();
+    releaseSyncLock(signal);
   }
 }

@@ -252,6 +252,8 @@ export interface SyncMeta {
   unknownBlobsSeenAt?: Record<string, number>;
   // Periodic squash of the sync repo's default branch to bound git history growth.
   lastMainSquashAt?: number;
+  // When that squash last failed: retried once a day, not after every sync.
+  mainSquashFailedAt?: number;
   // A sync-password change in progress (see sync/key-rotation.ts): the new salt
   // and a verifier of the new key, pinned so a retry rotates to the same key and
   // refuses a different password. Cleared when the rotation completes.

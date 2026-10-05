@@ -68,11 +68,12 @@ function installFakeCaches(meta: SharedPayloadMeta | null, files: Record<string,
     has: async () => exists,
     open: async () => ({
       match: async (req: unknown) => (exists ? store[String(req)] : undefined),
-      put: async () => undefined,
+      put: async (req: unknown, res: Response) => { const body = await res.text(); store[String(req)] = { json: async () => JSON.parse(body) }; },
+      delete: async (req: unknown) => { const had = String(req) in store; delete store[String(req)]; return had; },
     }),
     delete: async () => { if (!exists) return false; exists = false; deletedExisting = true; return true; },
   };
-  return { wasDeleted: () => deletedExisting };
+  return { wasDeleted: () => deletedExisting, entries: () => (exists ? Object.keys(store) : []), store };
 }
 
 const fileMeta = (over: Partial<SharedPayloadMeta> = {}): SharedPayloadMeta => ({
@@ -119,6 +120,24 @@ describe('useShareTarget (Android share → destination prompt)', () => {
     expect(createTask).not.toHaveBeenCalled();
     await waitFor(() => expect(useAppState.getState().selectedListId).toBe('__shared__'));
     await waitFor(() => expect(cache.wasDeleted()).toBe(true));
+  });
+
+  it('a file whose upload fails stays stashed (and the saved one leaves) — offered again, not lost', async () => {
+    window.history.replaceState({}, '', '/?shareTarget=1');
+    const meta = fileMeta({ files: [{ name: 'a.png', type: 'image/png', size: 3 }, { name: 'b.png', type: 'image/png', size: 3 }] });
+    const cache = installFakeCaches(meta, {
+      [shareFilePath(0)]: { bytes: new Uint8Array([1]), type: 'image/png' },
+      [shareFilePath(1)]: { bytes: new Uint8Array([2]), type: 'image/png' },
+    });
+    createFileItem.mockResolvedValueOnce({ id: 'f-a' }).mockResolvedValueOnce(undefined); // b's upload drops
+
+    render(<Harness />);
+    fireEvent.click(await screen.findByText('to-folder'));
+    await waitFor(() => expect(createFileItem).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(toast).toHaveBeenCalledWith(expect.stringMatching(/could not be saved — offered again/), 'error'));
+    expect(cache.wasDeleted()).toBe(false);
+    expect(cache.entries()).not.toContain(shareFilePath(0));
+    expect(cache.entries()).toContain(shareFilePath(1));
   });
 
   it('choosing Inbox for a file stores the bytes in the Shared Folder AND adds a pointer task', async () => {

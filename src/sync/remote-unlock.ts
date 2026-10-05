@@ -139,6 +139,45 @@ export async function publishRegistryEntry(pat: string, repo: string, entry: Reg
   await putFile(pat, repo, REGISTRY_PATH, JSON.stringify(next), existing?.sha);
 }
 
+/**
+ * A sync key rotation: re-MAC, under the new key, every entry and tombstone that
+ * verifies under the old one. Re-MACing only this device's own entry (all it
+ * used to do) left the other devices unverifiable until each republished, and a
+ * forgotten device's tombstone — the signal that drops it from every approver —
+ * stopped counting for good. Anything not authentic under either key is left as
+ * it is (it counts for nothing either way). Retried on a concurrent write.
+ */
+export async function remacRegistry(pat: string, repo: string, oldMacKey: CryptoKey, newMacKey: CryptoKey): Promise<void> {
+  for (let attempt = 1; ; attempt++) {
+    const existing = await getFile(pat, repo, REGISTRY_PATH);
+    const reg = existing ? safeParseRegistry(existing.data) : null;
+    if (!existing || !reg) return;
+    let changed = false;
+    for (const [id, e] of Object.entries(reg)) {
+      if (!e) continue;
+      if (await isAuthenticTombstone(e, oldMacKey)) {
+        const t = e as RegistryTombstone;
+        reg[id] = { ...t, mac: await registryMac(newMacKey, tombstoneBytes(t.deviceId, t.removedAt)) };
+        changed = true;
+      } else if (await isAuthenticEntry(e, oldMacKey)) {
+        const entry = e as RegistryEntry;
+        reg[id] = { ...entry, mac: await registryMac(newMacKey, registryEntryBytes({
+          deviceId: entry.deviceId, name: entry.name, ecdhPub: entry.ecdhPub, ecdsaPub: entry.ecdsaPub,
+          paranoid: entry.paranoid, updatedAt: entry.updatedAt,
+        })) };
+        changed = true;
+      }
+    }
+    if (!changed) return;
+    try {
+      await putFile(pat, repo, REGISTRY_PATH, JSON.stringify(reg), existing.sha);
+      return;
+    } catch (err) {
+      if (!(err instanceof Error && err.message === 'CONFLICT') || attempt >= 3) throw err;
+    }
+  }
+}
+
 /** Read the registry and return ONLY entries whose MAC verifies (forged/foreign dropped). */
 export async function readAuthenticRegistry(pat: string, repo: string, macKey: CryptoKey): Promise<RegistryEntry[]> {
   const file = await getFile(pat, repo, REGISTRY_PATH);
@@ -682,14 +721,21 @@ async function writeRegistryTombstone(pat: string, repo: string, deviceId: strin
     recordError('remoteUnlock.tombstone', new Error('No registry key: the device is forgotten on this device only'));
     return;
   }
-  try {
-    const existing = await getFile(pat, repo, REGISTRY_PATH);
-    const reg = (existing && safeParseRegistry(existing.data)) ?? {};
-    const removedAt = Date.now();
-    reg[deviceId] = { deviceId, removed: true, removedAt, mac: await registryMac(macKey, tombstoneBytes(deviceId, removedAt)) };
-    await putFile(pat, repo, REGISTRY_PATH, JSON.stringify(reg), existing?.sha);
-  } catch (err) {
-    recordError('remoteUnlock.tombstone', err);
+  // A concurrent registry write (another device's heartbeat) is a 409: read again
+  // and retry — swallowing it left the device forgotten here and trusted elsewhere.
+  for (let attempt = 1; ; attempt++) {
+    try {
+      const existing = await getFile(pat, repo, REGISTRY_PATH);
+      const reg = (existing && safeParseRegistry(existing.data)) ?? {};
+      const removedAt = Date.now();
+      reg[deviceId] = { deviceId, removed: true, removedAt, mac: await registryMac(macKey, tombstoneBytes(deviceId, removedAt)) };
+      await putFile(pat, repo, REGISTRY_PATH, JSON.stringify(reg), existing?.sha);
+      return;
+    } catch (err) {
+      if (err instanceof Error && err.message === 'CONFLICT' && attempt < 3) continue;
+      recordError('remoteUnlock.tombstone', err);
+      return;
+    }
   }
 }
 
@@ -951,12 +997,11 @@ export async function purgeManagedDevice(pat: string, repo: string, targetDevice
   // failure can never leave a phantom device on this trusted device's list).
   await removeApproverInvite(pat, repo, local.deviceId, targetDeviceId).catch((err) => recordError('remoteUnlock.purge.removeInvite', err));
   await writeRegistryTombstone(pat, repo, targetDeviceId, macKey ?? await getRegistryMacKey().catch(() => null));
-  await Promise.all([
-    deleteRemoteFileIfExists(pat, repo, cmdPath(targetDeviceId)),
-    deleteRemoteFileIfExists(pat, repo, wipeStatusPath(targetDeviceId)),
-    deleteRemoteFileIfExists(pat, repo, unlockReqPath(targetDeviceId)),
-    deleteRemoteFileIfExists(pat, repo, unlockRespPath(targetDeviceId)),
-  ]);
+  // One at a time: GitHub documents that concurrent writes to one branch
+  // conflict, and the parallel deletes left some of these files behind.
+  for (const path of [cmdPath(targetDeviceId), wipeStatusPath(targetDeviceId), unlockReqPath(targetDeviceId), unlockRespPath(targetDeviceId)]) {
+    await deleteRemoteFileIfExists(pat, repo, path);
+  }
   await mutateRemoteApproverFor((cur) => { delete cur[targetDeviceId]; return cur; });
 }
 
@@ -976,10 +1021,9 @@ export async function forgetManagedDeviceAfterWipeCommand(pat: string, repo: str
   // local entry always removed.
   await removeApproverInvite(pat, repo, local.deviceId, targetDeviceId).catch((err) => recordError('remoteUnlock.forget.removeInvite', err));
   await writeRegistryTombstone(pat, repo, targetDeviceId, macKey ?? await getRegistryMacKey().catch(() => null));
-  await Promise.all([
-    deleteRemoteFileIfExists(pat, repo, unlockReqPath(targetDeviceId)),
-    deleteRemoteFileIfExists(pat, repo, unlockRespPath(targetDeviceId)),
-  ]);
+  for (const path of [unlockReqPath(targetDeviceId), unlockRespPath(targetDeviceId)]) {
+    await deleteRemoteFileIfExists(pat, repo, path);
+  }
   await mutateRemoteApproverFor((cur) => { delete cur[targetDeviceId]; return cur; });
 }
 

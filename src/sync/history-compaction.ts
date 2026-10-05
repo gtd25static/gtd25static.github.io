@@ -16,6 +16,7 @@ import { db } from '../db';
 import { getDefaultBranch, getRef, getCommit, createCommit, updateRef } from './github-api';
 
 const MAIN_SQUASH_INTERVAL_MS = 30 * 24 * 60 * 60 * 1000; // ~monthly
+const MAIN_SQUASH_RETRY_MS = 24 * 60 * 60 * 1000;
 
 /**
  * Flatten the default branch to a single orphan commit holding the current tree.
@@ -58,7 +59,16 @@ export async function maybeSquashDefaultBranch(pat: string, repo: string): Promi
     return;
   }
   if (now - last < MAIN_SQUASH_INTERVAL_MS) return;
+  // A squash that keeps failing (the branch protected against force pushes, say)
+  // was retried after every successful sync: ~6 API calls and a dangling commit
+  // each time. Once a day is enough.
+  if (meta?.mainSquashFailedAt && now - meta.mainSquashFailedAt < MAIN_SQUASH_RETRY_MS) return;
 
-  await squashDefaultBranch(pat, repo);
-  await db.syncMeta.update('sync-meta', { lastMainSquashAt: now });
+  try {
+    await squashDefaultBranch(pat, repo);
+  } catch (err) {
+    await db.syncMeta.update('sync-meta', { mainSquashFailedAt: now });
+    throw err;
+  }
+  await db.syncMeta.update('sync-meta', { lastMainSquashAt: now, mainSquashFailedAt: undefined });
 }

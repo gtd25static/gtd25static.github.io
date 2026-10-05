@@ -1,8 +1,10 @@
 import { getFile, putFile } from './github-api';
 import {
   encryptSyncData,
+  decryptSyncData,
   getCachedSalt,
   createVerifier,
+  checkVerifier,
 } from './crypto';
 import { getLocalSnapshot } from './sync-engine';
 import { SYNC_VERSION } from './version';
@@ -115,39 +117,57 @@ export async function maybeCreateBackups(
 
   const backedUpAt = Date.now();
 
-  // Write all stale tiers in parallel
-  await Promise.allSettled(
-    tiersToWrite.map(async ({ tier, sha }) => {
-      try {
-        const backupData: SyncData & { backedUpAt: number } = {
-          ...encrypted,
-          backedUpAt,
-        };
-        await putFile(pat, repo, BACKUP_FILES[tier], JSON.stringify(backupData), sha);
-        localStorage.setItem(getLocalTimestampKey(tier), String(backedUpAt));
-      } catch {
-        // 409 = another device won the race, network error = retry next period
-        // Don't update localStorage — allow retry on next check cycle
-      }
-    }),
-  );
+  // One tier at a time: GitHub documents that concurrent writes to one branch
+  // conflict, and the parallel PUTs made the tiers collide with each other.
+  for (const { tier, sha } of tiersToWrite) {
+    try {
+      const backupData: SyncData & { backedUpAt: number } = {
+        ...encrypted,
+        backedUpAt,
+      };
+      await putFile(pat, repo, BACKUP_FILES[tier], JSON.stringify(backupData), sha);
+      localStorage.setItem(getLocalTimestampKey(tier), String(backedUpAt));
+    } catch {
+      // 409 = another device won the race, network error = retry next period
+      // Don't update localStorage — allow retry on next check cycle
+    }
+  }
 }
 
 /**
- * Rewrite all three tiers from an already-encrypted snapshot, now. A key
- * rotation calls this: the tiers hold the last snapshot each was taken from,
- * under whatever key was current then, and would otherwise keep old-key
- * ciphertext at the tip for up to a week. Not gated by the Paranoid flag — a
- * rotation is one explicit burst of writes the user asked for.
+ * Re-encrypt all three tiers under the new key, now. A key rotation calls this:
+ * the tiers hold the last snapshot each was taken from, under whatever key was
+ * current then, and would otherwise keep old-key ciphertext at the tip for up to
+ * a week. Each tier keeps ITS OWN content and time — they used to be overwritten
+ * with today's snapshot, so a password change wiped out the hourly, daily and
+ * weekly restore points. A tier already under the new key (a resumed rotation)
+ * is left alone; one neither key opens holds nothing anyone can restore and is
+ * replaced by `current`. Not gated by the Paranoid flag — a rotation is one
+ * explicit burst of writes the user asked for.
  */
-export async function overwriteAllBackups(pat: string, repo: string, encrypted: SyncData): Promise<void> {
-  const backedUpAt = Date.now();
-  const backupData: SyncData & { backedUpAt: number } = { ...encrypted, syncVersion: SYNC_VERSION, backedUpAt };
-  const content = JSON.stringify(backupData);
+export async function rekeyAllBackups(
+  pat: string, repo: string, oldKey: CryptoKey, newKey: CryptoKey, newSalt: string, current: SyncData,
+): Promise<void> {
+  const newVerifier = await createVerifier(newKey);
   for (const tier of Object.keys(BACKUP_FILES) as BackupTier[]) {
     const existing = await getFile(pat, repo, BACKUP_FILES[tier]);
-    await putFile(pat, repo, BACKUP_FILES[tier], content, existing?.sha);
-    localStorage.setItem(getLocalTimestampKey(tier), String(backedUpAt));
+    let backup: (SyncData & { backedUpAt?: number }) | null = null;
+    try {
+      backup = existing ? JSON.parse(existing.data) as SyncData & { backedUpAt?: number } : null;
+    } catch {
+      backup = null;
+    }
+    if (backup?.encryptionVerifier && backup.encryptionSalt === newSalt && await checkVerifier(newKey, backup.encryptionVerifier)) continue;
+    let next: SyncData & { backedUpAt: number };
+    if (backup?.encryptionVerifier && await checkVerifier(oldKey, backup.encryptionVerifier)) {
+      const plain = await decryptSyncData(oldKey, backup);
+      const reencrypted = await encryptSyncData(newKey, { ...plain, encryptionSalt: newSalt, encryptionVerifier: newVerifier });
+      next = { ...reencrypted, backedUpAt: backup.backedUpAt ?? Date.now() };
+    } else {
+      next = { ...current, syncVersion: SYNC_VERSION, backedUpAt: Date.now() };
+    }
+    await putFile(pat, repo, BACKUP_FILES[tier], JSON.stringify(next), existing?.sha);
+    localStorage.setItem(getLocalTimestampKey(tier), String(next.backedUpAt));
   }
 }
 

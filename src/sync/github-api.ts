@@ -32,6 +32,14 @@ export function transferTimeoutMs(bytes: number): number {
   return BASE_TIMEOUT_MS + Math.floor(bytes / 262_144) * 1000;
 }
 
+// A Contents API GET inlines files up to 1 MB as base64 (~1.4 MB of JSON); its
+// size is unknown until it arrives, so it gets the budget of the largest one.
+const CONTENTS_DOWNLOAD_TIMEOUT_MS = transferTimeoutMs(1_400_000);
+
+// GitHub asks clients that hit a secondary rate limit without a Retry-After to
+// wait at least a minute.
+const SECONDARY_LIMIT_WAIT_MS = 60_000;
+
 // Low-level fetch against a full api.github.com URL, with auth, timeout and
 // rate-limit detection. Used by both the Contents helpers and the Git Data API
 // helpers (which live under /git/... rather than /contents/...). The timeout
@@ -69,17 +77,36 @@ async function apiFetch(
   // LWW merge, which is only as trustworthy as the writing device's Date.now().
   recordServerDate(resp.headers.get('Date'));
 
-  // Detect rate limiting on 403
-  if (resp.status === 403) {
+  // Rate limits: a 403 with no requests left (primary), a 429, a 403 with
+  // Retry-After, or a 403 whose message says so (secondary). A secondary limit
+  // used to read as "Token rejected — check PAT", nudging the user to replace a
+  // token that worked.
+  if (resp.status === 403 || resp.status === 429) {
     const remaining = resp.headers.get('X-RateLimit-Remaining');
     const resetHeader = resp.headers.get('X-RateLimit-Reset');
+    const retryAfter = parseInt(resp.headers.get('Retry-After') ?? '', 10);
+    if (Number.isFinite(retryAfter)) throw new RateLimitError(Date.now() + retryAfter * 1000);
     if (remaining === '0' && resetHeader) {
       const resetAtMs = parseInt(resetHeader, 10) * 1000;
       throw new RateLimitError(resetAtMs);
     }
+    if (resp.status === 429) throw new RateLimitError(Date.now() + SECONDARY_LIMIT_WAIT_MS);
+    const message = await resp.clone().text().catch(() => '');
+    if (/rate limit/i.test(message)) throw new RateLimitError(Date.now() + SECONDARY_LIMIT_WAIT_MS);
   }
 
   return resp;
+}
+
+/**
+ * The server's clock, from the commit a Contents write created. api.github.com
+ * does not expose its Date header to browsers (it is not in
+ * Access-Control-Expose-Headers), so the skew check apiFetch feeds was blind in
+ * the app; the committer date of a write is set by the server.
+ */
+function recordCommitDate(json: unknown): void {
+  const date = (json as { commit?: { committer?: { date?: unknown } } } | null)?.commit?.committer?.date;
+  if (typeof date === 'string') recordServerDate(date);
 }
 
 async function githubFetch(
@@ -182,7 +209,7 @@ export async function getFile(
   path: string,
   signal?: AbortSignal,
 ): Promise<{ data: string; sha: string; etag?: string } | null> {
-  const resp = await githubFetch(pat, repo, path, undefined, signal);
+  const resp = await githubFetch(pat, repo, path, undefined, signal, false, CONTENTS_DOWNLOAD_TIMEOUT_MS);
   if (resp.status === 404) return null;
   if (!resp.ok) throw new Error(`GitHub API error: ${resp.status}`);
   // The ETag lets a later conditional GET (the Paranoid idle probe) ask whether
@@ -218,9 +245,11 @@ async function decodeContentsResponse(
   }
   const notInlined = file.encoding === 'none' || (file.content === '' && typeof file.size === 'number' && file.size > 0);
   if (notInlined) {
+    // Sized by the file: a fixed 15 s never finished a few-MB snapshot on a slow
+    // mobile link, so a device there could not sync (nor push) at all.
     const resp = await apiFetch(pat, gitUrl(repo, `git/blobs/${file.sha}`), {
       headers: { Accept: 'application/vnd.github.raw' },
-    }, signal);
+    }, signal, false, transferTimeoutMs(typeof file.size === 'number' ? file.size : MAX_REMOTE_FILE_BYTES));
     if (!resp.ok) throw new Error(`GitHub API error: ${resp.status} (blob for ${path})`);
     const declared = Number(resp.headers.get('Content-Length'));
     if (declared > MAX_REMOTE_FILE_BYTES) throw new Error(`${path} is too large to sync (${declared} bytes)`);
@@ -285,9 +314,13 @@ export async function putFile(
   }, signal, options?.keepalive);
 
   if (resp.status === 409) throw new Error('CONFLICT');
+  // A create (no sha) that finds the file there is a 422 — e.g. the retry of a
+  // create whose reply was lost. It is the same race as a 409: re-read, retry.
+  if (resp.status === 422 && !sha) throw new Error('CONFLICT');
   if (!resp.ok) throw new Error(`GitHub API error: ${resp.status}`);
 
   const json = await resp.json();
+  recordCommitDate(json);
   return json.content.sha;
 }
 
@@ -338,9 +371,11 @@ export async function putBinaryFile(
   }, signal);
 
   if (resp.status === 409) throw new Error('CONFLICT');
+  if (resp.status === 422 && !sha) throw new Error('CONFLICT');
   if (!resp.ok) throw new Error(`GitHub API error: ${resp.status}`);
 
   const json = await resp.json();
+  recordCommitDate(json);
   return json.content.sha;
 }
 

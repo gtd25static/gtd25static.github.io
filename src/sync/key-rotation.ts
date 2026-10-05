@@ -8,38 +8,47 @@
 // that survives an interruption at any point:
 //
 //   1. sync under the old key, so nothing pushed later is lost
-//   2. pin the new salt (+ a verifier of the new key) in syncMeta.keyRotation, so
-//      a retry rotates to the same key and refuses a different new password
+//   2. pin the new salt (+ a verifier of the new key) in syncMeta.keyRotation AND
+//      on the remote (ROTATION_MARKER_FILE), so a retry — on this device or any
+//      other — rotates to the same key and refuses a different new password
 //   3. rewrite every live shared blob under the new key, as ONE root commit of
 //      the blob branch — nothing on the remote changes until its ref update
 //   4. THE COMMIT POINT: cache the new key, store the new password, force-push
-//      the snapshot under it (no old-key copy of the old snapshot is written)
-//   5. drop the old-key migration backups, rewrite the tier backups, re-MAC this
-//      device's registry entry, squash the default branch so the old-key history
-//      is unreachable, forget the pin
+//      the snapshot under it (no old-key copy of the old snapshot is written) and
+//      carry the changelog over re-encrypted, so what other devices pushed during
+//      step 3 is kept. A push that "fails" after its snapshot landed is
+//      recognised by reading the remote back, and the rotation goes on.
+//   5. drop the old-key migration backups and legacy blob copies, re-encrypt
+//      each tier backup as it was, re-MAC the registry, drop the remote mark,
+//      squash the default branch so the old-key history is unreachable, forget
+//      the pin — kept if any of it failed, so the retry finishes it
 //
 // Interrupted before 4: the remote snapshot is as it was; after 3's ref update
 // the blobs are under the new key and the snapshot under the old for the length
-// of the gap (files fail to open until the retry, which finds them rotated).
+// of the gap (files fail to open until the retry, which finds them rotated — the
+// error says so; it used to say "Nothing was changed"). The remote mark lets any
+// device finish it with the same new password; without it, a password change
+// started on another device counted every file unreadable and kept it so.
 // Interrupted after 4: the stored password is the new one, so a retry's pre-sync
 // works under it and every later step is an overwrite. The other devices see the
 // new salt on their next sync and ask for the new password (their stored one
-// fails the verifier); anything they had not pushed by then is lost, which the
-// settings dialog says before starting.
+// fails the verifier). Residual: a file another device uploads under the old key
+// between an interruption after 4 and the retry stays unreadable (the retry no
+// longer has the old key).
 
 import { db } from '../db';
 import type { SyncData } from '../db/models';
 import { getVaultSecrets } from '../db/vault';
 import { isParanoidFlagSet } from '../db/paranoid-flag';
 import {
-  deleteFile, getFile, getFileSha, getBinaryFile, getRef, getCommit, getTree, createTree, createCommit,
-  createBlobBase64, updateRef, type GitTreeEntry,
+  deleteFile, getFile, putFile, getFileSha, getBinaryFile, getRef, getCommit, getTree, createTree, createCommit,
+  createBlobBase64, updateRef, getDefaultBranch, type GitTreeEntry,
 } from './github-api';
 import {
   deriveKey, generateSalt, createVerifier, checkVerifier,
   cacheEncryptionKey, getCachedEncryptionKey, getCachedSalt,
 } from './crypto';
-import { syncNow, forcePush, endSyncSession, SYNC_LOCK_NAME, SNAPSHOT_FILE } from './sync-engine';
+import { syncNow, forcePush, endSyncSession, rekeyRemoteChangelog, SYNC_LOCK_NAME, SNAPSHOT_FILE } from './sync-engine';
 import { isCompatibleVersion } from './version';
 import { hasPendingEntries } from './change-log';
 import { getSyncPat, rememberSyncPassword, forgetSyncPassword } from './sync-credentials';
@@ -47,10 +56,10 @@ import {
   BLOB_BRANCH, KEEP_PATH, KEEP_CONTENT_BASE64, blobPath, ensureBlobBranch, sealSharedBlob, decryptSharedBlob,
   sharedBlobDownloadTimeoutMs, paddedLength, withBlobBranchLock, readableLiveBlobIds,
 } from './shared-blobs';
-import { overwriteAllBackups } from './remote-backups';
-import { publishOwnRegistryEntry } from './remote-unlock';
+import { rekeyAllBackups } from './remote-backups';
+import { publishOwnRegistryEntry, remacRegistry } from './remote-unlock';
 import { squashDefaultBranch } from './history-compaction';
-import { b64encode } from './remote-unlock-crypto';
+import { b64encode, deriveRegistryMacKey } from './remote-unlock-crypto';
 import { SYNC_VERSION } from './version';
 import { recordError } from '../lib/diagnostics';
 
@@ -64,6 +73,22 @@ export interface RotationResult {
 }
 
 interface Creds { pat: string; repo: string }
+
+/** The pending rotation, on the remote: the new salt and a verifier of the new key
+ *  (what the snapshot itself carries once the rotation commits — nothing secret). */
+export const ROTATION_MARKER_FILE = 'gtd25-key-rotation.json';
+interface RotationPin { newSalt: string; newVerifier: string; startedAt: number }
+
+function parsePin(json: string): RotationPin | null {
+  try {
+    const v = JSON.parse(json) as Partial<RotationPin>;
+    return typeof v.newSalt === 'string' && typeof v.newVerifier === 'string'
+      ? { newSalt: v.newSalt, newVerifier: v.newVerifier, startedAt: Number(v.startedAt) || 0 }
+      : null;
+  } catch {
+    return null;
+  }
+}
 interface Keys { newPassword: string; oldPassword: string | null; oldKey: CryptoKey; oldSalt: string }
 
 async function currentSyncPassword(): Promise<string | null> {
@@ -83,6 +108,17 @@ export async function hasUnfinishedRotation(): Promise<boolean> {
  */
 export async function discardUnfinishedRotation(): Promise<void> {
   await db.syncMeta.update('sync-meta', { keyRotation: undefined });
+  // The remote mark too, or the next change (here or elsewhere) would resume it.
+  try {
+    const local = await db.localSettings.get('local');
+    const pat = await getSyncPat();
+    if (pat && local?.githubRepo) {
+      const marker = await getFile(pat, local.githubRepo, ROTATION_MARKER_FILE);
+      if (marker) await deleteFile(pat, local.githubRepo, ROTATION_MARKER_FILE, marker.sha);
+    }
+  } catch (err) {
+    recordError('keyRotation.discardMarker', err);
+  }
 }
 
 export async function rotateSyncKey(
@@ -126,18 +162,30 @@ async function rotateHoldingLock(
   { newPassword, oldPassword, oldKey, oldSalt }: Keys,
   onProgress: (progress: RotationProgress) => void,
 ): Promise<RotationResult> {
-  // 2. The new key: pinned now, or the pin of an unfinished rotation.
-  const pin = (await db.syncMeta.get('sync-meta'))?.keyRotation;
+  // 2. The new key: pinned now, or the pin of an unfinished rotation — this
+  //    device's, or the one the remote mark carries (started on another device).
+  const marker = await getFile(creds.pat, creds.repo, ROTATION_MARKER_FILE);
+  const remotePin = marker ? parsePin(marker.data) : null;
+  const localPin = (await db.syncMeta.get('sync-meta'))?.keyRotation ?? null;
+  const pin = remotePin ?? localPin;
   const newSalt = pin?.newSalt ?? generateSalt();
   const newKey = await deriveKey(newPassword, newSalt);
   if (pin) {
     if (!(await checkVerifier(newKey, pin.newVerifier))) {
-      throw new Error('A previous password change did not finish. Enter the same new password you chose then to complete it, or discard that change first.');
+      throw new Error(remotePin && remotePin.newSalt !== localPin?.newSalt
+        ? 'A password change started on another device did not finish. Enter the same new password chosen there to complete it, or forget that change first (shared files it already re-encrypted would stay unreadable).'
+        : 'A previous password change did not finish. Enter the same new password you chose then to complete it, or discard that change first.');
     }
+    if (localPin?.newSalt !== pin.newSalt) await db.syncMeta.update('sync-meta', { keyRotation: pin });
   } else {
     await db.syncMeta.update('sync-meta', {
       keyRotation: { newSalt, newVerifier: await createVerifier(newKey), startedAt: Date.now() },
     });
+  }
+  if (!remotePin) {
+    const pinned = (await db.syncMeta.get('sync-meta'))!.keyRotation!;
+    // Created only if absent: two devices starting at once — one of them stops here.
+    await putFile(creds.pat, creds.repo, ROTATION_MARKER_FILE, JSON.stringify(pinned), marker?.sha);
   }
 
   // 3. The Shared Folder's files.
@@ -150,25 +198,44 @@ async function rotateHoldingLock(
   await rememberSyncPassword(newPassword);
   let encrypted: SyncData | null = null;
   try {
-    encrypted = await forcePush({ backupExisting: false });
+    encrypted = await forcePush({ backupExisting: false, rekeyChangelogFrom: oldKey });
+    // A push can fail AFTER its snapshot landed (the changelog step, or a reply
+    // lost on the way back): then the remote is on the new key already.
+    if (!encrypted) encrypted = await committedSnapshot(creds, newKey, newSalt);
+    if (encrypted) await rekeyRemoteChangelog(creds.pat, creds.repo, oldKey, newKey);
   } finally {
     if (!encrypted) {
-      // Nothing was written: back to the old key, so this device stays in step
-      // with the remote (and with the other devices) instead of asking for a
+      // The snapshot was not written: back to the old key, so this device stays in
+      // step with the remote (and with the other devices) instead of asking for a
       // password the repo does not know yet.
       cacheEncryptionKey(oldKey, oldSalt);
       if (oldPassword) await rememberSyncPassword(oldPassword);
       else await forgetSyncPassword();
     }
   }
-  if (!encrypted) throw new Error('The snapshot could not be rewritten under the new password. Nothing was changed; try again.');
+  if (!encrypted) {
+    throw new Error(blobs.blobsRewritten > 0
+      ? 'The shared files were already re-encrypted under the new password, but the rest could not be written. Until you finish — change the password again, with the same new password — shared files can\'t be opened on any device.'
+      : 'The snapshot could not be rewritten under the new password. Try again with the same new password.');
+  }
 
-  // 5. What else still carries the old key.
+  // 5. What else still carries the old key. A leftover that could not be
+  //    deleted keeps the pin, so the retry deletes it (it used to be logged and
+  //    the change reported done, the old password still opening it at the tip).
   onProgress({ phase: 'backups' });
-  await deleteMigrationBackups(creds);
-  await overwriteAllBackups(creds.pat, creds.repo, encrypted);
+  let leftovers = await deleteMigrationBackups(creds);
+  leftovers += await deleteLegacyBlobCopies(creds);
+  await rekeyAllBackups(creds.pat, creds.repo, oldKey, newKey, newSalt, encrypted);
   onProgress({ phase: 'registry' });
+  if (oldPassword) {
+    // Every device's entry and every tombstone, not just this device's: a
+    // forgotten (maybe stolen) device's tombstone stopped counting otherwise.
+    await remacRegistry(creds.pat, creds.repo, await deriveRegistryMacKey(oldPassword, oldSalt), await deriveRegistryMacKey(newPassword, newSalt));
+  }
   await publishOwnRegistryEntry(); // MAC under the new key; false when this device has none to publish
+  if (leftovers > 0) throw new Error(`The password was changed, but ${leftovers} old copy(s) could not be deleted. Change the password again with the same new password to finish.`);
+  const finishedMarker = await getFile(creds.pat, creds.repo, ROTATION_MARKER_FILE);
+  if (finishedMarker) await deleteFile(creds.pat, creds.repo, ROTATION_MARKER_FILE, finishedMarker.sha);
   onProgress({ phase: 'history' });
   let historySquashed = false;
   try {
@@ -184,17 +251,62 @@ async function rotateHoldingLock(
   return { ...blobs, historySquashed };
 }
 
-/** The migration backups force pushes write are copies of old snapshots under old keys. */
-async function deleteMigrationBackups(creds: Creds): Promise<void> {
+/** The remote snapshot, if it already carries the new key (the push failed after it landed). */
+async function committedSnapshot(creds: Creds, newKey: CryptoKey, newSalt: string): Promise<SyncData | null> {
+  try {
+    const file = await getFile(creds.pat, creds.repo, SNAPSHOT_FILE);
+    if (!file) return null;
+    const snapshot = JSON.parse(file.data) as SyncData;
+    if (snapshot.encryptionSalt !== newSalt || !snapshot.encryptionVerifier) return null;
+    return (await checkVerifier(newKey, snapshot.encryptionVerifier)) ? snapshot : null;
+  } catch (err) {
+    recordError('keyRotation.committedSnapshot', err);
+    return null;
+  }
+}
+
+/** The migration backups force pushes write are copies of old snapshots under old
+ *  keys. Returns how many could not be deleted. */
+async function deleteMigrationBackups(creds: Creds): Promise<number> {
+  let failed = 0;
   for (let v = 0; v <= SYNC_VERSION; v++) {
     const path = `gtd25-snapshot-v${v}.backup.json`;
     try {
       const sha = await getFileSha(creds.pat, creds.repo, path);
       if (sha) await deleteFile(creds.pat, creds.repo, path, sha);
     } catch (err) {
+      failed++;
       recordError('keyRotation.migrationBackup', err);
     }
   }
+  return failed;
+}
+
+/** Shared files written before blobs had their own branch, still on the default
+ *  branch under the old key. Step 3 copies them over; a delete that failed there
+ *  is retried here on every run. Returns how many could not be deleted. */
+async function deleteLegacyBlobCopies(creds: Creds): Promise<number> {
+  const { pat, repo } = creds;
+  let failed = 0;
+  try {
+    const head = await getRef(pat, repo, await getDefaultBranch(pat, repo));
+    if (!head) return 0;
+    const { treeSha } = await getCommit(pat, repo, head);
+    const { entries } = await getTree(pat, repo, treeSha, true);
+    for (const entry of entries) {
+      if (entry.type !== 'blob' || !entry.path.startsWith(blobPath('')) || !entry.sha) continue;
+      try {
+        await deleteFile(pat, repo, entry.path, entry.sha);
+      } catch (err) {
+        failed++;
+        recordError('keyRotation.legacyBlob', err);
+      }
+    }
+  } catch (err) {
+    failed++;
+    recordError('keyRotation.legacyBlobList', err);
+  }
+  return failed;
 }
 
 function remoteSyncVersion(snapshotJson: string): number | undefined {

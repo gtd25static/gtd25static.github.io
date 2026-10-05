@@ -96,10 +96,28 @@ export async function ensureBlobBranch(creds: Creds): Promise<void> {
   });
   try {
     await createRef(creds.pat, creds.repo, BLOB_BRANCH, commitSha);
-  } catch {
-    // Another device created it first — fine, it now exists.
+  } catch (err) {
+    // Another device created it first — fine, it now exists. Anything else (a
+    // dropped connection, a 5xx) used to pass for that too, and every upload of
+    // the page's life then went to a branch that did not exist.
+    if (!(await getRef(creds.pat, creds.repo, BLOB_BRANCH))) throw err;
   }
   blobBranchEnsured = true;
+}
+
+/** Tests only. */
+export function __resetBlobBranchEnsuredForTests(): void {
+  blobBranchEnsured = false;
+}
+
+/** The local copy is only a cache: failing to write it (storage full) must not fail
+ *  an upload that reached GitHub, nor withhold a download that completed. */
+async function cacheBlobLocalBestEffort(blobId: string, plaintext: Uint8Array): Promise<void> {
+  try {
+    await cacheBlobLocal(blobId, plaintext);
+  } catch (err) {
+    recordError('sharedBlobs.cacheWrite', err);
+  }
 }
 
 // --- Binding a file's bytes to its id ---
@@ -248,7 +266,7 @@ export async function uploadSharedBlob(blobId: string, plaintext: Uint8Array): P
   const ciphertext = await sealSharedBlob(key, plaintext, blobId);
   await ensureBlobBranch(creds);
   await putBinaryFile(creds.pat, creds.repo, blobPath(blobId), ciphertext, undefined, undefined, BLOB_BRANCH);
-  await cacheBlobLocal(blobId, plaintext);
+  await cacheBlobLocalBestEffort(blobId, plaintext);
 }
 
 /** Time budget for downloading a file of `size` bytes (unknown: the folder cap). */
@@ -274,7 +292,7 @@ export async function getSharedBlobBytes(blobId: string, size?: number): Promise
   if (!ciphertext) ciphertext = await getBinaryFile(creds.pat, creds.repo, blobPath(blobId), undefined, undefined, timeoutMs);
   if (!ciphertext) throw new Error(`Blob ${blobId} not found on remote`);
   const plaintext = await decryptSharedBlob(key, ciphertext, blobId);
-  await cacheBlobLocal(blobId, plaintext);
+  await cacheBlobLocalBestEffort(blobId, plaintext);
   return plaintext;
 }
 

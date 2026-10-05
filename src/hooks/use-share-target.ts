@@ -28,6 +28,8 @@ export type ShareDestination = 'inbox' | 'shared-folder';
 export interface PendingShare {
   /** Files reconstructed from the stashed blobs. */
   files: File[];
+  /** Each file's slot in the stash (shareFilePath), so a saved one can leave it. */
+  stashIndexes?: number[];
   title: string;
   url: string;
   text: string;
@@ -59,23 +61,62 @@ async function clearStash(): Promise<void> {
   try { await caches.delete(SHARE_CACHE); } catch { /* nothing to clear */ }
 }
 
+/**
+ * Take one saved part out of the stash. What is left is exactly what did not
+ * save: a failed upload is offered again on the next start (the whole stash used
+ * to be cleared whatever happened, losing the file), and a tab killed half-way
+ * does not offer the saved parts twice. Best effort — the worst case is a
+ * duplicate, never a loss.
+ */
+async function dropFromStash(part: { fileIndex: number } | { text: true }): Promise<void> {
+  try {
+    if (!(await caches.has(SHARE_CACHE))) return;
+    const cache = await caches.open(SHARE_CACHE);
+    if ('fileIndex' in part) {
+      await cache.delete(shareFilePath(part.fileIndex));
+      return;
+    }
+    const metaRes = await cache.match(SHARE_META_PATH);
+    if (!metaRes) return;
+    const meta = (await metaRes.json()) as SharedPayloadMeta;
+    await cache.put(SHARE_META_PATH, new Response(JSON.stringify({ ...meta, title: '', url: '', text: '' }), {
+      headers: { 'Content-Type': 'application/json' },
+    }));
+  } catch (err) {
+    recordError('shareTarget.dropFromStash', err);
+  }
+}
+
 function cleanUrl(): void {
   try { window.history.replaceState(null, '', '/'); } catch { /* no-op */ }
 }
 
+interface SaveOutcome { saved: number; failed: number }
+
 /** Files → Shared Folder items; a link/text → a link or snippet item. */
-async function saveToSharedFolder({ files, title, url, text }: PendingShare): Promise<number> {
-  let saved = 0;
-  for (const file of files) {
-    if (await createFileItem(file)) saved++; // enforces the quota + toasts on failure
+async function saveToSharedFolder({ files, stashIndexes, title, url, text }: PendingShare): Promise<SaveOutcome> {
+  const outcome: SaveOutcome = { saved: 0, failed: 0 };
+  for (const [i, file] of files.entries()) {
+    if (await createFileItem(file)) { // enforces the quota + toasts on failure
+      outcome.saved++;
+      await dropFromStash({ fileIndex: stashIndexes?.[i] ?? i });
+    } else {
+      outcome.failed++;
+    }
   }
   const link = url || extractUrl(text);
-  if (link) {
-    if (await createLinkItem(link, title || undefined)) saved++;
-  } else if (text || title) {
-    if (await createSnippetItem(title || text.slice(0, 60), text || title)) saved++;
+  if (link || text || title) {
+    const item = link
+      ? await createLinkItem(link, title || undefined)
+      : await createSnippetItem(title || text.slice(0, 60), text || title);
+    if (item) {
+      outcome.saved++;
+      await dropFromStash({ text: true });
+    } else {
+      outcome.failed++;
+    }
   }
-  return saved;
+  return outcome;
 }
 
 /**
@@ -84,19 +125,22 @@ async function saveToSharedFolder({ files, title, url, text }: PendingShare): Pr
  * Folder AND gets an Inbox task whose description points at it — the inbox
  * entry to process, with the bytes kept where files belong.
  */
-async function saveToInbox({ files, title, url, text }: PendingShare): Promise<{ filesSaved: number; tasksCreated: number }> {
+async function saveToInbox({ files, stashIndexes, title, url, text }: PendingShare): Promise<{ filesSaved: number; tasksCreated: number; failed: number }> {
   let filesSaved = 0;
   let tasksCreated = 0;
+  let failed = 0;
   const result = formatCaptureResult(title, url, text);
   if (result.title) {
     await captureToInbox(result); // toasts 'Captured to Inbox' itself
     tasksCreated++;
+    await dropFromStash({ text: true });
   }
   if (files.length > 0) {
     const inboxId = await getOrCreateInbox();
-    for (const file of files) {
-      if (!(await createFileItem(file))) continue;
+    for (const [i, file] of files.entries()) {
+      if (!(await createFileItem(file))) { failed++; continue; }
       filesSaved++;
+      await dropFromStash({ fileIndex: stashIndexes?.[i] ?? i });
       const task = await createTask(inboxId, {
         title: file.name,
         description: 'Attached file — saved in the Shared Folder',
@@ -104,7 +148,7 @@ async function saveToInbox({ files, title, url, text }: PendingShare): Promise<{
       if (task) tasksCreated++;
     }
   }
-  return { filesSaved, tasksCreated };
+  return { filesSaved, tasksCreated, failed };
 }
 
 /**
@@ -196,12 +240,14 @@ export function useShareTarget(): ShareTargetApi {
 
         // Reconstruct File objects from the cached blobs.
         const files: File[] = [];
+        const stashIndexes: number[] = [];
         for (let i = 0; i < (meta.files?.length ?? 0); i++) {
           const fileRes = await cache.match(shareFilePath(i));
-          if (!fileRes) continue;
+          if (!fileRes) continue; // saved already (see dropFromStash)
           const blob = await fileRes.blob();
           const f = meta.files[i];
           files.push(new File([blob], f.name || `shared-${i}`, { type: f.type || blob.type || 'application/octet-stream' }));
+          stashIndexes.push(i);
         }
 
         if (files.length === 0 && !title && !url && !text) {
@@ -216,7 +262,7 @@ export function useShareTarget(): ShareTargetApi {
         // answers (resolve/discard clear it; postpone/app-close keep it for the
         // next start, still bounded by SHARE_STASH_TTL_MS + the ACR-017 sweep).
         keepStash = true;
-        showPending({ files, title, url, text });
+        showPending({ files, stashIndexes, title, url, text });
       } catch (err) {
         recordError('shareTarget.consume', err);
         toast('Could not save the shared content', 'error');
@@ -242,23 +288,31 @@ export function useShareTarget(): ShareTargetApi {
         return;
       }
       setPendingShare(null);
+      // Cleared only once everything saved: what failed stays stashed and is
+      // offered again on the next start (still bounded by the stash's TTL).
+      let failed = 0;
       try {
         if (dest === 'shared-folder') {
-          const saved = await saveToSharedFolder(pending);
-          if (saved > 0) {
+          const outcome = await saveToSharedFolder(pending);
+          failed = outcome.failed;
+          if (outcome.saved > 0) {
             useAppState.getState().selectList(SHARED_FOLDER_LIST_ID);
-            toast(`Saved ${saved} item${saved === 1 ? '' : 's'} to the Shared Folder`, 'success');
+            toast(`Saved ${outcome.saved} item${outcome.saved === 1 ? '' : 's'} to the Shared Folder`, 'success');
           }
         } else {
-          const { filesSaved } = await saveToInbox(pending);
-          if (filesSaved > 0) {
-            toast(`Saved ${filesSaved} file${filesSaved === 1 ? '' : 's'} to the Shared Folder and added ${filesSaved === 1 ? 'an Inbox task' : 'Inbox tasks'}`, 'success');
+          const outcome = await saveToInbox(pending);
+          failed = outcome.failed;
+          if (outcome.filesSaved > 0) {
+            toast(`Saved ${outcome.filesSaved} file${outcome.filesSaved === 1 ? '' : 's'} to the Shared Folder and added ${outcome.filesSaved === 1 ? 'an Inbox task' : 'Inbox tasks'}`, 'success');
           }
         }
       } catch (err) {
         recordError('shareTarget.save', err);
-        toast('Could not save the shared content', 'error');
-      } finally {
+        failed = Math.max(failed, 1);
+      }
+      if (failed > 0) {
+        toast(`${failed} shared item${failed === 1 ? '' : 's'} could not be saved — offered again next time you open the app`, 'error');
+      } else {
         await clearStash();
       }
     })();

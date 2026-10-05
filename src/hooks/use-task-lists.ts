@@ -6,7 +6,7 @@ import { recordChangeInTx, recordChangeBatchInTx, ensureDeviceId } from '../sync
 import { scheduleSyncDebounced } from '../sync/sync-engine';
 import { INBOX_LIST_NAME, ARCHIVED_LIST_RETENTION_MS, pickInboxList } from '../lib/constants';
 import { handleDbError } from '../lib/db-error';
-import { initFieldTimestamps, stampUpdatedFields } from '../sync/field-timestamps';
+import { initFieldTimestamps, stampUpdatedFields, stampChangedFields } from '../sync/field-timestamps';
 import { sanitizeSavedSearches, sameSearch, MAX_SAVED_SEARCHES, MAX_SAVED_SEARCH_LENGTH } from '../lib/list-filter';
 
 export function useTaskLists() {
@@ -45,7 +45,7 @@ export async function updateTaskList(id: string, updates: Partial<Pick<TaskList,
     await db.transaction('rw', [db.taskLists, db.changeLog], async () => {
       const existing = await db.taskLists.get(id);
       const now = Date.now();
-      const fieldTimestamps = stampUpdatedFields(existing?.fieldTimestamps, Object.keys(updates), now);
+      const fieldTimestamps = stampChangedFields(existing as unknown as Record<string, unknown> | undefined, updates, now);
       await db.taskLists.update(id, { ...updates, updatedAt: now, fieldTimestamps });
       const updated = await db.taskLists.get(id);
       if (updated) {

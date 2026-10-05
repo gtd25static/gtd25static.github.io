@@ -73,10 +73,14 @@ export function useLockScreenRemote() {
     return () => { cancelled = true; };
   }, []);
 
+  // One poll at a time: at the fast cadence against 15 s timeouts, a dead link
+  // used to pile up half a dozen requests.
+  const inFlight = useRef(false);
   const tick = useCallback(async () => {
     const c = ctx.current;
-    if (!c) return;
+    if (!c || inFlight.current) return;
     if (pending.current) {
+      inFlight.current = true;
       try {
         const r = await pollRemoteUnlock(c.pat, c.repo, c.deviceId, reqEtag.current);
         reqEtag.current = r.etag;
@@ -87,7 +91,9 @@ export function useLockScreenRemote() {
           setCode(null);
           setError('Unlock request expired — request again');
         }
-      } catch { /* transient */ }
+      } catch { /* transient */ } finally {
+        inFlight.current = false;
+      }
     }
   }, []);
 

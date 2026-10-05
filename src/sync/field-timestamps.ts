@@ -105,6 +105,29 @@ export function stampUpdatedFields(
   return ft;
 }
 
+/** Equal field values: absent and undefined are the same, arrays/objects compare by content. */
+export function sameFieldValue(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (a === undefined || b === undefined || a === null || b === null) return false;
+  if (typeof a !== 'object' || typeof b !== 'object') return false;
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+/**
+ * Stamp `now` on the fields of `updates` whose value differs from `existing`.
+ * A form saves every field it shows; stamping the unchanged ones too made that
+ * save win a field another device had just changed (a rename made on the phone
+ * was reverted by a description edit on the laptop), with nothing to show for it.
+ */
+export function stampChangedFields(
+  existing: Entity | undefined,
+  updates: Entity,
+  now: number,
+): FieldTimestamps {
+  const changed = Object.keys(updates).filter((key) => !sameFieldValue(existing?.[key], updates[key]));
+  return stampUpdatedFields(existing?.fieldTimestamps as FieldTimestamps | undefined, changed, now);
+}
+
 /**
  * Core field-level merge. Compares per-field timestamps and takes the newer
  * value for each field. Returns the merged entity if any changes were applied,

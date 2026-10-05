@@ -6,7 +6,7 @@ import { recordChangeInTx, recordChangeBatchInTx, ensureDeviceId } from '../sync
 import { scheduleSyncDebounced } from '../sync/sync-engine';
 import { computeNextOccurrence } from './use-recurring';
 import { handleDbError } from '../lib/db-error';
-import { initFieldTimestamps, stampUpdatedFields } from '../sync/field-timestamps';
+import { initFieldTimestamps, stampUpdatedFields, stampChangedFields } from '../sync/field-timestamps';
 import { undeleteRowInTx, type TaskSideChange } from './use-task-lists';
 import { setTaskStatus } from './use-tasks';
 import { MAX_TITLE_LENGTH } from '../lib/constants';
@@ -67,9 +67,9 @@ export async function updateSubtask(id: string, updates: Partial<Subtask>) {
     await db.transaction('rw', [db.subtasks, db.changeLog], async () => {
       const existing = await db.subtasks.get(id);
       const now = Date.now();
-      const fieldTimestamps = stampUpdatedFields(
-        existing?.fieldTimestamps,
-        Object.keys(updates),
+      const fieldTimestamps = stampChangedFields(
+        existing as unknown as Record<string, unknown> | undefined,
+        updates as Record<string, unknown>,
         now,
       );
       await db.subtasks.update(id, { ...updates, updatedAt: now, fieldTimestamps });

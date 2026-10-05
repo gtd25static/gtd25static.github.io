@@ -11,7 +11,7 @@ import { db } from '../db';
 import type { Task, TaskLink, DiscussionEntry } from '../db/models';
 import { recordChangeBatchInTx, ensureDeviceId } from '../sync/change-log';
 import { scheduleSyncDebounced } from '../sync/sync-engine';
-import { stampUpdatedFields } from '../sync/field-timestamps';
+import { stampUpdatedFields, stampChangedFields } from '../sync/field-timestamps';
 import { handleDbError } from '../lib/db-error';
 import { MAX_DESCRIPTION_LENGTH } from '../lib/constants';
 
@@ -173,7 +173,7 @@ export async function mergeTasks(
 
       // Fold content into the survivor.
       const updates = combineTaskContent(survivor, sources);
-      const survivorFT = stampUpdatedFields(survivor.fieldTimestamps, Object.keys(updates), now);
+      const survivorFT = stampChangedFields(survivor as unknown as Record<string, unknown>, updates as Record<string, unknown>, now);
       const survivorUpdated: Task = { ...survivor, ...updates, updatedAt: now, fieldTimestamps: survivorFT };
       await db.tasks.put(survivorUpdated);
       batch.push({

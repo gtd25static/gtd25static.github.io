@@ -3,7 +3,7 @@ import type { Task, TaskStatus } from '../db/models';
 import { recordChangeBatchInTx, ensureDeviceId } from '../sync/change-log';
 import { scheduleSyncDebounced } from '../sync/sync-engine';
 import { handleDbError } from '../lib/db-error';
-import { stampUpdatedFields } from '../sync/field-timestamps';
+import { stampUpdatedFields, stampChangedFields } from '../sync/field-timestamps';
 import { crossTypeUpdates, statusChangeUpdates } from './use-tasks';
 
 /** `now` is the deletedAt they all share (the retention expiry passes its own clock). */
@@ -49,7 +49,7 @@ export async function setTaskStatusBatch(ids: string[], status: TaskStatus) {
         const task = await db.tasks.get(id);
         if (!task) continue;
         const updates: Partial<Task> = { ...statusChangeUpdates(task, status, now), updatedAt: now };
-        updates.fieldTimestamps = stampUpdatedFields(task.fieldTimestamps, Object.keys(updates), now);
+        updates.fieldTimestamps = stampChangedFields(task as unknown as Record<string, unknown>, updates as Record<string, unknown>, now);
         await db.tasks.update(id, updates);
         const updated = await db.tasks.get(id);
         if (updated) {

@@ -6,7 +6,7 @@ import { recordChangeInTx, recordChangeBatchInTx, ensureDeviceId } from '../sync
 import { scheduleSyncDebounced } from '../sync/sync-engine';
 import { computeNextOccurrence } from './use-recurring';
 import { handleDbError } from '../lib/db-error';
-import { initFieldTimestamps, stampUpdatedFields } from '../sync/field-timestamps';
+import { initFieldTimestamps, stampUpdatedFields, stampChangedFields } from '../sync/field-timestamps';
 import { encryptRow, getActiveAtRestKey } from '../db/vault-middleware';
 import { SYNC_VERSION } from '../sync/version';
 import { undeleteRowInTx, type TaskSideChange } from './use-task-lists';
@@ -86,9 +86,9 @@ export async function updateTask(id: string, updates: Partial<Task>) {
     const existing = await db.tasks.get(id);
     if (!existing) return;
     const now = Date.now();
-    const fieldTimestamps = stampUpdatedFields(
-      existing.fieldTimestamps,
-      Object.keys(updates),
+    const fieldTimestamps = stampChangedFields(
+      existing as unknown as Record<string, unknown>,
+      updates as Record<string, unknown>,
       now,
     );
     const updated: Task = { ...existing, ...updates, updatedAt: now, fieldTimestamps };

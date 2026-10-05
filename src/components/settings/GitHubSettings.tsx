@@ -170,7 +170,7 @@ export function GitHubSettings() {
     const ok = await confirmDialog(
       unfinishedRotation
         ? 'Complete the unfinished password change? Enter the same new password you chose then. Everything in the repository is re-encrypted with it, and the old password stops working everywhere.'
-        : 'Change the sync password? Everything in the repository — the snapshot, every shared file and the backups — is re-encrypted with the new password, and the old one stops working everywhere. Make sure your other devices are online and have synced first: changes they have not pushed yet would be lost. They will ask for the new password on their next sync.',
+        : 'Change the sync password? Everything in the repository — the snapshot, every shared file and the backups — is re-encrypted with the new password, and the old one stops working everywhere. Your other devices will ask for the new password on their next sync; changes they have not synced yet are kept, and sync once it is entered there.',
       { confirmLabel: 'Change password', danger: true },
     );
     if (!ok) { setEncPassword(paranoid ? '' : currentSyncPassword); setEncPasswordConfirm(''); return; }
@@ -190,7 +190,7 @@ export function GitHubSettings() {
 
   async function handleDiscardRotation() {
     const ok = await confirmDialog(
-      'Forget the unfinished password change? The next password change starts from scratch; a shared file already re-encrypted under the forgotten password stays unreadable.',
+      'Forget the unfinished password change? The next password change starts from scratch; shared files already re-encrypted under the forgotten password stay unreadable on every device.',
       { confirmLabel: 'Forget it', danger: true },
     );
     if (!ok) return;

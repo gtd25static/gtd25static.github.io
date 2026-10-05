@@ -1,4 +1,5 @@
-import { getFile, getBinaryFile, putBinaryFile, transferTimeoutMs, RateLimitError } from '../../sync/github-api';
+import { getFile, getBinaryFile, putBinaryFile, putFile, transferTimeoutMs, RateLimitError } from '../../sync/github-api';
+import { getClockSkewMs, __resetClockSkewForTests } from '../../lib/clock-skew';
 
 describe('RateLimitError', () => {
   it('has correct properties', () => {
@@ -92,8 +93,75 @@ describe('request timeouts', () => {
   });
 
   it('keeps 15 s for ordinary requests', async () => {
-    await getFile('tok', 'me/repo', 'gtd25-changelog.json').catch(() => {}); // only the budget matters here
     await getBinaryFile('tok', 'me/repo', 'gtd25-shared/x');
-    expect(timeouts).toEqual([15_000, 15_000]);
+    expect(timeouts).toEqual([15_000]);
+  });
+
+  it('gives a contents download the time its largest inline body (~1.4 MB) needs', async () => {
+    await getFile('tok', 'me/repo', 'gtd25-changelog.json').catch(() => {}); // only the budget matters here
+    expect(timeouts).toEqual([transferTimeoutMs(1_400_000)]);
+    expect(timeouts[0]).toBeGreaterThan(15_000);
+  });
+
+  it('gives a snapshot over 1 MB the time its size needs — a fixed 15 s never finished on a slow link', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => url.includes('/git/blobs/')
+      ? new Response('{}', { status: 200 })
+      : new Response(JSON.stringify({ content: '', encoding: 'none', sha: 'big', size: 4_000_000 }), { status: 200 })));
+    await getFile('tok', 'me/repo', 'gtd25-snapshot.json');
+    expect(timeouts[1]).toBe(transferTimeoutMs(4_000_000));
+  });
+});
+
+describe('rate limits and ambiguous creates', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('treats a 429 as a rate limit, waiting what Retry-After says', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status: 429, headers: { 'Retry-After': '120' } })));
+    const before = Date.now();
+    const err = await getFile('tok', 'me/repo', 'x.json').catch((e) => e);
+    expect(err).toBeInstanceOf(RateLimitError);
+    expect(err.resetAtMs).toBeGreaterThanOrEqual(before + 120_000);
+  });
+
+  it('treats a 403 secondary limit as a rate limit, not as a rejected token', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(
+      JSON.stringify({ message: 'You have exceeded a secondary rate limit. Please wait a few minutes before you try again.' }),
+      { status: 403 },
+    )));
+    const err = await getFile('tok', 'me/repo', 'x.json').catch((e) => e);
+    expect(err).toBeInstanceOf(RateLimitError);
+    expect(err.resetAtMs).toBeGreaterThan(Date.now());
+  });
+
+  it('treats a 403 with Retry-After as a rate limit', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status: 403, headers: { 'Retry-After': '30' } })));
+    expect(await getFile('tok', 'me/repo', 'x.json').catch((e) => e)).toBeInstanceOf(RateLimitError);
+  });
+
+  it('keeps a plain 403 an auth error', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ message: 'Resource not accessible by personal access token' }), { status: 403 })));
+    const err = await getFile('tok', 'me/repo', 'x.json').catch((e) => e);
+    expect(err).not.toBeInstanceOf(RateLimitError);
+    expect(err.message).toBe('GitHub API error: 403');
+  });
+
+  it('reports a create that finds the file already there (422 without a sha) as a CONFLICT, so callers re-read', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ message: 'Invalid request.\n\n"sha" wasn\'t supplied.' }), { status: 422 })));
+    await expect(putFile('tok', 'me/repo', 'x.json', '[]')).rejects.toThrow('CONFLICT');
+  });
+});
+
+describe('clock skew from the commit a write creates', () => {
+  // api.github.com does not expose its Date header to browsers (it is not in
+  // Access-Control-Expose-Headers), so the skew check never fired in the app.
+  afterEach(() => { vi.unstubAllGlobals(); __resetClockSkewForTests(); });
+
+  it('reads the server time from the committer date of a PUT', async () => {
+    const serverTime = new Date(Date.now() - 3 * 3_600_000).toISOString();
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(
+      JSON.stringify({ content: { sha: 's' }, commit: { committer: { date: serverTime } } }), { status: 200 },
+    )));
+    await putFile('tok', 'me/repo', 'x.json', '[]', 'old');
+    expect(getClockSkewMs()).toBeGreaterThan(2.9 * 3_600_000);
   });
 });

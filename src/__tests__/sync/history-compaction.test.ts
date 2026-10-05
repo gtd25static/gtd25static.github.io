@@ -90,3 +90,23 @@ describe('maybeSquashDefaultBranch gate', () => {
     expect(Date.now() - (meta?.lastMainSquashAt ?? 0)).toBeLessThan(DAY);
   });
 });
+
+describe('maybeSquashDefaultBranch after a failure (reliability review)', () => {
+  it('retries a failing squash once a day, not after every sync', async () => {
+    await db.syncMeta.update('sync-meta', { lastMainSquashAt: Date.now() - 31 * DAY });
+    mGetRef.mockResolvedValue('head1');
+    mGetCommit.mockResolvedValue({ treeSha: 'tree1', parents: ['p1'] });
+    mCreateCommit.mockResolvedValue('commit2');
+    mUpdateRef.mockRejectedValue(new Error('GitHub API error (updateRef): 422'));
+
+    await expect(maybeSquashDefaultBranch('pat', 'u/r')).rejects.toThrow(/422/);
+    await maybeSquashDefaultBranch('pat', 'u/r'); // the next sync, minutes later
+    expect(mUpdateRef).toHaveBeenCalledTimes(1);
+
+    await db.syncMeta.update('sync-meta', { mainSquashFailedAt: Date.now() - DAY - 1 });
+    mUpdateRef.mockResolvedValue(undefined);
+    await maybeSquashDefaultBranch('pat', 'u/r');
+    expect(mUpdateRef).toHaveBeenCalledTimes(2);
+    expect((await db.syncMeta.get('sync-meta'))?.mainSquashFailedAt).toBeUndefined();
+  });
+});
