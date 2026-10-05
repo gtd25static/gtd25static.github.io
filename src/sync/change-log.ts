@@ -53,30 +53,6 @@ export async function recordChangeInTx(
   });
 }
 
-export async function recordChangeBatch(
-  entries: Array<{
-    entityType: ChangeEntry['entityType'];
-    entityId: string;
-    operation: ChangeEntry['operation'];
-    data?: Record<string, unknown>;
-  }>,
-) {
-  if (entries.length === 0) return;
-  const deviceId = await getDeviceId();
-  const now = Date.now();
-  const records: ChangeEntry[] = entries.map((e) => ({
-    id: newId(),
-    deviceId,
-    timestamp: now,
-    entityType: e.entityType,
-    entityId: e.entityId,
-    operation: e.operation,
-    data: e.data,
-    v: SYNC_VERSION,
-  }));
-  await db.changeLog.bulkAdd(records);
-}
-
 /**
  * Record a batch of changes within an existing Dexie transaction.
  * The caller must include db.changeLog in the transaction scope.
@@ -366,10 +342,6 @@ export async function getPendingEntries(limit?: number): Promise<ChangeEntry[]> 
 /** Ids of every pending entry (keys only: nothing is decrypted). */
 export async function getPendingIds(): Promise<string[]> {
   return (await db.changeLog.toCollection().primaryKeys()) as string[];
-}
-
-export async function clearPendingEntries(): Promise<void> {
-  await db.changeLog.clear();
 }
 
 export async function clearEntriesByIds(ids: string[]): Promise<void> {

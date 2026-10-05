@@ -1,9 +1,10 @@
 import { db } from '../../db';
 import { resetDb } from '../helpers/db-helpers';
 import {
-  recordChangeBatch,
+  recordChangeBatchInTx,
+  ensureDeviceId,
+  clearDeviceIdCache,
   getPendingEntries,
-  clearPendingEntries,
   clearEntriesByIds,
   pendingEntryCount,
   hasPendingEntries,
@@ -17,10 +18,18 @@ beforeEach(async () => {
   await resetDb();
 });
 
-describe('recordChangeBatch', () => {
+// recordChangeBatchInTx runs inside the caller's transaction (db.changeLog in scope).
+type BatchEntries = Parameters<typeof recordChangeBatchInTx>[0];
+async function recordBatch(entries: BatchEntries) {
+  await ensureDeviceId();
+  await db.transaction('rw', db.changeLog, () => recordChangeBatchInTx(entries));
+}
+
+describe('recordChangeBatchInTx', () => {
   it('adds multiple entries with shared timestamp and deviceId', async () => {
     await db.localSettings.update('local', { deviceId: 'batch-device' });
-    await recordChangeBatch([
+    clearDeviceIdCache(); // the id was cached when the database was set up
+    await recordBatch([
       { entityType: 'task', entityId: 't1', operation: 'upsert' },
       { entityType: 'subtask', entityId: 's1', operation: 'delete' },
       { entityType: 'taskList', entityId: 'l1', operation: 'upsert' },
@@ -34,13 +43,13 @@ describe('recordChangeBatch', () => {
   });
 
   it('no-ops on empty array', async () => {
-    await recordChangeBatch([]);
+    await recordBatch([]);
     const entries = await db.changeLog.toArray();
     expect(entries).toHaveLength(0);
   });
 
   it('includes v: SYNC_VERSION in batch entries', async () => {
-    await recordChangeBatch([
+    await recordBatch([
       { entityType: 'task', entityId: 't1', operation: 'upsert' },
       { entityType: 'subtask', entityId: 's1', operation: 'delete' },
     ]);
@@ -78,17 +87,6 @@ describe('getPendingEntries', () => {
   it('returns empty array when no entries', async () => {
     const entries = await getPendingEntries();
     expect(entries).toEqual([]);
-  });
-});
-
-describe('clearPendingEntries', () => {
-  it('removes all entries', async () => {
-    await db.changeLog.bulkAdd([
-      { id: 'e1', deviceId: 'd', timestamp: 1, entityType: 'task', entityId: 't1', operation: 'upsert' },
-      { id: 'e2', deviceId: 'd', timestamp: 2, entityType: 'task', entityId: 't2', operation: 'upsert' },
-    ]);
-    await clearPendingEntries();
-    expect(await db.changeLog.count()).toBe(0);
   });
 });
 
