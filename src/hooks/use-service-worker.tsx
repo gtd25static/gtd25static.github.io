@@ -3,6 +3,7 @@ import { useRegisterSW } from 'virtual:pwa-register/react';
 import { GIT_COMMIT } from '../lib/constants';
 import { fetchDeployedVersion } from '../lib/changelog';
 import { isParanoidFlagSet } from '../db/paranoid-flag';
+import { whenNoCriticalSection } from '../lib/critical-section';
 import { jitterInterval } from '../sync/poll-jitter';
 
 const UPDATE_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
@@ -66,6 +67,7 @@ async function updateWithinTimeout(registration: ServiceWorkerRegistration): Pro
 // reload interrupted skipWaiting/activation before the new SW could take control,
 // leaving it "waiting" forever and re-showing the banner.
 let reloadArmed = false;
+let applyQueued = false; // an update waiting for a critical section to end
 function reloadOnce() {
   if (reloadArmed) return;
   reloadArmed = true;
@@ -133,10 +135,15 @@ function useServiceWorkerImpl(): ServiceWorkerApi {
   // reloads on controllerchange. We add only a LONG, guarded fallback for
   // environments where controllerchange never fires (some standalone PWAs) —
   // never a short timer that could race the normal activation.
+  // The reload it causes hits every tab: wait until none is mid-import, mid-
+  // force-pull, mid-re-key… (lib/critical-section), and hold new ones off.
   const applyUpdate = useCallback(() => {
-    if (reloadArmed) return;
-    updateServiceWorker(true);
-    setTimeout(reloadOnce, RELOAD_FALLBACK_MS);
+    if (reloadArmed || applyQueued) return;
+    applyQueued = true;
+    void whenNoCriticalSection(() => {
+      updateServiceWorker(true);
+      setTimeout(reloadOnce, RELOAD_FALLBACK_MS);
+    });
   }, [updateServiceWorker]);
 
   useEffect(() => {

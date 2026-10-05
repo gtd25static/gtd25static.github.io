@@ -16,7 +16,7 @@
 import { encryptBlob, decryptBlob, encryptBytes, decryptBytes } from '../sync/crypto';
 
 /** Where a wrap lives; each slot has its own binding. */
-export type WrapSlot = 'slot1' | 'slot2' | 'ruk' | `prf:${string}`;
+export type WrapSlot = 'slot1' | 'slot2' | 'ruk' | 'ruk-next' | `prf:${string}`;
 
 // A pre-binding wrap: iv || AES-GCM(the 44-char base64 text of the 32-byte DEK) || tag.
 // A bound wrap encrypts the 32 raw bytes instead, so the two never share a length.

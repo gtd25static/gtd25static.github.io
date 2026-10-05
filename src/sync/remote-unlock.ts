@@ -16,7 +16,7 @@ import {
 import { encryptBlob, decryptBlob } from './crypto';
 import { importKekFromBytes } from '../db/vault-crypto';
 import { isParanoidFlagSet } from '../db/paranoid-flag';
-import { wrapDekWithRuk, unlockWithRemoteKey, clearRemoteUnlock, getVaultSecrets, getRukRaw, isRemoteUnlockEnrolled, isUnlocked, setRemoteApprovers } from '../db/vault';
+import { wrapDekWithRuk, stageNextRuk, promoteNextRuk, discardNextRuk, unlockWithRemoteKey, clearRemoteUnlock, getVaultSecrets, getRukRaw, isRemoteUnlockEnrolled, isUnlocked, setRemoteApprovers } from '../db/vault';
 export { isRemoteUnlockEnrolled } from '../db/vault'; // re-exported so the UI imports it from one place
 import { getCachedSalt } from './crypto';
 import { deriveRegistryMacKey } from './remote-unlock-crypto';
@@ -406,6 +406,7 @@ export async function reissueRemoteUnlock(ctx?: EnrollContext): Promise<boolean>
     const approvers = stillEligible(listed, await readAuthenticRegistry(c.pat, c.repo, c.macKey));
     if (approvers.length === 0) throw new Error('No approver can receive the new key');
     const identity = await ensureDeviceIdentity();
+    await stageNextRuk(ruk); // opens the vault for whoever gets it, even if the hand-out dies
     for (const a of approvers) {
       const rukEcies = await eciesEncryptTo(a.ecdhPub, ruk);
       const ts = Date.now();
@@ -414,7 +415,7 @@ export async function reissueRemoteUnlock(ctx?: EnrollContext): Promise<boolean>
         fromDeviceId: c.deviceId, fromName: c.deviceName, fromEcdsaPub: identity.ecdsaPub, rukEcies, ts, sig,
       });
     }
-    await wrapDekWithRuk(ruk);
+    await promoteNextRuk(ruk);
     await setRemoteApprovers(approvers);
     await db.localSettings.update('local', { githubPat: c.pat });
     return true;
@@ -467,6 +468,9 @@ export async function removeApprover(ctx: EnrollContext, targetDeviceId: string)
   const ruk = crypto.getRandomValues(new Uint8Array(32));
   let delivered = 0;
   try {
+    // Staged first: an approver handed the new key can unlock with it even if
+    // this dies before the end (it used to hold a key that opened nothing).
+    await stageNextRuk(ruk);
     for (const a of staying) {
       const rukEcies = await eciesEncryptTo(a.ecdhPub, ruk);
       const ts = Date.now();
@@ -477,16 +481,17 @@ export async function removeApprover(ctx: EnrollContext, targetDeviceId: string)
       delivered++;
     }
     // Every remaining approver has the new key — now make it the one that opens.
-    await wrapDekWithRuk(ruk);
+    await promoteNextRuk(ruk);
   } catch (err) {
-    // Be exact about the state we are leaving behind. Anyone already handed the
-    // new key will pick it up and stop being able to unlock until this runs
-    // again (retrying is safe: a fresh RUK with a newer timestamp wins). Saying
-    // "nothing was changed" here would be a lie.
+    // Be exact about the state we are leaving behind. The staged key opens the
+    // vault too, so those already handed it can unlock; the device being removed
+    // still can as well until this runs again (retrying is safe: a fresh RUK
+    // with a newer timestamp wins). "Nothing was changed" would be a lie.
     recordError('remoteUnlock.removeApprover.partial', err);
+    if (delivered === 0) await discardNextRuk().catch((e) => recordError('remoteUnlock.removeApprover.discard', e));
     throw new Error(delivered === 0
       ? 'Could not reach the trusted devices — nothing was changed, remote unlock still works as before.'
-      : `Interrupted after handing the new key to ${delivered} of ${staying.length} device(s). Until you run this again the device you are removing can still unlock this one, and the ones that got the new key cannot — the vault itself is unaffected, and retrying is safe.`);
+      : `Interrupted after handing the new key to ${delivered} of ${staying.length} device(s). Until you run this again the device you are removing can still unlock this one — the vault itself is unaffected, and retrying is safe.`);
   } finally {
     ruk.fill(0);
   }

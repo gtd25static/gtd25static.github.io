@@ -16,7 +16,7 @@ import { useRelaxedUnlockStore } from '../../stores/relaxed-unlock';
 import { clampBackgroundLockSeconds, DEFAULT_BACKGROUND_LOCK_SECONDS } from '../../hooks/use-background-lock';
 import { unlocksInWindow, effectiveMinutes } from '../../lib/relaxed-unlock';
 import {
-  enableParanoid, disableParanoid, changePassphrase, rekeyVault, configureIdleTimeout,
+  enableParanoid, disableParanoid, UnreadableRowsError, changePassphrase, rekeyVault, configureIdleTimeout,
   configureMaxUnlockAttempts, verifyAtRestIntegrity, lock, addSecurityKey, removeSecurityKey,
   listSecurityKeys, getVaultSecrets, DEFAULT_IDLE_MINUTES, DEFAULT_MAX_ATTEMPTS,
   setSecondaryPassphrase, clearSecondaryPassphrase, checkPassphrase, isUnlocked,
@@ -754,7 +754,20 @@ function ManageForm({ idleMinutes, maxAttempts, attemptWipeJustArmed, systemIdle
     if (!await requireOwner('Your passphrase is needed to turn Paranoid Mode off.')) return;
     setBusy(true);
     try {
-      await disableParanoid();
+      try {
+        await disableParanoid();
+      } catch (e) {
+        if (!(e instanceof UnreadableRowsError)) throw e;
+        // Rows nothing can open: dropped by the disable — asked first, not after.
+        setBusy(false);
+        const drop = await confirmDialog(
+          `${e.count} item${e.count === 1 ? '' : 's'} on this device can't be read (corrupt, or written under another key) and will be dropped. If sync holds them, they come back on the next sync. Turn Paranoid Mode off anyway?`,
+          { confirmLabel: 'Drop and disable', danger: true },
+        );
+        if (!drop) return;
+        setBusy(true);
+        await disableParanoid({ dropUnreadable: true });
+      }
       toast('Paranoid Mode disabled — local data decrypted', 'success');
     } catch (e) {
       recordError('security.disableParanoid', e);

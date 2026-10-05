@@ -23,6 +23,7 @@ import type { ListType } from '../../db/models';
 import type { DragItemData } from './DndProvider';
 import { LIST_DROP_ID_PREFIX } from './dnd-collision';
 import { SyncIndicator } from './SyncIndicator';
+import { ConflictsButton } from '../sync/ConflictsButton';
 import { PomodoroBar } from '../pomodoro/PomodoroBar';
 import { GIT_COMMIT, MAX_LIST_NAME_LENGTH, pickInboxList, isReservedListName } from '../../lib/constants';
 import { moveTaskToList } from '../../hooks/use-tasks';
@@ -419,7 +420,8 @@ export function Sidebar() {
         </div>
         {/* The sync label is the only thing here allowed to shrink (it truncates),
             so the row never grows past the sidebar's fixed width. */}
-        <div className="ml-auto flex min-w-0 items-center">
+        <div className="ml-auto flex min-w-0 items-center gap-1">
+          <ConflictsButton />
           <SyncIndicator />
           <button
             onClick={() => setSettingsOpen(true)}

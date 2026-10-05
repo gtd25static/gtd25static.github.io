@@ -47,6 +47,8 @@ const ENTITY_TYPE_BY_TABLE: Record<string, string> = {
   mindmapFolders: 'mindmapFolder',
   mindmaps: 'mindmap',
   mindmapNodes: 'mindmapNode',
+  // Both versions of a conflicting edit (sync/conflicts.ts): content.
+  syncConflicts: 'syncConflict',
 };
 
 function isHandledTable(name: string): boolean {
@@ -181,6 +183,7 @@ function quarantineRow(table: string, row: Row): Row {
   else if (table === 'taskLists' || table === 'sharedItems'
     || table === 'mindmaps' || table === 'mindmapFolders') out.name = UNREADABLE;
   else if (table === 'mindmapNodes') out.label = UNREADABLE;
+  else if (table === 'syncConflicts') { out.label = UNREADABLE; out.localValue = UNREADABLE; out.remoteValue = UNREADABLE; }
   out._decryptError = true;
   return out;
 }

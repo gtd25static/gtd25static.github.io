@@ -108,6 +108,17 @@ const localMigrations: LocalMigration[] = [
     toVersion: 9,
     migrate: async () => {},
   },
+  {
+    // v10: rows gain `_base` (sync/conflicts.ts) as remote changes reach them.
+    // Until then a row's base is implicit — its field timestamps up to now —
+    // rather than rewriting every row (a whole re-encryption in Paranoid Mode).
+    fromVersion: 9,
+    toVersion: 10,
+    migrate: async (database) => {
+      const meta = await database.syncMeta.get('sync-meta');
+      if (!meta?.conflictBaseSince) await database.syncMeta.update('sync-meta', { conflictBaseSince: Date.now() });
+    },
+  },
 ];
 
 export async function runLocalMigrations(database: Gtd25DB, from: number, to: number): Promise<void> {

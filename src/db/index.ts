@@ -1,5 +1,5 @@
 import Dexie, { type Table } from 'dexie';
-import type { TaskList, Task, Subtask, SyncMeta, LocalSettings, ChangeEntry, PomodoroSound, SoundPreset, PomodoroSettings, Vault, SharedItem, SharedBlob, MindmapFolder, Mindmap, MindmapNode } from './models';
+import type { TaskList, Task, Subtask, SyncMeta, LocalSettings, ChangeEntry, PomodoroSound, SoundPreset, PomodoroSettings, Vault, SharedItem, SharedBlob, MindmapFolder, Mindmap, MindmapNode, SyncConflict } from './models';
 import { newId } from '../lib/id';
 import { createLocalBackup } from './backup';
 import { purgeOldTrashItems, expireArchivedLists, expireCompletedItems } from './purge';
@@ -27,9 +27,16 @@ export class Gtd25DB extends Dexie {
   mindmapFolders!: Table<MindmapFolder, string>;
   mindmaps!: Table<Mindmap, string>;
   mindmapNodes!: Table<MindmapNode, string>;
+  syncConflicts!: Table<SyncConflict, string>;
 
   constructor() {
-    super('gtd25');
+    // Strict: every commit reaches the disk before it resolves. Chrome's default
+    // ('relaxed') can lose the last seconds of commits to a power cut or an OS
+    // crash — a dying phone battery — with no ordering between them: a changed
+    // passphrase's new wrap lost while the rows re-encrypted under it survived,
+    // or simply the last edits. Costs an fsync per transaction (a few ms; the
+    // app's writes are small and infrequent).
+    super('gtd25', { chromeTransactionDurability: 'strict' });
     this.version(1).stores({
       taskLists: 'id, order, deletedAt',
       tasks: 'id, listId, status, order, dueDate, deletedAt',
@@ -75,6 +82,11 @@ export class Gtd25DB extends Dexie {
       const idbTx = (tx as unknown as { idbtrans: IDBTransaction }).idbtrans;
       await normaliseWarningsInStore(idbTx.objectStore('tasks'));
       await normaliseWarningsInStore(idbTx.objectStore('subtasks'));
+    });
+    // Edits two devices made without seeing each other's, waiting for the user
+    // (sync/conflicts.ts). Local only, never synced.
+    this.version(10).stores({
+      syncConflicts: 'id, entityId, detectedAt',
     });
   }
 }

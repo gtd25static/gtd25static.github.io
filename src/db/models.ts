@@ -39,6 +39,9 @@ export interface TaskList {
   // rest), merged as a whole (LWW). Untrusted on read — see lib/list-filter.ts.
   savedSearches?: string[];
   fieldTimestamps?: Record<string, number>;
+  // Local only: per field, the newest timestamp known to be on the remote
+  // (sync/conflicts.ts). Rides in this device's change entries as their base.
+  _base?: Record<string, number>;
 }
 
 export interface TaskLink {
@@ -107,6 +110,9 @@ export interface Task {
   lastCompletedAt?: number;
   nextOccurrence?: number;
   fieldTimestamps?: Record<string, number>;
+  // Local only: per field, the newest timestamp known to be on the remote
+  // (sync/conflicts.ts). Rides in this device's change entries as their base.
+  _base?: Record<string, number>;
 }
 
 export interface Subtask {
@@ -132,6 +138,9 @@ export interface Subtask {
   // Additional links
   links?: TaskLink[];
   fieldTimestamps?: Record<string, number>;
+  // Local only: per field, the newest timestamp known to be on the remote
+  // (sync/conflicts.ts). Rides in this device's change entries as their base.
+  _base?: Record<string, number>;
 }
 
 export type SharedItemType = 'link' | 'file' | 'snippet';
@@ -156,6 +165,9 @@ export interface SharedItem {
   updatedAt: number;
   deletedAt?: number;
   fieldTimestamps?: Record<string, number>;
+  // Local only: per field, the newest timestamp known to be on the remote
+  // (sync/conflicts.ts). Rides in this device's change entries as their base.
+  _base?: Record<string, number>;
 }
 
 // Mindmaps: hierarchical node diagrams organized in nested folders. All three
@@ -173,6 +185,9 @@ export interface MindmapFolder {
   updatedAt: number;
   deletedAt?: number;
   fieldTimestamps?: Record<string, number>;
+  // Local only: per field, the newest timestamp known to be on the remote
+  // (sync/conflicts.ts). Rides in this device's change entries as their base.
+  _base?: Record<string, number>;
 }
 
 export interface Mindmap {
@@ -188,6 +203,9 @@ export interface Mindmap {
   updatedAt: number;
   deletedAt?: number;
   fieldTimestamps?: Record<string, number>;
+  // Local only: per field, the newest timestamp known to be on the remote
+  // (sync/conflicts.ts). Rides in this device's change entries as their base.
+  _base?: Record<string, number>;
 }
 
 // A single node of a mindmap. The map's root is the node with no parentId;
@@ -213,6 +231,9 @@ export interface MindmapNode {
   updatedAt: number;
   deletedAt?: number;
   fieldTimestamps?: Record<string, number>;
+  // Local only: per field, the newest timestamp known to be on the remote
+  // (sync/conflicts.ts). Rides in this device's change entries as their base.
+  _base?: Record<string, number>;
 }
 
 // Device-local cache of a Shared Folder blob's bytes (NEVER synced). `data` holds
@@ -252,6 +273,13 @@ export interface SyncMeta {
   unknownBlobsSeenAt?: Record<string, number>;
   // Periodic squash of the sync repo's default branch to bound git history growth.
   lastMainSquashAt?: number;
+  // Set before this device's first upload to an empty repo, cleared when it
+  // completes: an upload cut between its snapshot and its changelog is finished
+  // by the next sync instead of being refused as an incomplete remote.
+  initialUploadAt?: number;
+  // When this device started recording `_base` (sync/conflicts.ts): a row
+  // without one takes its field timestamps up to here as its base.
+  conflictBaseSince?: number;
   // When that squash last failed: retried once a day, not after every sync.
   mainSquashFailedAt?: number;
   // A sync-password change in progress (see sync/key-rotation.ts): the new salt
@@ -434,10 +462,42 @@ export interface Vault {
   // approvers without re-keying the existing ones. No new at-rest exposure: recovering
   // RUK still requires the DEK (i.e. an unlocked vault).
   rukWrappedByDek?: string;
+  // A new RUK staged beside the current one while it is handed to the approvers
+  // (removing an approver, a re-issue): it opens the vault too, so an approver
+  // that already got it can unlock if the hand-out is interrupted. Promoted into
+  // dekWrappedByRuk once every approver has it; cleared with remote unlock.
+  dekWrappedByRukNext?: string;
+  rukNextWrappedByDek?: string;
   // `seal`: the approver list encrypted under the DEK. The list itself must stay
   // readable while locked (the lock screen encrypts requests to these keys), so
   // a disk writer could swap a key; the seal catches that at the next unlock.
   remoteUnlock?: { approvers: RemoteApproverInfo[]; seal?: string };
+}
+
+/**
+ * The same field of the same item changed on two devices that had not seen each
+ * other's change (sync/conflicts.ts). Kept on this device only, until the user
+ * picks a version (or a later edit supersedes both); the newer version is
+ * applied meanwhile, as before. `localValue` / `remoteValue` / `label` are
+ * content — encrypted at rest in Paranoid Mode.
+ */
+export interface SyncConflict {
+  /** entityType:entityId:field:localAt:remoteAt — the same conflict is recorded once. */
+  id: string;
+  entityType: 'taskList' | 'task' | 'subtask' | 'mindmapFolder' | 'mindmap' | 'mindmapNode';
+  entityId: string;
+  /** The field, `discussionLog:<entry id>` for one discussion note, or '' for a delete-vs-edit. */
+  field: string;
+  kind: 'field' | 'deleted-remotely' | 'deleted-locally';
+  localValue?: unknown;
+  remoteValue?: unknown;
+  localAt: number;
+  remoteAt: number;
+  /** Which version is applied meanwhile. */
+  applied: 'local' | 'remote';
+  /** The item's title or name when detected, for the list. */
+  label?: string;
+  detectedAt: number;
 }
 
 export interface ChangeEntry {
@@ -454,6 +514,11 @@ export interface ChangeEntry {
 export interface SyncData {
   syncVersion?: number;
   wipedAt?: number;
+  // Written with wipedAt by a wipe / import / restore: the ids of the changelog
+  // entries that reset replaced. Wherever they are still found — a changelog
+  // reset that failed, a device that read the changelog before it — they are
+  // ignored; they used to be replayed over the reset on every device.
+  supersededEntryIds?: string[];
   encryptionSalt?: string;
   encryptionVerifier?: string;
   taskLists: TaskList[];

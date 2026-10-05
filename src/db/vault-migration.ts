@@ -32,6 +32,7 @@ function encryptedTables(): Array<Table<unknown, string>> {
     db.mindmapFolders as unknown as Table<unknown, string>,
     db.mindmaps as unknown as Table<unknown, string>,
     db.mindmapNodes as unknown as Table<unknown, string>,
+    db.syncConflicts as unknown as Table<unknown, string>,
   ];
 }
 
@@ -104,26 +105,62 @@ export async function encryptAllAtRest(onProgress?: ProgressFn): Promise<void> {
   await clearSharedBlobCache();
 }
 
+const UNREADABLE = Symbol('unreadable');
+
+async function tryDecryptRow(table: string, key: CryptoKey, row: Row): Promise<Row | typeof UNREADABLE> {
+  try {
+    return (await decryptRow(table, key, row)) as Row;
+  } catch {
+    return UNREADABLE;
+  }
+}
+
+/**
+ * How many stored rows `key` cannot open (corrupt, or written under another key)
+ * — what a disable would have to drop. Read-only.
+ */
+export async function countUnreadableAtRest(key: CryptoKey): Promise<number> {
+  let unreadable = 0;
+  for (const table of encryptedTables()) {
+    const raw = await readRaw(table);
+    for (const row of raw) if ((await tryDecryptRow(table.name, key, row)) === UNREADABLE) unreadable++;
+  }
+  return unreadable;
+}
+
 /**
  * Rewrite every row still encrypted under `key` back to plaintext on disk. Takes
  * the key explicitly: the disable runs a last pass after the Paranoid flag is
  * down, when no at-rest key is active any more (see vault.completeDisable).
+ *
+ * A row the key cannot open is deleted (and counted in the diagnostics log):
+ * nothing can ever read it, and one such row used to make every disable — and,
+ * through the resume, every unlock — fail, with a panic wipe the only way out.
+ * The disable asks before it starts (countUnreadableAtRest). Returns how many.
  */
-export async function decryptAllAtRest(key: CryptoKey, onProgress?: ProgressFn): Promise<void> {
+export async function decryptAllAtRest(key: CryptoKey, onProgress?: ProgressFn): Promise<number> {
   const tables = encryptedTables();
   const total = await totalRows(tables);
   let done = 0;
+  let dropped = 0;
   for (const table of tables) {
     const raw = await readRaw(table);
-    const plain = await Promise.all(raw.map(async (r) => (await decryptRow(table.name, key, r)) as Row));
+    const plain = await Promise.all(raw.map((r) => tryDecryptRow(table.name, key, r)));
+    const unreadable = raw.filter((_, i) => plain[i] === UNREADABLE).map((r) => String(r.id));
     // Only the rows that were still encrypted (decryptRow hands a plaintext row
     // back as is): rewriting the others gains nothing and could undo a write
     // that landed since the read, and it keeps the disable's last pass cheap.
-    await writeRaw(table, plain.filter((row, i) => row !== raw[i]));
+    await writeRaw(table, plain.filter((row, i): row is Row => row !== UNREADABLE && row !== raw[i]));
+    if (unreadable.length) {
+      await table.bulkDelete(unreadable);
+      dropped += unreadable.length;
+      recordError(`vault-migration:${table.name}`, new Error(`Dropped ${unreadable.length} unreadable row(s) while turning Paranoid Mode off`));
+    }
     done += raw.length;
     onProgress?.(done, total);
   }
   await clearSharedBlobCache();
+  return dropped;
 }
 
 /**

@@ -1,4 +1,4 @@
-import type { SyncData, Task, TaskList, Subtask, SharedItem, MindmapFolder, Mindmap, MindmapNode } from '../db/models';
+import type { SyncData, Task, TaskList, Subtask, SharedItem, MindmapFolder, Mindmap, MindmapNode, SyncConflict } from '../db/models';
 import { encryptRow, getActiveAtRestKey, type Row } from '../db/vault-middleware';
 
 type AtRestTableName = 'taskLists' | 'tasks' | 'subtasks' | 'sharedItems' | 'mindmapFolders' | 'mindmaps' | 'mindmapNodes';
@@ -35,4 +35,13 @@ export async function prepareSyncDataForAtRest<T extends Pick<SyncData, 'taskLis
   ]);
 
   return { ...data, taskLists, tasks, subtasks };
+}
+
+/** Conflict records pre-encrypted for a write transaction (Paranoid Mode; see above). */
+export async function prepareConflictRowsForAtRest(rows: SyncConflict[]): Promise<SyncConflict[]> {
+  if (rows.length === 0) return rows;
+  const key = getActiveAtRestKey();
+  if (!key) return rows;
+  const encrypted = await Promise.all(rows.map((row) => encryptRow('syncConflicts', key, row as unknown as Row)));
+  return encrypted as unknown as SyncConflict[];
 }

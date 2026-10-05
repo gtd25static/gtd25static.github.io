@@ -48,7 +48,7 @@ import {
   deriveKey, generateSalt, createVerifier, checkVerifier,
   cacheEncryptionKey, getCachedEncryptionKey, getCachedSalt,
 } from './crypto';
-import { syncNow, forcePush, endSyncSession, rekeyRemoteChangelog, SYNC_LOCK_NAME, SNAPSHOT_FILE } from './sync-engine';
+import { syncNow, forcePushHoldingLock, endSyncSession, rekeyRemoteChangelog, SYNC_LOCK_NAME, SNAPSHOT_FILE } from './sync-engine';
 import { isCompatibleVersion } from './version';
 import { hasPendingEntries } from './change-log';
 import { getSyncPat, rememberSyncPassword, forgetSyncPassword } from './sync-credentials';
@@ -62,6 +62,7 @@ import { squashDefaultBranch } from './history-compaction';
 import { b64encode, deriveRegistryMacKey } from './remote-unlock-crypto';
 import { SYNC_VERSION } from './version';
 import { recordError } from '../lib/diagnostics';
+import { inCriticalSection } from '../lib/critical-section';
 
 export type RotationPhase = 'syncing' | 'files' | 'snapshot' | 'backups' | 'registry' | 'history';
 export interface RotationProgress { phase: RotationPhase; done?: number; total?: number }
@@ -151,10 +152,12 @@ export async function rotateSyncKey(
 
   // Nobody else syncs this repo from this browser while the rotation runs.
   const keys: Keys = { newPassword, oldPassword, oldKey, oldSalt };
+  // A critical section too: an update applied in another tab must not reload
+  // this one half-way (lib/critical-section).
   const locks = typeof navigator !== 'undefined' ? navigator.locks : undefined;
-  return locks
-    ? locks.request(SYNC_LOCK_NAME, () => rotateHoldingLock(creds, keys, onProgress))
-    : rotateHoldingLock(creds, keys, onProgress);
+  return inCriticalSection<RotationResult>(async () => locks
+    ? await locks.request(SYNC_LOCK_NAME, () => rotateHoldingLock(creds, keys, onProgress))
+    : await rotateHoldingLock(creds, keys, onProgress));
 }
 
 async function rotateHoldingLock(
@@ -198,7 +201,7 @@ async function rotateHoldingLock(
   await rememberSyncPassword(newPassword);
   let encrypted: SyncData | null = null;
   try {
-    encrypted = await forcePush({ backupExisting: false, rekeyChangelogFrom: oldKey });
+    encrypted = await forcePushHoldingLock({ backupExisting: false, rekeyChangelogFrom: oldKey });
     // A push can fail AFTER its snapshot landed (the changelog step, or a reply
     // lost on the way back): then the remote is on the new key already.
     if (!encrypted) encrypted = await committedSnapshot(creds, newKey, newSalt);

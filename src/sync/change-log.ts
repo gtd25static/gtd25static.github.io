@@ -1,11 +1,12 @@
 import { db } from '../db';
-import type { ChangeEntry } from '../db/models';
+import type { ChangeEntry, SyncConflict } from '../db/models';
 import { newId } from '../lib/id';
 import { SYNC_VERSION } from './version';
 import { migrateEntryData } from './migrations';
 import { mergeEntity, stampUpdatedFields, capFutureTimestamps, MAX_FUTURE_SKEW_MS } from './field-timestamps';
 import { noteRemoteDeletions } from '../db/purge';
-import { prepareEntityRowsForAtRest } from './at-rest-writes';
+import { prepareEntityRowsForAtRest, prepareConflictRowsForAtRest } from './at-rest-writes';
+import { detectConflicts, detectDeleteConflict, isConflictEntity, advanceBase, effectiveBase } from './conflicts';
 import type { Subtask, Task, TaskList, SharedItem, MindmapFolder, Mindmap, MindmapNode } from '../db/models';
 
 type EntityRow = TaskList | Task | Subtask | SharedItem | MindmapFolder | Mindmap | MindmapNode;
@@ -198,6 +199,10 @@ async function applyRemoteEntriesOnce(entries: ChangeEntry[]): Promise<boolean> 
     .sort((a, b) => a.timestamp - b.timestamp);
   // Records this sync moves into the Trash: their 30 days run from now, here.
   const newlyDeleted: string[] = [];
+  // Concurrent edits found on the way (sync/conflicts.ts), recorded with the rows.
+  const conflicts = new Map<string, SyncConflict>();
+  const since = (await db.syncMeta.get('sync-meta'))?.conflictBaseSince ?? 0;
+  const pendingEntities = new Set((await getPendingEntries()).map((e) => e.entityId));
   const localState: Record<ChangeEntry['entityType'], Map<string, EntityRow | null>> = {
     taskList: new Map<string, EntityRow | null>(),
     task: new Map<string, EntityRow | null>(),
@@ -240,7 +245,16 @@ async function applyRemoteEntriesOnce(entries: ChangeEntry[]): Promise<boolean> 
         // keep the row alive here, while the field merge on the deleting device
         // and compaction kept the tombstone — the devices then disagreed. Rows
         // without field timestamps (pre-v5 data) keep the row-level rule.
-        const localFT = (existing as unknown as Record<string, unknown>).fieldTimestamps as Record<string, number> | undefined;
+        const row = existing as unknown as Record<string, unknown>;
+        if (isConflictEntity(entry.entityType)) {
+          const conflict = detectDeleteConflict(entry.entityType, row, entry.timestamp, {
+            localPending: pendingEntities.has(entry.entityId), since,
+          });
+          if (conflict) conflicts.set(conflict.id, conflict);
+        }
+        const currentBase = effectiveBase(row, since);
+        const nextBase = advanceBase(currentBase, { deletedAt: entry.timestamp });
+        const localFT = row.fieldTimestamps as Record<string, number> | undefined;
         const newerLocal = localFT ? localFT.deletedAt ?? 0 : existing.updatedAt ?? 0;
         if (entry.timestamp >= newerLocal) {
           if (!existing.deletedAt) newlyDeleted.push(entry.entityId);
@@ -248,13 +262,12 @@ async function applyRemoteEntriesOnce(entries: ChangeEntry[]): Promise<boolean> 
             ...existing,
             deletedAt: entry.timestamp,
             updatedAt: Math.max(existing.updatedAt ?? 0, entry.timestamp),
-            fieldTimestamps: stampUpdatedFields(
-              (existing as unknown as Record<string, unknown>).fieldTimestamps as Record<string, number> | undefined,
-              ['deletedAt'],
-              entry.timestamp,
-            ),
+            fieldTimestamps: stampUpdatedFields(localFT, ['deletedAt'], entry.timestamp),
+            _base: nextBase,
           };
           setChanged(entry.entityType, entry.entityId, updated as EntityRow);
+        } else if (nextBase !== row._base) {
+          setChanged(entry.entityType, entry.entityId, { ...existing, _base: nextBase } as EntityRow);
         }
       }
       continue;
@@ -271,21 +284,35 @@ async function applyRemoteEntriesOnce(entries: ChangeEntry[]): Promise<boolean> 
 
     // upsert with field-level merge
     const existing = await getCurrent(entry.entityType, entry.entityId);
+    const remote = data as Record<string, unknown>;
+    const remoteFT = remote.fieldTimestamps as Record<string, number> | undefined;
     if (existing) {
-      const merged = mergeEntity(
-        existing as unknown as Record<string, unknown>,
-        data as Record<string, unknown>,
-        entry.timestamp,
-      );
+      const row = existing as unknown as Record<string, unknown>;
+      if (isConflictEntity(entry.entityType)) {
+        // The writer's base rides in the entry (pushed with one filled in).
+        const writerBase = (remote._base ?? {}) as Record<string, number>;
+        for (const conflict of detectConflicts(entry.entityType, row, remote, writerBase, {
+          localPending: pendingEntities.has(entry.entityId), since,
+        })) conflicts.set(conflict.id, conflict);
+      }
+      // What this device now knows to be on the remote — even when the merge
+      // itself changes nothing (this side's value is newer).
+      const nextBase = advanceBase(effectiveBase(row, since), remoteFT);
+      const merged = mergeEntity(row, remote, entry.timestamp);
       if (merged) {
         if (merged.deletedAt && !existing.deletedAt) newlyDeleted.push(entry.entityId);
-        setChanged(entry.entityType, entry.entityId, merged as unknown as EntityRow);
+        setChanged(entry.entityType, entry.entityId, { ...merged, _base: nextBase } as unknown as EntityRow);
+      } else if (nextBase !== row._base) {
+        setChanged(entry.entityType, entry.entityId, { ...existing, _base: nextBase } as EntityRow);
       }
     } else {
       if (data?.deletedAt) newlyDeleted.push(entry.entityId);
-      setChanged(entry.entityType, entry.entityId, data as unknown as EntityRow);
+      // New here: everything in it came from the remote (the writer's own base is its business).
+      const { _base: _theirs, ...fresh } = remote;
+      setChanged(entry.entityType, entry.entityId, { ...fresh, _base: remoteFT ? { ...remoteFT } : undefined } as unknown as EntityRow);
     }
   }
+  const conflictRows = await prepareConflictRowsForAtRest([...conflicts.values()]);
 
   const [taskLists, tasks, subtasks, sharedItems, mindmapFolders, mindmaps, mindmapNodes] = await Promise.all([
     prepareEntityRowsForAtRest(tableNameForEntity.taskList, Array.from(writes.taskList.values()) as TaskList[]),
@@ -298,10 +325,11 @@ async function applyRemoteEntriesOnce(entries: ChangeEntry[]): Promise<boolean> 
   ]);
 
   if (taskLists.length === 0 && tasks.length === 0 && subtasks.length === 0 && sharedItems.length === 0
-    && mindmapFolders.length === 0 && mindmaps.length === 0 && mindmapNodes.length === 0) return true;
+    && mindmapFolders.length === 0 && mindmaps.length === 0 && mindmapNodes.length === 0 && conflictRows.length === 0) return true;
 
-  const written = await db.transaction('rw', [db.taskLists, db.tasks, db.subtasks, db.sharedItems, db.mindmapFolders, db.mindmaps, db.mindmapNodes, db.changeLog], async () => {
+  const written = await db.transaction('rw', [db.taskLists, db.tasks, db.subtasks, db.sharedItems, db.mindmapFolders, db.mindmaps, db.mindmapNodes, db.changeLog, db.syncConflicts], async () => {
     if (await pendingIdsAddedSince(pendingBefore)) return false;
+    if (conflictRows.length > 0) await db.syncConflicts.bulkPut(conflictRows);
     if (taskLists.length > 0) {
       await db.taskLists.bulkPut(taskLists);
     }

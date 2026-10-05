@@ -126,7 +126,8 @@ export async function decryptLocalBackups(): Promise<void> {
     if (!stored.encrypted) continue;
     try {
       const payload = JSON.parse(await decryptBlob(key, stored.encrypted)) as BackupPayload;
-      localStorage.setItem(storageKey, JSON.stringify({ timestamp: stored.timestamp, ...payload }));
+      // The reason too: dropped, a held pre-change copy became prunable.
+      localStorage.setItem(storageKey, JSON.stringify({ timestamp: stored.timestamp, reason: stored.reason, ...payload }));
     } catch (err) {
       recordError('backup.decryptOnDisable', err);
       localStorage.removeItem(storageKey);
@@ -147,52 +148,79 @@ async function readPayload(): Promise<BackupPayload> {
 }
 
 /**
- * Store the copy, making room if localStorage is full. A failure here used to be
- * a `console.warn` nobody reads — leaving the user believing they had a safety
- * net that was never written.
+ * Store the copy, making room if localStorage is full; false if it could not be
+ * stored. Room is made oldest first, and an app-start copy never pushes out a
+ * copy taken before a change: the full-storage fallback used to drop EVERY other
+ * copy — the pre-import one PRE_CHANGE_HOLD_MS exists for included — and, if the
+ * new copy still did not fit, left the device with none.
  */
-function writeWithRoom(key: string, serialized: string): void {
-  try {
-    localStorage.setItem(key, serialized);
-  } catch (err) {
-    // Full: drop every older copy and try once more keeping only this one.
-    for (const existing of listBackupKeys()) {
-      if (existing !== key) localStorage.removeItem(existing);
-    }
+function writeWithRoom(key: string, serialized: string, reason: BackupReason): boolean {
+  const tryWrite = () => {
     try {
       localStorage.setItem(key, serialized);
+      return true;
     } catch {
-      recordError('backup.localStorageFull', err);
-      return;
+      return false;
+    }
+  };
+  if (!tryWrite()) {
+    const older = listBackupKeys().filter((k) => k !== key).reverse(); // oldest first
+    const evictable = [
+      ...older.filter((k) => reasonOf(k) === 'boot'),
+      // A copy taken before a change may make room only for a newer such copy.
+      ...(reason === 'change' ? older.filter((k) => reasonOf(k) === 'change') : []),
+    ];
+    let stored = false;
+    for (const victim of evictable) {
+      localStorage.removeItem(victim);
+      if ((stored = tryWrite())) break;
+    }
+    if (!stored) {
+      recordError('backup.localStorageFull', new Error(`No room for a ${reason} safety copy`));
+      return false;
     }
   }
   pruneOldBackups();
+  return true;
 }
 
-export async function createLocalBackup({ reason = 'change' }: { reason?: BackupReason } = {}): Promise<void> {
+/**
+ * Take a safety copy. Returns false when one was due but could not be stored —
+ * the destructive caller then says so (it used to go ahead in silence); true
+ * when it was stored or there was nothing to copy.
+ */
+export async function createLocalBackup({ reason = 'change' }: { reason?: BackupReason } = {}): Promise<boolean> {
   try {
     const key = getActiveAtRestKey();
     // Paranoid + locked: rows come back still encrypted, so this would store
     // double-wrapped nonsense. Nothing to report — the boot-time call simply
     // runs before unlock, and every destructive path is behind the lock anyway.
-    if (isParanoidFlagSet() && !key) return;
+    if (isParanoidFlagSet() && !key) return true;
 
     const payload = await readPayload();
     const isEmpty = payload.taskLists.length === 0 && payload.tasks.length === 0 &&
       payload.subtasks.length === 0 && (payload.mindmaps?.length ?? 0) === 0;
-    if (isEmpty) return;
-    if (reason === 'boot' && await newestCopyHolds(payload, key)) return;
+    if (isEmpty) return true;
+    if (reason === 'boot' && await newestCopyHolds(payload, key)) return true;
 
     const timestamp = Date.now();
     const backup: StoredBackup = key
       ? { timestamp, reason, encrypted: await encryptBlob(key, JSON.stringify(payload)) }
       : { timestamp, reason, ...payload };
 
-    writeWithRoom(`${BACKUP_KEY_PREFIX}${timestamp}`, JSON.stringify(backup));
+    return writeWithRoom(`${BACKUP_KEY_PREFIX}${timestamp}`, JSON.stringify(backup), reason);
   } catch (err) {
     // A backup failure must never block the operation it was protecting.
     recordError('backup.create', err);
+    return false;
   }
+}
+
+/** For the destructive operations: take the pre-change copy, and say so if it failed. */
+export async function createLocalBackupOrWarn(): Promise<void> {
+  if (await createLocalBackup()) return;
+  const { toast } = await import('../components/ui/Toast');
+  toast("Couldn't save a safety copy on this device first (storage full?) — going ahead without one.", 'error');
 }
 
 export function getLocalBackups(): Array<{ key: string; timestamp: number }> {

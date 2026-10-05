@@ -88,6 +88,16 @@ const migrations: RemoteMigration[] = [
     toVersion: 9,
     migrate: (data) => ({ ...data, syncVersion: 9 }),
   },
+  {
+    // v10 change entries carry the writer's `_base` (sync/conflicts.ts), so the
+    // receiving device can tell a concurrent edit from a later one. Nothing to
+    // rewrite. The bump is the point — a v9 build would merge `_base` into its
+    // rows as if it were a field, push it back in the clear inside entries'
+    // plaintext part, and hand stale bases to every other device.
+    fromVersion: 9,
+    toVersion: 10,
+    migrate: (data) => ({ ...data, syncVersion: 10 }),
+  },
 ];
 
 export function runRemoteMigrations(data: SyncData, from: number, to: number): SyncData {

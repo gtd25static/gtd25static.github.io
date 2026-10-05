@@ -4,7 +4,7 @@ import App from './App';
 import './styles/index.css';
 import { installGlobalErrorHandlers, requestPersistentStorage } from './lib/diagnostics';
 import { retryPendingWipe } from './lib/panic-wipe';
-import { startCrossTabLock, reconcileParanoidFlag } from './db/vault';
+import { startCrossTabLock, reconcileParanoidFlag, enforceFailedAttemptLimit } from './db/vault';
 import { onTabSignal } from './lib/tab-channel';
 import { startForgettingSessionOnLock } from './lib/forget-on-lock';
 import { flushPendingClipboardClear, catchUpPendingClipboardClear } from './lib/clipboard-hygiene';
@@ -51,7 +51,8 @@ takeCaptureFromUrl();
 // Then make the Paranoid flag agree with the vault, which a crash in the middle
 // of an enable or disable can leave out of step — before the first render, so
 // the lock screen (or its absence) is right from the first paint.
-void retryPendingWipe().finally(() => reconcileParanoidFlag()).finally(() => {
+// A failed-attempt limit reached just before a crash is enforced here too.
+void retryPendingWipe().finally(() => enforceFailedAttemptLimit()).finally(() => reconcileParanoidFlag()).finally(() => {
   createRoot(document.getElementById('root')!).render(
     <StrictMode>
       <App />

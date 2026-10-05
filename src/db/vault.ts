@@ -15,8 +15,9 @@ import {
 import { deriveVaultKek, DEFAULT_ARGON2, LEGACY_KDF, type KdfParams } from './vault-kdf';
 import { generateDek, wrapDek, unwrapDek, importKekFromBytes, generateGarbageSlot, isLegacyWrap } from './vault-crypto';
 import { setVaultKeyProvider } from './vault-middleware';
-import { encryptAllAtRest, decryptAllAtRest, rewriteLegacyAtRestRows } from './vault-migration';
+import { encryptAllAtRest, decryptAllAtRest, countUnreadableAtRest, rewriteLegacyAtRestRows } from './vault-migration';
 import { withSyncLock } from '../sync/sync-lock';
+import { inCriticalSection } from '../lib/critical-section';
 import { registerPrfCredential, getPrfOutput } from '../sync/webauthn-prf';
 import { b64encode, b64decode } from '../sync/remote-unlock-crypto';
 import { PARANOID_FLAG, isParanoidFlagSet } from './paranoid-flag';
@@ -336,7 +337,7 @@ export async function enableParanoid(passphrase: string, idleMinutes = DEFAULT_I
   signalOtherTabs({ type: 'reload' });
 
   try {
-    await completeEnable();
+    await inCriticalSection(() => completeEnable()); // not cut short by an update's reload
   } catch (err) {
     recordError('vault.enable', err);
     const reason = err instanceof Error ? err.message : String(err);
@@ -359,7 +360,9 @@ async function completeEnable(): Promise<void> {
   // Holding the sync lock: a sync applying remote rows between the migration's
   // read and write would have them overwritten by its stale copies.
   await withSyncLock(() => encryptAllAtRest());
-  await db.vault.update('vault', { migrationState: 'done' });
+  // 'done' only once the credentials are stripped and the plaintext backups gone
+  // (below): set first, a kill in between left them on disk for good — the
+  // resume only runs while the state still says 'encrypting'.
   const vault = await db.vault.get('vault');
   await db.localSettings.update('local', {
     paranoidEnabled: true,
@@ -375,6 +378,7 @@ async function completeEnable(): Promise<void> {
     deviceIdentity: undefined,
   });
   purgeLocalBackups();
+  await db.vault.update('vault', { migrationState: 'done' });
   // Best effort, after the fact: tell the other devices this one is Paranoid now
   // (they stop offering it as an approver and stop sending it keys) and empty its
   // mailbox. Needs sync; a device without it has nothing published to correct.
@@ -407,10 +411,29 @@ export async function reconcileParanoidFlag(): Promise<void> {
   }
 }
 
-export async function disableParanoid(): Promise<void> {
+/** A disable that would have to drop rows nothing can read: the caller asks first. */
+export class UnreadableRowsError extends Error {
+  readonly count: number;
+  constructor(count: number) {
+    super(`${count} item(s) on this device can't be read and would be dropped`);
+    this.name = 'UnreadableRowsError';
+    this.count = count;
+  }
+}
+
+export async function disableParanoid(opts: { dropUnreadable?: boolean } = {}): Promise<void> {
   if (!currentDek) throw new Error('Unlock the vault before disabling Paranoid Mode');
-  await db.vault.update('vault', { migrationState: 'decrypting' });
-  await completeDisable();
+  // Before anything is written: rows the key cannot open are dropped by the
+  // disable (decryptAllAtRest), so say so first — once 'decrypting' is set, the
+  // disable resumes at every unlock.
+  if (!opts.dropUnreadable) {
+    const unreadable = await countUnreadableAtRest(currentDek);
+    if (unreadable > 0) throw new UnreadableRowsError(unreadable);
+  }
+  await inCriticalSection(async () => {
+    await db.vault.update('vault', { migrationState: 'decrypting' });
+    await completeDisable();
+  });
 }
 
 async function completeDisable(): Promise<void> {
@@ -733,6 +756,24 @@ export async function incrementFailedAttempts(): Promise<{ count: number; max: n
   });
 }
 
+/**
+ * At start: a failed-attempt count at its limit whose wipe never ran — the tab
+ * killed between persisting the count and the wipe, or the browser before it
+ * committed the wipe's marker — wipes now. Nothing re-derived the decision from
+ * the persisted counter, so the next correct passphrase simply reset it.
+ */
+export async function enforceFailedAttemptLimit(): Promise<void> {
+  try {
+    const vault = await db.vault.get('vault');
+    const max = vault?.maxUnlockAttempts ?? 0;
+    if (!vault || max <= 0 || (vault.failedUnlockAttempts ?? 0) < max) return;
+    const { panicWipe } = await import('../lib/panic-wipe'); // dynamic: avoids an import cycle
+    await panicWipe();
+  } catch (err) {
+    recordError('vault.attemptLimit', err);
+  }
+}
+
 // Count a failed unlock; trip the panic wipe at the configured limit. The counter
 // lives in the vault row so a reload cannot reset it. Re-reads the LATEST
 // persisted vault (not a possibly-stale snapshot) so the increment is monotonic
@@ -869,13 +910,6 @@ async function finishUnlock(vault: Vault, dek: CryptoKey, method: UnlockMethod =
     if ((vault.failedUnlockAttempts ?? 0) !== 0) {
       await db.vault.update('vault', { failedUnlockAttempts: 0 });
     }
-    // Resume an interrupted migration.
-    if (vault.migrationState === 'encrypting') {
-      await completeEnable();
-    } else if (vault.migrationState === 'decrypting') {
-      await completeDisable();
-      return true;
-    }
   } catch (err) {
     // Roll back the in-memory unlock so a failed post-validation step can never leave
     // the DEK/secrets live behind a locked-looking UI (ACR-008).
@@ -885,6 +919,30 @@ async function finishUnlock(vault: Vault, dek: CryptoKey, method: UnlockMethod =
     recordError('vault.finishUnlock.resume', err);
     lastUnlockFailure = 'resume-failed';
     return false;
+  }
+
+  // Resume an interrupted enable or disable. A failure here no longer refuses
+  // the unlock: one unreadable row, or a full disk, used to keep the device at
+  // its lock screen for good (the passphrase "correct, but unlock could not
+  // finish"), a panic wipe the only way out. Whatever state the migration
+  // reached, every row opens with this key, so the device opens as it is, says
+  // what did not finish, and the next unlock tries again.
+  if (vault.migrationState === 'encrypting' || vault.migrationState === 'decrypting') {
+    const what = vault.migrationState === 'encrypting' ? 'Turning Paranoid Mode on' : 'Turning Paranoid Mode off';
+    try {
+      if (vault.migrationState === 'encrypting') {
+        await completeEnable();
+      } else {
+        await completeDisable();
+        return true;
+      }
+    } catch (err) {
+      recordError('vault.finishUnlock.resume', err);
+      const reason = err instanceof Error ? err.message : String(err);
+      void import('../components/ui/Toast')
+        .then(({ toast }) => toast(`${what} did not finish (${reason}). It tries again at the next unlock.`, 'error'))
+        .catch(() => { /* no UI (tests) */ });
+    }
   }
 
   // Once per device: rewrite stored rows older builds left with fieldTimestamps
@@ -993,6 +1051,37 @@ export async function wrapDekWithRuk(rukRaw: Uint8Array): Promise<void> {
   await db.vault.update('vault', { dekWrappedByRuk, rukWrappedByDek });
 }
 
+/**
+ * Stage a new RUK beside the current one (see Vault.dekWrappedByRukNext). Handing
+ * a new key to several approvers is not atomic: an approver that got it used to
+ * be locked out if the hand-out died before the re-wrap at its end.
+ */
+export async function stageNextRuk(rukRaw: Uint8Array): Promise<void> {
+  if (!currentDek) throw new Error('Unlock the vault before changing remote unlock');
+  const kek = await importKekFromBytes(rukRaw);
+  await db.vault.update('vault', {
+    dekWrappedByRukNext: await wrapDek(kek, currentDek, 'ruk-next'),
+    rukNextWrappedByDek: await encryptBlob(currentDek, b64encode(rukRaw)),
+  });
+}
+
+/** A staged RUK nobody received: drop it. */
+export async function discardNextRuk(): Promise<void> {
+  await db.vault.update('vault', { dekWrappedByRukNext: undefined, rukNextWrappedByDek: undefined });
+}
+
+/** Every approver has the staged RUK: make it THE remote-unlock key (one write). */
+export async function promoteNextRuk(rukRaw: Uint8Array): Promise<void> {
+  if (!currentDek) throw new Error('Unlock the vault before changing remote unlock');
+  const kek = await importKekFromBytes(rukRaw);
+  await db.vault.update('vault', {
+    dekWrappedByRuk: await wrapDek(kek, currentDek, 'ruk'),
+    rukWrappedByDek: await encryptBlob(currentDek, b64encode(rukRaw)),
+    dekWrappedByRukNext: undefined,
+    rukNextWrappedByDek: undefined,
+  });
+}
+
 /** Recover the raw RUK (requires the vault unlocked + remote unlock enrolled), or null. */
 export async function getRukRaw(): Promise<Uint8Array | null> {
   if (!currentDek) return null;
@@ -1004,17 +1093,18 @@ export async function getRukRaw(): Promise<Uint8Array | null> {
 /** Unlock using a remote-unlock key (RUK) relayed from a trusted device. */
 export async function unlockWithRemoteKey(rukRaw: Uint8Array): Promise<boolean> {
   const vault = await db.vault.get('vault');
-  if (!vault?.dekWrappedByRuk) return false;
+  if (!vault?.dekWrappedByRuk && !vault?.dekWrappedByRukNext) return false;
   const kek = await importKekFromBytes(rukRaw);
-  let dek: CryptoKey;
-  try {
-    dek = await unwrapDek(kek, vault.dekWrappedByRuk, 'ruk');
-  } catch {
+  let dek: CryptoKey | null = null;
+  // The current key, or one staged by an interrupted hand-out (see stageNextRuk).
+  if (vault.dekWrappedByRuk) dek = await unwrapDek(kek, vault.dekWrappedByRuk, 'ruk').catch(() => null);
+  if (!dek && vault.dekWrappedByRukNext) dek = await unwrapDek(kek, vault.dekWrappedByRukNext, 'ruk-next').catch(() => null);
+  if (!dek) {
     await registerFailedAttempt('remote', false); // logged, but never wipes (see above)
     return false; // wrong RUK
   }
   const ok = await finishUnlock(vault, dek, 'remote');
-  if (ok && isLegacyWrap(vault.dekWrappedByRuk)) {
+  if (ok && vault.dekWrappedByRuk && isLegacyWrap(vault.dekWrappedByRuk)) {
     // Bind a pre-binding wrap to its slot now that its KEK is in hand (see vault-crypto).
     try {
       await db.vault.update('vault', { dekWrappedByRuk: await wrapDek(kek, dek, 'ruk') });
@@ -1028,7 +1118,7 @@ export async function unlockWithRemoteKey(rukRaw: Uint8Array): Promise<boolean> 
 /** True once remote unlock is enrolled on this device (a wrapped-by-RUK DEK exists). */
 export async function isRemoteUnlockEnrolled(): Promise<boolean> {
   const vault = await db.vault.get('vault');
-  return !!vault?.dekWrappedByRuk;
+  return !!(vault?.dekWrappedByRuk || vault?.dekWrappedByRukNext);
 }
 
 /**
@@ -1064,7 +1154,10 @@ async function checkRemoteApproverSeal(vault: Vault, dek: CryptoKey): Promise<vo
 
 /** Tear down remote-unlock enrollment (drop the RUK-wrapped DEK + cached approvers). */
 export async function clearRemoteUnlock(): Promise<void> {
-  await db.vault.update('vault', { dekWrappedByRuk: undefined, rukWrappedByDek: undefined, remoteUnlock: undefined });
+  await db.vault.update('vault', {
+    dekWrappedByRuk: undefined, rukWrappedByDek: undefined, dekWrappedByRukNext: undefined, rukNextWrappedByDek: undefined,
+    remoteUnlock: undefined,
+  });
 }
 
 /**
@@ -1161,9 +1254,11 @@ export async function rekeyVault(
   rekeying = true;
   emit();
   try {
-    const { newDek, result } = await rekeyVaultContent({
+    // Holding the sync lock (a sync writing between the content read and the
+    // swap was lost) and as a critical section (an update's reload must wait).
+    const { newDek, result } = await withSyncLock(() => inCriticalSection(() => rekeyVaultContent({
       vault, newKek, newSalt, kdf: kdfParams, secrets: currentSecrets,
-    });
+    })));
     currentDek = newDek;
     setKeyFlag(false); // the security keys' wraps opened the old DEK
     // The safety backups were encrypted under the old key: replace them with one

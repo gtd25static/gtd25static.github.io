@@ -14,20 +14,26 @@ const VERIFIER_PLAINTEXT = 'gtd25-encryption-check';
 // Safe to move inside the blob because every merge runs AFTER decryption.
 const FIELD_TIMESTAMPS = 'fieldTimestamps';
 
+// `_base` (sync/conflicts.ts) names the fields and when each was last seen from
+// the remote — as telling as fieldTimestamps, so it rides inside the blob too.
+const BASE = '_base';
+
 export const SENSITIVE_FIELDS: Record<string, string[]> = {
-  taskList: ['name', 'savedSearches', FIELD_TIMESTAMPS],
-  task: ['title', 'description', 'link', 'linkTitle', 'links', 'discussionLog', FIELD_TIMESTAMPS],
-  subtask: ['title', 'link', 'linkTitle', 'links', FIELD_TIMESTAMPS],
+  taskList: ['name', 'savedSearches', FIELD_TIMESTAMPS, BASE],
+  task: ['title', 'description', 'link', 'linkTitle', 'links', 'discussionLog', FIELD_TIMESTAMPS, BASE],
+  subtask: ['title', 'link', 'linkTitle', 'links', FIELD_TIMESTAMPS, BASE],
   // Shared Folder: everything except opaque id/order/timestamps is encrypted —
   // no filename, type, size, URL or blob-ref leaks. Same exposure level as tasks.
-  sharedItem: ['type', 'name', 'size', 'url', 'blobId', 'mimeType', FIELD_TIMESTAMPS],
+  sharedItem: ['type', 'name', 'size', 'url', 'blobId', 'mimeType', FIELD_TIMESTAMPS, BASE],
   // Mindmaps: names/labels are content; structural refs (parentId/folderId/mapId)
   // stay plaintext so structure merges without decrypting (like Task.listId).
-  mindmapFolder: ['name', FIELD_TIMESTAMPS],
-  mindmap: ['name', 'background', 'smartColoring', FIELD_TIMESTAMPS],
+  mindmapFolder: ['name', FIELD_TIMESTAMPS, BASE],
+  mindmap: ['name', 'background', 'smartColoring', FIELD_TIMESTAMPS, BASE],
   // Formatting rides along encrypted: a palette is content ("red = blocked"),
   // and it costs nothing to hide it. Structure (parentId/order) stays plaintext.
-  mindmapNode: ['label', 'shape', 'palette', 'colorBg', 'colorFg', 'colorBorder', FIELD_TIMESTAMPS],
+  mindmapNode: ['label', 'shape', 'palette', 'colorBg', 'colorFg', 'colorBorder', FIELD_TIMESTAMPS, BASE],
+  // A recorded sync conflict (local only, at rest): both versions are content.
+  syncConflict: ['label', 'localValue', 'remoteValue'],
 };
 
 // --- Key cache ---

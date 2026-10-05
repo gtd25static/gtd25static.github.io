@@ -22,9 +22,11 @@ const task = () => ({
 });
 
 describe('fieldTimestamps is encrypted (v7)', () => {
-  it('is on every entity type’s sensitive list', () => {
+  it('is on every entity type’s sensitive list — and so is `_base`, which tells as much', () => {
     for (const [entity, fields] of Object.entries(SENSITIVE_FIELDS)) {
+      if (entity === 'syncConflict') continue; // a local record, no field timestamps
       expect(fields, `${entity} must hide its field timestamps`).toContain('fieldTimestamps');
+      expect(fields, `${entity} must hide its base`).toContain('_base');
     }
   });
 

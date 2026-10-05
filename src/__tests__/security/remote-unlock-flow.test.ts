@@ -968,6 +968,32 @@ describe('remote unlock: removing one approver', () => {
     expect(inbox ? JSON.parse(inbox.data)[LAP] : undefined).toBeUndefined();
   });
 
+  it('interrupted after the delivery, the approver that got the new key can still unlock (reliability review)', async () => {
+    await enrollTwoApprovers();
+    await actAsLaptop();
+    // The tab dies between handing out the new key and making it the one that opens.
+    const promote = vi.spyOn(vault, 'promoteNextRuk').mockRejectedValueOnce(new Error('tab killed'));
+    await expect(ru.removeApprover({ pat: PAT, repo: REPO, deviceId: LAP, deviceName: 'Work Laptop', macKey }, PHONE2)).rejects.toThrow();
+    promote.mockRestore();
+
+    await actAsPhone();
+    await ru.pollApproverInbox(PAT, REPO, PHONE, macKey);
+    const fresh = rukBytes((await db.localSettings.get('local'))!.remoteApproverFor![LAP]!.ruk);
+    await actAsLaptop();
+    vault.lock();
+    expect(await vault.isRemoteUnlockEnrolled()).toBe(true);
+    expect(await vault.unlockWithRemoteKey(fresh)).toBe(true);
+  });
+
+  it('a completed removal leaves no staged key behind', async () => {
+    await enrollTwoApprovers();
+    await actAsLaptop();
+    await ru.removeApprover({ pat: PAT, repo: REPO, deviceId: LAP, deviceName: 'Work Laptop', macKey }, PHONE2);
+    const v = await db.vault.get('vault');
+    expect(v?.dekWrappedByRukNext).toBeUndefined();
+    expect(v?.rukNextWrappedByDek).toBeUndefined();
+  });
+
   it('removing the LAST approver turns remote unlock off rather than leaving a dead wrap', async () => {
     await enrollPair();
     await actAsLaptop();
@@ -996,6 +1022,7 @@ describe('remote unlock: removing one approver', () => {
     // Nothing rotated, nothing dropped: remote unlock is exactly as it was.
     const v = await db.vault.get('vault');
     expect(v?.dekWrappedByRuk).toBe(oldWrap);
+    expect(v?.dekWrappedByRukNext).toBeUndefined(); // the staged key nobody got is gone
     expect(v?.remoteUnlock?.approvers.map((a) => a.deviceId).sort()).toEqual([PHONE, PHONE2]);
     vault.lock();
     expect(await vault.unlockWithRemoteKey(goodRuk)).toBe(true);

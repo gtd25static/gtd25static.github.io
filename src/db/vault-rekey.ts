@@ -62,6 +62,10 @@ export async function rekeyVaultContent(input: RekeyInput): Promise<{ newDek: Cr
   const newDek = await generateDek();
   const encByTable = await encryptContentRows(newDek, plainByTable);
   const encChangeLog = await Promise.all(changeLog.map((e) => encryptRow('changeLog', newDek, e) as Promise<Row>));
+  // Open sync conflicts hold both versions of an edit: carried over under the new
+  // key (a quarantined one holds nothing to carry).
+  const conflicts = ((await db.syncConflicts.toArray()) as unknown as Row[]).filter((c) => !c._decryptError);
+  const encConflicts = await Promise.all(conflicts.map((c) => encryptRow('syncConflicts', newDek, c) as Promise<Row>));
 
   // 3. The re-keyed vault row: slot 1 under the given KEK, slot 2 fresh garbage
   //    (the secondary passphrase's KEK is not at hand, so it has to be set again),
@@ -73,7 +77,8 @@ export async function rekeyVaultContent(input: RekeyInput): Promise<{ newDek: Cr
   const { vault, newKek, newSalt, kdf, secrets } = input;
   const securityKeysDropped = vault.securityKeys?.length
     ?? (vault.webauthnCredentialId && vault.dekWrappedByPrf ? 1 : 0);
-  const remote: Pick<Vault, 'remoteUnlock'> = vault.dekWrappedByRuk && vault.remoteUnlock
+  const enrolled = !!(vault.dekWrappedByRuk || vault.dekWrappedByRukNext);
+  const remote: Pick<Vault, 'remoteUnlock'> = enrolled && vault.remoteUnlock
     ? {
         remoteUnlock: {
           approvers: vault.remoteUnlock.approvers,
@@ -101,7 +106,7 @@ export async function rekeyVaultContent(input: RekeyInput): Promise<{ newDek: Cr
   //    them through whatever key it holds: no crypto runs inside the transaction
   //    (Safari), and nothing reads raw ciphertext through a bypass window.
   const tables = CONTENT_TABLES.map((t) => t.table());
-  await db.transaction('rw', [...tables, db.changeLog, db.sharedBlobs, db.vault], async () => {
+  await db.transaction('rw', [...tables, db.changeLog, db.sharedBlobs, db.vault, db.syncConflicts], async () => {
     for (const t of CONTENT_TABLES) {
       await t.table().clear();
       const enc = encByTable.get(t.name) ?? [];
@@ -110,8 +115,10 @@ export async function rekeyVaultContent(input: RekeyInput): Promise<{ newDek: Cr
     await db.changeLog.clear();
     if (encChangeLog.length) await db.changeLog.bulkPut(encChangeLog as unknown as ChangeEntry[]);
     await db.sharedBlobs.clear(); // a mirror of the backend: re-downloaded under the new key
+    await db.syncConflicts.clear();
+    if (encConflicts.length) await db.syncConflicts.bulkPut(encConflicts as never[]);
     await db.vault.put(newVault);
   });
 
-  return { newDek, result: { securityKeysDropped, remoteUnlock: vault.dekWrappedByRuk ? 'turned-off' : 'none' } };
+  return { newDek, result: { securityKeysDropped, remoteUnlock: enrolled ? 'turned-off' : 'none' } };
 }

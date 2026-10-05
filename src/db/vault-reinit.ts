@@ -119,7 +119,7 @@ export async function reinitVaultWithPlaceholders(vault: Vault, realDek: CryptoK
   const tables = CONTENT_TABLES.map((t) => t.table());
   await db.transaction(
     'rw',
-    [...tables, db.vault, db.changeLog, db.syncMeta, db.sharedBlobs, db.localSettings],
+    [...tables, db.vault, db.changeLog, db.syncMeta, db.sharedBlobs, db.localSettings, db.syncConflicts],
     async () => {
       for (const t of CONTENT_TABLES) {
         await t.table().clear();
@@ -129,6 +129,7 @@ export async function reinitVaultWithPlaceholders(vault: Vault, realDek: CryptoK
       await db.sharedBlobs.clear();
       if (placeholderBlobs.length) await db.sharedBlobs.bulkPut(placeholderBlobs);
       await db.changeLog.clear();     // old `_enc` snapshots under the real DEK
+      await db.syncConflicts.clear(); // both versions of real edits
       await db.syncMeta.clear();      // remote SHAs / pull cursors of the real repo
       await db.vault.put(newVault);
       // Cover story: sync was never set up here. Drop any plaintext creds too, and

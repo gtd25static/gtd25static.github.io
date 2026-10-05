@@ -18,6 +18,7 @@ import { EncryptionPasswordModal } from '../settings/EncryptionPasswordModal';
 import { TrashModal } from '../trash/TrashModal';
 import { HelpOverlay } from './HelpOverlay';
 import { SyncIndicator } from './SyncIndicator';
+import { ConflictsButton } from '../sync/ConflictsButton';
 import { ToastContainer } from '../ui/Toast';
 import { ConfirmDialogContainer } from '../ui/ConfirmDialog';
 import { PasswordPromptContainer } from '../ui/PasswordPrompt';
@@ -111,6 +112,7 @@ export function AppShell() {
             </span>
           )}
           <div className="ml-auto flex items-center gap-1">
+            <ConflictsButton />
             <SyncIndicator />
             <button
               onClick={() => setSettingsOpen(true)}

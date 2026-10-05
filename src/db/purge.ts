@@ -11,14 +11,19 @@ const THIRTY_DAYS = 30 * 24 * 60 * 60 * 1000;
  */
 export async function noteRemoteDeletions(ids: string[]): Promise<void> {
   if (ids.length === 0) return;
+  await db.transaction('rw', db.localSettings, () => noteRemoteDeletionsInTx(ids));
+}
+
+/** noteRemoteDeletions inside a caller's transaction (db.localSettings in scope),
+ *  so the arrival times commit with the rows they are about. */
+export async function noteRemoteDeletionsInTx(ids: string[]): Promise<void> {
+  if (ids.length === 0) return;
   const now = Date.now();
-  await db.transaction('rw', db.localSettings, async () => {
-    const local = await db.localSettings.get('local');
-    if (!local) return;
-    const trashArrivals = { ...(local.trashArrivals ?? {}) };
-    for (const id of ids) trashArrivals[id] ??= now;
-    await db.localSettings.update('local', { trashArrivals });
-  });
+  const local = await db.localSettings.get('local');
+  if (!local) return;
+  const trashArrivals = { ...(local.trashArrivals ?? {}) };
+  for (const id of ids) trashArrivals[id] ??= now;
+  await db.localSettings.update('local', { trashArrivals });
 }
 
 /**

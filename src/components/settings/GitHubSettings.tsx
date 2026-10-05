@@ -188,6 +188,23 @@ export function GitHubSettings() {
     }
   }
 
+  // Both replace a whole side and used to run on a single tap.
+  async function handleForcePush() {
+    const ok = await confirmDialog(
+      'Replace everything in the repository with this device\'s data? Changes your other devices pushed that this one has not pulled are overwritten, on every device.',
+      { confirmLabel: 'Force push', danger: true },
+    );
+    if (ok) await forcePush();
+  }
+
+  async function handleForcePull() {
+    const ok = await confirmDialog(
+      'Replace this device\'s data with the repository\'s? Changes made here that have not synced yet are discarded (a safety backup is kept in Settings → Backups).',
+      { confirmLabel: 'Force pull', danger: true },
+    );
+    if (ok) await forcePull();
+  }
+
   async function handleDiscardRotation() {
     const ok = await confirmDialog(
       'Forget the unfinished password change? The next password change starts from scratch; shared files already re-encrypted under the forgotten password stay unreadable on every device.',
@@ -278,8 +295,8 @@ export function GitHubSettings() {
           {testing ? 'Testing...' : 'Test Connection'}
         </Button>
         <Button size="sm" variant="secondary" onClick={() => syncNow(true)} disabled={!!rotation}>Sync Now</Button>
-        <Button size="sm" variant="ghost" onClick={() => forcePush()} disabled={!!rotation}>Force Push</Button>
-        <Button size="sm" variant="ghost" onClick={() => forcePull()} disabled={!!rotation}>Force Pull</Button>
+        <Button size="sm" variant="ghost" onClick={handleForcePush} disabled={!!rotation}>Force Push</Button>
+        <Button size="sm" variant="ghost" onClick={handleForcePull} disabled={!!rotation}>Force Pull</Button>
       </div>
     </div>
   );
