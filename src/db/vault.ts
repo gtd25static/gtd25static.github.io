@@ -413,6 +413,11 @@ async function completeEnable(): Promise<void> {
     deviceIdentity: undefined,
   });
   await purgeLocalBackups();
+  // Hashes of what the remote backup tiers held (sync/remote-backups): a Paranoid
+  // device writes no tiers, and keeps no fingerprint of its content in plaintext.
+  for (const tier of ['hourly', 'daily', 'weekly']) {
+    try { localStorage.removeItem(`gtd25-backup-${tier}-fp`); } catch { /* storage unavailable */ }
+  }
   await db.vault.update('vault', { migrationState: 'done' });
   // Best effort, after the fact: tell the other devices this one is Paranoid now
   // (they stop offering it as an approver and stop sending it keys) and empty its

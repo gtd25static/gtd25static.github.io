@@ -11,6 +11,8 @@ vi.mock('../../sync/github-api', async (importOriginal) => {
     putFile: vi.fn(),
     deleteFile: vi.fn(),
     testConnection: vi.fn(),
+    // The idle probe's conditional GET: failing, every poll falls through to a full sync.
+    getFileConditional: vi.fn(() => Promise.reject(new Error('no network in tests'))),
   };
 });
 

@@ -46,6 +46,25 @@ export const CHANGELOG_FILE = 'gtd25-changelog.json';
 const LEGACY_FILE = 'gtd25-data.json';
 const COMPACTION_THRESHOLD = 30;
 const MAX_CHANGELOG_ENTRIES = 500;
+// The most pending changes one sync pushes; the rest go with the next ones (the
+// idle poll syncs while any are pending). A device back from months offline used
+// to send them all in one body — tens of MB, base64-encoded on a phone.
+const MAX_PUSH_ENTRIES = 500;
+// A compaction rewrites the whole snapshot (every row decrypted and encrypted
+// again, all of it uploaded), so it also waits for the changelog to reach this
+// share of the snapshot's size: at a fixed 30 entries a 5 MB snapshot cost
+// ~230 KB of upload per edit. MAX_CHANGELOG_ENTRIES still forces one.
+const COMPACTION_MIN_SHARE = 0.1;
+// After a failed one (a big upload timing out on a slow link) the next waits
+// this long: it was redone, in full, on every sync.
+const COMPACTION_RETRY_MS = 10 * 60_000;
+let compactionFailedAt = 0;
+
+function compactionDue(entries: number, changelogBytes: number, snapshotBytes: number): boolean {
+  if (Date.now() - compactionFailedAt < COMPACTION_RETRY_MS) return false;
+  if (entries > MAX_CHANGELOG_ENTRIES) return true;
+  return entries >= COMPACTION_THRESHOLD && changelogBytes >= snapshotBytes * COMPACTION_MIN_SHARE;
+}
 const MAX_RETRIES = 3;
 const MAX_REMOTE_BACKUPS = 2;
 const SYNC_TIMEOUT_MS = 45_000;
@@ -723,9 +742,11 @@ export async function cheapIdleProbe(): Promise<boolean> {
 }
 
 async function idlePollOnce(): Promise<void> {
-  // In Paranoid Mode, gate the full sync behind a cheap conditional-GET probe so
-  // the steady state is two bodyless 304s rather than two full-body pulls.
-  if (isParanoidFlagSet() && !(await cheapIdleProbe())) return;
+  // Gate the full sync behind a cheap conditional-GET probe so the steady state
+  // is two bodyless 304s rather than two full-body pulls. On every device: only
+  // Paranoid ones did, and the others downloaded the whole snapshot every 30 s
+  // while visible (~0.6 GB an hour at 5 MB).
+  if (!(await cheapIdleProbe())) return;
   await syncNow();
 }
 
@@ -1363,7 +1384,7 @@ async function runSync(manual = false, pushLimit?: number): Promise<number> {
     reportProgress('pulling', 'Fetching changes...', 0.4);
 
     // Force compaction when changelog is oversized
-    if (remoteEntries.length > MAX_CHANGELOG_ENTRIES) {
+    if (remoteEntries.length > MAX_CHANGELOG_ENTRIES && Date.now() - compactionFailedAt >= COMPACTION_RETRY_MS) {
       const encResult = await resolveEncryptionKey();
       if (encResult !== 'needs-password') {
         reportProgress('compacting', 'Compacting oversized changelog...', 0.35);
@@ -1734,7 +1755,7 @@ async function runSync(manual = false, pushLimit?: number): Promise<number> {
     }
 
     // Get our pending local changes (optionally limited for batch pushes)
-    let pendingEntries = await getPendingEntries(pushLimit);
+    let pendingEntries = await getPendingEntries(pushLimit ?? MAX_PUSH_ENTRIES);
 
     // Deduplicate: a previous flushOnHide may have pushed entries that weren't
     // cleared locally. Only a remote copy that opens under the repository's key
@@ -1867,7 +1888,11 @@ async function runSync(manual = false, pushLimit?: number): Promise<number> {
     // Lightweight pomodoro push: sync pomodoro data to snapshot without waiting for compaction.
     // Pomodoro settings/presets are stored as plaintext fields on the snapshot JSON,
     // so we can update them without decrypting/re-encrypting the full snapshot.
-    const willCompact = !remoteSalt || (remoteEntries.length + pendingEntries.length) >= COMPACTION_THRESHOLD;
+    const willCompact = !remoteSalt || compactionDue(
+      remoteEntries.length + pendingEntries.length,
+      (remoteChangelogFile?.data.length ?? 0) + JSON.stringify(pendingEntries).length,
+      remoteSnapshotFile?.data.length ?? 0,
+    );
     if (!willCompact) {
       try {
         const localPomSettings = await db.pomodoroSettings.get('pomodoro');
@@ -1905,13 +1930,9 @@ async function runSync(manual = false, pushLimit?: number): Promise<number> {
     if (!remoteSalt) {
       reportProgress('compacting', 'Encrypting data...', 0.9);
       await compactSnapshot(creds.pat, creds.repo, encKey);
-    } else {
-      // Normal compaction threshold check
-      const totalEntries = remoteEntries.length + pendingEntries.length;
-      if (totalEntries >= COMPACTION_THRESHOLD) {
-        reportProgress('compacting', 'Finalizing...', 0.95);
-        await compactSnapshot(creds.pat, creds.repo, encKey);
-      }
+    } else if (willCompact) {
+      reportProgress('compacting', 'Finalizing...', 0.95);
+      await compactSnapshot(creds.pat, creds.repo, encKey);
     }
 
     // Update flushOnHide cache with current sync state
@@ -2210,6 +2231,7 @@ async function compactSnapshot(pat: string, repo: string, encKey: CryptoKey) {
   } catch (err) {
     console.error('Compaction failed:', err);
     recordError('sync.compactSnapshot', err);
+    compactionFailedAt = Date.now(); // not again at the next sync (see COMPACTION_RETRY_MS)
     // Non-critical, sync still works
   }
 }
@@ -2801,6 +2823,7 @@ export function __resetForTesting() {
   probeChangelogEtag = null;
   probeSnapshotEtag = null;
   remoteLeftUnapplied = false;
+  compactionFailedAt = 0;
   consecutiveErrors = 0;
   pausedUntil = 0;
   pollGeneration = 0;

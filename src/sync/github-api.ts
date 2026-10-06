@@ -126,9 +126,9 @@ async function githubFetch(
 }
 
 function utf8ToBase64(str: string): string {
-  return btoa(
-    Array.from(new TextEncoder().encode(str), (b) => String.fromCharCode(b)).join(''),
-  );
+  // In chunks: one character per byte through an array held ~20× the file in
+  // memory (12 MB → ~250 MB), enough to crash a phone.
+  return bytesToBase64(new TextEncoder().encode(str));
 }
 
 function base64ToUtf8(base64: string): string {

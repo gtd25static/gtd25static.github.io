@@ -42,6 +42,17 @@ function getLocalTimestampKey(tier: BackupTier): string {
   return `gtd25-backup-${tier}-at`;
 }
 
+// What this device last wrote to each tier, as a SHA-256 of the plaintext.
+// Only devices without Paranoid Mode write tiers, and so only they keep one.
+function getLocalFingerprintKey(tier: BackupTier): string {
+  return `gtd25-backup-${tier}-fp`;
+}
+
+async function fingerprint(data: SyncData): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify(data)));
+  return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, '0')).join('');
+}
+
 /**
  * Attempts to create backups for stale tiers. Called fire-and-forget after sync.
  * Uses local gates, remote freshness checks, random jitter, and GitHub SHA
@@ -117,8 +128,19 @@ export async function maybeCreateBackups(
     return;
   }
 
-  // Create encrypted snapshot once
+  // A tier whose file holds what this device would write now (nothing changed
+  // since it wrote it) is left as it is: each rewrite of the same data added a
+  // snapshot-sized object to the repository's history, every hour.
   const localData = await getLocalSnapshot();
+  const current = await fingerprint(localData);
+  const changed = tiersToWrite.filter(({ tier, sha }) => {
+    if (!sha || localStorage.getItem(getLocalFingerprintKey(tier)) !== current) return true;
+    localStorage.setItem(getLocalTimestampKey(tier), String(Date.now()));
+    return false;
+  });
+  if (changed.length === 0) return;
+
+  // Create encrypted snapshot once
   const salt = getCachedSalt()!;
   localData.encryptionSalt = salt;
   localData.encryptionVerifier = await createVerifier(encKey);
@@ -129,7 +151,7 @@ export async function maybeCreateBackups(
 
   // One tier at a time: GitHub documents that concurrent writes to one branch
   // conflict, and the parallel PUTs made the tiers collide with each other.
-  for (const { tier, sha } of tiersToWrite) {
+  for (const { tier, sha } of changed) {
     try {
       const backupData: SyncData & { backedUpAt: number } = {
         ...encrypted,
@@ -137,6 +159,7 @@ export async function maybeCreateBackups(
       };
       await putFile(pat, repo, BACKUP_FILES[tier], JSON.stringify(backupData), sha);
       localStorage.setItem(getLocalTimestampKey(tier), String(backedUpAt));
+      localStorage.setItem(getLocalFingerprintKey(tier), current);
     } catch {
       // 409 = another device won the race, network error = retry next period
       // Don't update localStorage — allow retry on next check cycle

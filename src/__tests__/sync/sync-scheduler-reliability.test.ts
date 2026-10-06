@@ -10,7 +10,8 @@ import { setupSyncCredentials } from '../helpers/sync-helpers';
 
 vi.mock('../../sync/github-api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../sync/github-api')>();
-  return { ...actual, getFile: vi.fn(), putFile: vi.fn(), deleteFile: vi.fn(), testConnection: vi.fn() };
+  // The idle probe's conditional GET: failing, every poll falls through to a full sync.
+  return { ...actual, getFile: vi.fn(), putFile: vi.fn(), deleteFile: vi.fn(), testConnection: vi.fn(), getFileConditional: vi.fn(() => Promise.reject(new Error('no network in tests'))) };
 });
 vi.mock('../../components/ui/Toast', () => ({ toast: vi.fn() }));
 vi.mock('../../sync/remote-backups', async () => ({
@@ -18,7 +19,7 @@ vi.mock('../../sync/remote-backups', async () => ({
   maybeCreateBackups: vi.fn(() => Promise.resolve()),
 }));
 
-import { getFile, putFile, RateLimitError } from '../../sync/github-api';
+import { getFile, putFile, getFileConditional, RateLimitError } from '../../sync/github-api';
 import { startScheduler, stopScheduler, __resetForTesting, CHANGELOG_FILE } from '../../sync/sync-engine';
 import { toast } from '../../components/ui/Toast';
 import { recordServerDate, __resetClockSkewForTests } from '../../lib/clock-skew';
@@ -129,6 +130,21 @@ describe('a rate limit with this device\'s clock ahead (reliability review 2026-
 
     await vi.advanceTimersByTimeAsync(11 * 60_000);
     expect(mockGetFile.mock.calls.length).toBeGreaterThan(atLimit);
+  });
+});
+
+// Reliability review 2026-10-06 (M15): only a Paranoid device asked "changed?"
+// first; every other one downloaded the whole snapshot on every 30-second poll.
+describe('the idle poll of a device without Paranoid Mode', () => {
+  // What the probe decides is tested in idle-probe*.test.ts; here, that it is asked.
+  it('asks "changed?" first, like a Paranoid one', async () => {
+    startScheduler();
+    await settle();
+    vi.mocked(getFileConditional).mockClear();
+
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(vi.mocked(getFileConditional)).toHaveBeenCalled();
   });
 });
 

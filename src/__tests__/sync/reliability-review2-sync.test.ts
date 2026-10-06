@@ -288,3 +288,58 @@ describe('B17: importing a backup without pomodoro settings', () => {
     expect(snapshot.soundPresets?.map((p) => p.id)).toEqual(['p1']);
   });
 });
+
+describe('M16: compaction', () => {
+  function foreignEntries(n: number): ChangeEntry[] {
+    return Array.from({ length: n }, (_, i) => ({
+      id: `fe-${i}`, deviceId: 'device-B', timestamp: T0 + i, entityType: 'task' as const, entityId: `ft-${i}`, operation: 'upsert' as const,
+      data: { ...task(`ft-${i}`, 'l1') } as never, v: 10,
+    }));
+  }
+  const snapshotPuts = () => (putFile as Mock).mock.calls.filter((c) => c[2] === SNAPSHOT_FILE).length;
+
+  it('does not rewrite a large snapshot for a few dozen small edits', async () => {
+    await db.syncMeta.update('sync-meta', { lastPulledAt: Date.now() - 1000, pomodoroSyncedAt: Date.now() });
+    await setRemote({ taskLists: [list('l1')], tasks: [task('big', 'l1', { description: 'x'.repeat(1_000_000) })] }, foreignEntries(35));
+
+    await syncNow();
+
+    expect(snapshotPuts()).toBe(0);
+  });
+
+  it('after a failed compaction, the next syncs do not redo it at once', async () => {
+    await db.syncMeta.update('sync-meta', { lastPulledAt: Date.now() - 1000, pomodoroSyncedAt: Date.now() });
+    await setRemote({ taskLists: [list('l1')] }, foreignEntries(35));
+    const put = (putFile as Mock).getMockImplementation()!;
+    (putFile as Mock).mockImplementation(async (...args: Parameters<typeof put>) => {
+      if (args[2] === SNAPSHOT_FILE) throw new Error('Failed to fetch'); // a slow uplink timing out
+      return put(...args);
+    });
+
+    await syncNow();
+    const attempts = snapshotPuts();
+    expect(attempts).toBe(1);
+    await syncNow();
+    await syncNow();
+
+    expect(snapshotPuts()).toBe(attempts);
+  });
+});
+
+describe('B10: a long backlog of edits', () => {
+  it('goes up in bounded pushes, not one body holding all of it', async () => {
+    await setRemote({ taskLists: [list('l1')] });
+    await db.syncMeta.update('sync-meta', { lastPulledAt: Date.now() - 1000, pomodoroSyncedAt: Date.now() });
+    await db.taskLists.put(list('l1'));
+    const now = Date.now();
+    await db.changeLog.bulkAdd(Array.from({ length: 620 }, (_, i) => ({
+      id: `p-${String(i).padStart(4, '0')}`, deviceId: 'device-A', timestamp: now + i, entityType: 'task' as const,
+      entityId: `t-${i}`, operation: 'upsert' as const, data: { ...task(`t-${i}`, 'l1') } as never, v: 10,
+    })));
+
+    const remaining = await syncNow();
+
+    expect(remaining).toBe(120);
+    expect(await db.changeLog.count()).toBe(120);
+  });
+});

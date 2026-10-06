@@ -10,7 +10,8 @@ import type { ChangeEntry, SyncData, Task, TaskList } from '../../db/models';
 
 vi.mock('../../sync/github-api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../sync/github-api')>();
-  return { ...actual, getFile: vi.fn(), putFile: vi.fn(), deleteFile: vi.fn(), testConnection: vi.fn() };
+  // The idle probe's conditional GET: failing, every poll falls through to a full sync.
+  return { ...actual, getFile: vi.fn(), putFile: vi.fn(), deleteFile: vi.fn(), testConnection: vi.fn(), getFileConditional: vi.fn(() => Promise.reject(new Error('no network in tests'))) };
 });
 vi.mock('../../components/ui/Toast', () => ({ toast: vi.fn() }));
 vi.mock('../../sync/remote-backups', async () => ({

@@ -186,3 +186,24 @@ describe('clock skew from the commit a write creates', () => {
     expect(getClockSkewMs()).toBeGreaterThan(2.9 * 3_600_000);
   });
 });
+
+// Reliability review 2026-10-06 (B10): the body was built one character per
+// byte through an array — ~20× the file in memory (12 MB → ~250 MB).
+describe('putFile body encoding', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('round-trips multi-byte text and a large body', async () => {
+    const bodies: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, init: RequestInit) => {
+      bodies.push(String(init.body));
+      return new Response(JSON.stringify({ content: { sha: 's' } }), { status: 200 });
+    }));
+    const text = 'ñandú — 日本語 — 🎉 '.repeat(50_000);
+
+    await putFile('tok', 'me/repo', 'x.json', text);
+
+    const sent = JSON.parse(bodies[0]).content as string;
+    const bytes = Uint8Array.from(atob(sent), (c) => c.charCodeAt(0));
+    expect(new TextDecoder().decode(bytes)).toBe(text);
+  });
+});

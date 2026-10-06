@@ -12,6 +12,9 @@ const SYNC_LOCALSTORAGE_KEYS = [
   'gtd25-backup-hourly-at',
   'gtd25-backup-daily-at',
   'gtd25-backup-weekly-at',
+  'gtd25-backup-hourly-fp',
+  'gtd25-backup-daily-fp',
+  'gtd25-backup-weekly-fp',
   'gtd25-theme',
 ];
 

@@ -320,3 +320,45 @@ describe('a key the remote no longer uses (reliability review)', () => {
     expect(mockPutFile).not.toHaveBeenCalled();
   });
 });
+
+// Reliability review 2026-10-06 (M17): every stale tier was re-encrypted and
+// uploaded even when nothing had changed — an hourly copy of the same data,
+// each one a new snapshot-sized object in the repository's history.
+describe('maybeCreateBackups — nothing changed since a tier was written', () => {
+  const HOUR = 3_600_000;
+  beforeEach(() => {
+    for (const tier of ['hourly', 'daily', 'weekly']) localStorage.removeItem(`gtd25-backup-${tier}-fp`);
+  });
+
+  async function firstRunThenLater(changeData?: () => Promise<unknown>) {
+    const start = Date.now();
+    mockGetFile.mockResolvedValue(null);
+    mockPutFile.mockResolvedValue('sha-1');
+    await maybeCreateBackups('pat', 'owner/repo', mockEncKey());
+    const written = mockPutFile.mock.calls.length;
+
+    // Two hours on: the hourly tier is due; its file still holds what was written.
+    vi.spyOn(Date, 'now').mockReturnValue(start + 2 * HOUR);
+    __resetForTesting();
+    const tierFiles = new Set<string>(Object.values(BACKUP_FILES));
+    mockGetFile.mockImplementation(async (_p: string, _r: string, path: string) =>
+      (tierFiles.has(path) ? { data: JSON.stringify({ backedUpAt: start }), sha: 'sha-1' } : null));
+    // (A real change: the mock of getLocalSnapshot does not reach this module — an import cycle.)
+    if (changeData) await changeData();
+    await maybeCreateBackups('pat', 'owner/repo', mockEncKey());
+    return { written, after: mockPutFile.mock.calls.length };
+  }
+
+  it('does not upload the same content again', async () => {
+    const { written, after } = await firstRunThenLater();
+    expect(written).toBe(3);
+    expect(after).toBe(written);
+  });
+
+  it('uploads once the data changed', async () => {
+    const { db } = await import('../../db');
+    const { written, after } = await firstRunThenLater(() =>
+      db.taskLists.add({ id: 'new', name: 'New', type: 'tasks', order: 9, createdAt: 1, updatedAt: 1 }));
+    expect(after).toBeGreaterThan(written);
+  });
+});

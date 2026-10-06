@@ -80,6 +80,32 @@ export function clearEncryptionKey() {
   cachedKey = null;
   cachedSalt = null;
   if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
+  // Locking calls this: what was decrypted goes with the keys.
+  decryptedBlobs = new WeakMap();
+}
+
+// --- Decrypted entity blobs, remembered ---
+//
+// Every read in Paranoid Mode decrypts every row it returns, and the live
+// queries re-read whole tables after each write: ~0.5 s per read at a few
+// thousand tasks on a desktop, several times that on a phone. A ciphertext
+// always opens to the same text, so it is decrypted once per key: the cache is
+// keyed by the key object and by type, id and the ciphertext itself (a row that
+// changes gets a new one — a fresh IV on every write). Only the decrypted JSON
+// is kept: the row is rebuilt from what is stored now, and parsed afresh for
+// each caller. Dropped on lock (clearEncryptionKey); bounded.
+const MAX_DECRYPTED_BLOBS = 50_000;
+let decryptedBlobs = new WeakMap<CryptoKey, Map<string, string>>();
+
+function rememberedPlaintext(key: CryptoKey, id: string): string | undefined {
+  return decryptedBlobs.get(key)?.get(id);
+}
+
+function rememberPlaintext(key: CryptoKey, id: string, plaintext: string): void {
+  let blobs = decryptedBlobs.get(key);
+  if (!blobs) decryptedBlobs.set(key, (blobs = new Map()));
+  if (blobs.size >= MAX_DECRYPTED_BLOBS) blobs.delete(blobs.keys().next().value!); // the oldest
+  blobs.set(id, plaintext);
 }
 
 export function hasEncryptionKey(): boolean {
@@ -261,15 +287,19 @@ export async function decryptEntity(
   if (typeof entity._enc !== 'string') throw new Error(`Malformed ${entityType} record: _enc is not ciphertext`);
 
   const aad = entityAad(entityType, entity);
-  let plaintext: string;
-  try {
-    // New blobs are bound to type+id; verify that binding.
-    plaintext = await decryptBlob(key, entity._enc, aad);
-  } catch (err) {
-    // Fallback for blobs written before AAD binding (no additionalData). If there is no
-    // AAD to try, this was already the unbound attempt, so the error is genuine.
-    if (!aad) throw err;
-    plaintext = await decryptBlob(key, entity._enc);
+  const blobId = `${entityType}\u0000${String(entity.id)}\u0000${entity._enc}`;
+  let plaintext = rememberedPlaintext(key, blobId);
+  if (plaintext === undefined) {
+    try {
+      // New blobs are bound to type+id; verify that binding.
+      plaintext = await decryptBlob(key, entity._enc, aad);
+    } catch (err) {
+      // Fallback for blobs written before AAD binding (no additionalData). If there is no
+      // AAD to try, this was already the unbound attempt, so the error is genuine.
+      if (!aad) throw err;
+      plaintext = await decryptBlob(key, entity._enc);
+    }
+    rememberPlaintext(key, blobId, plaintext);
   }
   const sensitiveData = JSON.parse(plaintext) as Record<string, unknown>;
 

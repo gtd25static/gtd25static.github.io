@@ -55,6 +55,10 @@ const SYNC_HISTORY_KEYS = [
   'gtd25-backup-hourly-at',
   'gtd25-backup-daily-at',
   'gtd25-backup-weekly-at',
+  // Hashes of what this device last wrote to each remote backup tier (sync/remote-backups).
+  'gtd25-backup-hourly-fp',
+  'gtd25-backup-daily-fp',
+  'gtd25-backup-weekly-fp',
 ];
 
 /**
