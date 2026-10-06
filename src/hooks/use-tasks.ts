@@ -6,10 +6,11 @@ import { recordChangeInTx, recordChangeBatchInTx, ensureDeviceId } from '../sync
 import { scheduleSyncDebounced } from '../sync/sync-engine';
 import { computeNextOccurrence } from './use-recurring';
 import { handleDbError } from '../lib/db-error';
+import { storedVersion, storedVersionInTx } from '../db/stored-version';
 import { initFieldTimestamps, stampUpdatedFields, stampChangedFields } from '../sync/field-timestamps';
 import { encryptRow, getActiveAtRestKey } from '../db/vault-middleware';
 import { SYNC_VERSION } from '../sync/version';
-import { undeleteRowInTx, type TaskSideChange } from './use-task-lists';
+import { undeleteRowInTx, getOrCreateInbox, type TaskSideChange } from './use-task-lists';
 import { MAX_TITLE_LENGTH } from '../lib/constants';
 
 export function useTasks(listId: string | null) {
@@ -84,50 +85,66 @@ export async function updateTask(id: string, updates: Partial<Task>) {
   if (updates.title !== undefined) updates = { ...updates, title: updates.title.slice(0, MAX_TITLE_LENGTH) };
   try {
     const deviceId = await ensureDeviceId();
-    const existing = await db.tasks.get(id);
-    if (!existing) return;
-    const now = Date.now();
-    const fieldTimestamps = stampChangedFields(
-      existing as unknown as Record<string, unknown>,
-      updates as Record<string, unknown>,
-      now,
-    );
-    const updated: Task = { ...existing, ...updates, updatedAt: now, fieldTimestamps };
-    const change: ChangeEntry = {
-      id: newId(),
-      deviceId,
-      timestamp: now,
-      entityType: 'task',
-      entityId: id,
-      operation: 'upsert',
-      data: updated as unknown as Record<string, unknown>,
-      v: SYNC_VERSION,
-    };
-
-    let taskRow = updated as unknown as Record<string, unknown>;
-    let changeRow = change as unknown as Record<string, unknown>;
-    const atRestKey = getActiveAtRestKey();
-    if (atRestKey) {
-      const [encryptedTask, encryptedChange] = await Promise.all([
-        encryptRow('tasks', atRestKey, taskRow),
-        encryptRow('changeLog', atRestKey, changeRow),
-      ]);
-      if (!encryptedTask || !encryptedChange) throw new Error('Failed to encrypt task update');
-      taskRow = encryptedTask;
-      changeRow = encryptedChange;
+    // The row is read, the edit encrypted, then the whole row written: a sync
+    // merge landing in between was overwritten here (its entries already
+    // consumed). The write goes through only if the row is still the version
+    // read — stored version first, then the row, so a merge between the two is
+    // caught too — and is redone on top of the merge otherwise.
+    // The last try writes regardless: the edit itself must never be lost.
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      if (await writeTaskUpdate(id, updates, deviceId, attempt === 3)) break;
     }
-
-    // Safari can close a write transaction while the Paranoid middleware awaits
-    // Web Crypto. Pre-encrypt outside IndexedDB, then write already-encrypted rows
-    // in one short transaction that the middleware fast-passes synchronously.
-    await db.transaction('rw', [db.tasks, db.changeLog], async () => {
-      await db.tasks.put(taskRow as unknown as Task);
-      await db.changeLog.add(changeRow as unknown as ChangeEntry);
-    });
     scheduleSyncDebounced();
   } catch (error) {
     handleDbError(error, 'update task');
   }
+}
+
+/** One try of updateTask: false when the row changed under it (nothing written) — unless `force`. */
+async function writeTaskUpdate(id: string, updates: Partial<Task>, deviceId: string, force: boolean): Promise<boolean> {
+  const versionRead = await storedVersion('tasks', id);
+  const existing = await db.tasks.get(id);
+  if (!existing) return true;
+  const now = Date.now();
+  const fieldTimestamps = stampChangedFields(
+    existing as unknown as Record<string, unknown>,
+    updates as Record<string, unknown>,
+    now,
+  );
+  const updated: Task = { ...existing, ...updates, updatedAt: now, fieldTimestamps };
+  const change: ChangeEntry = {
+    id: newId(),
+    deviceId,
+    timestamp: now,
+    entityType: 'task',
+    entityId: id,
+    operation: 'upsert',
+    data: updated as unknown as Record<string, unknown>,
+    v: SYNC_VERSION,
+  };
+
+  let taskRow = updated as unknown as Record<string, unknown>;
+  let changeRow = change as unknown as Record<string, unknown>;
+  const atRestKey = getActiveAtRestKey();
+  if (atRestKey) {
+    const [encryptedTask, encryptedChange] = await Promise.all([
+      encryptRow('tasks', atRestKey, taskRow),
+      encryptRow('changeLog', atRestKey, changeRow),
+    ]);
+    if (!encryptedTask || !encryptedChange) throw new Error('Failed to encrypt task update');
+    taskRow = encryptedTask;
+    changeRow = encryptedChange;
+  }
+
+  // Safari can close a write transaction while the Paranoid middleware awaits
+  // Web Crypto. Pre-encrypt outside IndexedDB, then write already-encrypted rows
+  // in one short transaction that the middleware fast-passes synchronously.
+  return db.transaction('rw', [db.tasks, db.changeLog], async (tx) => {
+    if (!force && (await storedVersionInTx(tx, 'tasks', id)) !== versionRead) return false;
+    await db.tasks.put(taskRow as unknown as Task);
+    await db.changeLog.add(changeRow as unknown as ChangeEntry);
+    return true;
+  });
 }
 
 /**
@@ -220,13 +237,21 @@ export async function restoreTask(id: string) {
   try {
     const now = Date.now();
     await ensureDeviceId();
+    // Its list gone for good (purged): restored there it sat out of sight until
+    // the next start moved it. It comes back in the Inbox.
+    const deleted = await db.tasks.get(id);
+    const inboxId = deleted?.deletedAt && !(await db.taskLists.get(deleted.listId)) ? await getOrCreateInbox() : undefined;
     await db.transaction('rw', [db.taskLists, db.tasks, db.subtasks, db.changeLog], async () => {
-      const task = await db.tasks.get(id);
+      let task = await db.tasks.get(id);
       if (!task?.deletedAt) return;
       const cascadeAt = task.deletedAt;
       const batch: TaskSideChange[] = [];
       const list = await db.taskLists.get(task.listId);
       if (list?.deletedAt) batch.push(await undeleteRowInTx('taskList', list, now));
+      if (!list && inboxId) {
+        await db.tasks.update(id, { listId: inboxId, fieldTimestamps: stampUpdatedFields(task.fieldTimestamps, ['listId'], now) });
+        task = (await db.tasks.get(id))!;
+      }
       batch.push(await undeleteRowInTx('task', task, now));
       const subs = await db.subtasks.where('taskId').equals(id).toArray();
       for (const sub of subs) {

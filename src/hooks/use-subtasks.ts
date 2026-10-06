@@ -7,7 +7,7 @@ import { scheduleSyncDebounced } from '../sync/sync-engine';
 import { computeNextOccurrence } from './use-recurring';
 import { handleDbError } from '../lib/db-error';
 import { initFieldTimestamps, stampUpdatedFields, stampChangedFields } from '../sync/field-timestamps';
-import { undeleteRowInTx, type TaskSideChange } from './use-task-lists';
+import { undeleteRowInTx, getOrCreateInbox, type TaskSideChange } from './use-task-lists';
 import { setTaskStatus } from './use-tasks';
 import { MAX_TITLE_LENGTH } from '../lib/constants';
 
@@ -178,6 +178,14 @@ export async function restoreSubtask(id: string) {
   try {
     const now = Date.now();
     await ensureDeviceId();
+    const deleted = await db.subtasks.get(id);
+    if (deleted?.deletedAt && !(await db.tasks.get(deleted.taskId))) {
+      // Its task is gone for good (purged): restored as a subtask it had nowhere
+      // to show, and the next start deleted it again. It comes back as a task in
+      // the Inbox instead.
+      await convertSubtaskToTask(id, await getOrCreateInbox(), { fromTrash: true });
+      return;
+    }
     await db.transaction('rw', [db.taskLists, db.tasks, db.subtasks, db.changeLog], async () => {
       const sub = await db.subtasks.get(id);
       if (!sub?.deletedAt) return;
@@ -195,10 +203,14 @@ export async function restoreSubtask(id: string) {
 }
 
 /** Returns the new task's id (for an Undo), or undefined if nothing was converted. */
-export async function convertSubtaskToTask(subtaskId: string, targetListId: string): Promise<string | undefined> {
+export async function convertSubtaskToTask(
+  subtaskId: string,
+  targetListId: string,
+  { fromTrash = false }: { fromTrash?: boolean } = {},
+): Promise<string | undefined> {
   try {
     const subtask = await db.subtasks.get(subtaskId);
-    if (!subtask || subtask.deletedAt) return undefined;
+    if (!subtask || (subtask.deletedAt && !fromTrash)) return undefined;
     const now = Date.now();
     const newTaskId = newId();
     await ensureDeviceId();

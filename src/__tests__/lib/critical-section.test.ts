@@ -97,3 +97,38 @@ it('with Web Locks, an update waits for every section and a new one waits for th
   await new Promise((r) => setTimeout(r, 10));
   expect(late).not.toHaveBeenCalled();
 });
+
+// Reliability review 2026-10-06 (B9): a section started in this tab after the
+// update took its lock queued behind it but armed the "Leave site?" prompt; the
+// update's reload then asked, and if the user stayed, the lock was held for good
+// — every import, force pull, wipe or password change in every tab hung.
+describe('once this tab is applying an update', () => {
+  afterEach(() => vi.useRealTimers());
+
+  it('refuses a new section here (no prompt that could cancel the reload)', async () => {
+    installFakeLocks();
+    vi.useFakeTimers();
+    const apply = vi.fn();
+    await whenNoCriticalSection(apply);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(apply).toHaveBeenCalled();
+
+    await expect(inCriticalSection(async () => 'ran')).rejects.toThrow(/updat/i);
+    const ev = new Event('beforeunload', { cancelable: true });
+    window.dispatchEvent(ev);
+    expect(ev.defaultPrevented).toBe(false);
+  });
+
+  it('lets go if the page is somehow still here a minute later', async () => {
+    const { held } = installFakeLocks();
+    vi.useFakeTimers();
+    await whenNoCriticalSection(() => {});
+    await vi.advanceTimersByTimeAsync(0);
+    expect(held).toContain('exclusive');
+
+    await vi.advanceTimersByTimeAsync(61_000);
+
+    expect(held).not.toContain('exclusive');
+    await expect(inCriticalSection(async () => 'ran')).resolves.toBe('ran');
+  });
+});

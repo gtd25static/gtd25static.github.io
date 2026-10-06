@@ -96,9 +96,12 @@ export function useMotivationStats(): MotivationStats | undefined {
   const [timeOfDay, setTimeOfDay] = useState(getTimeOfDay);
   const [refreshKey, setRefreshKey] = useState(0);
 
-  // Midnight refresh
+  // Midnight refresh — re-armed every day (it fired once: a window left open
+  // showed yesterday's numbers from the second midnight on), and checked again
+  // when the page comes back, since a timer stands still while the device sleeps.
   useEffect(() => {
     const now = new Date();
+    const day = now.toDateString();
     const tomorrow = new Date(now);
     tomorrow.setDate(tomorrow.getDate() + 1);
     tomorrow.setHours(0, 0, 0, 0);
@@ -107,8 +110,17 @@ export function useMotivationStats(): MotivationStats | undefined {
     const timeout = setTimeout(() => {
       setRefreshKey((k) => k + 1);
     }, msUntilMidnight);
-    return () => clearTimeout(timeout);
-  }, []);
+    const onReturn = () => {
+      if (new Date().toDateString() !== day) setRefreshKey((k) => k + 1);
+    };
+    window.addEventListener('focus', onReturn);
+    document.addEventListener('visibilitychange', onReturn);
+    return () => {
+      clearTimeout(timeout);
+      window.removeEventListener('focus', onReturn);
+      document.removeEventListener('visibilitychange', onReturn);
+    };
+  }, [refreshKey]);
 
   // Hourly re-evaluation for timeOfDay
   useEffect(() => {

@@ -38,10 +38,34 @@ function computeTargetMinute(targetMinute: number, now: Date): number {
   return target.getTime();
 }
 
+// The running timer's end, kept across reloads: an update's reload, a re-key's,
+// or Android killing the PWA in the background lost it, and no bell ever came.
+// Not content — a time — so it is kept in the clear on a Paranoid device too.
+const TIMER_END_KEY = 'gtd25-pomodoro-end';
+// A timer that ended longer ago than this while the page was gone is dropped
+// without a bell; a more recent one completes (and rings) at the first tick.
+const LATE_BELL_MS = 10 * 60 * 1000;
+
+function restoredTimerEnd(): number | null {
+  try {
+    const end = Number(localStorage.getItem(TIMER_END_KEY));
+    if (!end) return null;
+    if (end < Date.now() - LATE_BELL_MS) {
+      localStorage.removeItem(TIMER_END_KEY);
+      return null;
+    }
+    return end;
+  } catch {
+    return null;
+  }
+}
+
+const restoredEnd = restoredTimerEnd();
+
 export const usePomodoroStore = create<PomodoroState>((set, get) => ({
-  timerRunning: false,
-  timerEndTime: null,
-  displaySeconds: 0,
+  timerRunning: restoredEnd !== null,
+  timerEndTime: restoredEnd,
+  displaySeconds: restoredEnd !== null ? Math.max(0, Math.ceil((restoredEnd - Date.now()) / 1000)) : 0,
   ambientPlaying: false,
   pomodoroSettingsOpen: false,
 
@@ -104,3 +128,12 @@ export const usePomodoroStore = create<PomodoroState>((set, get) => ({
 
   setPomodoroSettingsOpen: (open) => set({ pomodoroSettingsOpen: open }),
 }));
+
+usePomodoroStore.subscribe((state, previous) => {
+  const end = state.timerRunning ? state.timerEndTime : null;
+  if (end === (previous.timerRunning ? previous.timerEndTime : null)) return;
+  try {
+    if (end) localStorage.setItem(TIMER_END_KEY, String(end));
+    else localStorage.removeItem(TIMER_END_KEY);
+  } catch { /* storage unavailable: the timer just doesn't survive a reload */ }
+});

@@ -163,3 +163,36 @@ describe('the quota message', () => {
     expect(Number(item)).toBeGreaterThan(Number(free));
   });
 });
+
+// Reliability review 2026-10-06 (B21): the 30 MB check ran before an upload that
+// can take a minute; two adds at once (a drop and a paste) both passed it.
+describe('two files added at once', () => {
+  it('cannot together go past the folder\'s limit', async () => {
+    vi.mocked(sharedBlobBlocker).mockResolvedValue(null);
+    vi.mocked(uploadSharedBlob).mockImplementation(() => new Promise((r) => setTimeout(r, 20)));
+    const chains = new Map<string, Promise<unknown>>();
+    Object.defineProperty(navigator, 'locks', {
+      configurable: true,
+      value: {
+        request: (name: string, fn: () => Promise<unknown>) => {
+          const run = (chains.get(name) ?? Promise.resolve()).then(fn);
+          chains.set(name, run.catch(() => undefined));
+          return run;
+        },
+      },
+    });
+    try {
+      const size = Math.ceil(MAX_SHARED_FOLDER_BYTES * 0.6);
+      const results = await Promise.all([
+        createFileItem(new File([new Uint8Array(size)], 'one.bin')),
+        createFileItem(new File([new Uint8Array(size)], 'two.bin')),
+      ]);
+      expect(results.filter(Boolean)).toHaveLength(1);
+      expect(await db.sharedItems.count()).toBe(1);
+    } finally {
+      Object.defineProperty(navigator, 'locks', { configurable: true, value: undefined });
+      vi.mocked(uploadSharedBlob).mockImplementation(async () => {});
+      vi.mocked(sharedBlobBlocker).mockResolvedValue('no-sync');
+    }
+  });
+});

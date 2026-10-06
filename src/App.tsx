@@ -11,6 +11,7 @@ import { touchVaultActivity, lockIfIdleExpired, lock, isParanoidEnabled, DEFAULT
 import { startSystemIdleLock, DEFAULT_SYSTEM_LOCK_GRACE_MINUTES } from './lib/system-idle';
 import { checkRecurringTasks } from './hooks/use-recurring';
 import { recordError } from './lib/diagnostics';
+import { toast } from './components/ui/Toast';
 import { SpecialListProvider } from './hooks/use-special-list';
 import { SyncProvider } from './sync/use-sync';
 import { usePomodoroClock } from './hooks/use-pomodoro-clock';
@@ -95,6 +96,15 @@ function UnlockedApp() {
   useEffect(() => {
     ensureDefaults().catch((e) => recordError('startup.defaults', e));
   }, []);
+
+  // The remote-wipe watcher's token was refused (use-remote-unlock): said to the
+  // owner here, once unlocked — never on the lock screen.
+  const wipeTokenRejected = !!localSettings.remoteWipeTokenRejectedAt;
+  useEffect(() => {
+    if (wipeTokenRejected) {
+      toast("Remote wipe can't reach GitHub: this device's token was rejected. Enter a new one in Settings → Sync.", 'error');
+    }
+  }, [wipeTokenRejected]);
 
   // Check recurring tasks on startup and every 60s. A persistent DB failure here
   // is otherwise invisible (recurring tasks silently stop resetting) — tag it in

@@ -1080,6 +1080,12 @@ function RemoteUnlockSection() {
           <button type="button" className="ml-2 underline" onClick={() => void updateLocalSettings({ remoteUnlockTampered: undefined })}>Dismiss</button>
         </div>
       )}
+      {enrolled && local.remoteWipeTokenRejectedAt && (
+        <p role="alert" className="rounded-md bg-red-50 px-2 py-1.5 text-xs text-red-700 dark:bg-red-950/40 dark:text-red-300">
+          GitHub rejected this device's token, so it can't receive a remote wipe (or unlock). Enter a new token in
+          Settings → Sync.
+        </p>
+      )}
       {enrolled ? (
         <>
           <p className="text-xs text-emerald-600 dark:text-emerald-400">

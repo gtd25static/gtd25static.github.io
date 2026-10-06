@@ -171,6 +171,9 @@ export async function createFileItem(file: File): Promise<SharedItem | undefined
     // dangling item; a failure after upload leaves only a harmless orphan blob.
     // Both under the branch lock, so no compaction here sees the bytes unnamed.
     return await withBlobBranchLock(async () => {
+      // Again under the lock, before the upload: the check above ran before an
+      // upload that can take a minute, and two adds at once both passed it.
+      if (!(await checkFits(bytes.length))) return undefined;
       await uploadSharedBlob(blobId, bytes);
 
       const now = Date.now();
@@ -206,6 +209,7 @@ export async function createSnippetItem(name: string, text: string): Promise<Sha
     if (!(await checkFits(bytes.length))) return undefined;
     const blobId = newId();
     return await withBlobBranchLock(async () => {
+      if (!(await checkFits(bytes.length))) return undefined; // again, under the lock (see createFileItem)
       await uploadSharedBlob(blobId, bytes);
 
       const now = Date.now();

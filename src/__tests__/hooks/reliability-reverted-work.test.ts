@@ -299,3 +299,66 @@ describe('saving an edit with nothing in it (M1)', () => {
     expect((await db.tasks.get(task.id))?.updatedAt).toBe(task.updatedAt);
   });
 });
+
+// Reliability review 2026-10-06 (B12): updateTask read the row, then wrote the
+// whole of it back in a later transaction; a sync merge landing in between was
+// overwritten here — its entries already consumed, so this device kept the old
+// values until the field was edited again.
+describe('an edit and a sync merge at the same moment (B12)', () => {
+  it('the edit is applied on top of the merge, not over it', async () => {
+    const t = assertDefined(await createTask(listId, { title: 'Draft', description: 'Old notes' }));
+    const realGet = db.tasks.get.bind(db.tasks);
+    vi.spyOn(db.tasks, 'get').mockImplementationOnce((async (id: string) => {
+      const row = await realGet(id);
+      // The merge lands right after the edit read the row.
+      await db.tasks.update(id, { description: 'Notes from the laptop', fieldTimestamps: { ...row!.fieldTimestamps, description: Date.now() } });
+      return row;
+    }) as never);
+
+    await updateTask(t.id, { title: 'Final' });
+
+    const after = assertDefined(await db.tasks.get(t.id));
+    expect(after.title).toBe('Final');
+    expect(after.description).toBe('Notes from the laptop');
+  });
+});
+
+// Reliability review 2026-10-06 (B20): restoring an item whose parent was already
+// purged "worked", but left it out of sight — a subtask was deleted again at the
+// next start, a task sat invisible in a list that no longer exists.
+describe('restoring from the Trash when the parent is gone (B20)', () => {
+  it('a subtask comes back as a task in the Inbox', async () => {
+    const { restoreSubtask } = await import('../../hooks/use-subtasks');
+    const { getOrCreateInbox } = await import('../../hooks/use-task-lists');
+    const inboxId = await getOrCreateInbox();
+    const parent = assertDefined(await createTask(listId, { title: 'Trip' }));
+    const sub = assertDefined(await createSubtask(parent.id, { title: 'Book hotel', links: [{ url: 'https://h.example' }] }));
+    await db.subtasks.update(sub.id, { deletedAt: Date.now() });
+    await db.tasks.delete(parent.id); // purged
+
+    await restoreSubtask(sub.id);
+
+    const tasks = await db.tasks.where('listId').equals(inboxId).toArray();
+    const promoted = assertDefined(tasks.find((t) => t.title === 'Book hotel'));
+    expect(promoted.deletedAt).toBeUndefined();
+    expect(promoted.links).toEqual([{ url: 'https://h.example' }]);
+    expect((await db.subtasks.get(sub.id))?.deletedAt).toBeDefined(); // the subtask itself stays gone
+    // and it holds after the next start's repairs
+    await cleanOrphans();
+    expect((await db.tasks.get(promoted.id))?.deletedAt).toBeUndefined();
+  });
+
+  it('a task whose list was purged comes back in the Inbox', async () => {
+    const { getOrCreateInbox } = await import('../../hooks/use-task-lists');
+    const { restoreTask } = await import('../../hooks/use-tasks');
+    const t = assertDefined(await createTask(listId, { title: 'Orphan' }));
+    await db.tasks.update(t.id, { deletedAt: Date.now() });
+    await db.taskLists.delete(listId); // purged
+
+    await restoreTask(t.id);
+
+    const after = assertDefined(await db.tasks.get(t.id));
+    expect(after.deletedAt).toBeUndefined();
+    expect(after.listId).toBe(await getOrCreateInbox());
+  });
+});

@@ -12,6 +12,11 @@
 const LOCK_NAME = 'gtd25-critical';
 
 let active = 0;
+// This tab holds the update's exclusive lock and is about to reload.
+let applyingUpdate = false;
+// Normally the page is gone long before this; if not, the lock is let go so the
+// app keeps working (it used to be held for good).
+const UPDATE_HOLD_MS = 60_000;
 
 function guardUnload(event: BeforeUnloadEvent): void {
   event.preventDefault();
@@ -30,6 +35,10 @@ function locks(): LockManager | undefined {
  * exist so callers already inside one do not open another.)
  */
 export async function inCriticalSection<T>(fn: () => Promise<T>): Promise<T> {
+  // An update is reloading this tab: a section now would wait behind its lock
+  // while arming the "Leave site?" prompt — and staying on the page there kept
+  // the lock, and every critical operation in every tab, stuck for good.
+  if (applyingUpdate) throw new Error('The app is updating — try again once it has reloaded.');
   active++;
   if (active === 1 && typeof window !== 'undefined') window.addEventListener('beforeunload', guardUnload);
   try {
@@ -57,8 +66,12 @@ export async function whenNoCriticalSection(apply: () => void): Promise<void> {
     // Held until the reload: an import started meanwhile in another tab would
     // otherwise run straight into it.
     void lockManager.request(LOCK_NAME, { mode: 'exclusive' }, () => {
+      applyingUpdate = true;
       apply();
-      return new Promise<never>(() => {});
+      return new Promise<void>((resolve) => setTimeout(() => {
+        applyingUpdate = false;
+        resolve();
+      }, UPDATE_HOLD_MS));
     });
     return;
   }

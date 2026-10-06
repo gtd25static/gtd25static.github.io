@@ -338,6 +338,10 @@ export interface LocalSettings {
   id: string; // always 'local'
   githubPat?: string;
   githubRepo?: string;
+  // The remote-wipe watcher's mailbox poll was refused (token expired or
+  // revoked): this device is out of reach of a remote wipe. Shown to the owner
+  // once unlocked, never on the lock screen; cleared by the next poll that works.
+  remoteWipeTokenRejectedAt?: number;
   syncEnabled: boolean;
   syncIntervalMs: number;
   deviceId?: string;

@@ -5,6 +5,7 @@ import { isParanoidFlagSet } from '../db/paranoid-flag';
 import { jitterInterval } from '../sync/poll-jitter';
 import { getCachedSalt } from '../sync/crypto';
 import { recordError } from '../lib/diagnostics';
+import { classifySyncError } from '../sync/sync-errors';
 import { toast } from '../components/ui/Toast';
 import {
   getMailboxPat, getRepo, requestRemoteUnlock, pollRemoteUnlock, pollRemoteCommands, cancelRemoteUnlock,
@@ -184,7 +185,20 @@ export function useRemoteWipeCommands() {
         etag.current = null;
         lastKey.current = key;
       }
-      const w = await pollRemoteCommands(ctx.pat, ctx.repo, ctx.deviceId, etag.current);
+      let w: Awaited<ReturnType<typeof pollRemoteCommands>>;
+      try {
+        w = await pollRemoteCommands(ctx.pat, ctx.repo, ctx.deviceId, etag.current);
+      } catch (err) {
+        // A refused token is not transient: noted, or the device was silently out
+        // of reach of a remote wipe while Settings still said "Enabled".
+        if (classifySyncError(err).category === 'auth') {
+          await db.localSettings.update('local', { remoteWipeTokenRejectedAt: Date.now() });
+        }
+        throw err;
+      }
+      if ((await db.localSettings.get('local'))?.remoteWipeTokenRejectedAt) {
+        await db.localSettings.update('local', { remoteWipeTokenRejectedAt: undefined });
+      }
       etag.current = w.etag;
       // While unlocked, refresh the registry entry at most daily, so the trusted
       // devices can show when this one was last seen (a no-op while locked).

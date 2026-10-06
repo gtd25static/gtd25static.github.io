@@ -303,6 +303,27 @@ describe('GitHubSettings — changing the password before the key is cached', ()
   });
 });
 
+// Reliability review 2026-10-06 (B11): a new token was saved and nothing else
+// happened — "Token rejected" stayed up until the next poll (minutes, in backoff).
+describe('GitHubSettings — a new token on a device that syncs', () => {
+  it('syncs at once', async () => {
+    const { syncNow } = await import('../../sync/sync-engine');
+    vi.mocked(syncNow).mockClear();
+    h.hasEncryptionKey.mockReturnValue(true);
+    h.vault = { enabled: false, unlocked: false };
+    h.local = { githubPat: 'ghp_expired', githubRepo: 'owner/repo', encryptionPassword: 'alpha rhino cactus velvet moon', syncEnabled: true };
+    const user = userEvent.setup();
+    render(<GitHubSettings />);
+    const field = screen.getByLabelText('Personal Access Token');
+    await user.clear(field);
+    await user.type(field, 'ghp_fresh');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+
+    await vi.waitFor(() => expect(syncNow).toHaveBeenCalledWith(true));
+    h.hasEncryptionKey.mockReturnValue(false);
+  });
+});
+
 describe('GitHubSettings — Paranoid: where this device syncs is behind the passphrase', () => {
   // An unlocked but unattended session could point the device at another
   // repository — every later change would be streamed there (GUI review).

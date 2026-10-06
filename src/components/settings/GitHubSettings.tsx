@@ -176,6 +176,10 @@ export function GitHubSettings() {
     }
     toast('Sync settings saved', 'success');
     if (willEnableSync && (effectivePat !== storedPat || !wasSyncEnabled)) void warnIfTokenReachesTooFar(effectivePat);
+    // A new token or repository on a device that already syncs: sync now, rather
+    // than leave "Token rejected" up until the next poll (a backoff can be minutes).
+    if (wasSyncEnabled && willEnableSync && !rotating
+      && (effectivePat !== storedPat || repo.trim() !== (local.githubRepo ?? ''))) void syncNow(true);
     if (paranoid) setPat(''); // a typed-in secret does not stay on screen either
     if (!rotating) return;
 

@@ -95,7 +95,7 @@ describe('make a task a subtask of another', () => {
 
     expect((await db.subtasks.get(subId))?.taskId).toBe(parent.id);
     undoOfLastToast()();
-    await vi.waitFor(async () => expect((await db.tasks.get(task.id))?.description).toBe('Embassy needs two photos'));
-    expect((await db.tasks.get(task.id))?.deletedAt).toBeUndefined();
+    await vi.waitFor(async () => expect((await db.tasks.get(task.id))?.deletedAt).toBeUndefined());
+    expect((await db.tasks.get(task.id))?.description).toBe('Embassy needs two photos');
   });
 });
