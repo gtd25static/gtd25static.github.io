@@ -1,4 +1,5 @@
 import { db } from './index';
+import { portableRows } from './portable-rows';
 import type { TaskList, Task, Subtask, Settings, PomodoroSettings, SoundPreset, MindmapFolder, Mindmap, MindmapNode, SharedItem } from './models';
 import type JSZip from 'jszip';
 import { generateSalt, deriveKey, encryptBlob, decryptBlob, createVerifier, checkVerifier } from '../sync/crypto';
@@ -91,6 +92,16 @@ async function buildPayload(): Promise<ExportPayload> {
     db.soundPresets.toArray(),
   ]);
   const sharedLinks = sharedItems.filter((i) => i.type === 'link' && !i.deletedAt);
+  // Rows this device can't read stay out (see portableRows) — and the user is told.
+  const out = {
+    taskLists: portableRows(taskLists), tasks: portableRows(tasks), subtasks: portableRows(subtasks),
+    mindmapFolders: portableRows(mindmapFolders), mindmaps: portableRows(mindmaps), mindmapNodes: portableRows(mindmapNodes),
+  };
+  const unreadable = Object.values(out).reduce((n, c) => n + c.unreadable, 0);
+  if (unreadable > 0) {
+    const { toast } = await import('../components/ui/Toast');
+    toast(`${unreadable} item(s) this device can't read were left out of the backup.`, 'error');
+  }
 
   const settings: Settings = {
     theme: (localStorage.getItem('gtd25-theme') as Settings['theme']) ?? 'system',
@@ -99,12 +110,12 @@ async function buildPayload(): Promise<ExportPayload> {
   return {
     exportVersion: CURRENT_EXPORT_VERSION,
     exportedAt: Date.now(),
-    taskLists,
-    tasks,
-    subtasks,
-    mindmapFolders,
-    mindmaps,
-    mindmapNodes,
+    taskLists: out.taskLists.rows,
+    tasks: out.tasks.rows,
+    subtasks: out.subtasks.rows,
+    mindmapFolders: out.mindmapFolders.rows,
+    mindmaps: out.mindmaps.rows,
+    mindmapNodes: out.mindmapNodes.rows,
     ...(sharedLinks.length > 0 ? { sharedLinks } : {}),
     settings,
     pomodoroSettings: pomodoroSettings ?? undefined,
@@ -271,11 +282,16 @@ function validatePayload(parsed: ExportPayload): ImportData {
   }
 
   // Encryption bookkeeping is never something a backup may set: a row carrying a
-  // bogus `_enc` was stored beside it in plaintext on a Paranoid device.
-  const withoutBookkeeping = <T,>(rows: T[]): T[] => rows.map((row) => {
-    const { _enc: _ciphertext, _decryptError: _quarantined, ...rest } = row as Record<string, unknown>;
-    return rest as T;
-  });
+  // bogus `_enc` was stored beside it in plaintext on a Paranoid device. A row
+  // marked `_decryptError` is the placeholder for one the exporting device could
+  // not read: it is left out — imported with the mark stripped, it became a real
+  // row titled "⚠︎ unreadable" and replaced the intact copies everywhere.
+  const withoutBookkeeping = <T,>(rows: T[]): T[] => rows
+    .filter((row) => !(row as { _decryptError?: unknown })._decryptError)
+    .map((row) => {
+      const { _enc: _ciphertext, _decryptError: _quarantined, ...rest } = row as Record<string, unknown>;
+      return rest as T;
+    });
   parsed.taskLists = withoutBookkeeping(parsed.taskLists);
   parsed.tasks = withoutBookkeeping(parsed.tasks);
   parsed.subtasks = withoutBookkeeping(parsed.subtasks);

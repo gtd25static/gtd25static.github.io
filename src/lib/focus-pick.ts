@@ -12,6 +12,9 @@ export function eligibleForFocus(tasks: Task[], taskListIds: Set<string>): Task[
       t.status !== 'done' &&
       t.status !== 'blocked' &&
       !t.archived &&
+      // Not one this device can't read: picking it wrote the vault's placeholder
+      // back over its ciphertext.
+      !(t as { _decryptError?: boolean })._decryptError &&
       taskListIds.has(t.listId),
   );
 }

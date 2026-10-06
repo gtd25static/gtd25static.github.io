@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
+import { useLiveQuery } from 'dexie-react-hooks';
 import { Button } from '../ui/Button';
 import { useLocalSettings } from '../../hooks/use-settings';
 import { listRemoteBackups, type BackupInfo } from '../../sync/remote-backups';
@@ -68,7 +69,7 @@ export function BackupsSettings() {
 
   // Safety backups: taken at boot and before every destructive operation. On a
   // Paranoid device they exist too, encrypted with the vault's at-rest key.
-  const localBackups = getLocalBackups();
+  const localBackups = useLiveQuery(() => getLocalBackups(), [], []);
 
   async function handleRestoreLocal(backup: { key: string; timestamp: number }) {
     if (!await confirmDialog(
@@ -87,7 +88,7 @@ export function BackupsSettings() {
     }
   }
 
-  // Safety backups only live in this device's localStorage; downloading one
+  // Safety backups only live on this device (IndexedDB); downloading one
   // packages it in the standard backup zip so another device can import it. It
   // goes through the export dialog, so it gets the same encryption choice as an
   // export (encrypted by default in Paranoid Mode) — it used to be written to

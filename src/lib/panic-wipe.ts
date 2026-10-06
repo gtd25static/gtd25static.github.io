@@ -22,26 +22,41 @@ import { haltErrorPersistence } from './diagnostics';
 // breadcrumb for a wipe whose IndexedDB deletion could not be confirmed.
 export const WIPE_PENDING_KEY = 'gtd25-wipe-pending';
 
-async function deleteIndexedDb(closeOptions: { disableAutoOpen: boolean }): Promise<'deleted' | 'incomplete'> {
+interface Deletion {
+  outcome: 'deleted' | 'incomplete';
+  /** Settles when the request does — true once the database is really gone, even after a `blocked`. */
+  completed: Promise<boolean>;
+}
+
+async function deleteIndexedDb(closeOptions: { disableAutoOpen: boolean }): Promise<Deletion> {
   try {
     db.close(closeOptions);
   } catch { /* already closed */ }
-  return await new Promise<'deleted' | 'incomplete'>((resolve) => {
+  let complete!: (deleted: boolean) => void;
+  const completed = new Promise<boolean>((resolve) => { complete = resolve; });
+  const outcome = await new Promise<Deletion['outcome']>((resolve) => {
     let settled = false;
-    const done = (outcome: 'deleted' | 'incomplete') => {
-      if (!settled) { settled = true; resolve(outcome); }
+    const done = (result: Deletion['outcome']) => {
+      if (!settled) { settled = true; resolve(result); }
     };
     try {
       const req = indexedDB.deleteDatabase('gtd25');
-      req.onsuccess = () => done('deleted');
-      req.onerror = () => done('incomplete');
+      req.onsuccess = () => { done('deleted'); complete(true); };
+      req.onerror = () => { done('incomplete'); complete(false); };
       // Open connections elsewhere — don't hang the wipe; the marker keeps it
-      // retryable. (The browser may still complete the delete once they close.)
+      // retryable. The browser completes the delete once they close (onsuccess
+      // then still fires, see wipeDevice).
       req.onblocked = () => done('incomplete');
     } catch {
       done('incomplete');
+      complete(false);
     }
   });
+  return { outcome, completed };
+}
+
+function clearWipeMarker(): void {
+  try { localStorage.removeItem(WIPE_PENDING_KEY); } catch { /* ignore */ }
 }
 
 function clearWebStorage(): void {
@@ -114,14 +129,17 @@ async function wipeDevice(closeOptions: { disableAutoOpen: boolean }): Promise<v
   // The diagnostics log in memory still holds the session's history: any error
   // after this point (a closed database, say) used to write all of it back.
   haltErrorPersistence();
-  const idbOutcome = await deleteIndexedDb(closeOptions);
+  const deletion = await deleteIndexedDb(closeOptions);
   clearWebStorage();
   await clearCaches();
   await unregisterServiceWorkers();
 
-  if (idbOutcome === 'deleted') {
-    try { localStorage.removeItem(WIPE_PENDING_KEY); } catch { /* ignore */ }
-  }
+  // The marker goes once the deletion is done — and the steps above with it. A
+  // blocked deletion completes later, when the other connections close: the
+  // marker must go then too, or the next start wiped again, taking everything
+  // created since. (New opens queue behind the delete: nothing is lost to it.)
+  if (deletion.outcome === 'deleted') clearWipeMarker();
+  else void deletion.completed.then((deleted) => { if (deleted) clearWipeMarker(); });
 }
 
 /**

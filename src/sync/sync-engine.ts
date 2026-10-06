@@ -2751,8 +2751,10 @@ async function importDataHoldingLock(data: ImportData): Promise<void> {
             mindmapNodes: mergeById(remotePlain?.mindmapNodes, local.mindmapNodes),
           }),
       settings: { theme },
-      pomodoroSettings: data.pomodoroSettings,
-      soundPresets: data.soundPresets,
+      // A backup without them keeps this device's: they would be gone from the
+      // remote snapshot, so from every device set up after it.
+      pomodoroSettings: data.pomodoroSettings ?? local.pomodoroSettings,
+      soundPresets: data.soundPresets ?? local.soundPresets,
     };
 
     // The remote first (see wipeAllData), then this device in one transaction.
@@ -2886,8 +2888,9 @@ async function restoreFromBackupHoldingLock(tier: BackupTier): Promise<void> {
       settings: backupData.settings ?? {
         theme: (localStorage.getItem('gtd25-theme') as Settings['theme']) ?? 'system',
       },
-      pomodoroSettings: backupData.pomodoroSettings,
-      soundPresets: backupData.soundPresets,
+      // As in importData: what the backup lacks, this device's.
+      pomodoroSettings: backupData.pomodoroSettings ?? (await db.pomodoroSettings.get('pomodoro')) ?? undefined,
+      soundPresets: backupData.soundPresets ?? await db.soundPresets.toArray(),
     };
 
     // The remote first (see wipeAllData), then this device in one transaction.

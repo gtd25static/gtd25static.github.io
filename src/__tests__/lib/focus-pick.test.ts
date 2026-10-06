@@ -32,6 +32,13 @@ describe('eligibleForFocus', () => {
     expect(eligibleForFocus(tasks, taskListIds).map((t) => t.id)).toEqual(['ok']);
   });
 
+  // Reliability review 2026-10-06 (M13): picking one wrote the placeholder the
+  // vault shows for an unreadable row back over its ciphertext.
+  it('excludes a row this device cannot read', () => {
+    const tasks = [makeTask({ id: 'ok' }), { ...makeTask({ id: 'unreadable' }), _decryptError: true } as Task];
+    expect(eligibleForFocus(tasks, taskListIds).map((t) => t.id)).toEqual(['ok']);
+  });
+
   it('returns empty for no eligible tasks', () => {
     expect(eligibleForFocus([], taskListIds)).toEqual([]);
   });

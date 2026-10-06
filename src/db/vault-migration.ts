@@ -19,6 +19,7 @@ import {
   getActiveAtRestKey, setMigrationBypass, encryptRow, decryptRow, type Row,
 } from './vault-middleware';
 import { recordError } from '../lib/diagnostics';
+import { isQuotaError } from '../lib/db-error';
 
 type ProgressFn = (done: number, total: number) => void;
 
@@ -72,7 +73,7 @@ async function writeRaw(table: Table<unknown, string>, rows: Row[]): Promise<voi
     recordError(`vault-migration:${table.name}`, err);
     // Surface storage exhaustion clearly — the migration is idempotent/resumable,
     // so the half-written state is safe to retry once space is freed.
-    if (err instanceof DOMException && err.name === 'QuotaExceededError') {
+    if (isQuotaError(err)) {
       throw new Error('Not enough storage to complete the at-rest migration. Free up space and try again.');
     }
     throw err;

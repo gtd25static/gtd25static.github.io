@@ -55,6 +55,9 @@ function steppable(t: Task): t is Task & { recurrenceInterval: number; recurrenc
 
 function isDue(t: Task, now: number): boolean {
   if (t.deletedAt || !t.recurrenceType || !steppable(t) || t.nextOccurrence > now) return false;
+  // A row this device can't read is the vault's placeholder: never written back
+  // over its ciphertext.
+  if ((t as { _decryptError?: boolean })._decryptError) return false;
   // Time-based: only a done task comes back. Date-based: whatever its status.
   return t.recurrenceType === 'date-based' || t.status === 'done';
 }

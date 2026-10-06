@@ -9,7 +9,9 @@ const h = vi.hoisted(() => ({
   sw: { needRefresh: true, applyUpdate: vi.fn(), checkForUpdate: vi.fn(), forceCheck: vi.fn() },
   vault: { enabled: false, unlocked: false, locked: false, hasSecurityKey: false },
   incompatHandlers: [] as Array<() => void>,
+  toast: vi.fn(),
 }));
+vi.mock('../../components/ui/Toast', () => ({ toast: h.toast }));
 vi.mock('../../hooks/use-service-worker', () => ({ useServiceWorker: () => h.sw }));
 vi.mock('../../hooks/use-vault', () => ({ useVault: () => h.vault }));
 vi.mock('../../sync/sync-engine', () => ({
@@ -226,6 +228,27 @@ describe('AppUpdatePrompt', () => {
 
     expect(screen.getByText('Update queued. It will install after the vault locks.')).toBeInTheDocument();
     expect(h.sw.applyUpdate).not.toHaveBeenCalled();
+  });
+
+  // Reliability review 2026-10-06 (B16): with no new build waiting, "Update now"
+  // was a bare reload — into the same build.
+  it('"Update now" with nothing waiting looks for the update instead of reloading into the same build', async () => {
+    const user = userEvent.setup();
+    h.sw.needRefresh = false;
+    h.sw.forceCheck = vi.fn(async () => 'up-to-date');
+    const reload = vi.fn();
+    vi.stubGlobal('location', { ...window.location, reload });
+    try {
+      render(<AppUpdatePrompt />);
+      act(() => { h.incompatHandlers.forEach((cb) => cb()); });
+      await user.click(await screen.findByRole('button', { name: /update now/i }));
+
+      await waitFor(() => expect(h.sw.forceCheck).toHaveBeenCalledTimes(2)); // on the event, and on the tap
+      expect(reload).not.toHaveBeenCalled();
+      await waitFor(() => expect(h.toast).toHaveBeenCalledWith(expect.stringMatching(/No newer version is published/), 'error'));
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it('does not render an equal commit range for sync-incompatible metadata', async () => {

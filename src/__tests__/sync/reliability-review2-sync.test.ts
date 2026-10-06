@@ -274,3 +274,17 @@ describe('B8: a password change whose merge at the commit point gives up', () =>
 function SyncDataBase(): SyncData {
   return makeSyncData({ syncVersion: 10 }) as SyncData;
 }
+
+describe('B17: importing a backup without pomodoro settings', () => {
+  it('keeps this device\'s settings and presets on the remote', async () => {
+    await setRemote({ taskLists: [list('l1')] });
+    await db.pomodoroSettings.put({ id: 'pomodoro', masterVolume: 0.3, tickingEnabled: false, bellEnabled: true, activePresetId: 'p1', updatedAt: T0, dynamicMixEnabled: false });
+    await db.soundPresets.put({ id: 'p1', name: 'Rain', layers: [], createdAt: T0, updatedAt: T0 } as never);
+
+    await importData({ taskLists: [list('imported')], tasks: [], subtasks: [] });
+
+    const snapshot = await remoteSnapshot();
+    expect(snapshot.pomodoroSettings?.masterVolume).toBe(0.3);
+    expect(snapshot.soundPresets?.map((p) => p.id)).toEqual(['p1']);
+  });
+});

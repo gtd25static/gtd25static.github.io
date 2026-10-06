@@ -151,13 +151,13 @@ describe('a burst of remote resets cannot push the pre-reset copy out of the bac
   it('keeps the oldest copy taken before a reset in the last 24 hours', async () => {
     await seedTask();
     await createLocalBackup(); // before the first reset: the copy that matters
-    const first = getLocalBackups()[0];
+    const [first] = await getLocalBackups();
     for (let i = 0; i < 4; i++) {
       await db.tasks.update('t1', { title: `state ${i}` });
       await new Promise((r) => setTimeout(r, 5));
       await createLocalBackup();
     }
-    expect(getLocalBackups().map((b) => b.timestamp)).toContain(first.timestamp);
+    expect((await getLocalBackups()).map((b) => b.timestamp)).toContain(first.timestamp);
   });
 });
 

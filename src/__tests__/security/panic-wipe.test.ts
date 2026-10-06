@@ -168,6 +168,32 @@ describe('blocked wipe + boot retry', () => {
     expect(await db.tasks.count()).toBe(1);
   });
 
+  // Reliability review 2026-10-06 (M12): a blocked deletion is not abandoned —
+  // it completes once the other connections close. The marker stayed armed, so
+  // the NEXT start wiped again: everything created in between included.
+  it('a blocked deletion that completes later clears the marker, so the next start wipes nothing', async () => {
+    let finishLater!: () => void;
+    vi.spyOn(indexedDB, 'deleteDatabase').mockImplementationOnce(() => {
+      const req = { onsuccess: null, onerror: null, onblocked: null } as unknown as IDBOpenDBRequest;
+      setTimeout(() => req.onblocked?.(new Event('blocked') as IDBVersionChangeEvent), 0);
+      finishLater = () => req.onsuccess?.(new Event('success'));
+      return req;
+    });
+    await seedTask();
+    localStorage.setItem(WIPE_PENDING_KEY, String(Date.now()));
+
+    await retryPendingWipe(); // the boot retry: blocked by a frozen tab
+    expect(localStorage.getItem(WIPE_PENDING_KEY)).not.toBeNull();
+    finishLater(); // the tab goes away; the deletion goes through
+    await vi.waitFor(() => expect(localStorage.getItem(WIPE_PENDING_KEY)).toBeNull());
+
+    // Whatever is created from here on, the next start leaves it alone.
+    const deleteSpy = vi.spyOn(indexedDB, 'deleteDatabase');
+    deleteSpy.mockClear(); // (the same spy as above: forget the blocked call)
+    await retryPendingWipe();
+    expect(deleteSpy).not.toHaveBeenCalled();
+  });
+
   it('retryPendingWipe is a no-op without the marker', async () => {
     await seedTask();
     const deleteSpy = vi.spyOn(indexedDB, 'deleteDatabase');

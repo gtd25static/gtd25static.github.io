@@ -32,7 +32,11 @@ function stored(dump: string): Stored {
     vault: gtd25.vault.values[0] as Record<string, unknown>,
     tasks: gtd25.tasks.values as StoredRow[],
     lists: gtd25.taskLists.values as StoredRow[],
-    backups: Object.keys(parsed.localStorage).filter((key) => key.startsWith('gtd25-local-backup-')),
+    // Safety backups live in IndexedDB since 2026-10-06 (and in localStorage before).
+    backups: [
+      ...((gtd25.localBackups?.values ?? []) as StoredRow[]).map((row) => row.id),
+      ...Object.keys(parsed.localStorage).filter((key) => key.startsWith('gtd25-local-backup-')),
+    ],
   };
 }
 

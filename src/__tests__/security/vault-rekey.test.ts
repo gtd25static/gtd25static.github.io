@@ -47,13 +47,12 @@ async function rawRows(table: { toArray: () => Promise<unknown[]> }): Promise<Ro
 
 /** Every stored byte, raw, plus the safety backups, as one string. */
 async function rawDump(): Promise<string> {
-  const tables = [db.taskLists, db.tasks, db.subtasks, db.sharedItems, db.sharedBlobs, db.mindmaps, db.mindmapNodes, db.changeLog, db.syncMeta, db.vault, db.localSettings];
+  const tables = [db.taskLists, db.tasks, db.subtasks, db.sharedItems, db.sharedBlobs, db.mindmaps, db.mindmapNodes, db.changeLog, db.syncMeta, db.vault, db.localSettings, db.localBackups];
   const parts: string[] = [];
   for (const t of tables) {
     const rows = await rawRows(t as unknown as { toArray: () => Promise<unknown[]> });
     parts.push(JSON.stringify(rows, (_k, v) => (v instanceof Uint8Array ? Array.from(v).join(',') : v)));
   }
-  for (const b of getLocalBackups()) parts.push(localStorage.getItem(b.key) ?? '');
   return parts.join('\n');
 }
 
@@ -271,13 +270,13 @@ describe('rekeyVault rewrites the device under a new key', () => {
     await createLocalBackup();
     await new Promise((r) => setTimeout(r, 5));
     await createLocalBackup();
-    const oldKeys = getLocalBackups().map((b) => b.key);
+    const oldKeys = (await getLocalBackups()).map((b) => b.key);
     expect(oldKeys).toHaveLength(2);
 
     await rekeyVault(REAL);
 
     expect(await db.sharedBlobs.count()).toBe(0);
-    const backups = getLocalBackups();
+    const backups = await getLocalBackups();
     expect(backups).toHaveLength(1);
     expect(oldKeys).not.toContain(backups[0].key);
     expect((await readLocalBackup(backups[0].key)).tasks[0].title).toBe(TITLE);

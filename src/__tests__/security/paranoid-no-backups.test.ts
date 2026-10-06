@@ -15,15 +15,8 @@ import type { Task } from '../../db/models';
 
 const PARANOID_FLAG = 'gtd25-paranoid';
 
-function localBackupKeys(): string[] {
-  // The test localStorage polyfill doesn't enumerate stored keys via Object.keys;
-  // use the index API which works there and in real browsers.
-  const keys: string[] = [];
-  for (let i = 0; i < localStorage.length; i++) {
-    const k = localStorage.key(i);
-    if (k?.startsWith('gtd25-local-backup-')) keys.push(k);
-  }
-  return keys;
+async function localBackupKeys(): Promise<string[]> {
+  return (await db.localBackups.toCollection().primaryKeys()) as string[];
 }
 
 async function aesKey(): Promise<CryptoKey> {
@@ -49,7 +42,7 @@ afterEach(() => {
 describe('paranoid backups', () => {
   it('creates a local backup when paranoid is OFF', async () => {
     await createLocalBackup();
-    expect(localBackupKeys().length).toBe(1);
+    expect((await localBackupKeys()).length).toBe(1);
   });
 
   it('creates NO local backup while paranoid is ON but LOCKED', async () => {
@@ -57,7 +50,7 @@ describe('paranoid backups', () => {
     // and re-encrypting them doubly so.
     localStorage.setItem(PARANOID_FLAG, '1');
     await createLocalBackup();
-    expect(localBackupKeys().length).toBe(0);
+    expect((await localBackupKeys()).length).toBe(0);
   });
 
   it('creates an ENCRYPTED local backup when paranoid is ON and unlocked', async () => {
@@ -69,10 +62,10 @@ describe('paranoid backups', () => {
     await enableParanoid('paranoid backup passphrase');
 
     await createLocalBackup();
-    const [key] = localBackupKeys();
+    const [key] = await localBackupKeys();
     expect(key).toBeDefined();
 
-    const raw = localStorage.getItem(key)!;
+    const raw = JSON.stringify(await db.localBackups.get(key));
     expect(raw).not.toContain(marker);      // no content in the clear…
     expect(raw).not.toContain('"tasks"');   // …not even the structure
     expect(JSON.parse(raw).encrypted).toEqual(expect.any(String));
@@ -85,7 +78,7 @@ describe('paranoid backups', () => {
   it('refuses to decrypt a paranoid backup once locked', async () => {
     await enableParanoid('paranoid backup passphrase');
     await createLocalBackup();
-    const [key] = localBackupKeys();
+    const [key] = await localBackupKeys();
     __resetVaultStateForTests(); // as if the vault had locked
 
     await expect(readLocalBackup(key)).rejects.toThrow('Unlock the vault');
@@ -123,13 +116,13 @@ describe('disabling Paranoid Mode keeps the safety backups usable', () => {
   it('rewrites them as plaintext backups that still restore afterwards', async () => {
     await enableParanoid(PASS);
     await createLocalBackup();
-    const [key] = localBackupKeys();
-    expect(JSON.parse(localStorage.getItem(key)!).encrypted).toEqual(expect.any(String));
+    const [key] = await localBackupKeys();
+    expect((await db.localBackups.get(key))!.encrypted).toEqual(expect.any(String));
 
     await disableParanoid();
 
-    expect(localBackupKeys()).toEqual([key]); // same backup, same timestamp
-    const stored = JSON.parse(localStorage.getItem(key)!);
+    expect(await localBackupKeys()).toEqual([key]); // same backup, same timestamp
+    const stored = (await db.localBackups.get(key))!;
     expect(stored.encrypted).toBeUndefined();
     const data = await readLocalBackup(key);
     expect(data.tasks.map((t) => t.title)).toContain(MARKER);
@@ -138,33 +131,33 @@ describe('disabling Paranoid Mode keeps the safety backups usable', () => {
   it('drops a backup that no longer decrypts instead of keeping a dead entry', async () => {
     await enableParanoid(PASS);
     await createLocalBackup();
-    const [key] = localBackupKeys();
-    const stored = JSON.parse(localStorage.getItem(key)!);
-    localStorage.setItem(key, JSON.stringify({ ...stored, encrypted: stored.encrypted.slice(0, -8) + 'AAAAAAAA' }));
+    const [key] = await localBackupKeys();
+    const stored = (await db.localBackups.get(key))!;
+    await db.localBackups.put({ ...stored, encrypted: stored.encrypted!.slice(0, -8) + 'AAAAAAAA' });
 
     await disableParanoid();
-    expect(localBackupKeys()).toEqual([]);
+    expect(await localBackupKeys()).toEqual([]);
   });
 
   it('does the same when an interrupted disable is resumed at unlock', async () => {
     await enableParanoid(PASS);
     await createLocalBackup();
-    const [key] = localBackupKeys();
+    const [key] = await localBackupKeys();
     await db.vault.update('vault', { migrationState: 'decrypting' });
     lock();
 
     expect(await unlockWithPassphrase(PASS)).toBe(true); // completes the disable
-    expect(JSON.parse(localStorage.getItem(key)!).encrypted).toBeUndefined();
+    expect((await db.localBackups.get(key))!.encrypted).toBeUndefined();
     expect((await readLocalBackup(key)).tasks.map((t) => t.title)).toContain(MARKER);
   });
 
   it('says plainly why a backup left encrypted by an older disable cannot be opened', async () => {
     await enableParanoid(PASS);
     await createLocalBackup();
-    const [key] = localBackupKeys();
-    const leftover = localStorage.getItem(key)!;
+    const [key] = await localBackupKeys();
+    const leftover = (await db.localBackups.get(key))!;
     await disableParanoid();
-    localStorage.setItem(key, leftover); // what a disable before this fix left behind
+    await db.localBackups.put(leftover); // what a disable before this fix left behind
 
     await expect(readLocalBackup(key)).rejects.toThrow(/Paranoid Mode.*turned off/i);
   });

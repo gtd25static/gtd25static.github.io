@@ -399,13 +399,19 @@ request per tab switch. On mobile that is constant, and it will churn install/ac
 ### Mount the registration at the very top of the tree
 
 ```tsx
-<ErrorBoundary>
-  <ServiceWorkerProvider>        {/* ← always mounted, outside every gate */}
+<ServiceWorkerProvider>          {/* ← always mounted, outside every gate */}
+  <ErrorBoundary fallback={null}>  {/* a broken prompt can't take the app down */}
     <AppUpdatePrompt />
+  </ErrorBoundary>
+  <ErrorBoundary>                  {/* its fallback offers the waiting update, not just Reload */}
     {locked ? <LockScreen /> : <MainApp />}
-  </ServiceWorkerProvider>
-</ErrorBoundary>
+  </ErrorBoundary>
+</ServiceWorkerProvider>
 ```
+
+The error boundary goes **inside** the provider, not around it: wrapped around, a render crash anywhere replaced the
+provider too, so the waiting worker was never offered — and "Reload" re-runs the broken build (a reload does not
+activate a waiting worker). gtd25 had it that way until 2026-10-06.
 
 **This is the highest-value structural decision in the whole design.** If update detection lives inside your
 authenticated/unlocked/loaded shell, then a build that crashes *before* that shell mounts is unrecoverable — the user

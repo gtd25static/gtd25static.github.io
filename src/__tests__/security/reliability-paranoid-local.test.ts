@@ -129,18 +129,8 @@ describe('strict durability', () => {
 });
 
 describe('safety copies when storage is full', () => {
-  /** A localStorage that holds at most `n` safety copies. */
-  function capBackups(n: number) {
-    const real = localStorage.setItem.bind(localStorage);
-    vi.spyOn(localStorage, 'setItem').mockImplementation((key: string, value: string) => {
-      if (key.startsWith('gtd25-local-backup-')) {
-        const present = getLocalBackups().filter((b) => b.key !== key).length;
-        if (present >= n) throw new DOMException('full', 'QuotaExceededError');
-      }
-      real(key, value);
-    });
-  }
-
+  // In IndexedDB since 2026-10-06 (reliability review 2, M14): no copy is ever
+  // evicted to make room for another — the localStorage-era eviction rules are gone.
   async function copyAt(ts: number, reason: 'boot' | 'change') {
     vi.spyOn(Date, 'now').mockReturnValue(ts);
     await db.tasks.update('t1', { title: `at ${ts}` });
@@ -149,44 +139,24 @@ describe('safety copies when storage is full', () => {
     return ok;
   }
 
-  it('an app-start copy makes room from older app-start copies only, never the pre-change one', async () => {
+  it('a copy that cannot be stored says so, and the copies already there stay', async () => {
     const base = Date.now();
     await copyAt(base - 3000, 'change');
     await copyAt(base - 2000, 'boot');
-    capBackups(2);
-    expect(await copyAt(base - 1000, 'boot')).toBe(true);
-    const keys = getLocalBackups().map((b) => b.timestamp);
-    expect(keys).toContain(base - 3000); // the copy taken before the change survives
-    expect(keys).toContain(base - 1000);
-  });
+    vi.spyOn(db.localBackups, 'put').mockRejectedValueOnce(new DOMException('full', 'QuotaExceededError'));
 
-  it('with only pre-change copies stored, an app-start copy is skipped — and says so', async () => {
-    const base = Date.now();
-    await copyAt(base - 3000, 'change');
-    await copyAt(base - 2000, 'change');
-    capBackups(2);
     expect(await copyAt(base - 1000, 'boot')).toBe(false);
-    expect(getLocalBackups().map((b) => b.timestamp).sort()).toEqual([base - 3000, base - 2000]);
-  });
 
-  it('a burst of changes on a full storage keeps the oldest pre-change copy of the day (the one before the burst)', async () => {
-    const base = Date.now();
-    await copyAt(base - 3000, 'change'); // before the first reset of the burst
-    await copyAt(base - 2000, 'change');
-    await copyAt(base - 1000, 'change');
-    capBackups(3);
-    expect(await copyAt(base, 'change')).toBe(true);
-    const kept = getLocalBackups().map((b) => b.timestamp);
-    expect(kept).toContain(base - 3000);
-    expect(kept).toContain(base);
+    expect((await getLocalBackups()).map((b) => b.timestamp)).toEqual([base - 2000, base - 3000]);
   });
 
   it('turning Paranoid off keeps why each copy was taken', async () => {
     await enableParanoid(PASS);
     await createLocalBackup({ reason: 'change' });
     await decryptLocalBackups();
-    const key = getLocalBackups()[0].key;
-    expect(JSON.parse(localStorage.getItem(key)!).reason).toBe('change');
+    const [copy] = await getLocalBackups();
+    expect(copy.reason).toBe('change');
+    expect((await db.localBackups.get(copy.key))?.encrypted).toBeUndefined();
   });
 });
 

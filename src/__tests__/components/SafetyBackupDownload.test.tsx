@@ -26,7 +26,7 @@ vi.mock('../../hooks/use-vault', () => ({ useVault: () => ({ enabled: h.paranoid
 vi.mock('../../db/vault', () => ({ getVaultSecrets: () => ({ syncPassword: 'the-sync-password' }) }));
 vi.mock('../../sync/sync-engine', () => ({ wipeAllData: vi.fn(), restoreFromBackup: vi.fn(), importData: vi.fn() }));
 vi.mock('../../db/backup', () => ({
-  getLocalBackups: () => [BACKUP],
+  getLocalBackups: async () => [BACKUP],
   readLocalBackup: vi.fn(async () => BACKUP_DATA),
 }));
 vi.mock('../../sync/remote-backups', () => ({ listRemoteBackups: vi.fn(async () => []) }));
@@ -56,7 +56,7 @@ afterEach(() => {
 async function openDownload() {
   const user = userEvent.setup();
   render(<BackupsSettings />);
-  await user.click(screen.getByRole('button', { name: 'Download' }));
+  await user.click(await screen.findByRole('button', { name: 'Download' }));
   const dialog = screen.getByRole('heading', { name: 'Download safety backup' }).closest('dialog') as HTMLElement;
   return { user, dialog: within(dialog) };
 }

@@ -160,7 +160,7 @@ export async function reinitVaultWithPlaceholders(vault: Vault, realDek: CryptoK
   // This tab cached the old device id; left there it would go on stamping every
   // new change with the id the swap just replaced.
   clearDeviceIdCache();
-  purgeLocalBackups();
+  await purgeLocalBackups();
   for (const key of SYNC_HISTORY_KEYS) {
     try { localStorage.removeItem(key); } catch { /* storage unavailable */ }
   }

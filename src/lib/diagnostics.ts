@@ -220,18 +220,29 @@ export async function getStorageEstimate(): Promise<StorageEstimate> {
   }
 }
 
-/** Unregister all service workers and reload — recovery from a wedged/stale SW. */
-export async function forceServiceWorkerUpdate(): Promise<void> {
+/**
+ * Unregister every service worker, drop its cached build, and reload — recovery
+ * from a wedged or stale worker: the reload then comes from the network and
+ * registers the deployed build. (It used to unregister only a worker whose
+ * update() threw, so a stale one kept serving the old build.) Offline it does
+ * nothing: without the worker and its cache the app could not load at all.
+ * Data is untouched, and so is the share stash.
+ */
+export async function forceServiceWorkerUpdate(): Promise<'offline' | void> {
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) return 'offline';
   try {
     if (typeof navigator !== 'undefined' && navigator.serviceWorker) {
       const regs = await navigator.serviceWorker.getRegistrations();
-      await Promise.all(regs.map((r) => r.update().catch(() => r.unregister())));
+      await Promise.all(regs.map((r) => r.unregister()));
+    }
+    if (typeof caches !== 'undefined') {
+      const names = await caches.keys();
+      await Promise.all(names.filter((n) => n.startsWith('workbox-')).map((n) => caches.delete(n)));
     }
   } catch (err) {
     recordError('sw.forceUpdate', err);
-  } finally {
-    if (typeof window !== 'undefined') {
-      try { window.location.reload(); } catch { /* no-op */ }
-    }
+  }
+  if (typeof window !== 'undefined') {
+    try { window.location.reload(); } catch { /* no-op */ }
   }
 }

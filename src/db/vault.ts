@@ -355,6 +355,15 @@ export async function enableParanoid(passphrase: string, idleMinutes = DEFAULT_I
   currentSecrets = secrets;
   idleTimeoutMs = idleMinutes * 60_000;
   setFlag(true);
+  if (!readFlag()) {
+    // The flag could not be stored (storage full; the write is swallowed above).
+    // Nothing is encrypted yet: undo the vault row rather than leave a setup that
+    // fails half-way and refuses every retry as unfinished.
+    currentDek = null;
+    currentSecrets = null;
+    await db.vault.delete('vault');
+    throw new Error('Not enough storage to turn on Paranoid Mode. Free some space on this device and try again.');
+  }
   // The app's other tabs hold no key: they would go on reading the rows as they
   // are rewritten below and get ciphertext back (which crashed them). Reload them
   // now that the flag is up, so they come back at the lock screen.
@@ -403,7 +412,7 @@ async function completeEnable(): Promise<void> {
     remoteApproverFor: undefined,
     deviceIdentity: undefined,
   });
-  purgeLocalBackups();
+  await purgeLocalBackups();
   await db.vault.update('vault', { migrationState: 'done' });
   // Best effort, after the fact: tell the other devices this one is Paranoid now
   // (they stop offering it as an approver and stop sending it keys) and empty its
@@ -1307,7 +1316,7 @@ export async function rekeyVault(
     setKeyFlag(false); // the security keys' wraps opened the old DEK
     // The safety backups were encrypted under the old key: replace them with one
     // fresh copy under the new one, so the safety net is back immediately.
-    purgeLocalBackups();
+    await purgeLocalBackups();
     await createLocalBackup();
     // The other tabs' memory still holds what they showed under the old key.
     signalOtherTabs({ type: 'reload' });

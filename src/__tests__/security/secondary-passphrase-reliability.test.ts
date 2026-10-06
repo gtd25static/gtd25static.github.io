@@ -38,14 +38,8 @@ async function unlockWithSecondary(): Promise<boolean> {
   return unlockWithPassphrase(SECONDARY);
 }
 
-// The test localStorage polyfill doesn't enumerate keys via Object.keys.
-function backupKeys(): string[] {
-  const keys: string[] = [];
-  for (let i = 0; i < localStorage.length; i++) {
-    const k = localStorage.key(i);
-    if (k?.startsWith('gtd25-local-backup-')) keys.push(k);
-  }
-  return keys;
+async function backupKeys(): Promise<string[]> {
+  return (await db.localBackups.toCollection().primaryKeys()) as string[];
 }
 
 async function settle(until?: () => boolean): Promise<void> {
@@ -130,10 +124,10 @@ describe('secondary unlock leaves nothing behind outside the database', () => {
     await seedRealContent();
     await enableParanoid(REAL);
     await createLocalBackup();
-    expect(backupKeys()).toHaveLength(1);
+    expect(await backupKeys()).toHaveLength(1);
 
     expect(await unlockWithSecondary()).toBe(true);
-    expect(backupKeys()).toEqual([]);
+    expect(await backupKeys()).toEqual([]);
   });
 
   it('control: a normal unlock keeps the safety backups', async () => {
@@ -143,7 +137,7 @@ describe('secondary unlock leaves nothing behind outside the database', () => {
     lock();
 
     expect(await unlockWithPassphrase(REAL)).toBe(true);
-    expect(backupKeys()).toHaveLength(1);
+    expect(await backupKeys()).toHaveLength(1);
   });
 
   it('drops a share stashed while locked, so its real content is never offered', async () => {

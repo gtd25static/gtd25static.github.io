@@ -1,8 +1,12 @@
-import { Component, type ReactNode, type ErrorInfo } from 'react';
+import { Component, type ContextType, type ReactNode, type ErrorInfo } from 'react';
 import { recordError } from '../lib/diagnostics';
+import { ServiceWorkerContext } from '../hooks/use-service-worker';
+import { GIT_COMMIT } from '../lib/constants';
 
 interface Props {
   children: ReactNode;
+  /** Shown instead of the error screen (null: nothing) — for a part that must not take the app down. */
+  fallback?: ReactNode;
 }
 
 interface State {
@@ -26,6 +30,11 @@ const MAX_RETRIES = 5;
 const RETRY_WINDOW_MS = 5 * 60_000;
 
 export class ErrorBoundary extends Component<Props, State> {
+  // The update machinery sits above the app's boundary (App.tsx): a build that
+  // breaks while rendering can still be replaced — "Reload" alone re-ran it, a
+  // waiting worker needs activating.
+  static contextType = ServiceWorkerContext;
+  declare context: ContextType<typeof ServiceWorkerContext>;
   state: State = { hasError: false, error: null, retrying: false };
   private retries = 0;
   private lastTransientAt = 0;
@@ -56,6 +65,8 @@ export class ErrorBoundary extends Component<Props, State> {
   }
 
   render() {
+    // A given fallback stands in for everything below, the transient wait included.
+    if (this.state.hasError && 'fallback' in this.props) return this.props.fallback ?? null;
     // From the very first render after a transient error (componentDidCatch, which
     // counts and schedules the retry, runs after it) until the retries run out.
     const waiting = this.state.hasError && this.state.error !== null && isTransient(this.state.error)
@@ -68,6 +79,7 @@ export class ErrorBoundary extends Component<Props, State> {
       );
     }
     if (this.state.hasError) {
+      const update = this.context?.needRefresh ? this.context : null;
       return (
         <div className="flex min-h-screen items-center justify-center bg-neutral-50 p-8 dark:bg-neutral-900">
           <div className="max-w-md rounded-lg bg-white p-6 shadow-lg dark:bg-neutral-800">
@@ -78,11 +90,12 @@ export class ErrorBoundary extends Component<Props, State> {
               {this.state.error?.message ?? 'An unexpected error occurred.'}
             </p>
             <button
-              onClick={() => window.location.reload()}
+              onClick={() => (update ? update.applyUpdate() : window.location.reload())}
               className="rounded-md bg-accent-600 px-4 py-2 text-sm font-medium text-white hover:bg-accent-700"
             >
-              Reload
+              {update ? 'Update and reload' : 'Reload'}
             </button>
+            <p className="mt-3 font-mono text-[11px] text-neutral-400">Build {GIT_COMMIT}</p>
           </div>
         </div>
       );

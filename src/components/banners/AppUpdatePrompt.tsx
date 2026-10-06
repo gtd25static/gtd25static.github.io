@@ -5,6 +5,8 @@ import { useVault } from '../../hooks/use-vault';
 import { GIT_COMMIT } from '../../lib/constants';
 import { changelogFor, fetchDeployedChanges, type VersionInfo } from '../../lib/changelog';
 import { Button } from '../ui/Button';
+import { toast } from '../ui/Toast';
+import { forceServiceWorkerUpdate } from '../../lib/diagnostics';
 
 const PARANOID_UPDATE_NOTICE_KEY = 'gtd25-paranoid-update-notice';
 const PARANOID_UPDATE_NOTICE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -50,7 +52,9 @@ function armParanoidUpdateNotice(targetCommit?: string): void {
     to: targetCommit,
     at: Date.now(),
   };
-  localStorage.setItem(PARANOID_UPDATE_NOTICE_KEY, JSON.stringify(notice));
+  // Only a notice: with storage full it threw, and the update never ran (the
+  // button stuck on "Updating…", or the error took the prompt down).
+  try { localStorage.setItem(PARANOID_UPDATE_NOTICE_KEY, JSON.stringify(notice)); } catch { /* no notice, still updates */ }
 }
 
 // App-wide update prompt. Rendered from the always-mounted App (inside
@@ -193,8 +197,20 @@ export function AppUpdatePrompt() {
       if (vault.enabled) armParanoidUpdateNotice(info?.commit);
       applyUpdate(); // skipWaiting + single guarded reload
     } else {
-      if (vault.enabled) armParanoidUpdateNotice(info?.commit);
-      window.location.reload();
+      // Required by sync, but no new build waiting: a bare reload re-ran this
+      // one. Look for it — found, it waits and this prompt applies it.
+      setUpdating(true);
+      void forceCheck().then(async (result) => {
+        setUpdating(false);
+        if (result === 'update-found') return;
+        if (result === 'stale-worker') {
+          if (vault.enabled) armParanoidUpdateNotice(info?.commit);
+          if ((await forceServiceWorkerUpdate()) !== 'offline') return;
+        }
+        toast(result === 'up-to-date'
+          ? 'No newer version is published yet. Try again in a few minutes.'
+          : "Couldn't check for the update. Check the connection and try again.", 'error');
+      });
     }
   };
 

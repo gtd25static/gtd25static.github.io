@@ -100,15 +100,15 @@ describe('an enable interrupted mid-encryption', () => {
 
   it('keeps the plaintext safety backups until the encryption completes, then deletes them', async () => {
     await createLocalBackup();
-    expect(getLocalBackups()).toHaveLength(1);
+    expect(await getLocalBackups()).toHaveLength(1);
 
     await enableCrashingMidway();
-    expect(getLocalBackups(), 'a recovery point while the migration is unfinished').toHaveLength(1);
+    expect(await getLocalBackups(), 'a recovery point while the migration is unfinished').toHaveLength(1);
 
     await reload();
     await unlockWithPassphrase(PASS);
-    const leftovers = getLocalBackups().map((b) => localStorage.getItem(b.key) ?? '');
-    expect(leftovers.join(' ')).not.toMatch(/TASK_MARKER/);
+    const leftovers = await db.localBackups.toArray();
+    expect(JSON.stringify(leftovers)).not.toMatch(/TASK_MARKER/);
   });
 
   it('refuses plaintext writes while it waits locked (fail-closed like any Paranoid device)', async () => {
@@ -180,6 +180,27 @@ describe('reconcileParanoidFlag (boot)', () => {
 
     await enableParanoid(PASS);
     await reload();
+    expect(isParanoidEnabled()).toBe(true);
+  });
+});
+
+// Reliability review 2026-10-06: the flag goes to localStorage, whose write was
+// swallowed when storage was full. The enable then failed half-way and every
+// retry was refused as "an earlier setup is unfinished".
+describe('turning Paranoid Mode on when its flag cannot be stored', () => {
+  it('stops before touching any row, says why, and a later try works', async () => {
+    const real = localStorage.setItem.bind(localStorage);
+    const spy = vi.spyOn(localStorage, 'setItem').mockImplementation((key: string, value: string) => {
+      if (key === FLAG) throw new DOMException('full', 'QuotaExceededError');
+      real(key, value);
+    });
+
+    await expect(enableParanoid(PASS)).rejects.toThrow(/storage/i);
+    expect(await db.vault.get('vault')).toBeUndefined();
+    expect(isParanoidEnabled()).toBe(false);
+
+    spy.mockRestore();
+    await enableParanoid(PASS);
     expect(isParanoidEnabled()).toBe(true);
   });
 });

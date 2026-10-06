@@ -69,7 +69,9 @@ export function DiagnosticsSettings() {
           Version <span className="font-mono">{build.version}</span> · commit <span className="font-mono">{build.commit}</span>
         </p>
         <div className="flex gap-2 pt-1">
-          <Button size="sm" variant="secondary" onClick={() => void forceServiceWorkerUpdate()}>
+          <Button size="sm" variant="secondary" onClick={() => void forceServiceWorkerUpdate().then((r) => {
+            if (r === 'offline') toast("You're offline — connect first: without its worker the app could not load.", 'error');
+          })}>
             Force update &amp; reload
           </Button>
           <Button size="sm" variant="secondary" onClick={copyReport}>Copy diagnostics</Button>

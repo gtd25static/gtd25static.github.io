@@ -511,6 +511,26 @@ export interface Vault {
  * applied meanwhile, as before. `localValue` / `remoteValue` / `label` are
  * content — encrypted at rest in Paranoid Mode.
  */
+/**
+ * A device-local safety copy (db/backup.ts), in IndexedDB since 2026-10-06 —
+ * localStorage's few MB stopped holding them on a large database. `id` keeps the
+ * localStorage key it would have had (`gtd25-local-backup-<timestamp>`). The
+ * payload's collections sit beside the bookkeeping, or, on a Paranoid device,
+ * only `encrypted` (AES-GCM under the at-rest key).
+ */
+export interface LocalBackup {
+  id: string;
+  timestamp: number;
+  reason?: 'boot' | 'change';
+  encrypted?: string;
+  taskLists?: TaskList[];
+  tasks?: Task[];
+  subtasks?: Subtask[];
+  mindmapFolders?: MindmapFolder[];
+  mindmaps?: Mindmap[];
+  mindmapNodes?: MindmapNode[];
+}
+
 export interface SyncConflict {
   /** entityType:entityId:field:localAt:remoteAt — the same conflict is recorded once. */
   id: string;

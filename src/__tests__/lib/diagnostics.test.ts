@@ -133,3 +133,44 @@ describe('diagnostics: persistent storage', () => {
     expect(persist).toHaveBeenCalled();
   });
 });
+
+// Reliability review 2026-10-06 (B16): it only unregistered a worker whose
+// update() threw — with a stale worker the reload stayed on the old build.
+describe('forceServiceWorkerUpdate', () => {
+  it('drops the worker and its cached build (not the share stash), then reloads', async () => {
+    const { forceServiceWorkerUpdate } = await import('../../lib/diagnostics');
+    const unregister = vi.fn(async () => true);
+    const update = vi.fn(async () => undefined);
+    const deleted: string[] = [];
+    const reload = vi.fn();
+    vi.stubGlobal('navigator', { ...navigator, onLine: true, serviceWorker: { getRegistrations: async () => [{ unregister, update }] } });
+    vi.stubGlobal('caches', { keys: async () => ['workbox-precache-v2-x', 'gtd25-share-target'], delete: async (k: string) => { deleted.push(k); return true; } });
+    vi.stubGlobal('location', { reload });
+    vi.stubGlobal('window', { location: { reload } });
+    try {
+      await forceServiceWorkerUpdate();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+    expect(unregister).toHaveBeenCalled();
+    expect(deleted).toEqual(['workbox-precache-v2-x']);
+    expect(reload).toHaveBeenCalled();
+  });
+
+  it('offline it changes nothing: without the worker the app could not load', async () => {
+    const { forceServiceWorkerUpdate } = await import('../../lib/diagnostics');
+    const unregister = vi.fn(async () => true);
+    const reload = vi.fn();
+    vi.stubGlobal('navigator', { ...navigator, onLine: false, serviceWorker: { getRegistrations: async () => [{ unregister }] } });
+    vi.stubGlobal('window', { location: { reload } });
+    let result: unknown;
+    try {
+      result = await forceServiceWorkerUpdate();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+    expect(unregister).not.toHaveBeenCalled();
+    expect(reload).not.toHaveBeenCalled();
+    expect(result).toBe('offline');
+  });
+});

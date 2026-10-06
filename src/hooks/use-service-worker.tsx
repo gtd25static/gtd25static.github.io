@@ -176,7 +176,7 @@ function useServiceWorkerImpl(): ServiceWorkerApi {
 // Single SW registration + update detection for the whole app, provided from the
 // ALWAYS-mounted App so it keeps running while the vault is locked — letting a
 // user stuck on a buggy locked build pull a fix without wiping their data.
-const ServiceWorkerContext = createContext<ServiceWorkerApi | null>(null);
+export const ServiceWorkerContext = createContext<ServiceWorkerApi | null>(null);
 
 export function ServiceWorkerProvider({ children }: { children: ReactNode }) {
   const api = useServiceWorkerImpl();

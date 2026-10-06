@@ -158,12 +158,18 @@ describe('a backup ZIP cannot smuggle `_enc` in', () => {
     zip.file('data.json', JSON.stringify({
       exportVersion: 1,
       taskLists: [{ id: 'l1', name: 'Work', type: 'tasks', order: 0, createdAt: 1, updatedAt: 1, _enc: 1 }],
-      tasks: [{ id: 't1', listId: 'l1', title: SECRET, status: 'todo', order: 0, createdAt: 1, updatedAt: 1, _enc: true, _decryptError: true }],
+      tasks: [
+        { id: 't1', listId: 'l1', title: SECRET, status: 'todo', order: 0, createdAt: 1, updatedAt: 1, _enc: true },
+        // The placeholder for a row the exporting device could not read: left out
+        // (reliability review 2026-10-06, M13) — imported, it replaced the real one.
+        { id: 't2', listId: 'l1', title: '⚠︎ unreadable', status: 'todo', order: 1, createdAt: 1, updatedAt: 1, _decryptError: true },
+      ],
       subtasks: [],
     }));
     // JSZip reads a Uint8Array where a File would come from the picker (node has no FileReader).
     const bytes = (await zip.generateAsync({ type: 'uint8array' })) as unknown as File;
     const data = await parseImportZip(bytes);
+    expect(data.tasks.map((t) => t.id)).toEqual(['t1']);
     const task = data.tasks[0] as unknown as Record<string, unknown>;
     const list = data.taskLists[0] as unknown as Record<string, unknown>;
     expect(task.title).toBe(SECRET);

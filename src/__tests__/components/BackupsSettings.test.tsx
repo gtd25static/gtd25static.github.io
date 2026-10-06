@@ -32,7 +32,7 @@ vi.mock('../../sync/sync-engine', () => ({
   importData: h.importData,
 }));
 vi.mock('../../db/backup', () => ({
-  getLocalBackups: () => h.localBackups,
+  getLocalBackups: async () => h.localBackups,
   readLocalBackup: vi.fn(() => ({ taskLists: [], tasks: [], subtasks: [] })),
 }));
 vi.mock('../../sync/remote-backups', () => ({
@@ -125,10 +125,10 @@ describe('BackupsSettings — local safety backups', () => {
 
   // The copies hold mindmaps too (since 2026-07-27), and are also made before
   // an import/restore/reset; the text said "(not mindmaps)" and "at app start".
-  it('says what a safety backup holds', () => {
+  it('says what a safety backup holds', async () => {
     h.localBackups = [{ key: 'gtd25-local-backup-1', timestamp: Date.now() }];
     renderWithDialogs();
-    const text = screen.getByText(/they hold/).textContent ?? '';
+    const text = (await screen.findByText(/they hold/)).textContent ?? '';
     expect(text).toMatch(/mindmaps/);
     expect(text).not.toMatch(/not mindmaps/);
     expect(text).toMatch(/not the Shared\s+Folder/);
@@ -140,7 +140,7 @@ describe('BackupsSettings — local safety backups', () => {
     h.localBackups = [{ key: 'gtd25-local-backup-1', timestamp: Date.now() }];
     renderWithDialogs();
 
-    await user.click(screen.getByRole('button', { name: 'Restore' }));
+    await user.click(await screen.findByRole('button', { name: 'Restore' }));
     // Dialog open: its confirm button shares the label with the row button.
     await user.click(screen.getAllByRole('button', { name: 'Restore' })[1]);
     expect(h.importData).toHaveBeenCalledTimes(1);
@@ -151,7 +151,7 @@ describe('BackupsSettings — local safety backups', () => {
     h.localBackups = [{ key: 'gtd25-local-backup-1', timestamp: Date.now() }];
     renderWithDialogs();
 
-    await user.click(screen.getByRole('button', { name: 'Restore' }));
+    await user.click(await screen.findByRole('button', { name: 'Restore' }));
     await user.click(screen.getByRole('button', { name: 'Cancel' }));
     expect(h.importData).not.toHaveBeenCalled();
   });

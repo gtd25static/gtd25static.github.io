@@ -65,15 +65,19 @@ export default function App() {
   }), []);
 
   return (
-    <ErrorBoundary>
-      {/* SW update detection + the update prompt run from here (always mounted),
-          so updates can be applied even from the lock screen — no wipe needed if
-          a bug blocks unlock. */}
-      <ServiceWorkerProvider>
+    // SW update detection + the update prompt run from here (always mounted), so
+    // updates can be applied even from the lock screen — no wipe needed if a bug
+    // blocks unlock. Above the app's error boundary, each in its own: a build that
+    // crashes while rendering keeps the prompt (and the boundary offers the
+    // update), and a broken prompt cannot take the app down.
+    <ServiceWorkerProvider>
+      <ErrorBoundary fallback={null}>
         <AppUpdatePrompt />
+      </ErrorBoundary>
+      <ErrorBoundary>
         {locked ? <LockScreen /> : busy ? <VaultBusyScreen /> : <UnlockedApp />}
-      </ServiceWorkerProvider>
-    </ErrorBoundary>
+      </ErrorBoundary>
+    </ServiceWorkerProvider>
   );
 }
 
@@ -89,7 +93,7 @@ function UnlockedApp() {
   const systemIdleUnavailableRef = useRef(!!localSettings.paranoidSystemIdleUnavailable);
 
   useEffect(() => {
-    ensureDefaults();
+    ensureDefaults().catch((e) => recordError('startup.defaults', e));
   }, []);
 
   // Check recurring tasks on startup and every 60s. A persistent DB failure here

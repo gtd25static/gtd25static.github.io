@@ -1,6 +1,7 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import App from './App';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import './styles/index.css';
 import { installGlobalErrorHandlers, requestPersistentStorage } from './lib/diagnostics';
 import { retryPendingWipe } from './lib/panic-wipe';
@@ -9,6 +10,7 @@ import { onTabSignal } from './lib/tab-channel';
 import { startForgettingSessionOnLock } from './lib/forget-on-lock';
 import { flushPendingClipboardClear, catchUpPendingClipboardClear } from './lib/clipboard-hygiene';
 import { takeCaptureFromUrl } from './hooks/use-url-capture';
+import { noticeIfSlow, showBootNotice } from './lib/boot-notice';
 
 // Capture uncaught errors for the in-app diagnostics log, and ask the browser to
 // persist storage so IndexedDB isn't silently evicted (data-loss prevention).
@@ -54,13 +56,27 @@ takeCaptureFromUrl();
 // A failed-attempt limit reached just before a crash is enforced here too — and
 // when it wipes, nothing else runs (the page reloads; reading the closed
 // database on the way used to log errors, and with them the wiped history).
+// These wait on IndexedDB, which another window of the app can hold up (an
+// upgrade or a deletion it blocks — asleep, say): past a few seconds the page
+// says so instead of staying blank. They still finish before the first render:
+// they decide whether the lock screen shows.
+const BOOT_NOTICE_AFTER_MS = 6_000;
 void (async () => {
-  await retryPendingWipe().catch(() => undefined);
-  if (await enforceFailedAttemptLimit()) return;
-  await reconcileParanoidFlag().catch(() => undefined);
+  const wiped = await noticeIfSlow((async () => {
+    await retryPendingWipe().catch(() => undefined);
+    if (await enforceFailedAttemptLimit()) return true;
+    await reconcileParanoidFlag().catch(() => undefined);
+    return false;
+  })(), BOOT_NOTICE_AFTER_MS, () => showBootNotice(
+    'GTD25 is waiting for its data. If another window of the app is open (or asleep), close it to continue.',
+  ));
+  if (wiped) return;
   createRoot(document.getElementById('root')!).render(
     <StrictMode>
-      <App />
+      {/* Last resort for App's own hooks; the app's boundary is inside it (App.tsx). */}
+      <ErrorBoundary>
+        <App />
+      </ErrorBoundary>
     </StrictMode>,
   );
 })();

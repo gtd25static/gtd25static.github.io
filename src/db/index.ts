@@ -1,7 +1,9 @@
 import Dexie, { type Table } from 'dexie';
-import type { TaskList, Task, Subtask, SyncMeta, LocalSettings, ChangeEntry, PomodoroSound, SoundPreset, PomodoroSettings, Vault, SharedItem, SharedBlob, MindmapFolder, Mindmap, MindmapNode, SyncConflict } from './models';
+import type { TaskList, Task, Subtask, SyncMeta, LocalSettings, ChangeEntry, PomodoroSound, SoundPreset, PomodoroSettings, Vault, SharedItem, SharedBlob, MindmapFolder, Mindmap, MindmapNode, SyncConflict, LocalBackup } from './models';
 import { newId } from '../lib/id';
-import { createLocalBackup } from './backup';
+import { recordError } from '../lib/diagnostics';
+import { showBootNotice } from '../lib/boot-notice';
+import { createLocalBackup, adoptLegacyLocalBackups } from './backup';
 import { purgeOldTrashItems, expireOldItemsWhenCurrent } from './purge';
 import { ensureDeviceId, recordChangeBatchInTx, pruneChangelogIfSyncDisabled } from '../sync/change-log';
 import { initFieldTimestamps, stampUpdatedFields } from '../sync/field-timestamps';
@@ -28,6 +30,7 @@ export class Gtd25DB extends Dexie {
   mindmaps!: Table<Mindmap, string>;
   mindmapNodes!: Table<MindmapNode, string>;
   syncConflicts!: Table<SyncConflict, string>;
+  localBackups!: Table<LocalBackup, string>;
 
   constructor() {
     // Strict: every commit reaches the disk before it resolves. Chrome's default
@@ -88,6 +91,11 @@ export class Gtd25DB extends Dexie {
     this.version(10).stores({
       syncConflicts: 'id, entityId, detectedAt',
     });
+    // Device-local safety copies (db/backup.ts), moved out of localStorage.
+    // Local only, never synced; encrypted by backup.ts itself on a Paranoid device.
+    this.version(11).stores({
+      localBackups: 'id, timestamp',
+    });
   }
 }
 
@@ -115,6 +123,18 @@ export function onDatabaseSupersededByOtherTab(handler: () => void): () => void 
   return () => { databaseClosedHandler = null; };
 }
 
+// Our own open (an upgrade, or a new schema after a deploy) waits for another
+// connection that won't close — another window of the app, maybe asleep. Every
+// query waits behind it: say so, until the database opens.
+let hideBlockedNotice: (() => void) | null = null;
+db.on('blocked', () => {
+  hideBlockedNotice ??= showBootNotice('GTD25 is waiting for another window of the app to let go of its data. Close other GTD25 windows (or tabs) to continue.');
+});
+db.on('ready', () => {
+  hideBlockedNotice?.();
+  hideBlockedNotice = null;
+}, true); // sticky: every (re)open, not only the first
+
 db.on('versionchange', () => {
   // Dexie's own handler closes the connection; we only have to surface it.
   databaseClosedHandler?.();
@@ -136,13 +156,19 @@ export async function cleanOrphans() {
     const subtasks = await db.subtasks.toArray();
     const changedTasks = new Map<string, Task>();
     const changedSubtasks = new Map<string, Subtask>();
+    // Rows this device can't read are the vault's placeholders: a repair written
+    // back would replace their ciphertext with the placeholder. They are left
+    // for when they can be read again (or the remote's copy replaces them).
+    const unreadable = (row: object) => !!(row as { _decryptError?: boolean })._decryptError;
     const fixTask = (task: Task, changes: Partial<Task>): Task => {
+      if (unreadable(task)) return task;
       const fieldTimestamps = stampUpdatedFields(task.fieldTimestamps, Object.keys(changes), now);
       const next = { ...task, ...changes, updatedAt: now, fieldTimestamps };
       changedTasks.set(task.id, next);
       return next;
     };
     const fixSubtask = (sub: Subtask, changes: Partial<Subtask>): Subtask => {
+      if (unreadable(sub)) return sub;
       const fieldTimestamps = stampUpdatedFields(sub.fieldTimestamps, Object.keys(changes), now);
       const next = { ...sub, ...changes, updatedAt: now, fieldTimestamps };
       changedSubtasks.set(sub.id, next);
@@ -488,28 +514,44 @@ export async function ensureDefaults() {
     }
   });
 
+  // Each step on its own: one that threw (storage full, a timeout, a data bug)
+  // used to skip every step after it, on every start — the local migrations,
+  // which ran last, included. They run first now: the repairs below then work
+  // on migrated data.
+  const step = async (name: string, run: () => Promise<unknown>) => {
+    try {
+      await run();
+    } catch (err) {
+      recordError(`startup.${name}`, err);
+    }
+  };
+
+  // Run local migrations if needed
+  await step('migrations', async () => {
+    const current = await db.localSettings.get('local');
+    const appliedVersion = current?.appliedSyncVersion ?? 0;
+    if (appliedVersion < SYNC_VERSION) {
+      await runLocalMigrations(db, appliedVersion, SYNC_VERSION);
+      await db.localSettings.update('local', { appliedSyncVersion: SYNC_VERSION });
+    }
+  });
+
   // Clean orphaned records
-  await cleanOrphans();
+  await step('orphans', cleanOrphans);
 
   // Lists archived and tasks completed / follow-ups resolved over 12 months ago
   // move to the Trash, then the 30-day purge below (next startup at the
   // earliest) hard-deletes them. With sync on, after this session's first sync.
-  await expireOldItemsWhenCurrent();
+  await step('retention', expireOldItemsWhenCurrent);
 
   // Purge soft-deleted items older than 30 days at startup
-  await purgeOldTrashItems();
+  await step('purge', purgeOldTrashItems);
 
   // Cap changelog when sync is disabled to prevent unbounded growth
-  await pruneChangelogIfSyncDisabled();
+  await step('changelogCap', pruneChangelogIfSyncDisabled);
 
+  // Copies an older build kept in localStorage move to IndexedDB first.
+  await step('legacyBackups', adoptLegacyLocalBackups);
   // Defer backup so it doesn't block initial render
   setTimeout(() => createLocalBackup({ reason: 'boot' }), 5000);
-
-  // Run local migrations if needed
-  const current = await db.localSettings.get('local');
-  const appliedVersion = current?.appliedSyncVersion ?? 0;
-  if (appliedVersion < SYNC_VERSION) {
-    await runLocalMigrations(db, appliedVersion, SYNC_VERSION);
-    await db.localSettings.update('local', { appliedSyncVersion: SYNC_VERSION });
-  }
 }

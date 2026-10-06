@@ -130,6 +130,18 @@ describe('recurring reset (A1)', () => {
     expect(await db.changeLog.count()).toBe(entriesBefore);
   });
 
+  it('leaves alone a row this device cannot read (M13: never written back over its ciphertext)', async () => {
+    const occurrence = Date.now() - HOUR;
+    const task = await recurringTask({ status: 'done', nextOccurrence: occurrence });
+    await db.tasks.update(task.id, { _decryptError: true } as never);
+    const entriesBefore = await db.changeLog.count();
+
+    await checkRecurringTasks();
+
+    expect(await db.changeLog.count()).toBe(entriesBefore);
+    expect((await db.tasks.get(task.id))?.status).toBe('done');
+  });
+
   it('resets subtasks with the occurrence stamp too', async () => {
     const occurrence = Date.now() - 2 * HOUR;
     const task = await recurringTask({ status: 'done', nextOccurrence: occurrence, fieldTimestamps: { status: occurrence - DAY } });
