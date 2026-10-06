@@ -30,7 +30,7 @@ export async function deleteTasksBatch(ids: string[], now = Date.now()) {
           batch.push({ entityType: 'subtask', entityId: sub.id, operation: 'delete' });
         }
       }
-      await recordChangeBatchInTx(batch);
+      await recordChangeBatchInTx(batch, now);
     });
     scheduleSyncDebounced();
   } catch (error) {

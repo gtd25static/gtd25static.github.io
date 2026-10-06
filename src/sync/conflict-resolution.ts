@@ -26,7 +26,8 @@ export function archiveOldCompleted(data: SyncData): SyncData {
   return {
     ...data,
     tasks: data.tasks.map((t) => {
-      if (t.status === 'done' && !t.archived) {
+      // A done recurring task is waiting for its next occurrence, not finished.
+      if (t.status === 'done' && !t.archived && !t.recurrenceType) {
         const completedAt = t.completedAt ?? t.updatedAt;
         if (completedAt < cutoff) {
           const now = Date.now();

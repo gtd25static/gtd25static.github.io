@@ -2,7 +2,7 @@ import Dexie, { type Table } from 'dexie';
 import type { TaskList, Task, Subtask, SyncMeta, LocalSettings, ChangeEntry, PomodoroSound, SoundPreset, PomodoroSettings, Vault, SharedItem, SharedBlob, MindmapFolder, Mindmap, MindmapNode, SyncConflict } from './models';
 import { newId } from '../lib/id';
 import { createLocalBackup } from './backup';
-import { purgeOldTrashItems, expireArchivedLists, expireCompletedItems } from './purge';
+import { purgeOldTrashItems, expireOldItemsWhenCurrent } from './purge';
 import { ensureDeviceId, recordChangeBatchInTx, pruneChangelogIfSyncDisabled } from '../sync/change-log';
 import { initFieldTimestamps, stampUpdatedFields } from '../sync/field-timestamps';
 import { INBOX_LIST_NAME, pickInboxList } from '../lib/constants';
@@ -195,6 +195,16 @@ export async function cleanOrphans() {
         });
       }
       if (Object.keys(repair).length > 0) fixTask(task, repair);
+    }
+
+    // An open task can't be archived: compaction archives tasks done for 90 days,
+    // and older builds left the flag on one reopened (or brought back by its
+    // recurrence) — hidden from Focus, the banners and nudges. In a follow-up
+    // list `archived` means resolved, so those keep it.
+    for (const original of tasks) {
+      const task = changedTasks.get(original.id) ?? original;
+      if (task.deletedAt || !task.archived || task.status === 'done' || followUpLists.has(task.listId)) continue;
+      fixTask(task, { archived: undefined });
     }
 
     // Live children of a parent in the Trash — another device deleted the list
@@ -429,12 +439,10 @@ export async function ensureDefaults() {
   // Clean orphaned records
   await cleanOrphans();
 
-  // Lists archived over 12 months ago move to the Trash, then the 30-day purge
-  // below (next startup at the earliest) hard-deletes them.
-  await expireArchivedLists();
-
-  // Tasks completed and follow-ups resolved over 12 months ago, likewise.
-  await expireCompletedItems();
+  // Lists archived and tasks completed / follow-ups resolved over 12 months ago
+  // move to the Trash, then the 30-day purge below (next startup at the
+  // earliest) hard-deletes them. With sync on, after this session's first sync.
+  await expireOldItemsWhenCurrent();
 
   // Purge soft-deleted items older than 30 days at startup
   await purgeOldTrashItems();

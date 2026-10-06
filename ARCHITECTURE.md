@@ -72,8 +72,9 @@ All persistent entities live in IndexedDB via Dexie. Definitions: `src/db/models
   end of the sidebar, drops out of Focus / nudges / banners / the Attention
   counter / move-to-list targets (it stays searchable and keeps counting in
   Insights), and 12 months later `expireArchivedLists` (startup, from
-  `ensureDefaults`) soft-deletes it into the Trash, where the usual 30-day
-  purge finishes the job.
+  `ensureDefaults` — with sync on, after the session's first successful sync,
+  so it never acts on stale data) soft-deletes it into the Trash, where the
+  usual 30-day purge finishes the job.
 - **Task** — title, description, links, `status: 'todo'|'done'|'blocked'|'working'`, due date, star, completion timestamps, follow-up ping fields, recurrence config, archived flag, `fieldTimestamps`.
 - **Subtask** — same shape as Task but linked to a parent `taskId`. Nesting beyond one level is disallowed.
 - **ChangeEntry** — append-only sync log: `{ id, deviceId, timestamp, entityType, entityId, operation: 'upsert'|'delete', data, v }`.
@@ -186,7 +187,8 @@ The append-only changelog plus timestamp-ordered replay gives **eventual consist
 ### Soft deletes & auto-archive
 
 - Deletes are soft: the engine sets `deletedAt` and lets the tombstone propagate. After **30 days** (`src/sync/conflict-resolution.ts:3`, `cleanupSoftDeletes`) tombstones are pruned from snapshots during compaction.
-- Completed tasks older than 90 days are auto-archived during compaction so motivation stats and default views stay focused on recent work.
+- Completed tasks older than 90 days are auto-archived during compaction so motivation stats and default views stay focused on recent work. Recurring tasks are never archived (done, they are waiting for their next occurrence), and a task that leaves `done` sheds the flag.
+- Recurring resets (`checkRecurringTasks`) are stamped with the occurrence's time, not the clock: every device computes the same stamp, so a completion made after the occurrence — on any device — wins the merge over a reset made later by a device that had not synced yet.
 
 ### Multi-device coordination
 

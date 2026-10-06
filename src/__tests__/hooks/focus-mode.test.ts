@@ -230,6 +230,9 @@ describe('maintainFocusSet', () => {
     }
     await maybeRefillFocus(now);
     expect((await focusedTasks()).map((t) => t.id)).toContain(recurring.id); // rank-0 urgent
+    // Focused before its occurrence came round (a reset leaves alone what was set after it).
+    const focusedRow = assertDefined(await db.tasks.get(recurring.id), 'focused');
+    await db.tasks.update(recurring.id, { fieldTimestamps: { ...focusedRow.fieldTimestamps, focusedAt: now - 2000 } });
 
     await checkRecurringTasks(); // reset clears its focusedAt → set leaks to 2
     expect(await focusedTasks()).toHaveLength(FOCUS_SET_SIZE - 1);

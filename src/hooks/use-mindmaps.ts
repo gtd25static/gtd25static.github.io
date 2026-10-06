@@ -322,7 +322,7 @@ export async function deleteMindmapFolder(id: string): Promise<void> {
           batch.push({ entityType: 'mindmapNode', entityId: n.id, operation: 'delete' });
         }
       }
-      await recordChangeBatchInTx(batch);
+      await recordChangeBatchInTx(batch, now);
     });
     scheduleSyncDebounced();
   } catch (error) {
@@ -502,7 +502,7 @@ export async function deleteMindmap(id: string): Promise<void> {
         await db.mindmapNodes.update(n.id, { deletedAt: now, updatedAt: now, fieldTimestamps: nft });
         batch.push({ entityType: 'mindmapNode', entityId: n.id, operation: 'delete' });
       }
-      await recordChangeBatchInTx(batch);
+      await recordChangeBatchInTx(batch, now);
     });
     scheduleSyncDebounced();
   } catch (error) {
@@ -773,7 +773,7 @@ export async function deleteMindmapNodeSubtree(id: string): Promise<string[]> {
         batch.push({ entityType: 'mindmapNode', entityId: nodeId, operation: 'delete' });
         deleted.push(nodeId);
       }
-      await recordChangeBatchInTx(batch);
+      await recordChangeBatchInTx(batch, now);
     });
     scheduleSyncDebounced();
     return deleted;

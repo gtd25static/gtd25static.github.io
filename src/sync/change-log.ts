@@ -61,6 +61,11 @@ export async function recordChangeInTx(
  * Record a batch of changes within an existing Dexie transaction.
  * The caller must include db.changeLog in the transaction scope.
  * Uses cached deviceId to avoid accessing db.localSettings within the transaction.
+ *
+ * `timestamp`: a cascade delete passes the deletedAt it gave its rows. Other
+ * devices set deletedAt from a delete entry's timestamp, and a restore brings
+ * back the children whose deletedAt equals the parent's — a later clock reading
+ * here left them in the Trash there.
  */
 export async function recordChangeBatchInTx(
   entries: Array<{
@@ -69,10 +74,11 @@ export async function recordChangeBatchInTx(
     operation: ChangeEntry['operation'];
     data?: Record<string, unknown>;
   }>,
+  timestamp?: number,
 ) {
   if (entries.length === 0) return;
   const deviceId = cachedDeviceId ?? await getDeviceId();
-  const now = Date.now();
+  const now = timestamp ?? Date.now();
   const records: ChangeEntry[] = entries.map((e) => ({
     id: newId(),
     deviceId,

@@ -7,29 +7,43 @@ import { fromInputDate, toInputDate } from '../../lib/date-utils';
 import type { Subtask, TaskLink } from '../../db/models';
 import { AddLinkForm } from '../shared/AddLinkForm';
 
-interface Props {
-  onSubmit: (data: { title: string; link?: string; dueDate?: number; links?: TaskLink[] }) => void;
-  onCancel: () => void;
-  initial?: Partial<Subtask>;
-}
+interface SubtaskFormData { title: string; link?: string; dueDate?: number; links?: TaskLink[] }
 
-export function SubtaskForm({ onSubmit, onCancel, initial }: Props) {
+/** A new subtask gets every field; an edit (`initial` given) only the ones changed. */
+type Props =
+  | { initial?: undefined; onSubmit: (data: SubtaskFormData) => void; onCancel: () => void }
+  | { initial: Partial<Subtask>; onSubmit: (data: Partial<SubtaskFormData>) => void; onCancel: () => void };
+
+export function SubtaskForm(props: Props) {
+  const { onCancel, initial } = props;
   const [title, setTitle] = useState(initial?.title ?? '');
   const [link, setLink] = useState(initial?.link ?? '');
   const [dueDate, setDueDate] = useState(initial?.dueDate ? toInputDate(initial.dueDate) : '');
   const [links, setLinks] = useState<TaskLink[]>(initial?.links ?? []);
   const [addingLink, setAddingLink] = useState(false);
   const [showMore, setShowMore] = useState(!!initial?.link || !!initial?.dueDate || (initial?.links ?? []).length > 0);
+  // An edit sends only what the user changed (see TaskForm).
+  const [opened] = useState(() => ({ title, link, dueDate, links }));
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!title.trim()) return;
-    onSubmit({
+    const data: SubtaskFormData = {
       title: title.trim(),
       link: link.trim() && isValidUrl(link.trim()) ? link.trim() : undefined,
       dueDate: dueDate ? fromInputDate(dueDate) : undefined,
       links: links.length > 0 ? links : undefined,
-    });
+    };
+    if (props.initial) {
+      const edited: Partial<SubtaskFormData> = { ...data };
+      if (title === opened.title) delete edited.title;
+      if (link === opened.link) delete edited.link;
+      if (dueDate === opened.dueDate) delete edited.dueDate;
+      if (JSON.stringify(links) === JSON.stringify(opened.links)) delete edited.links;
+      props.onSubmit(edited);
+    } else {
+      props.onSubmit(data);
+    }
     setTitle('');
     setLink('');
     setDueDate('');

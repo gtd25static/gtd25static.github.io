@@ -60,6 +60,7 @@ export async function createSubtask(
 }
 
 export async function updateSubtask(id: string, updates: Partial<Subtask>) {
+  if (Object.keys(updates).length === 0) return; // an edit form saved with nothing edited
   // Every caller (inline edit included) gets the same cap as the task forms.
   if (updates.title !== undefined) updates = { ...updates, title: updates.title.slice(0, MAX_TITLE_LENGTH) };
   try {

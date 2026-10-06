@@ -207,7 +207,7 @@ export async function deleteTaskList(id: string): Promise<number | undefined> {
         }
       }
 
-      await recordChangeBatchInTx(batch);
+      await recordChangeBatchInTx(batch, now);
     });
 
     scheduleSyncDebounced();

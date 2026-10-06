@@ -52,8 +52,9 @@ describe('checkRecurringTasks', () => {
         nextOccurrence: past,
       }),
     );
-    // Mark as done
-    await db.tasks.update(task.id, { status: 'done', updatedAt: Date.now() });
+    // Marked done before the occurrence came round (as a completion always is:
+    // it sets the next occurrence after itself)
+    await db.tasks.update(task.id, { status: 'done', updatedAt: Date.now(), fieldTimestamps: { ...task.fieldTimestamps, status: past - 60_000 } });
 
     await checkRecurringTasks();
 
@@ -143,7 +144,7 @@ describe('checkRecurringTasks', () => {
       }),
     );
     const sub = assertDefined(await createSubtask(task.id, { title: 'Sub1' }));
-    await db.subtasks.update(sub.id, { status: 'done', updatedAt: Date.now() });
+    await db.subtasks.update(sub.id, { status: 'done', updatedAt: Date.now(), fieldTimestamps: { ...sub.fieldTimestamps, status: past - 60_000 } });
 
     await checkRecurringTasks();
 

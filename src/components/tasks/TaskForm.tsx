@@ -9,21 +9,24 @@ import { AddLinkForm } from '../shared/AddLinkForm';
 import { computeNextOccurrence } from '../../hooks/use-recurring';
 import { MAX_TITLE_LENGTH, MAX_DESCRIPTION_LENGTH } from '../../lib/constants';
 
+interface TaskFormData {
+  title: string;
+  description?: string;
+  link?: string;
+  dueDate?: number;
+  links?: TaskLink[];
+  recurrenceType?: 'time-based' | 'date-based';
+  recurrenceInterval?: number;
+  recurrenceUnit?: 'hours' | 'days' | 'weeks' | 'months';
+  nextOccurrence?: number;
+  skipFirst?: boolean;
+}
+
 interface Props {
   open: boolean;
   onClose: () => void;
-  onSubmit: (data: {
-    title: string;
-    description?: string;
-    link?: string;
-    dueDate?: number;
-    links?: TaskLink[];
-    recurrenceType?: 'time-based' | 'date-based';
-    recurrenceInterval?: number;
-    recurrenceUnit?: 'hours' | 'days' | 'weeks' | 'months';
-    nextOccurrence?: number;
-    skipFirst?: boolean;
-  }) => void;
+  /** A new task gets every field; an edit (`initial` given) only the ones changed. */
+  onSubmit: (data: Partial<TaskFormData>) => void;
   initial?: Partial<Task>;
   /** Follow-up lists have no recurrence (nor a done state for it to reset from). */
   allowRecurrence?: boolean;
@@ -45,11 +48,32 @@ export function TaskForm({ open, onClose, onSubmit, initial, allowRecurrence = t
   const [recurrenceUnit, setRecurrenceUnit] = useState<'hours' | 'days' | 'weeks' | 'months'>(initial?.recurrenceUnit ?? 'days');
   const [skipFirst, setSkipFirst] = useState(false);
 
+  // What the dialog opened with. An edit sends only what the user changed from
+  // it: sending every field put back, stamped now, one another device changed
+  // while the dialog was open — and that stale value won everywhere.
+  const [opened] = useState(() => ({ title, description, link, dueDate, links, recurring, recurrenceType, recurrenceInterval, recurrenceUnit }));
+
+  function onlyEdited(data: TaskFormData): Partial<TaskFormData> {
+    const edited: Partial<TaskFormData> = { ...data };
+    if (title === opened.title) delete edited.title;
+    if (description === opened.description) delete edited.description;
+    if (link === opened.link) delete edited.link;
+    if (JSON.stringify(links) === JSON.stringify(opened.links)) delete edited.links;
+    const scheduleEdited =
+      dueDate !== opened.dueDate || recurring !== opened.recurring || recurrenceType !== opened.recurrenceType ||
+      recurrenceInterval !== opened.recurrenceInterval || recurrenceUnit !== opened.recurrenceUnit ||
+      (!allowRecurrence && !!initial?.recurrenceType); // saving here clears a recurrence it can't show
+    if (!scheduleEdited) {
+      for (const key of ['dueDate', 'recurrenceType', 'recurrenceInterval', 'recurrenceUnit', 'nextOccurrence', 'skipFirst'] as const) delete edited[key];
+    }
+    return edited;
+  }
+
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!title.trim()) return;
 
-    const data: Parameters<typeof onSubmit>[0] = {
+    const data: TaskFormData = {
       title: title.trim(),
       description: description.trim() || undefined,
       link: link.trim() && isValidUrl(link.trim()) ? link.trim() : undefined,
@@ -78,7 +102,7 @@ export function TaskForm({ open, onClose, onSubmit, initial, allowRecurrence = t
       }
     }
 
-    onSubmit(data);
+    onSubmit(initial ? onlyEdited(data) : data);
     setTitle('');
     setDescription('');
     setLink('');

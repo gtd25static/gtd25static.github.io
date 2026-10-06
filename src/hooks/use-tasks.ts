@@ -79,6 +79,7 @@ export async function createTask(
 }
 
 export async function updateTask(id: string, updates: Partial<Task>) {
+  if (Object.keys(updates).length === 0) return; // an edit form saved with nothing edited
   // Every caller (inline edit included) gets the same cap as the task forms.
   if (updates.title !== undefined) updates = { ...updates, title: updates.title.slice(0, MAX_TITLE_LENGTH) };
   try {
@@ -148,6 +149,10 @@ export function statusChangeUpdates(task: Task | undefined, status: TaskStatus, 
     updates.completedAt = now;
   } else if (task?.status === 'done') {
     updates.completedAt = undefined;
+    // Compaction archives tasks done for 90 days; reopened, one stayed hidden
+    // from Focus, the banners and nudges. (Follow-ups, where `archived` means
+    // resolved, are never 'done'.)
+    if (task.archived) updates.archived = undefined;
   }
 
   // Recurrence: when marking a recurring task done
@@ -196,7 +201,7 @@ export async function deleteTask(id: string) {
         batch.push({ entityType: 'subtask', entityId: sub.id, operation: 'delete' });
       }
 
-      await recordChangeBatchInTx(batch);
+      await recordChangeBatchInTx(batch, now);
     });
 
     scheduleSyncDebounced();

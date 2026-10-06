@@ -1,5 +1,6 @@
 import { db } from './index';
 import { ARCHIVED_LIST_RETENTION_MS, COMPLETED_RETENTION_MS } from '../lib/constants';
+import { recordError } from '../lib/diagnostics';
 
 const THIRTY_DAYS = 30 * 24 * 60 * 60 * 1000;
 
@@ -102,7 +103,7 @@ async function forgetSettledArrivals(arrivals: Record<string, number>): Promise<
 /**
  * gtd25 keeps work, not an archive: tasks completed and follow-ups resolved more
  * than COMPLETED_RETENTION_MS (12 months) ago go to the Trash, with their
- * subtasks, like a delete by hand — recorded in the changelog so every device
+ * subtasks (recurring tasks never: they come back), like a delete by hand — recorded in the changelog so every device
  * converges — and the 30-day purge above ends them. Counted from completedAt
  * (a follow-up: from when it was resolved), not the last edit; open items,
  * however old, are never touched. Runs at startup, from ensureDefaults().
@@ -114,6 +115,9 @@ export async function expireCompletedItems(now: number = Date.now()) {
   const expired = tasks.filter((t) => {
     if (t.deletedAt) return false;
     if (followUpLists.has(t.listId)) return !!t.archived && (t.fieldTimestamps?.archived ?? t.updatedAt) < cutoff;
+    // A recurring task is never finished: done, it is waiting for its next
+    // occurrence ("every 2 years" waits longer than the retention).
+    if (t.recurrenceType) return false;
     return t.status === 'done' && (t.completedAt ?? t.updatedAt) < cutoff;
   });
   if (expired.length === 0) return;
@@ -142,4 +146,33 @@ export async function expireArchivedLists(now: number = Date.now()) {
   for (const list of expired) {
     await deleteTaskList(list.id);
   }
+}
+
+let retentionAfterPull: (() => void) | null = null;
+
+/**
+ * The two expiries above, run on data that is current. Without sync they run
+ * now. With sync on they wait for this session's first successful sync: at
+ * startup this device may still hold a list another one has since unarchived,
+ * or a task reopened there, and its delete — stamped now — would win everywhere.
+ * Runs at startup, from ensureDefaults().
+ */
+export async function expireOldItemsWhenCurrent(): Promise<void> {
+  const expire = async () => {
+    await expireArchivedLists();
+    await expireCompletedItems();
+  };
+  if (!(await db.localSettings.get('local'))?.syncEnabled) {
+    await expire();
+    return;
+  }
+  const { onSyncSuccess, offSyncSuccess } = await import('../sync/sync-engine');
+  if (retentionAfterPull) offSyncSuccess(retentionAfterPull);
+  const afterPull = () => {
+    offSyncSuccess(afterPull);
+    if (retentionAfterPull === afterPull) retentionAfterPull = null;
+    void expire().catch((e) => recordError('retention.afterSync', e));
+  };
+  retentionAfterPull = afterPull;
+  onSyncSuccess(afterPull);
 }
