@@ -21,6 +21,7 @@ vi.mock('../../sync/remote-backups', async () => ({
 import { getFile, putFile, RateLimitError } from '../../sync/github-api';
 import { startScheduler, stopScheduler, __resetForTesting, CHANGELOG_FILE } from '../../sync/sync-engine';
 import { toast } from '../../components/ui/Toast';
+import { recordServerDate, __resetClockSkewForTests } from '../../lib/clock-skew';
 
 const mockGetFile = getFile as Mock;
 const mockPutFile = putFile as Mock;
@@ -50,6 +51,7 @@ beforeEach(async () => {
 afterEach(() => {
   stopScheduler();
   vi.useRealTimers();
+  __resetClockSkewForTests();
 });
 
 async function settle() {
@@ -111,6 +113,21 @@ describe('a rate limit pauses everything until it resets', () => {
     expect((toast as Mock).mock.calls.filter((c) => /Rate limited/.test(String(c[0]))).length).toBe(1);
 
     await vi.advanceTimersByTimeAsync(3 * 60_000);
+    expect(mockGetFile.mock.calls.length).toBeGreaterThan(atLimit);
+  });
+});
+
+describe('a rate limit with this device\'s clock ahead (reliability review 2026-10-06, B4)', () => {
+  it('pauses as long as the limit says, not hours more', async () => {
+    recordServerDate(new Date(Date.now() - 2 * 60 * 60 * 1000).toUTCString()); // 2 h ahead
+    startScheduler();
+    await settle();
+    mockGetFile.mockRejectedValueOnce(new RateLimitError(Date.now() + 10 * 60_000));
+    await vi.advanceTimersByTimeAsync(30_000);
+    await settle();
+    const atLimit = mockGetFile.mock.calls.length;
+
+    await vi.advanceTimersByTimeAsync(11 * 60_000);
     expect(mockGetFile.mock.calls.length).toBeGreaterThan(atLimit);
   });
 });

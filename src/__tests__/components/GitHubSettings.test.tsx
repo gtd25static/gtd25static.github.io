@@ -19,6 +19,7 @@ const h = vi.hoisted(() => ({
   isRemoteUnlockEnrolled: vi.fn(async () => false),
   contentReplacedByLinking: vi.fn(async () => null as null | { lists: number; tasks: number; maps: number }),
   hasEncryptionKey: vi.fn(() => false),
+  ensureEncryptionKey: vi.fn(async () => null),
   rotateSyncKey: vi.fn(),
   requirePassphrase: vi.fn(async (): Promise<string | null> => 'the passphrase'),
   confirm: vi.fn(async () => true),
@@ -39,6 +40,7 @@ vi.mock('../../sync/github-api', () => ({
 }));
 vi.mock('../../sync/sync-engine', () => ({
   syncNow: vi.fn(),
+  ensureEncryptionKey: () => h.ensureEncryptionKey(),
   forcePush: vi.fn(),
   forcePull: vi.fn(),
   contentReplacedByLinking: h.contentReplacedByLinking,
@@ -67,6 +69,7 @@ vi.mock('../../sync/key-rotation', () => ({
   discardUnfinishedRotation: vi.fn(),
 }));
 vi.mock('../../components/ui/Toast', () => ({ toast: h.toast }));
+vi.mock('../../sync/sync-lock', () => ({ withSyncLock: (fn: () => Promise<unknown>) => fn() }));
 
 describe('GitHubSettings — sync password strength gate (ACR-014)', () => {
   beforeEach(() => {
@@ -263,6 +266,40 @@ describe('GitHubSettings — changing the sync password', () => {
     await act(async () => finish());
     expect(screen.queryByRole('dialog', { name: 'Changing the sync password' })).not.toBeInTheDocument();
     expect(h.toast).toHaveBeenCalledWith(expect.stringMatching(/Sync password changed/), 'success');
+  });
+});
+
+// Reliability review 2026-10-06: Save before the key was cached (the startup
+// sync still deriving it, or the cache expired after 30 idle minutes) stored the
+// new password as is — nothing re-encrypted, and this device locked out.
+describe('GitHubSettings — changing the password before the key is cached', () => {
+  beforeEach(() => {
+    h.updateLocalSettings.mockClear();
+    h.confirm.mockReset();
+    h.confirm.mockResolvedValue(true);
+    h.rotateSyncKey.mockReset();
+    h.rotateSyncKey.mockResolvedValue({ blobsRewritten: 0, blobsUnreadable: 0, historySquashed: true });
+    h.hasEncryptionKey.mockReturnValue(false);
+    h.ensureEncryptionKey.mockReset();
+    h.vault = { enabled: false, unlocked: false };
+    h.secrets = undefined;
+    h.local = { githubPat: 'ghp_token', githubRepo: 'owner/repo', encryptionPassword: 'alpha rhino cactus velvet moon', syncEnabled: true };
+  });
+  afterEach(() => h.hasEncryptionKey.mockReturnValue(false));
+
+  it('gets the key first, then changes the password (not just stores it)', async () => {
+    h.ensureEncryptionKey.mockImplementation(async () => { h.hasEncryptionKey.mockReturnValue(true); return {} as never; });
+    const user = userEvent.setup();
+    render(<GitHubSettings />);
+    const field = screen.getByLabelText('Encryption Password');
+    await user.clear(field);
+    await user.type(field, 'harbor velvet 91 frosty lantern orbit');
+    await user.type(screen.getByLabelText('Confirm Password'), 'harbor velvet 91 frosty lantern orbit');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+
+    await vi.waitFor(() => expect(h.rotateSyncKey).toHaveBeenCalledWith('harbor velvet 91 frosty lantern orbit', expect.any(Function)));
+    // The stored password stays the old one until the remote speaks the new.
+    expect(h.updateLocalSettings).toHaveBeenCalledWith(expect.objectContaining({ encryptionPassword: 'alpha rhino cactus velvet moon' }));
   });
 });
 

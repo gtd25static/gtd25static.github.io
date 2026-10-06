@@ -1,7 +1,8 @@
 import { isParanoidFlagSet } from '../db/paranoid-flag';
-import { recordServerDate } from '../lib/clock-skew';
+import { recordServerDate, getClockSkewMs } from '../lib/clock-skew';
 
 export class RateLimitError extends Error {
+  /** When the limit lifts, on this device's clock. */
   resetAtMs: number;
   constructor(resetAtMs: number) {
     super('GitHub API rate limit exceeded');
@@ -75,7 +76,7 @@ async function apiFetch(
 
   // Every response carries the server's clock — free skew detection for the
   // LWW merge, which is only as trustworthy as the writing device's Date.now().
-  recordServerDate(resp.headers.get('Date'));
+  const skewMs = recordServerDate(resp.headers.get('Date'));
 
   // Rate limits: a 403 with no requests left (primary), a 429, a 403 with
   // Retry-After, or a 403 whose message says so (secondary). A secondary limit
@@ -87,7 +88,10 @@ async function apiFetch(
     const retryAfter = parseInt(resp.headers.get('Retry-After') ?? '', 10);
     if (Number.isFinite(retryAfter)) throw new RateLimitError(Date.now() + retryAfter * 1000);
     if (remaining === '0' && resetHeader) {
-      const resetAtMs = parseInt(resetHeader, 10) * 1000;
+      // The only reset on the server's clock: on this device's it is the skew
+      // later (positive: this device is ahead). Every other case is counted
+      // from this device's Date.now() already.
+      const resetAtMs = parseInt(resetHeader, 10) * 1000 + (skewMs ?? getClockSkewMs() ?? 0);
       throw new RateLimitError(resetAtMs);
     }
     if (resp.status === 429) throw new RateLimitError(Date.now() + SECONDARY_LIMIT_WAIT_MS);

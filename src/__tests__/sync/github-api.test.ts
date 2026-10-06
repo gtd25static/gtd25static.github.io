@@ -115,6 +115,27 @@ describe('request timeouts', () => {
 describe('rate limits and ambiguous creates', () => {
   afterEach(() => vi.unstubAllGlobals());
 
+  // Reliability review 2026-10-06 (B4): the pause added the clock skew to every
+  // reset, though only X-RateLimit-Reset is on the server's clock: a device two
+  // hours ahead paused two hours for a 2-minute Retry-After.
+  it('gives every reset on this device\'s clock: Retry-After as is, X-RateLimit-Reset corrected for skew', async () => {
+    const twoHours = 2 * 60 * 60 * 1000;
+    const serverDate = new Date(Date.now() - twoHours).toUTCString(); // this device is 2 h ahead
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status: 429, headers: { 'Retry-After': '120', Date: serverDate } })));
+    const before = Date.now();
+    const retry = await getFile('tok', 'me/repo', 'x.json').catch((e) => e);
+    expect(retry.resetAtMs).toBeGreaterThanOrEqual(before + 120_000);
+    expect(retry.resetAtMs).toBeLessThan(before + 125_000);
+
+    const serverReset = Math.floor((Date.now() - twoHours) / 1000) + 600; // in 10 min, server time
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', {
+      status: 403, headers: { 'X-RateLimit-Remaining': '0', 'X-RateLimit-Reset': String(serverReset), Date: serverDate },
+    })));
+    const primary = await getFile('tok', 'me/repo', 'x.json').catch((e) => e);
+    expect(primary.resetAtMs).toBeGreaterThan(Date.now() + 9 * 60_000);
+    expect(primary.resetAtMs).toBeLessThan(Date.now() + 11 * 60_000);
+  });
+
   it('treats a 429 as a rate limit, waiting what Retry-After says', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status: 429, headers: { 'Retry-After': '120' } })));
     const before = Date.now();

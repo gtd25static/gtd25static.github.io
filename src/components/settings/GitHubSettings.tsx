@@ -6,7 +6,8 @@ import { Button } from '../ui/Button';
 import { toast } from '../ui/Toast';
 import { confirmDialog } from '../ui/ConfirmDialog';
 import { testConnection, tokenReach, tokenReachWarning } from '../../sync/github-api';
-import { syncNow, forcePush, forcePull, contentReplacedByLinking } from '../../sync/sync-engine';
+import { syncNow, forcePush, forcePull, contentReplacedByLinking, ensureEncryptionKey } from '../../sync/sync-engine';
+import { withSyncLock } from '../../sync/sync-lock';
 import { deriveKey, cacheEncryptionKey, generateSalt, hasEncryptionKey } from '../../sync/crypto';
 import {
   rotateSyncKey, hasUnfinishedRotation, discardUnfinishedRotation, type RotationProgress, type RotationResult,
@@ -83,6 +84,17 @@ export function GitHubSettings() {
     // whole repository under it (sync/key-rotation.ts) — run after the other
     // fields are saved, and only when this device can read the remote (a cached
     // key). An unfinished rotation is completed by saving its password again.
+    // The key may not be cached yet (the startup sync still deriving it) or have
+    // expired (30 idle minutes). Read as "can't read the remote", the new password
+    // was then stored as is: nothing re-encrypted, and this device locked out of
+    // the repository it had been opening. Get it first: from the stored password
+    // and the salt last seen, else from the sync in flight, else from one now.
+    if (wasSyncEnabled && willEnableSync && newPassword && (passwordChanged || unfinishedRotation) && !hasEncryptionKey()) {
+      await ensureEncryptionKey();
+      if (!hasEncryptionKey()) await withSyncLock(async () => {});
+      if (!hasEncryptionKey()) await ensureEncryptionKey();
+      if (!hasEncryptionKey()) await syncNow();
+    }
     const rotating = wasSyncEnabled && willEnableSync && !!newPassword && hasEncryptionKey()
       && (passwordChanged || !!unfinishedRotation);
 

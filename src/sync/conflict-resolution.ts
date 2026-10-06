@@ -1,6 +1,9 @@
 import type { SyncData } from '../db/models';
 
-export function cleanupSoftDeletes(data: SyncData, maxAgeMs: number = 30 * 24 * 60 * 60 * 1000): SyncData {
+/** How long a tombstone stays in the snapshot after the delete (then compaction drops it). */
+export const TOMBSTONE_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+
+export function cleanupSoftDeletes(data: SyncData, maxAgeMs: number = TOMBSTONE_RETENTION_MS): SyncData {
   const cutoff = Date.now() - maxAgeMs;
   return {
     ...data,

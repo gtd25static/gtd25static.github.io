@@ -272,6 +272,10 @@ export interface SyncMeta {
   lastSnapshotSha?: string;
   lastPulledAt?: number;
   lastPushedAt?: number;
+  // This device came back after longer than tombstones last: the lastPulledAt it
+  // had then, until the rows deleted elsewhere meanwhile are in its Trash
+  // (sync-engine trashRowsDeletedWhileAway).
+  awaySweepFrom?: number;
   pendingChanges: boolean;
   pomodoroSyncedAt?: number;
   // Shared Folder blob-branch history compaction (local bookkeeping, not synced):

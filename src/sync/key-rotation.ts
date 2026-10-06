@@ -233,7 +233,21 @@ async function rotateHoldingLock(
 
   // 3. The Shared Folder's files.
   onProgress({ phase: 'files' });
-  const blobs = await withBlobBranchLock(() => rotateBlobBranch(creds, oldKey, newKey, onProgress));
+  const branch: BranchProgress = { moved: false };
+  let blobs: Awaited<ReturnType<typeof rotateBlobBranch>>;
+  try {
+    blobs = await withBlobBranchLock(() => rotateBlobBranch(creds, oldKey, newKey, onProgress, branch));
+  } catch (err) {
+    // Before the branch moved, nothing on the remote is under the new key: a
+    // change started by this call is undone — its mark and its pin — so "Nothing
+    // was changed" is true. Left behind, every device refused Shared Folder
+    // uploads and skipped its backups until this one finished or forgot it.
+    // A change resumed here (pinned before) keeps both: its files may have moved.
+    if (!pin && !branch.moved && await blobBranchStill(creds, branch.head)) {
+      await discardUnfinishedRotation().catch((e) => recordError('keyRotation.undoMark', e));
+    }
+    throw err;
+  }
 
   // 4. The commit point: from here on this device speaks the new key.
   onProgress({ phase: 'snapshot' });
@@ -382,11 +396,25 @@ async function opensWith(key: CryptoKey, bytes: Uint8Array, blobId: string): Pro
  * under the new key (a retry) is kept; one neither key opens is kept and counted;
  * a legacy blob still on the default branch is moved here and dropped there.
  */
+/** Where rotateBlobBranch got to: the branch head it started from, and whether it moved it. */
+interface BranchProgress { head?: string | null; moved: boolean }
+
+/** True when the blob branch is where `head` says (unread: never touched); false when unsure. */
+async function blobBranchStill(creds: Creds, head: string | null | undefined): Promise<boolean> {
+  if (head === undefined) return true;
+  try {
+    return (await getRef(creds.pat, creds.repo, BLOB_BRANCH)) === head;
+  } catch {
+    return false;
+  }
+}
+
 async function rotateBlobBranch(
   creds: Creds,
   oldKey: CryptoKey,
   newKey: CryptoKey,
   onProgress: (progress: RotationProgress) => void,
+  progress: BranchProgress = { moved: false },
 ): Promise<{ blobsRewritten: number; blobsUnreadable: number }> {
   const { pat, repo } = creds;
   const result = { blobsRewritten: 0, blobsUnreadable: 0 };
@@ -405,6 +433,7 @@ async function rotateBlobBranch(
     head = await getRef(pat, repo, BLOB_BRANCH);
     if (!head) throw new Error('Could not create the shared-files branch');
   }
+  progress.head = head;
   const { treeSha, parents } = await getCommit(pat, repo, head);
   const { entries, truncated } = await getTree(pat, repo, treeSha, true);
   if (truncated) throw new Error('Too many shared files to re-encrypt in one go');
@@ -469,6 +498,7 @@ async function rotateBlobBranch(
   if (snapshot && !isCompatibleVersion(remoteSyncVersion(snapshot.data))) {
     throw new Error('The repository was updated by a newer version of the app. Update this device, then change the password. Nothing was changed.');
   }
+  progress.moved = true; // set before: a reply lost after the ref moved must not count as unmoved
   await updateRef(pat, repo, BLOB_BRANCH, commit, true);
 
   // The copies on the default branch are old-key ciphertext too; off the tip

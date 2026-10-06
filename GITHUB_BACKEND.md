@@ -494,6 +494,11 @@ resurrect every entity it holds that was deleted elsewhere, because the tombston
 like a legitimate unseen entity. Pick the window to match how long your users' devices realistically stay dark, and
 document it.
 
+gtd25 guards the bet (since 2026-10-06): a device whose last pull is older than the window treats the remote as the
+source of truth. A local row the remote lists nowhere (snapshot or changelog), with no pending change and unchanged
+since that pull, goes to the device's own Trash — nothing is sent, and restoring it from the Trash brings it back
+everywhere. The sweep is noted in `syncMeta.awaySweepFrom` first, so a sync cut short retries it.
+
 ---
 
 ## 8. Consistency model — what you actually get
@@ -899,7 +904,7 @@ Stated plainly, because a reimplementation should decide consciously whether to 
    sync, compare the local clock against the API response `Date` header and warn (or refuse to write) beyond a
    threshold.
 3. **Tombstone window vs. offline window.** A device offline longer than the tombstone retention (30 days) resurrects
-   entities deleted elsewhere.
+   entities deleted elsewhere — unless it sweeps them on return, as gtd25 does (§7, Layer 3).
 4. **Torn state between snapshot and changelog.** Non-atomic multi-file writes; tolerated, not prevented (§8).
 5. **Metadata leakage.** Entity counts, structure, ordering, status, sizes and sync timing are plaintext by design.
    E2EE protects content, not shape or rhythm.

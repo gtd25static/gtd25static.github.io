@@ -148,6 +148,25 @@ describe('resolving', () => {
     expect(await db.syncConflicts.count()).toBe(0);
   });
 
+  // Reliability review 2026-10-06 (B5): stamped with this device's now, the
+  // choice lost to a version stamped later by a clock running ahead — the next
+  // sync re-applied it and the pick silently went back.
+  it('the choice outranks both versions, even one stamped in the future', async () => {
+    const ahead = Date.now() + 2 * 60 * 60 * 1000;
+    await db.tasks.put(row({ title: 'Theirs', fieldTimestamps: { ...row().fieldTimestamps, title: ahead } }));
+    const conflict = {
+      id: 'c', entityType: 'task' as const, entityId: 't1', field: 'title', kind: 'field' as const,
+      localValue: 'Mine', remoteValue: 'Theirs', localAt: T2, remoteAt: ahead, applied: 'remote' as const, detectedAt: Date.now(),
+    };
+    await db.syncConflicts.put(conflict);
+
+    await resolveConflict(conflict, { keep: 'local' });
+
+    const saved = (await db.tasks.get('t1'))!;
+    expect(saved.title).toBe('Mine');
+    expect(saved.fieldTimestamps!.title).toBeGreaterThan(ahead);
+  });
+
   it('a title written by hand is capped like any title, and an empty name is refused', async () => {
     await db.tasks.put(row());
     const conflict = {

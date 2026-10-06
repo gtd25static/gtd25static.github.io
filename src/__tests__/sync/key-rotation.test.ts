@@ -283,6 +283,71 @@ describe('rotateSyncKey stops before moving the shared files', () => {
   });
 });
 
+// Reliability review 2026-10-06 (M10): a change that failed before its commit
+// point said "Nothing was changed" but left its remote mark (and the pin) behind:
+// every device then refused Shared Folder uploads and skipped its backups until
+// this one finished or forgot it — and a retry hit the same failure.
+describe('rotateSyncKey stopped before the files moved leaves nothing behind', () => {
+  it('no remote mark and no pin after a "nothing was changed" failure', async () => {
+    await seed();
+    await db.sharedItems.update('si-b1', { _decryptError: true } as never);
+
+    await expect(rotateSyncKey(NEW_PW)).rejects.toThrow(/Nothing was changed/);
+
+    expect(fakeRepo.readText(ROTATION_MARKER_FILE)).toBeNull();
+    expect(await hasUnfinishedRotation()).toBe(false);
+  });
+
+  it('a network failure before the branch moved is undone the same way', async () => {
+    await seed();
+    const original = fakeRepo.api.createTree;
+    fakeRepo.api.createTree = vi.fn(async () => { throw new Error('Failed to fetch'); });
+    try {
+      await expect(rotateSyncKey(NEW_PW)).rejects.toThrow(/Failed to fetch/);
+    } finally {
+      fakeRepo.api.createTree = original;
+    }
+
+    expect(fakeRepo.readText(ROTATION_MARKER_FILE)).toBeNull();
+    expect(await hasUnfinishedRotation()).toBe(false);
+  });
+
+  it('keeps the mark and pin when the branch did move (the change must be finished)', async () => {
+    await seed();
+    const original = fakeRepo.api.updateRef;
+    fakeRepo.api.updateRef = vi.fn(async (...args: Parameters<typeof original>) => {
+      await original(...args);
+      throw new Error('Failed to fetch'); // the reply was lost after the ref moved
+    }) as typeof original;
+    try {
+      await expect(rotateSyncKey(NEW_PW)).rejects.toThrow();
+    } finally {
+      fakeRepo.api.updateRef = original;
+    }
+
+    expect(fakeRepo.readText(ROTATION_MARKER_FILE)).not.toBeNull();
+    expect(await hasUnfinishedRotation()).toBe(true);
+  });
+
+  it('an unfinished change resumed here keeps its pin and mark whatever fails', async () => {
+    await seed();
+    // Pinned by an earlier attempt (its files may have moved since).
+    const newSalt = generateSalt();
+    const pin = { newSalt, newVerifier: await createVerifier(await deriveKey(NEW_PW, newSalt)), startedAt: 1 };
+    await db.syncMeta.update('sync-meta', { keyRotation: pin });
+    fakeRepo.writeText(ROTATION_MARKER_FILE, JSON.stringify(pin));
+    const original = fakeRepo.api.createTree;
+    fakeRepo.api.createTree = vi.fn(async () => { throw new Error('Failed to fetch'); });
+    try {
+      await expect(rotateSyncKey(NEW_PW)).rejects.toThrow(/Failed to fetch/);
+    } finally {
+      fakeRepo.api.createTree = original;
+    }
+    expect(await hasUnfinishedRotation()).toBe(true);
+    expect(fakeRepo.readText(ROTATION_MARKER_FILE)).not.toBeNull();
+  });
+});
+
 describe('rotateSyncKey resumes', () => {
   it('padding a file already under the new key but written without padding', async () => {
     await seed();

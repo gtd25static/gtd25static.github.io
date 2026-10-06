@@ -1,9 +1,9 @@
 import { db } from '../db';
-import type { SyncData, SyncMeta, Settings, ChangeEntry, PomodoroSettings, SoundPreset, SyncConflict } from '../db/models';
+import type { SyncData, SyncMeta, Settings, ChangeEntry, PomodoroSettings, SoundPreset, SyncConflict, Task } from '../db/models';
 import type { ImportData } from '../db/export-import';
 import { getFile, getFileConditional, putFile, deleteFile, RateLimitError, type ConditionalFile } from './github-api';
 import { jitterInterval } from './poll-jitter';
-import { cleanupSoftDeletes, archiveOldCompleted } from './conflict-resolution';
+import { cleanupSoftDeletes, archiveOldCompleted, TOMBSTONE_RETENTION_MS } from './conflict-resolution';
 import { applyRemoteEntries as applyRemoteEntriesToDb, notePushedEntries, pendingIdsAddedSince, getPendingEntries, getPendingIds, clearEntriesByIds, pendingEntryCount, isKnownEntityType } from './change-log';
 import { mergeEntity, stampUpdatedFields, capFutureTimestamps, MAX_FUTURE_SKEW_MS, withoutLocalSyncFields } from './field-timestamps';
 import { noteRemoteDeletions, noteRemoteDeletionsInTx } from '../db/purge';
@@ -73,6 +73,59 @@ async function reconcileFromSnapshot(snapshot: SyncData): Promise<number | null>
     }
   }
   return null;
+}
+
+/**
+ * Rows deleted on another device while this one was away for longer than the
+ * tombstone window: compaction has dropped their tombstones, so to this device
+ * they looked like rows nobody had seen — and the first automatic write of one
+ * (a recurring reset, a Focus pick, an orphan repair) brought it back on every
+ * device. The remote is the source of truth: a row it lists nowhere (snapshot or
+ * changelog), with nothing pending here and unchanged since the last pull, goes
+ * to this device's Trash — locally only, nothing is sent; restoring it from the
+ * Trash brings it back everywhere. Returns how many, or null if it must be retried.
+ */
+type AwayRow = { id: string; deletedAt?: number; updatedAt?: number; fieldTimestamps?: Record<string, number>; _decryptError?: boolean };
+
+async function trashRowsDeletedWhileAway(snapshot: SyncData, remoteEntries: ChangeEntry[], lastPulledAt: number): Promise<number | null> {
+  const collections = [
+    ['taskLists', snapshot.taskLists], ['tasks', snapshot.tasks], ['subtasks', snapshot.subtasks],
+    ['sharedItems', snapshot.sharedItems], ['mindmapFolders', snapshot.mindmapFolders],
+    ['mindmaps', snapshot.mindmaps], ['mindmapNodes', snapshot.mindmapNodes],
+  ] as const;
+  const onRemote = new Set<string>(remoteEntries.map((e) => e.entityId));
+  for (const [, rows] of collections) for (const row of rows ?? []) onRemote.add(row.id);
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const pending = await getPendingEntries();
+    const pendingBefore = new Set(pending.map((e) => e.id));
+    const pendingEntities = new Set(pending.map((e) => e.entityId));
+    const now = Date.now();
+    const ghosts: Array<[typeof collections[number][0], AwayRow[]]> = [];
+    for (const [tableName, remoteRows] of collections) {
+      if (!remoteRows) continue; // a snapshot without the collection says nothing about it
+      const rows = (await db.table(tableName).toArray()) as AwayRow[];
+      const away = rows.filter((r) => !r.deletedAt && !r._decryptError && !onRemote.has(r.id)
+        && !pendingEntities.has(r.id) && (r.updatedAt ?? 0) <= lastPulledAt);
+      if (away.length > 0) {
+        ghosts.push([tableName, away.map((r) => ({
+          ...r, deletedAt: now, updatedAt: now,
+          fieldTimestamps: stampUpdatedFields(r.fieldTimestamps, ['deletedAt'], now),
+        }))]);
+      }
+    }
+    if (ghosts.length === 0) return 0;
+    await createLocalBackup();
+    const prepared = await Promise.all(ghosts.map(async ([tableName, rows]) =>
+      // (one overload per table; any of them encrypts by the table name)
+      [tableName, await prepareEntityRowsForAtRest(tableName as 'tasks', rows as unknown as Task[])] as const));
+    const written = await db.transaction('rw', [...prepared.map(([t]) => db.table(t)), db.changeLog], async () => {
+      if (await pendingIdsAddedSince(pendingBefore)) return false;
+      for (const [tableName, rows] of prepared) await db.table(tableName).bulkPut(rows);
+      return true;
+    });
+    if (written) return ghosts.reduce((n, [, rows]) => n + rows.length, 0);
+  }
+  return null; // local edits kept landing: the next sync tries again
 }
 
 async function reconcileEntitiesOnce(snapshot: SyncData): Promise<number | null> {
@@ -595,6 +648,7 @@ export function endSyncSession(): void {
   cachedChangelogTimestamp = 0;
   probeChangelogEtag = null;
   probeSnapshotEtag = null;
+  remoteLeftUnapplied = false;
 }
 
 // --- Scheduler functions ---
@@ -627,6 +681,9 @@ function isHidden(): boolean {
 // bodies every 30s. Reduces the wire footprint and doesn't burn rate limit.
 let probeChangelogEtag: string | null = null;
 let probeSnapshotEtag: string | null = null;
+// The last sync could not apply everything it read (a merge gave up after local
+// edits kept landing): the probe must not take "unchanged since" for "applied".
+let remoteLeftUnapplied = false;
 
 /**
  * Returns true when a full syncNow() is warranted — remote changed, a file is
@@ -643,6 +700,7 @@ export async function cheapIdleProbe(): Promise<boolean> {
     const creds = await getCredentials();
     if (!creds) return false; // sync disabled / vault locked — a full sync would no-op too
     if ((await pendingEntryCount()) > 0) return true; // something to push
+    if (remoteLeftUnapplied) return true; // what the last sync read is not all applied here
     const [cl, snap] = await Promise.all([
       getFileConditional(creds.pat, creds.repo, CHANGELOG_FILE, probeChangelogEtag),
       getFileConditional(creds.pat, creds.repo, SNAPSHOT_FILE, probeSnapshotEtag),
@@ -1326,7 +1384,10 @@ async function runSync(manual = false, pushLimit?: number): Promise<number> {
     if (!remoteSnapshotFile && !remoteChangelogFile) {
       const local = await getLocalSnapshotWithPendingIds();
       let localData = local.snapshot;
-      const hasData = localData.taskLists.length > 0 || localData.tasks.length > 0 || localData.subtasks.length > 0;
+      // Any collection counts: a device holding only mind maps or shared items
+      // cleared their pending entries below with nothing uploaded.
+      const hasData = [localData.taskLists, localData.tasks, localData.subtasks, localData.sharedItems,
+        localData.mindmapFolders, localData.mindmaps, localData.mindmapNodes].some((rows) => (rows?.length ?? 0) > 0);
       if (hasData) {
         // Encryption is always required
         const encKey = await resolveEncryptionKey();
@@ -1524,27 +1585,41 @@ async function runSync(manual = false, pushLimit?: number): Promise<number> {
           reportError('Remote data corrupted', { category: 'corrupt-remote', message: 'Remote data corrupted' });
           return -1;
         }
-        let snapshot = wipeParsed.value;
-        if (remoteSalt) {
-          snapshot = await decryptSyncData(encKey, snapshot);
-        }
+        const remoteState = remoteSalt ? await decryptSyncData(encKey, wipeParsed.value) : wipeParsed.value;
 
         // Edits this device made after the reset survive it (folded into the
         // adopted state, and still pending); older pending changes are what the
         // reset replaced. One transaction: cut short, nothing is half-adopted.
         // A local safety copy first, since everything here is replaced wholesale.
-        const pending = await getPendingEntries();
-        const postReset = pending.filter((e) => e.timestamp > remoteWipedAt);
+        // The pending changes are read after it, and the replace refuses if one
+        // was recorded since: an edit made while the copy was taken was
+        // overwritten here, though still pushed.
         await createLocalBackup();
-        snapshot = withOwnBase(withoutBase(snapshot)); // the remote state, before this device's own edits go on top
-        applyEntriesToSnapshot(snapshot, postReset);
-        await replaceLocalEntitiesFromSnapshot(snapshot, {
-          keepBase: true,
-          clearPendingIds: pending.filter((e) => e.timestamp <= remoteWipedAt).map((e) => e.id),
-          pomodoroSettings: snapshot.pomodoroSettings,
-          soundPresets: snapshot.soundPresets,
-          syncMeta: { lastWipeSeenAt: remoteWipedAt },
-        });
+        let adopted = false;
+        for (let attempt = 1; attempt <= 3 && !adopted; attempt++) {
+          const pending = await getPendingEntries();
+          const postReset = pending.filter((e) => e.timestamp > remoteWipedAt);
+          // The remote state, before this device's own edits go on top.
+          const snapshot = withOwnBase(withoutBase(structuredClone(remoteState)));
+          applyEntriesToSnapshot(snapshot, postReset);
+          try {
+            await replaceLocalEntitiesFromSnapshot(snapshot, {
+              keepBase: true,
+              pendingBefore: new Set(pending.map((e) => e.id)),
+              clearPendingIds: pending.filter((e) => e.timestamp <= remoteWipedAt).map((e) => e.id),
+              pomodoroSettings: snapshot.pomodoroSettings,
+              soundPresets: snapshot.soundPresets,
+              syncMeta: { lastWipeSeenAt: remoteWipedAt },
+            });
+            adopted = true;
+          } catch (err) {
+            if (!(err instanceof ReplaceRacedError)) throw err;
+          }
+        }
+        if (!adopted) {
+          recordSyncMessage('adoptReset.raced', 'Local edits kept landing while adopting a reset; the next sync tries again');
+          return -1;
+        }
       }
     }
 
@@ -1601,8 +1676,11 @@ async function runSync(manual = false, pushLimit?: number): Promise<number> {
       cachedRemoteEntries.filter((e) => e.deviceId !== creds.deviceId).map((e) => e.id),
     );
     const newlyPulledCount = foreignEntries.filter((e) => !previousForeignIds.has(e.id)).length;
+    // False when a merge gave up (local edits kept landing): the entries are
+    // applied again by the next sync, which the idle probe must then not skip.
+    let allApplied = true;
     if (foreignEntries.length > 0) {
-      await applyRemoteEntries(foreignEntries);
+      allApplied = await applyRemoteEntries(foreignEntries);
     }
 
     // Reconcile with snapshot whenever its SHA changes to catch entities
@@ -1610,22 +1688,48 @@ async function runSync(manual = false, pushLimit?: number): Promise<number> {
     // What it brings in counts as pulled too (the indicator showed only "↑").
     let pulledFromSnapshot = 0;
     // The snapshot this run has fully reconciled (null: not yet — see below).
-    let reconciledSnapshotSha = (await db.syncMeta.get('sync-meta'))?.lastSnapshotSha ?? null;
-    if (remoteSnapshotFile && remoteSnapshotFile.sha !== reconciledSnapshotSha) {
-      const reconParsed = safeParseJson<SyncData>(remoteSnapshotFile.data, 'snapshot (reconcile)');
-      let reconciled: number | null = 0;
-      if (reconParsed.ok) {
-        const snapshotData = remoteSalt
-          ? await decryptSyncData(encKey, reconParsed.value)
-          : reconParsed.value;
-        reconciled = await reconcileFromSnapshot(snapshotData);
+    const metaBefore = await db.syncMeta.get('sync-meta');
+    let reconciledSnapshotSha = metaBefore?.lastSnapshotSha ?? null;
+    // Away longer than tombstones last (see trashRowsDeletedWhileAway): noted
+    // before anything else, so the sweep is retried until it is done even though
+    // this sync moves lastPulledAt on.
+    let awaySweepFrom = metaBefore?.awaySweepFrom;
+    if (!awaySweepFrom && metaBefore?.lastPulledAt && Date.now() - metaBefore.lastPulledAt > TOMBSTONE_RETENTION_MS) {
+      awaySweepFrom = metaBefore.lastPulledAt;
+      await db.syncMeta.update('sync-meta', { awaySweepFrom });
+    }
+    let reconcileSnapshot: SyncData | null = null;
+    const decryptedRemoteSnapshot = async (): Promise<SyncData | null> => {
+      if (!reconcileSnapshot && remoteSnapshotFile) {
+        const parsedSnapshot = safeParseJson<SyncData>(remoteSnapshotFile.data, 'snapshot (reconcile)');
+        if (parsedSnapshot.ok) {
+          reconcileSnapshot = remoteSalt ? await decryptSyncData(encKey, parsedSnapshot.value) : parsedSnapshot.value;
+        }
       }
+      return reconcileSnapshot;
+    };
+    if (remoteSnapshotFile && remoteSnapshotFile.sha !== reconciledSnapshotSha) {
+      const snapshotData = await decryptedRemoteSnapshot();
+      const reconciled = snapshotData ? await reconcileFromSnapshot(snapshotData) : 0;
       // Local edits kept landing under the merge: leave the snapshot unseen so
       // the next sync reconciles it again.
       if (reconciled !== null) {
         pulledFromSnapshot = reconciled;
         reconciledSnapshotSha = remoteSnapshotFile.sha;
         await db.syncMeta.update('sync-meta', { lastSnapshotSha: remoteSnapshotFile.sha });
+      } else {
+        allApplied = false;
+      }
+    }
+    if (awaySweepFrom && allApplied) {
+      const snapshotData = await decryptedRemoteSnapshot();
+      const trashed = snapshotData ? await trashRowsDeletedWhileAway(snapshotData, remoteEntries, awaySweepFrom) : null;
+      if (trashed !== null) {
+        await db.syncMeta.update('sync-meta', { awaySweepFrom: undefined });
+        if (trashed > 0) {
+          recordSyncMessage('awayTrash', `${trashed} item(s) deleted elsewhere while this device was away moved to its Trash`);
+          toast(`This device was away for a while: ${trashed} item(s) deleted on other devices meanwhile are now in its Trash.`, 'info');
+        }
       }
     }
 
@@ -1645,6 +1749,9 @@ async function runSync(manual = false, pushLimit?: number): Promise<number> {
       const dupes = pendingEntries.filter((e) => remoteIds.has(e.id));
       if (dupes.length > 0) {
         await clearEntriesByIds(dupes.map((e) => e.id));
+        // Pushed all the same: unrecorded, the snapshot path raised a conflict
+        // against this device's own value once another device edited on top.
+        await notePushedEntries(dupes);
         pendingEntries = pendingEntries.filter((e) => !remoteIds.has(e.id));
       }
     }
@@ -1716,7 +1823,7 @@ async function runSync(manual = false, pushLimit?: number): Promise<number> {
           let newForeign = freshEntries.filter((e) => e.deviceId !== creds.deviceId && !appliedForeignIds.has(e.id));
           newForeign = await decryptChangeEntries(encKey, newForeign, { allowPlaintext: !remoteSalt });
           if (newForeign.length > 0) {
-            await applyRemoteEntries(newForeign);
+            if (!(await applyRemoteEntries(newForeign))) allApplied = false;
             for (const e of newForeign) appliedForeignIds.add(e.id);
           }
           // Rebuild: fresh remote + our pending encrypted (deduplicated)
@@ -1815,6 +1922,7 @@ async function runSync(manual = false, pushLimit?: number): Promise<number> {
     // passes for applied.
     probeChangelogEtag = remoteChangelogFile?.etag ?? null;
     probeSnapshotEtag = remoteSnapshotFile?.etag ?? null;
+    remoteLeftUnapplied = !allApplied;
     cachedRemoteEntries = finalRemoteEntries;
     cachedChangelogTimestamp = Date.now();
 
@@ -1865,10 +1973,10 @@ async function runSync(manual = false, pushLimit?: number): Promise<number> {
       const waitMin = Math.ceil(waitMs / 60_000);
       reportError(`Rate limited — retrying in ${waitMin}m`, { category: 'rate-limited', message: err.message, retryAtMs: err.resetAtMs });
       const alreadyPaused = Date.now() < pausedUntil;
-      // The reset time is on the server's clock; this device's may be off by
-      // hours, which would stretch the pause by as much (getClockSkewMs > 0:
-      // this device is ahead).
-      pausedUntil = Math.max(pausedUntil, err.resetAtMs + (getClockSkewMs() ?? 0) + 1000); // 1s buffer
+      // resetAtMs is on this device's clock (github-api corrects the one reset
+      // given on the server's): adding the skew here too paused a device hours
+      // ahead for hours, or one behind not at all.
+      pausedUntil = Math.max(pausedUntil, err.resetAtMs + 1000); // 1s buffer
       if (!alreadyPaused || manual) toast(`Rate limited — retrying in ${waitMin}m`, 'error');
       clearSchedulerTimer(); // the poll that hit the limit does not re-arm
       schedulerState = 'idle';
@@ -2187,7 +2295,12 @@ export async function forcePushHoldingLock(options: ForcePushOptions = {}): Prom
         recordSyncMessage('forcePush.resetDuringRotation', 'The repository was reset while the password was changing');
         return null;
       }
-      await reconcileFromSnapshot(await decryptSyncData(rekeyChangelogFrom, existingSnapshot));
+      // Local edits kept landing under the merge: pushing now would overwrite
+      // what was compacted in. Nothing is written; the change reverts and retries.
+      if ((await reconcileFromSnapshot(await decryptSyncData(rekeyChangelogFrom, existingSnapshot))) === null) {
+        recordSyncMessage('forcePush.rotationMergeRaced', 'Local edits kept landing while the password change merged the remote');
+        return null;
+      }
     }
 
     const local = await getLocalSnapshotWithPendingIds();
@@ -2430,8 +2543,19 @@ async function wipeAllDataHoldingLock(): Promise<void> {
       // next sync's compaction still purges the shared files' bytes — every one,
       // without the grace it gives files it does not know (with no items left,
       // each file would look like another device's fresh upload).
+      const beforeFlag = await db.syncMeta.get('sync-meta');
       await db.syncMeta.update('sync-meta', { pendingBlobDeletes: 1, blobPurgeAll: true });
-      wipedAt = await replaceRemoteSnapshot(creds, signal, remoteKey, empty);
+      try {
+        wipedAt = await replaceRemoteSnapshot(creds, signal, remoteKey, empty);
+      } catch (err) {
+        // Not wiped after all: armed, the next compaction dropped every file
+        // this device does not list — another device's fresh uploads included.
+        await db.syncMeta.update('sync-meta', {
+          pendingBlobDeletes: beforeFlag?.pendingBlobDeletes ?? 0,
+          blobPurgeAll: beforeFlag?.blobPurgeAll,
+        });
+        throw err;
+      }
       remoteDone = true;
     }
 
@@ -2521,7 +2645,8 @@ async function replaceRemoteSnapshot(
 /**
  * The remote a replace is about to overwrite, decrypted, with its changelog
  * folded in (recent edits of the collections it carries over have not reached
- * the snapshot yet, and the reset supersedes the changelog) — or null.
+ * the snapshot yet, and the reset supersedes the changelog) — or null when there
+ * is none, or it is corrupt. Throws when it cannot be read.
  */
 async function decryptedRemote(
   creds: { pat: string; repo: string },
@@ -2530,13 +2655,11 @@ async function decryptedRemote(
 ): Promise<SyncData | null> {
   if (!remoteKey.existing) return null;
   const parsed = safeParseJson<SyncData>(remoteKey.existing.data, 'existing snapshot (carry over)');
-  if (!parsed.ok) return null;
-  try {
-    return await remoteWithChangelog(creds, remoteKey.encKey, parsed.value, signal);
-  } catch (err) {
-    recordError('sync.carryOver', err);
-    return null;
-  }
+  if (!parsed.ok) return null; // nothing to carry over from a corrupt remote (a replace is the way out)
+  // A read that fails (offline, a timeout) stops the replace: carrying over
+  // nothing dropped the Shared Folder items this device had not pulled — on
+  // every device. The caller then reports that nothing was changed.
+  return remoteWithChangelog(creds, remoteKey.encKey, parsed.value, signal);
 }
 
 /** Rows of a collection a replace does not bring itself, from several copies by id — the newer one winning. */
@@ -2675,6 +2798,7 @@ export function __resetForTesting() {
   cachedChangelogTimestamp = 0;
   probeChangelogEtag = null;
   probeSnapshotEtag = null;
+  remoteLeftUnapplied = false;
   consecutiveErrors = 0;
   pausedUntil = 0;
   pollGeneration = 0;

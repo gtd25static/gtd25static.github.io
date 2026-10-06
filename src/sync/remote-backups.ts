@@ -8,6 +8,7 @@ import {
 } from './crypto';
 import { getLocalSnapshot, remoteKeyIsCurrent } from './sync-engine';
 import { SYNC_VERSION } from './version';
+import { recordError } from '../lib/diagnostics';
 import { isParanoidFlagSet } from '../db/paranoid-flag';
 import type { SyncData } from '../db/models';
 
@@ -109,7 +110,12 @@ export async function maybeCreateBackups(
   // Not under a key the remote no longer uses: written after a sync-password
   // change (the jitter above is long enough), an old-key tier at the tip opened
   // with the old password again and with the new one not at all.
-  if (!(await remoteKeyIsCurrent())) return;
+  if (!(await remoteKeyIsCurrent())) {
+    // Said in the diagnostics log: a change left unfinished kept every device
+    // from backing up, with nothing anywhere to show it.
+    recordError('sync.backup.keyChanging', new Error('Remote backups skipped: the sync password is changing (or a change was left unfinished)'));
+    return;
+  }
 
   // Create encrypted snapshot once
   const localData = await getLocalSnapshot();

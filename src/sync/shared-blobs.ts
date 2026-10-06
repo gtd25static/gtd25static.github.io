@@ -268,7 +268,7 @@ export async function uploadSharedBlob(blobId: string, plaintext: Uint8Array): P
   const { remoteKeyIsCurrent, syncNow } = await import('./sync-engine');
   if (!(await remoteKeyIsCurrent())) {
     void syncNow(); // picks up the new key (or asks for the new password)
-    throw new Error('The sync password is changing or was changed on another device. Try again in a moment.');
+    throw new Error('The sync password is changing or was changed on another device. Try again in a moment — if this keeps happening, a password change was left unfinished: finish it (or forget it) in Settings → Sync.');
   }
   const key = await requireSyncKey();
   const ciphertext = await sealSharedBlob(key, plaintext, blobId);

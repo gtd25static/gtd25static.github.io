@@ -91,7 +91,13 @@ async function resolveConflictLocked(conflict: SyncConflict, choice: ConflictCho
       return;
     }
 
-    const now = Date.now();
+    // Later than both versions and the row's own stamp: stamped with this
+    // device's clock alone, the pick lost to a version stamped later by a clock
+    // running ahead, and the next sync silently put that one back.
+    const field = conflict.kind !== 'field' ? 'deletedAt'
+      : conflict.field.startsWith('discussionLog:') ? 'discussionLog' : conflict.field;
+    const rowStamp = (row.fieldTimestamps as Record<string, number> | undefined)?.[field] ?? 0;
+    const now = Math.max(Date.now(), conflict.localAt + 1, conflict.remoteAt + 1, rowStamp + 1);
     let changes: Record<string, unknown>;
     if (conflict.kind === 'field') {
       const picked = 'value' in choice
