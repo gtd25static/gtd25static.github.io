@@ -70,13 +70,14 @@ describe('formatCaptureResult', () => {
     });
   });
 
-  it('prefers url param over embedded URL in text', () => {
+  it('prefers url param over embedded URL in text (the text is kept as the description)', () => {
     expect(
       formatCaptureResult('Page', 'https://main.com', 'text https://other.com'),
     ).toEqual({
       title: 'Page',
       link: 'https://main.com',
       linkTitle: 'Page',
+      description: 'text https://other.com',
     });
   });
 });

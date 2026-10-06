@@ -308,6 +308,58 @@ export async function cleanMindmapOrphans() {
     for (const m of maps) {
       if (m.folderId && !folderIds.has(m.folderId) && !m.deletedAt) {
         await repairMap(m.id, { folderId: undefined }, ['folderId']);
+        m.folderId = undefined;
+      }
+    }
+
+    // Folder cycles: device A moved F1 into F2 while B moved F2 into F1. Every
+    // parent exists, yet neither folder, nor anything in them, can be reached
+    // from the top level. Each cycle's smallest id moves there — the same pick on
+    // every device.
+    const folderById = new Map(folders.map((f) => [f.id, f]));
+    for (const f of folders) {
+      if (f.parentId && !folderIds.has(f.parentId)) f.parentId = undefined; // repaired above
+    }
+    for (const start of folders) {
+      const path: string[] = [];
+      let at: MindmapFolder | undefined = start;
+      while (at && !path.includes(at.id)) {
+        path.push(at.id);
+        at = at.parentId ? folderById.get(at.parentId) : undefined;
+      }
+      if (!at) continue; // reached the top level
+      const cycle = path.slice(path.indexOf(at.id));
+      if (cycle.every((id) => folderById.get(id)!.deletedAt)) continue;
+      const pick = [...cycle].sort()[0];
+      await repairFolder(pick, { parentId: undefined }, ['parentId']);
+      folderById.get(pick)!.parentId = undefined;
+    }
+
+    // Live rows in a deleted folder — created on one device while another deleted
+    // the folder — were neither shown nor in the Trash. They join the folder's
+    // delete: its exact deletedAt, so restoring the folder brings them back (the
+    // same rule as tasks in a deleted list, see cleanOrphans). Top-down, so a
+    // subfolder's own contents follow it.
+    const deletedFolderAt = (id: string | undefined) => (id ? folderById.get(id)?.deletedAt : undefined);
+    for (let changed = true; changed;) {
+      changed = false;
+      for (const f of folders) {
+        const cascadeAt = deletedFolderAt(f.parentId);
+        if (f.deletedAt || !cascadeAt) continue;
+        await repairFolder(f.id, { deletedAt: cascadeAt }, ['deletedAt']);
+        f.deletedAt = cascadeAt;
+        changed = true;
+      }
+    }
+    for (const m of maps) {
+      const cascadeAt = deletedFolderAt(m.folderId);
+      if (m.deletedAt || !cascadeAt) continue;
+      await repairMap(m.id, { deletedAt: cascadeAt }, ['deletedAt']);
+      m.deletedAt = cascadeAt;
+      for (const n of nodes) {
+        if (n.mapId !== m.id || n.deletedAt) continue;
+        await repairNode(n.id, { deletedAt: cascadeAt }, ['deletedAt']);
+        n.deletedAt = cascadeAt;
       }
     }
 

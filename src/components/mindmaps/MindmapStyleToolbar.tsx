@@ -134,11 +134,13 @@ export function MindmapStyleToolbar({ mapId, node, isRoot, nodes, background, sm
           <Popover anchorRef={nodeAnchorRef} label="Advanced colours" onClose={() => setOpenPopover(null)}>
             {(['colorBg', 'colorFg', 'colorBorder'] as const).map((field) => (
               <ColorField
-                key={field}
+                // Per node: a colour still settling saves to the node it was picked for.
+                key={`${node.id}:${field}`}
                 label={PART_LABEL[field]}
                 value={field === 'colorBg' ? current.bg : field === 'colorFg' ? current.fg : current.border}
                 custom={node[field]}
                 onChange={(hex) => apply({ [field]: hex })}
+                onPreview={(hex) => preview({ [field]: hex })}
               />
             ))}
             <p className="px-2 pt-1 text-[11px] leading-snug text-zinc-400">
@@ -351,16 +353,38 @@ function readColor(value: string, fallback: string): string {
   return isHexColor(resolved) ? resolved : fallback;
 }
 
-/** A colour picker plus the hex itself, because typing #1a73e8 beats hunting for it. */
-function ColorField({ label, value, custom, onChange }: {
+// A colour is saved once it has stayed put this long (or the field goes away).
+const COLOR_SAVE_AFTER_MS = 400;
+
+/**
+ * A colour picker plus the hex itself, because typing #1a73e8 beats hunting for it.
+ * A picker fires on every step of a drag: each step is previewed (`onPreview`)
+ * and only the colour it settles on is saved — saving every step queued a
+ * change entry per step, and a few seconds of dragging held this device's next
+ * edits back from the other devices for minutes.
+ */
+function ColorField({ label, value, custom, onChange, onPreview }: {
   label: string;
   value: string;
   custom: string | undefined;
   onChange: (hex: string | null) => void;
+  onPreview?: (hex: string) => void;
 }) {
   const resolved = readColor(value, '#ffffff');
   const [text, setText] = useState(custom ?? resolved);
   const lastAppliedRef = useRef(custom ?? resolved);
+  const onChangeRef = useRef(onChange);
+  onChangeRef.current = onChange;
+  const pendingRef = useRef<string | null>(null);
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const savePending = () => {
+    clearTimeout(saveTimerRef.current);
+    const hex = pendingRef.current;
+    pendingRef.current = null;
+    if (hex) onChangeRef.current(hex);
+  };
+  // Closing the popover (or selecting another node) saves what was picked.
+  useEffect(() => () => savePending(), []);
 
   // Follow the node/map while the field isn't being edited into an invalid state
   useEffect(() => {
@@ -376,11 +400,21 @@ function ColorField({ label, value, custom, onChange }: {
     const hex = raw.startsWith('#') ? raw : `#${raw}`;
     if (isHexColor(hex)) {
       lastAppliedRef.current = hex.toLowerCase();
-      onChange(hex.toLowerCase());
+      onPreview?.(hex.toLowerCase());
+      pendingRef.current = hex.toLowerCase();
+      clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = setTimeout(savePending, COLOR_SAVE_AFTER_MS);
     }
+  };
+  const clear = () => {
+    clearTimeout(saveTimerRef.current);
+    pendingRef.current = null;
+    onChange(null);
   };
 
   const valid = isHexColor(text.startsWith('#') ? text : `#${text}`);
+  // The picker shows what is being picked, not the saved colour it would snap back to.
+  const pickerValue = /^#[0-9a-f]{6}$/i.test(text) ? text.toLowerCase() : resolved;
 
   return (
     <div className="flex items-center justify-between gap-2 rounded-lg px-2 py-1.5 text-sm text-zinc-700 dark:text-zinc-200">
@@ -389,7 +423,7 @@ function ColorField({ label, value, custom, onChange }: {
         {custom && (
           <button
             type="button"
-            onClick={() => onChange(null)}
+            onClick={clear}
             className="text-xs text-zinc-400 underline hover:text-zinc-600 dark:hover:text-zinc-200"
           >
             clear
@@ -411,7 +445,7 @@ function ColorField({ label, value, custom, onChange }: {
         <input
           type="color"
           aria-label={label}
-          value={resolved}
+          value={pickerValue}
           onChange={(e) => commit(e.target.value)}
           className="h-7 w-9 shrink-0 cursor-pointer rounded border border-zinc-300 bg-transparent p-0.5 dark:border-zinc-600"
         />

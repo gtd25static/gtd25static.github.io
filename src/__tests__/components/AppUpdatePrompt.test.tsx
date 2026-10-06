@@ -1,10 +1,11 @@
 // @vitest-environment jsdom
 //
 // The update prompt is a plain fixed overlay, so top-layer dialogs (showModal)
-// would paint above and block it. These tests pin the dismissal behavior: open
-// modal dialogs are closed when the prompt appears AND while it stays visible,
-// but not once it is demoted to the "Later" banner.
-import { render, screen, waitFor } from '@testing-library/react';
+// would paint above and block it. It used to close them — an Edit Task dialog
+// with its unsaved text included (reliability review 2026-10-06, A3). Now an
+// open dialog is never touched: the prompt waits as the top banner while one is
+// open and comes back as the dialog when it closes.
+import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import '../setup-component';
 import { AppUpdatePrompt } from '../../components/banners/AppUpdatePrompt';
@@ -34,7 +35,9 @@ function openModalDialog(): HTMLDialogElement {
   return dlg;
 }
 
-describe('AppUpdatePrompt — takes precedence over open dialogs', () => {
+const bannerText = 'A new version of GTD25 is available.';
+
+describe('AppUpdatePrompt — never closes an open dialog', () => {
   beforeEach(() => {
     localStorage.clear();
     // version.json fetch: not deployed — prompt shows without changelog info.
@@ -45,40 +48,49 @@ describe('AppUpdatePrompt — takes precedence over open dialogs', () => {
     document.querySelectorAll('dialog').forEach((d) => d.remove());
   });
 
-  it('closes a modal dialog that was open when the prompt appears', async () => {
-    const dlg = openModalDialog();
-    render(<AppUpdatePrompt />);
-    await screen.findByText('Update available');
-    await waitFor(() => expect(dlg.hasAttribute('open')).toBe(false));
-  });
-
-  it('closes modal dialogs that open while the prompt is visible', async () => {
-    render(<AppUpdatePrompt />);
-    await screen.findByText('Update available');
-
-    const dlg = openModalDialog();
-    await waitFor(() => expect(dlg.hasAttribute('open')).toBe(false));
-  });
-
-  it('dispatches the dialog close event so React onClose handlers run', async () => {
-    render(<AppUpdatePrompt />);
-    await screen.findByText('Update available');
-
+  it('a dialog open when the update arrives stays open, and the prompt waits as the banner', async () => {
     const dlg = openModalDialog();
     const onClose = vi.fn();
     dlg.addEventListener('close', onClose);
-    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    render(<AppUpdatePrompt />);
+
+    await screen.findByText(bannerText);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(dlg.hasAttribute('open')).toBe(true);
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.queryByText('Update available')).not.toBeInTheDocument();
   });
 
-  it('leaves dialogs alone once demoted to the "Later" banner', async () => {
+  it('the prompt comes back as the dialog once the open dialog closes', async () => {
+    const dlg = openModalDialog();
+    render(<AppUpdatePrompt />);
+    await screen.findByText(bannerText);
+
+    dlg.close();
+
+    expect(await screen.findByText('Update available')).toBeInTheDocument();
+  });
+
+  it('a dialog opened while the prompt is shown stays open; the prompt steps back to the banner', async () => {
+    render(<AppUpdatePrompt />);
+    await screen.findByText('Update available');
+
+    const dlg = openModalDialog();
+
+    await screen.findByText(bannerText);
+    expect(dlg.hasAttribute('open')).toBe(true);
+  });
+
+  it('"Later" still demotes it to the banner for good', async () => {
     const user = userEvent.setup();
     render(<AppUpdatePrompt />);
     await screen.findByText('Update available');
     await user.click(screen.getByRole('button', { name: 'Later' }));
 
     const dlg = openModalDialog();
-    // Give a buggy (not disconnected) observer time to mis-fire.
+    dlg.close();
     await new Promise((r) => setTimeout(r, 50));
-    expect(dlg.hasAttribute('open')).toBe(true);
+    expect(screen.queryByText('Update available')).not.toBeInTheDocument();
+    expect(screen.getByText(bannerText)).toBeInTheDocument();
   });
 });

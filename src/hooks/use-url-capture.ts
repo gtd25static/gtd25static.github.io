@@ -2,24 +2,30 @@ import { useEffect } from 'react';
 import { createTask } from './use-tasks';
 import { getOrCreateInbox } from './use-task-lists';
 import { toast } from '../components/ui/Toast';
-import { MAX_TITLE_LENGTH } from '../lib/constants';
+import { MAX_TITLE_LENGTH, MAX_DESCRIPTION_LENGTH } from '../lib/constants';
 import { extractUrl, isValidUrl } from '../lib/link-utils';
 
 /**
- * Sanitize a capture param: trim, truncate. Markup is kept as literal text —
- * titles are only ever rendered as text, and stripping "tags" ate ordinary
- * text such as "a<b and c>d".
+ * Sanitize a capture param: trim, truncate (to a title's length unless the
+ * caller has a bigger home for it). Markup is kept as literal text — titles are
+ * only ever rendered as text, and stripping "tags" ate ordinary text such as
+ * "a<b and c>d".
  */
-export function sanitize(raw: string | null): string {
+export function sanitize(raw: string | null, maxLength = MAX_TITLE_LENGTH): string {
   if (!raw) return '';
-  return raw.trim().slice(0, MAX_TITLE_LENGTH);
+  return raw.trim().slice(0, maxLength);
 }
 
 export interface CaptureResult {
   title: string;
   link?: string;
   linkTitle?: string;
+  /** Text that came with the capture besides its title and link. */
+  description?: string;
 }
+
+// How much of a capture too long for a title stays in it (the rest is in the description).
+const CAPTURE_TITLE_PREVIEW = 120;
 
 /**
  * Custom scheme registered by the manifest's protocol_handlers. Chrome only
@@ -63,10 +69,13 @@ export function formatCaptureResult(title: string, url: string, text: string): C
   // driven by a hostile page, and a `javascript:` value has no business being
   // stored as one — the render-time href sanitiser stays the second line of
   // defence, not the only one.
+  // Text besides the title and link is kept as the description (it used to be dropped).
   if (url && isValidUrl(url)) {
-    return title
+    const result: CaptureResult = title
       ? { title, link: url, linkTitle: title }
       : { title: url, link: url };
+    if (text && text !== url && text !== title) result.description = text;
+    return result;
   }
 
   // Try extracting a URL from the text param (common on Android)
@@ -74,7 +83,9 @@ export function formatCaptureResult(title: string, url: string, text: string): C
   if (embeddedUrl) {
     const textWithoutUrl = text.replace(embeddedUrl, '').trim().replace(/\s+/g, ' ');
     const effectiveTitle = title || textWithoutUrl || embeddedUrl;
-    return { title: effectiveTitle, link: embeddedUrl };
+    const result: CaptureResult = { title: effectiveTitle, link: embeddedUrl };
+    if (title && textWithoutUrl && textWithoutUrl !== title) result.description = textWithoutUrl;
+    return result;
   }
 
   // Plain text capture
@@ -137,9 +148,20 @@ export function useUrlCapture() {
  * through to createTask so the task renders the URL as a clickable link (sanitized +
  * rel="noopener noreferrer" by the task UI). Reused by the share-target flow.
  */
-export async function captureToInbox({ title, link, linkTitle }: CaptureResult) {
+export async function captureToInbox({ title, link, linkTitle, description }: CaptureResult) {
+  // Too long for a title (a shared note): a short title, and all of it in the
+  // description — everything past 500 characters used to be lost.
+  if (title.length > MAX_TITLE_LENGTH) {
+    description = description ? `${title}\n\n${description}` : title;
+    const firstLine = title.split('\n', 1)[0].trim();
+    title = firstLine.length > CAPTURE_TITLE_PREVIEW ? `${firstLine.slice(0, CAPTURE_TITLE_PREVIEW - 1)}…` : firstLine;
+  }
+  if (description && description.length > MAX_DESCRIPTION_LENGTH) {
+    description = description.slice(0, MAX_DESCRIPTION_LENGTH);
+    toast(`The text was cut to a task's ${MAX_DESCRIPTION_LENGTH} characters — share it to the Shared Folder to keep all of it.`, 'error');
+  }
   const inboxId = await getOrCreateInbox();
-  const task = await createTask(inboxId, { title, link, linkTitle });
+  const task = await createTask(inboxId, { title, link, linkTitle, ...(description ? { description } : {}) });
   if (task) {
     toast('Captured to Inbox', 'success');
   }

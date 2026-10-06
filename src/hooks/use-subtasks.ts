@@ -1,6 +1,6 @@
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../db';
-import type { Subtask, SubtaskStatus, TaskLink } from '../db/models';
+import type { Subtask, SubtaskStatus, Task, TaskLink } from '../db/models';
 import { newId } from '../lib/id';
 import { recordChangeInTx, recordChangeBatchInTx, ensureDeviceId } from '../sync/change-log';
 import { scheduleSyncDebounced } from '../sync/sync-engine';
@@ -194,10 +194,11 @@ export async function restoreSubtask(id: string) {
   }
 }
 
-export async function convertSubtaskToTask(subtaskId: string, targetListId: string) {
+/** Returns the new task's id (for an Undo), or undefined if nothing was converted. */
+export async function convertSubtaskToTask(subtaskId: string, targetListId: string): Promise<string | undefined> {
   try {
     const subtask = await db.subtasks.get(subtaskId);
-    if (!subtask) return;
+    if (!subtask || subtask.deletedAt) return undefined;
     const now = Date.now();
     const newTaskId = newId();
     await ensureDeviceId();
@@ -212,11 +213,20 @@ export async function convertSubtaskToTask(subtaskId: string, targetListId: stri
         link: subtask.link,
         linkTitle: subtask.linkTitle,
         dueDate: subtask.dueDate,
+        // Everything a subtask holds comes along (its links and warning used to be dropped).
+        links: subtask.links ? [...subtask.links] : undefined,
+        hasWarning: subtask.hasWarning,
+        warningAt: subtask.warningAt,
+        blockedAt: subtask.blockedAt,
+        completedAt: subtask.completedAt,
         status: subtask.status,
         order: count,
         createdAt: now,
         updatedAt: now,
       };
+      for (const key of Object.keys(newTask) as Array<keyof typeof newTask>) {
+        if (newTask[key] === undefined) delete newTask[key];
+      }
       newTask.fieldTimestamps = initFieldTimestamps(newTask as unknown as Record<string, unknown>, now);
       await db.tasks.add(newTask);
 
@@ -228,21 +238,36 @@ export async function convertSubtaskToTask(subtaskId: string, targetListId: stri
     });
 
     scheduleSyncDebounced();
+    return newTaskId;
   } catch (error) {
     handleDbError(error, 'convert subtask');
+    return undefined;
   }
 }
 
-export async function convertTaskToSubtask(taskId: string, parentTaskId: string) {
+/**
+ * What a task holds that a subtask can't — lost if it becomes one (the original
+ * stays in the Trash for 30 days). Named in the confirmation it asks for first.
+ */
+export function lostAsSubtask(task: Task): string[] {
+  const lost: string[] = [];
+  if (task.description?.trim()) lost.push('description');
+  if (task.discussionLog?.length) lost.push('discussion history');
+  if (task.recurrenceType) lost.push('recurrence');
+  return lost;
+}
+
+/** Returns the new subtask's id (for an Undo), or undefined if nothing was converted. */
+export async function convertTaskToSubtask(taskId: string, parentTaskId: string): Promise<string | undefined> {
   try {
-    if (taskId === parentTaskId) return;
+    if (taskId === parentTaskId) return undefined;
 
     const task = await db.tasks.get(taskId);
-    if (!task) return;
+    if (!task || task.deletedAt) return undefined;
 
     // Don't convert tasks that have subtasks (no deep nesting)
     const existingSubtasks = await db.subtasks.where('taskId').equals(taskId).toArray();
-    if (existingSubtasks.some((s) => !s.deletedAt)) return;
+    if (existingSubtasks.some((s) => !s.deletedAt)) return undefined;
 
     const now = Date.now();
     const newSubtaskId = newId();
@@ -258,11 +283,18 @@ export async function convertTaskToSubtask(taskId: string, parentTaskId: string)
         linkTitle: task.linkTitle,
         dueDate: task.dueDate,
         links: task.links ? [...task.links] : undefined,
-        status: task.status as import('../db/models').SubtaskStatus,
+        hasWarning: task.hasWarning,
+        warningAt: task.warningAt,
+        blockedAt: task.blockedAt,
+        completedAt: task.completedAt,
+        status: task.status,
         order: parentSubCount,
         createdAt: now,
         updatedAt: now,
       };
+      for (const key of Object.keys(newSub) as Array<keyof Subtask>) {
+        if (newSub[key] === undefined) delete newSub[key];
+      }
       newSub.fieldTimestamps = initFieldTimestamps(newSub as unknown as Record<string, unknown>, now);
       await db.subtasks.add(newSub);
 
@@ -275,8 +307,10 @@ export async function convertTaskToSubtask(taskId: string, parentTaskId: string)
     });
 
     scheduleSyncDebounced();
+    return newSubtaskId;
   } catch (error) {
     handleDbError(error, 'convert task to subtask');
+    return undefined;
   }
 }
 

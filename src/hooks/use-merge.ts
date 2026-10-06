@@ -27,6 +27,7 @@ type ChangeBatch = Array<{
 /** Snapshot captured before a merge so it can be reversed (Undo). */
 export interface MergeSnapshot {
   survivor: Task; // full survivor row BEFORE the merge
+  changed: Array<keyof Task>; // the survivor fields the merge changed (Undo reverts only these)
   sources: Task[]; // full source rows BEFORE soft-delete
   reparented: Array<{ id: string; fromTaskId: string }>; // subtasks moved to survivor
 }
@@ -191,7 +192,7 @@ export async function mergeTasks(
       }
 
       await recordChangeBatchInTx(batch);
-      snapshot = { survivor, sources, reparented };
+      snapshot = { survivor, changed: Object.keys(updates) as Array<keyof Task>, sources, reparented };
     });
 
     scheduleSyncDebounced();
@@ -202,8 +203,13 @@ export async function mergeTasks(
   }
 }
 
-/** Reverse a merge: restore the survivor's pre-merge content, re-parent the
- * moved subtasks back, and un-delete the sources. */
+/** Reverse a merge: put back the survivor fields the merge changed, re-parent
+ * the moved subtasks back, and un-delete the sources.
+ *
+ * Only the merge's own fields, each stamped now — absent before the merge means
+ * removed now (a star, a description the survivor lacked). Writing the whole
+ * pre-merge row back stamped only the keys it had, so the added fields stayed on
+ * every other device, and it reverted edits made since. */
 export async function unmergeTasks(snapshot: MergeSnapshot): Promise<void> {
   try {
     const now = Date.now();
@@ -211,19 +217,23 @@ export async function unmergeTasks(snapshot: MergeSnapshot): Promise<void> {
     await db.transaction('rw', [db.tasks, db.subtasks, db.changeLog], async () => {
       const batch: ChangeBatch = [];
 
-      const ft = stampUpdatedFields(
-        snapshot.survivor.fieldTimestamps,
-        Object.keys(snapshot.survivor),
-        now,
-      );
-      const restored: Task = { ...snapshot.survivor, updatedAt: now, fieldTimestamps: ft };
-      await db.tasks.put(restored);
-      batch.push({
-        entityType: 'task',
-        entityId: restored.id,
-        operation: 'upsert',
-        data: restored as unknown as Record<string, unknown>,
-      });
+      const current = await db.tasks.get(snapshot.survivor.id);
+      if (current) {
+        const restored: Task = { ...current, updatedAt: now, fieldTimestamps: stampUpdatedFields(current.fieldTimestamps, snapshot.changed, now) };
+        const before = snapshot.survivor as unknown as Record<string, unknown>;
+        const target = restored as unknown as Record<string, unknown>;
+        for (const field of snapshot.changed) {
+          if (before[field] !== undefined) target[field] = before[field];
+          else delete target[field];
+        }
+        await db.tasks.put(restored);
+        batch.push({
+          entityType: 'task',
+          entityId: restored.id,
+          operation: 'upsert',
+          data: restored as unknown as Record<string, unknown>,
+        });
+      }
 
       for (const rp of snapshot.reparented) {
         const sub = await db.subtasks.get(rp.id);

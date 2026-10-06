@@ -105,32 +105,27 @@ export function AppUpdatePrompt() {
   const sameCommitRefresh = needRefresh && !syncIncompat && versionChecked && sameCommit && changes.length === 0;
   const waitingForVersionCheck = needRefresh && !syncIncompat && !versionChecked;
   const available = (needRefresh || syncIncompat) && !sameCommitRefresh;
+
+  // Native <dialog>s (an edit form, Settings, a password prompt, the password
+  // change's progress) use showModal(), whose top layer paints above any
+  // z-index and would hide the prompt. The prompt used to close them — an Edit
+  // Task dialog and its unsaved text included. Now, while one is open, the
+  // prompt waits as the top banner and comes back as the dialog once it closes;
+  // the observer also catches dialogs that open after it (a focus nudge).
+  const [dialogOpen, setDialogOpen] = useState(false);
+  useEffect(() => {
+    if (!available) return;
+    const check = () => setDialogOpen(!!document.querySelector('dialog[open]'));
+    check();
+    const observer = new MutationObserver(check);
+    observer.observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ['open'] });
+    return () => observer.disconnect();
+  }, [available]);
+
   // Over a locked vault it is the top banner, never the modal: the modal sat
   // above the lock screen and looked the same whether the vault had locked under
   // it or not (a Mac woken after hours showed it over a vault it had left open).
-  const asModal = !dismissed && !vault.locked;
-  const promptVisible = available && !waitingForVersionCheck && asModal && !updateInstalledNoticeVisible;
-
-  // While the (modal) update prompt is visible, keep native <dialog>s closed
-  // (Settings, confirm/password prompts, the focus nudge, …): they all use
-  // showModal(), whose top layer paints above any z-index and would hide the
-  // prompt — including ones that open AFTER it (e.g. a focus nudge firing on
-  // its timer), hence the observer, not a one-shot sweep. close() fires each
-  // dialog's onClose, so React state stays consistent and they don't re-open.
-  // (Overlays that must survive — lock screen, remote-approval, the encryption
-  // password gate — are plain divs, layered by z-index/DOM order instead.)
-  useEffect(() => {
-    if (!promptVisible) return;
-    const closeOpenDialogs = () => {
-      document.querySelectorAll('dialog[open]').forEach((d) => {
-        try { (d as HTMLDialogElement).close(); } catch { /* ignore */ }
-      });
-    };
-    closeOpenDialogs();
-    const observer = new MutationObserver(closeOpenDialogs);
-    observer.observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ['open'] });
-    return () => observer.disconnect();
-  }, [promptVisible]);
+  const asModal = !dismissed && !vault.locked && !dialogOpen;
 
   useEffect(() => {
     if (deferUntilLocked && vault.locked && !updating) {

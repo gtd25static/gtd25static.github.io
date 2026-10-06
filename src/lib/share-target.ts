@@ -24,6 +24,10 @@ export const SHARE_STASH_TTL_MS = 24 * 60 * 60 * 1000;
 // (createFileItem) stays the authoritative check at consume time; these only stop
 // a mis-share from filling the origin's storage quota with bytes the app would
 // reject anyway, so they mirror that quota.
+// Shared text and URLs are kept whole (text to a snippet or a task's description);
+// these only bound what a hostile page could make the app hold.
+export const MAX_SHARED_TEXT_LENGTH = 1_000_000;
+export const MAX_SHARED_URL_LENGTH = 8192;
 export const MAX_SHARE_FILES = 20;
 export const MAX_SHARE_FILE_BYTES = MAX_SHARED_FOLDER_BYTES;
 export const MAX_SHARE_TOTAL_BYTES = MAX_SHARED_FOLDER_BYTES;

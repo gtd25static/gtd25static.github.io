@@ -571,26 +571,29 @@ Native `<dialog open>` elements render in the browser's **top layer**, above eve
 regular positioned `div`, any open modal — settings, a confirmation, a picker — will cover it completely, and the
 user will never see that an update exists.
 
+Do **not** fix this by closing the open dialogs. An earlier version of this protocol did (a `MutationObserver`
+calling `.close()` on every `dialog[open]`), and a deploy then threw away whatever the user was typing in an edit
+dialog: closing fires its `onClose`, the form unmounts, the text is gone. Instead, step aside while a dialog is open:
+
 ```ts
+const [dialogOpen, setDialogOpen] = useState(false)
 useEffect(() => {
-  if (!promptVisible) return
-  const closeOpenDialogs = () => {
-    document.querySelectorAll('dialog[open]').forEach(d => {
-      try { (d as HTMLDialogElement).close() } catch {}
-    })
-  }
-  closeOpenDialogs()
-  // An observer, not a one-shot sweep: dialogs can open AFTER the prompt appears
-  // (a timer-driven notification, a deferred prompt).
-  const observer = new MutationObserver(closeOpenDialogs)
+  if (!available) return
+  const check = () => setDialogOpen(!!document.querySelector('dialog[open]'))
+  check()
+  // An observer, not a one-shot check: dialogs can open AFTER the prompt appears
+  // (a timer-driven notification, a deferred prompt) and close at any time.
+  const observer = new MutationObserver(check)
   observer.observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ['open'] })
   return () => observer.disconnect()
-}, [promptVisible])
+}, [available])
+
+const asModal = !dismissed && !vaultLocked && !dialogOpen // otherwise: the thin top banner
 ```
 
-Calling `.close()` (rather than hiding the element) fires each dialog's `close` event, so React state stays
-consistent and they do not immediately re-open. Overlays that must survive alongside the prompt — a lock screen, a
-credential gate — should be plain `div`s layered by `z-index` rather than native dialogs.
+While a dialog is open the update waits as the banner; when it closes, the modal comes back. Overlays that must
+survive alongside the prompt — a lock screen, a credential gate — should be plain `div`s layered by `z-index` rather
+than native dialogs.
 
 ---
 
@@ -715,7 +718,7 @@ Covered in §7. Long fallback + module-level single-reload guard.
 
 ### 8.7 The prompt hidden behind a native dialog
 
-Covered in §6. Top-layer `<dialog>` beats any `z-index`.
+Covered in §6. Top-layer `<dialog>` beats any `z-index` — step aside while one is open; never close it (unsaved input).
 
 ### 8.8 Update detection gated behind app state
 
@@ -844,8 +847,8 @@ mistaken for a bug. It does not affect correctness — only latency.
   a missing message.
 - The prompt component: renders the dialog with a changelog; "Update now" calls `applyUpdate`; "Later" demotes to
   the banner; renders nothing when there is no update; shows "Update required" for a protocol-mandated update.
-- Dialog suppression: closes an already-open dialog; closes one that opens later; fires the `close` event so React
-  state stays consistent; leaves dialogs alone once demoted to the banner.
+- Open dialogs: never closed; the prompt is the banner while one is open (already open, or opened later) and the
+  dialog again once it closes; "Later" demotes it for good.
 - The completed-update notice: suppressed when the commit did not change; expires after its TTL; survives malformed
   JSON without throwing.
 
@@ -922,7 +925,7 @@ mysteriously stopped syncing" into "update to continue".
 - [ ] Modal dialog with a real changelog; "Later" → persistent banner.
 - [ ] Running → available commit hashes displayed.
 - [ ] Same-commit signals suppressed (after the version check resolves).
-- [ ] Open native `<dialog>`s closed via `MutationObserver` while the prompt is visible.
+- [ ] Open native `<dialog>`s left alone: the prompt waits as the banner while one is open (`MutationObserver`).
 - [ ] Deferral path for unsafe states, with a post-update confirmation guarded on the commit actually changing.
 
 **Apply**

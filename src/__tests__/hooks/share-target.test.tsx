@@ -483,6 +483,71 @@ describe('useShareTarget (Android share → destination prompt)', () => {
   });
 });
 
+// Reliability review 2026-10-06 (A4): shared text was cut to a title's 500
+// characters before the destination was even picked, and the stash holding the
+// whole of it was then cleared; text carrying a URL saved only the link.
+describe('shared text is kept whole', () => {
+  const longText = 'Notes from the call. ' + 'x'.repeat(2970) + ' END';
+
+  it('to the Shared Folder: a long text becomes a snippet with every character', async () => {
+    window.history.replaceState({}, '', '/?shareTarget=1');
+    installFakeCaches({ title: '', text: longText, url: '', ts: Date.now(), files: [] }, {});
+
+    render(<Harness />);
+    fireEvent.click(await screen.findByText('to-folder'));
+
+    await waitFor(() => expect(createSnippetItem).toHaveBeenCalledTimes(1));
+    expect(createSnippetItem.mock.calls[0][1]).toBe(longText);
+  });
+
+  it('to the Shared Folder: text around a URL is a snippet holding both, not just the link', async () => {
+    window.history.replaceState({}, '', '/?shareTarget=1');
+    const text = 'Read this before Friday, especially section 3: https://example.com/report';
+    installFakeCaches({ title: '', text, url: '', ts: Date.now(), files: [] }, {});
+
+    render(<Harness />);
+    fireEvent.click(await screen.findByText('to-folder'));
+
+    await waitFor(() => expect(createSnippetItem).toHaveBeenCalledTimes(1));
+    expect(createSnippetItem.mock.calls[0][1]).toBe(text);
+    expect(createLinkItem).not.toHaveBeenCalled();
+  });
+
+  it('to the Shared Folder: a separate shared URL is added to the text it does not appear in', async () => {
+    window.history.replaceState({}, '', '/?shareTarget=1');
+    installFakeCaches({ title: 'Report', text: 'Have a look at the numbers', url: 'https://example.com/r', ts: Date.now(), files: [] }, {});
+
+    render(<Harness />);
+    fireEvent.click(await screen.findByText('to-folder'));
+
+    await waitFor(() => expect(createSnippetItem).toHaveBeenCalledTimes(1));
+    expect(createSnippetItem.mock.calls[0]).toEqual(['Report', 'Have a look at the numbers\n\nhttps://example.com/r']);
+  });
+
+  it('a long URL is not cut either', async () => {
+    window.history.replaceState({}, '', '/?shareTarget=1');
+    const url = 'https://example.com/a?' + 'q=1&'.repeat(200);
+    installFakeCaches({ title: 'Page', text: '', url, ts: Date.now(), files: [] }, {});
+
+    render(<Harness />);
+    fireEvent.click(await screen.findByText('to-folder'));
+
+    await waitFor(() => expect(createLinkItem).toHaveBeenCalledWith(url, 'Page'));
+  });
+
+  it('to the Inbox: the whole text reaches the capture', async () => {
+    window.history.replaceState({}, '', '/?shareTarget=1');
+    installFakeCaches({ title: '', text: longText, url: '', ts: Date.now(), files: [] }, {});
+
+    render(<Harness />);
+    fireEvent.click(await screen.findByText('to-inbox'));
+
+    await waitFor(() => expect(captureToInbox).toHaveBeenCalledTimes(1));
+    const capture = captureToInbox.mock.calls[0][0] as { title: string; description?: string };
+    expect(`${capture.title}\n${capture.description ?? ''}`).toContain(' END');
+  });
+});
+
 describe('selectFilesToStash (SW stash caps, ACR-018)', () => {
   it('skips a single file over the per-file cap', () => {
     const { keep, skipped } = selectFilesToStash([{ size: MAX_SHARE_FILE_BYTES + 1 }, { size: 10 }]);

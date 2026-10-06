@@ -138,3 +138,47 @@ describe('mergeTasks / unmergeTasks (DB)', () => {
     expect((await db.subtasks.get(sub.id))?.taskId).toBe(src.id); // re-parented back
   });
 });
+
+// Reliability review 2026-10-06 (M6): Undo wrote the pre-merge row back and
+// stamped only the keys that row had, so a field the merge ADDED (a star, a
+// description the survivor lacked) was never unset on the other devices — and
+// writing the whole old row back also reverted edits made since.
+describe('unmergeTasks undoes exactly what the merge changed', () => {
+  beforeEach(async () => {
+    await resetDb();
+  });
+
+  it('unsets, with a fresh stamp, the fields the merge added; leaves later edits alone', async () => {
+    const list = await createTaskList('L');
+    const survivor = assertDefined(await createTask(list.id, { title: 'Call the bank' }));
+    const source = assertDefined(await createTask(list.id, { title: 'call bank', description: 'Ask about the fee' }));
+    await updateTask(source.id, { starred: true });
+
+    const snapshot = assertDefined(await mergeTasks(survivor.id, [source.id]));
+    const merged = assertDefined(await db.tasks.get(survivor.id));
+    expect(merged.starred).toBe(true);
+    expect(merged.description).toBe('Ask about the fee');
+    const mergedAt = merged.updatedAt;
+
+    // Edited after the merge, before the Undo.
+    await updateTask(survivor.id, { title: 'Call the bank today' });
+    await new Promise((r) => setTimeout(r, 2));
+    await unmergeTasks(snapshot);
+
+    const undone = assertDefined(await db.tasks.get(survivor.id));
+    expect('starred' in undone).toBe(false);
+    expect('description' in undone).toBe(false);
+    expect(undone.fieldTimestamps?.starred).toBeGreaterThan(mergedAt);
+    expect(undone.fieldTimestamps?.description).toBeGreaterThan(mergedAt);
+    expect(undone.title).toBe('Call the bank today');
+
+    // What goes to the other devices: the unset fields, newer than the merge.
+    const entry = assertDefined((await db.changeLog.toArray())
+      .filter((e) => e.entityId === survivor.id)
+      .sort((a, b) => a.timestamp - b.timestamp)
+      .at(-1));
+    const data = entry.data as unknown as Task;
+    expect('starred' in data).toBe(false);
+    expect(data.fieldTimestamps?.starred).toBeGreaterThan(mergedAt);
+  });
+});

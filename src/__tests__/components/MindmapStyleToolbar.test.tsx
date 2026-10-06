@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import '../setup-component';
 import type { MindmapNode } from '../../db/models';
@@ -171,7 +171,50 @@ describe('MindmapStyleToolbar — canvas background', () => {
     expect(mockSetBackground).not.toHaveBeenCalled();
 
     await user.type(hex, '34ab');
-    expect(mockSetBackground).toHaveBeenCalledWith('map-1', '#1234ab');
+    await waitFor(() => expect(mockSetBackground).toHaveBeenCalledWith('map-1', '#1234ab'));
+  });
+});
+
+// Reliability review 2026-10-06 (M19): a colour picker fires on every step of a
+// drag, and each step was a saved edit with its own change entry — a few seconds
+// queued a hundred, holding this device's next edits back for minutes.
+describe('MindmapStyleToolbar — dragging a colour picker', () => {
+  it('previews every step live and saves once, the colour it settles on', async () => {
+    const user = userEvent.setup();
+    renderBar(node({ palette: 'sky' }));
+    await user.click(screen.getByLabelText('Advanced colours'));
+    const picker = screen.getByLabelText('Background');
+
+    for (let i = 0; i < 30; i++) {
+      fireEvent.change(picker, { target: { value: `#00${(i * 8).toString(16).padStart(2, '0')}00` } });
+    }
+    expect(useMindmapUi.getState().stylePreview).toEqual({ colorBg: '#00e800' });
+    expect(mockUpdateStyle).not.toHaveBeenCalled();
+
+    await waitFor(() => expect(mockUpdateStyle).toHaveBeenCalledTimes(1));
+    expect(mockUpdateStyle).toHaveBeenCalledWith('n1', { colorBg: '#00e800' });
+  });
+
+  it('saves the picked colour at once when the popover closes', async () => {
+    const user = userEvent.setup();
+    renderBar(node({ palette: 'sky' }));
+    await user.click(screen.getByLabelText('Advanced colours'));
+    fireEvent.change(screen.getByLabelText('Background'), { target: { value: '#123456' } });
+
+    fireEvent.keyDown(document, { key: 'Escape' });
+
+    expect(mockUpdateStyle).toHaveBeenCalledWith('n1', { colorBg: '#123456' });
+  });
+
+  it('the canvas background is saved once too', async () => {
+    const user = userEvent.setup();
+    renderBar(node(), undefined);
+    await user.click(screen.getByLabelText('Canvas background'));
+    const picker = screen.getByLabelText('Custom');
+    for (const v of ['#101010', '#202020', '#303030']) fireEvent.change(picker, { target: { value: v } });
+
+    await waitFor(() => expect(mockSetBackground).toHaveBeenCalledTimes(1));
+    expect(mockSetBackground).toHaveBeenCalledWith('map-1', '#303030');
   });
 });
 
@@ -208,12 +251,12 @@ describe('MindmapStyleToolbar — advanced colours', () => {
     await user.click(screen.getByLabelText('Advanced colours'));
 
     fireEvent.change(screen.getByLabelText('Border'), { target: { value: '#00ff00' } });
-    expect(mockUpdateStyle).toHaveBeenCalledWith('n1', { colorBorder: '#00ff00' });
+    await waitFor(() => expect(mockUpdateStyle).toHaveBeenCalledWith('n1', { colorBorder: '#00ff00' }));
 
     const hex = screen.getByLabelText('Text hex');
     await user.clear(hex);
     await user.type(hex, '#AABBCC');
-    expect(mockUpdateStyle).toHaveBeenCalledWith('n1', { colorFg: '#aabbcc' });
+    await waitFor(() => expect(mockUpdateStyle).toHaveBeenCalledWith('n1', { colorFg: '#aabbcc' }));
   });
 
   it('offers "clear" only for parts that carry a custom colour', async () => {

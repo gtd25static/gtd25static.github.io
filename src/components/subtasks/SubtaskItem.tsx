@@ -1,7 +1,8 @@
 import { useState, useCallback, useEffect } from 'react';
 import { MAX_TITLE_LENGTH } from '../../lib/constants';
 import type { Subtask } from '../../db/models';
-import { setSubtaskStatus, deleteSubtask, restoreSubtask, updateSubtask, convertSubtaskToTask } from '../../hooks/use-subtasks';
+import { setSubtaskStatus, deleteSubtask, restoreSubtask, updateSubtask } from '../../hooks/use-subtasks';
+import { promoteToTask } from './convert-actions';
 import { toast } from '../ui/Toast';
 import { confirmDialog } from '../ui/ConfirmDialog';
 import { toggleWarning } from '../../hooks/use-warning';
@@ -192,7 +193,7 @@ export function SubtaskItem({ subtask }: Props) {
         label: 'Promote to task',
         children: targetLists.map((l) => ({
           label: l.name,
-          onClick: () => convertSubtaskToTask(subtask.id, l.id),
+          onClick: () => void promoteToTask(subtask.id, l.id),
         })),
       });
     }

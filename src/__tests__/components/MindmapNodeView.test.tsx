@@ -68,3 +68,27 @@ describe('MindmapNodeView animation classes', () => {
     expect(g.style.transformOrigin).toBe('');
   });
 });
+
+// Reliability review 2026-10-06 (B22): a remote rename of the node being edited
+// re-ran the focus-and-select-all, so the next keystroke replaced the draft.
+describe('MindmapNodeView inline editor', () => {
+  it('a remote change to the label while editing leaves the draft and its caret alone', async () => {
+    const { userEvent } = await import('@testing-library/user-event').then((m) => ({ userEvent: m.default }));
+    const user = userEvent.setup();
+    const props = {
+      rect: RECT, selected: true, hovered: false, editing: true, isRoot: false, isDragSource: false, isDropTarget: false,
+      animateIn: false, onMeasure: noop, onPointerDown: noop, onCommitEdit: noop, onCancelEdit: noop,
+    };
+    const { container, rerender } = render(<svg><MindmapNodeView node={node({ label: 'Node' })} {...props} /></svg>);
+    const ta = container.querySelector('textarea') as HTMLTextAreaElement;
+    ta.setSelectionRange(ta.value.length, ta.value.length);
+    await user.type(ta, ' and more');
+    expect(ta.value).toBe('Node and more');
+
+    rerender(<svg><MindmapNodeView node={node({ label: 'Renamed elsewhere' })} {...props} /></svg>);
+
+    expect(ta.value).toBe('Node and more');
+    expect(ta.selectionStart).toBe(ta.value.length);
+    expect(ta.selectionEnd).toBe(ta.value.length);
+  });
+});

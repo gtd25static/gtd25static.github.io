@@ -82,10 +82,14 @@ export const MindmapNodeView = memo(function MindmapNodeView({
   }, [editing, node.id, onCommitEdit]);
 
   useLayoutEffect(() => {
-    if (!editing) {
-      setDraft(node.label);
-      return;
-    }
+    if (!editing) setDraft(node.label);
+  }, [editing, node.label]);
+
+  // Focus and select as the editor opens — only then: a rename of this node
+  // synced in mid-edit re-ran it, selected the whole draft, and the next
+  // keystroke replaced it.
+  useLayoutEffect(() => {
+    if (!editing) return;
     const ta = textareaRef.current;
     if (ta) {
       ta.focus();
@@ -93,7 +97,7 @@ export const MindmapNodeView = memo(function MindmapNodeView({
       ta.style.height = 'auto';
       ta.style.height = `${ta.scrollHeight}px`;
     }
-  }, [editing, node.label]);
+  }, [editing]);
 
   // Selection/hover draw an accent outline *around* the shape instead of
   // recolouring its border, so a node's own colours survive being pointed at.

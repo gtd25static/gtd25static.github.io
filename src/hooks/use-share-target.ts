@@ -10,6 +10,7 @@ import { extractUrl } from '../lib/link-utils';
 import { sanitize, formatCaptureResult, captureToInbox } from './use-url-capture';
 import {
   SHARE_CACHE, SHARE_META_PATH, shareFilePath, SHARE_TARGET_FLAG, SHARE_STASH_TTL_MS, type SharedPayloadMeta,
+  MAX_SHARED_TEXT_LENGTH, MAX_SHARED_URL_LENGTH,
 } from '../lib/share-target';
 
 const SHARED_FOLDER_LIST_ID = '__shared__';
@@ -121,11 +122,18 @@ async function saveToSharedFolder({ files, stashIndexes, title, url, text }: Pen
     if (result === 'saved') outcome.saved++;
     else if (result === 'failed') outcome.failed++;
   }
-  const link = url || extractUrl(text);
+  // Text that is more than a bare link is kept whole, as a snippet (with the
+  // shared URL added when the text doesn't carry it); a bare link is a link item.
+  // Any text next to a URL used to be dropped for the link alone.
+  const embeddedUrl = extractUrl(text);
+  const prose = embeddedUrl ? text.replace(embeddedUrl, '').trim() : text;
+  const link = url || embeddedUrl;
   if (link || text || title) {
-    const item = link
-      ? await createLinkItem(link, title || undefined)
-      : await createSnippetItem(title || text.slice(0, 60), text || title);
+    const item = prose
+      ? await createSnippetItem(title || prose.slice(0, 60), url && !text.includes(url) ? `${text}\n\n${url}` : text)
+      : link
+        ? await createLinkItem(link, title || undefined)
+        : await createSnippetItem(title.slice(0, 60), title);
     if (item) {
       outcome.saved++;
       await dropFromStash({ text: true });
@@ -231,9 +239,11 @@ export function useShareTarget(): ShareTargetApi {
         // silently resurrecting day-old content would be surprising).
         if (typeof meta?.ts !== 'number' || Date.now() - meta.ts > SHARE_STASH_TTL_MS) return;
 
+        // The text and URL whole: cut to a title's length here, a long note
+        // shared to either destination lost everything past 500 characters.
         const title = sanitize(meta.title);
-        const url = sanitize(meta.url);
-        const text = sanitize(meta.text);
+        const url = sanitize(meta.url, MAX_SHARED_URL_LENGTH);
+        const text = sanitize(meta.text, MAX_SHARED_TEXT_LENGTH);
 
         // Files store their bytes through sync whichever destination is picked,
         // and can't save before sync is ready, which at startup it may not be

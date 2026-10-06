@@ -13,7 +13,7 @@ import {
 import { sortableKeyboardCoordinates } from '@dnd-kit/sortable';
 import { customCollisionDetection } from './dnd-collision';
 import { moveTaskToList } from '../../hooks/use-tasks';
-import { convertTaskToSubtask } from '../../hooks/use-subtasks';
+import { makeSubtaskOf } from '../subtasks/convert-actions';
 import { toast } from '../ui/Toast';
 import { useAppState } from '../../stores/app-state';
 
@@ -109,8 +109,7 @@ export function DndProvider({ children }: { children: ReactNode }) {
         return;
       }
       if (String(active.id) === overData.taskId) return;
-      convertTaskToSubtask(String(active.id), overData.taskId);
-      toast('Converted to subtask', 'success');
+      void makeSubtaskOf(String(active.id), overData.taskId); // asks first if content would be lost; toasts with Undo
       return;
     }
 
