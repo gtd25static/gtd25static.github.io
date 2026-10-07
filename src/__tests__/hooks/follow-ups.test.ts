@@ -198,40 +198,20 @@ describe('cadenceMs', () => {
 });
 
 describe('applyDiscussed', () => {
-  it('appends a log entry and re-snoozes for the cadence', () => {
-    const task = makeTask({ snoozeCadence: '1month' });
-    const update = applyDiscussed(task, '  spoke to the team  ');
+  it('re-snoozes for the cadence and leaves the discussion log alone', () => {
+    const task = makeTask({ snoozeCadence: '1month', discussionLog: [{ id: 'old', at: 5, note: 'first' }] });
+    const update = applyDiscussed(task);
 
-    expect(update.discussionLog).toHaveLength(1);
-    expect(update.discussionLog![0].at).toBe(Date.now());
-    expect(update.discussionLog![0].note).toBe('spoke to the team'); // trimmed
-    expect(update.discussionLog![0].id).toBeTruthy();
     expect(update.pingedAt).toBe(Date.now());
     expect(update.pingCooldown).toBe('custom');
     expect(update.pingCooldownUntil).toBe(Date.now() + MONTH);
-  });
-
-  it('preserves prior log entries (append, not replace)', () => {
-    const task = makeTask({ discussionLog: [{ id: 'old', at: 5, note: 'first' }] });
-    const update = applyDiscussed(task, 'second');
-    expect(update.discussionLog).toHaveLength(2);
-    expect(update.discussionLog![0].id).toBe('old');
-    expect(update.discussionLog![1].note).toBe('second');
-  });
-
-  it('does not log an entry when the note is empty/whitespace (just re-snoozes)', () => {
-    const task = makeTask({ discussionLog: [{ id: 'old', at: 5, note: 'first' }] });
-    const blank = applyDiscussed(task, '   ');
-    expect(blank.discussionLog).toBeUndefined(); // existing log left untouched
-    expect(blank.pingCooldown).toBe('custom');
-    expect(applyDiscussed(makeTask()).discussionLog).toBeUndefined();
+    expect('discussionLog' in update).toBe(false);
   });
 
   it('snoozes until an explicit untilMs (custom date) instead of the cadence', () => {
     const until = Date.now() + 5 * DAY;
-    const update = applyDiscussed(makeTask({ snoozeCadence: '1month' }), 'met up', { untilMs: until });
+    const update = applyDiscussed(makeTask({ snoozeCadence: '1month' }), { untilMs: until });
     expect(update.pingCooldown).toBe('custom');
     expect(update.pingCooldownUntil).toBe(until);
-    expect(update.discussionLog).toHaveLength(1);
   });
 });

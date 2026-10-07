@@ -1,8 +1,7 @@
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../db';
-import type { Task, DiscussionEntry } from '../db/models';
+import type { Task } from '../db/models';
 import { PING_COOLDOWN_MS } from '../lib/constants';
-import { newId } from '../lib/id';
 
 const ABSOLUTE_TIMESTAMP_FLOOR = Date.UTC(2000, 0, 1);
 const MAX_REASONABLE_CUSTOM_MS = 10 * 366 * 24 * 60 * 60 * 1000;
@@ -104,28 +103,17 @@ export function cadenceMs(task: Task): number {
 }
 
 /**
- * Build the update payload for the "Discussed" action: re-snooze, and append a
- * discussion-log entry *only when a note was written* (a blank note re-snoozes
- * without creating an empty history row). By default it re-snoozes for the
- * topic's cadence; pass `untilMs` to snooze until a specific absolute time (the
- * "custom date" path). Reversible via the existing wake (which clears the ping
- * fields but leaves the log intact).
+ * Build the snooze payload for the "Discussed" action. By default it re-snoozes
+ * for the topic's cadence; pass `untilMs` to snooze until a specific absolute
+ * time (the "custom date" path). Never touches the discussion log (notes are
+ * logged inline on the card). Reversible via Unsnooze, which clears the ping fields.
  */
-export function applyDiscussed(
-  task: Task,
-  note?: string,
-  opts?: { untilMs?: number },
-): Partial<Task> {
+export function applyDiscussed(task: Task, opts?: { untilMs?: number }): Partial<Task> {
   const now = Date.now();
-  const until = opts?.untilMs ?? now + cadenceMs(task);
-  const snooze: Partial<Task> = {
+  return {
     pingedAt: now,
     pingCooldown: 'custom',
     pingCooldownCustomMs: undefined,
-    pingCooldownUntil: until,
+    pingCooldownUntil: opts?.untilMs ?? now + cadenceMs(task),
   };
-  const trimmed = note?.trim();
-  if (!trimmed) return snooze;
-  const entry: DiscussionEntry = { id: newId(), at: now, note: trimmed };
-  return { ...snooze, discussionLog: [...(task.discussionLog ?? []), entry] };
 }

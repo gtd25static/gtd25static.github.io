@@ -104,7 +104,7 @@ export function DiscussedPopover({ task, align, onDone }: Props) {
       const cadenceUpdate: Partial<Task> = { snoozeCadence: 'custom', snoozeCadenceDays: days };
       await updateTask(task.id, {
         ...cadenceUpdate,
-        ...applyDiscussed({ ...task, ...cadenceUpdate }, undefined, { untilMs: target.getTime() }),
+        ...applyDiscussed({ ...task, ...cadenceUpdate }, { untilMs: target.getTime() }),
       });
       onDone();
       return;
