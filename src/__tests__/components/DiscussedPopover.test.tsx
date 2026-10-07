@@ -96,9 +96,25 @@ describe('DiscussedPopover', () => {
     expect(screen.getByText('custom')).toBeInTheDocument();
   });
 
-  it('Snooze re-snoozes for the chosen cadence without logging the note', async () => {
+  // Notes are logged in the card's inline discussion log; this popover only snoozes.
+  it('has no note field and opens with the focus on Snooze', () => {
+    renderPopover();
+    expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
+    expect(screen.queryByText('Log')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Snooze' })).toHaveFocus();
+  });
+
+  it('Enter right after opening re-snoozes on the remembered cadence', async () => {
+    const { user, task } = renderPopover({ snoozeCadence: '30d' });
+    await user.keyboard('{Enter}');
+    const [id, payload] = mockUpdateTask.mock.calls[0];
+    expect(id).toBe(task.id);
+    expect(payload.snoozeCadence).toBe('30d');
+    expect(payload.pingCooldownUntil).toBeGreaterThan(Date.now() + 29 * DAY);
+  });
+
+  it('Snooze re-snoozes for the chosen cadence without logging anything', async () => {
     const { user, task } = renderPopover();
-    await user.type(screen.getByPlaceholderText('What came of it?'), 'spoke to ops');
     await user.click(screen.getByText('30 days'));
     await user.click(screen.getByText('Snooze'));
 
@@ -111,47 +127,6 @@ describe('DiscussedPopover', () => {
     expect(payload.pingCooldownUntil).toBeGreaterThan(Date.now() + 29 * DAY);
     expect(payload.pingCooldownUntil).toBeLessThan(Date.now() + 31 * DAY);
   });
-
-  it('Log appends the note without snoozing', async () => {
-    const { user, task } = renderPopover();
-    await user.type(screen.getByPlaceholderText('What came of it?'), 'spoke to ops');
-    await user.click(screen.getByText('Log'));
-
-    expect(mockUpdateTask).toHaveBeenCalledTimes(1);
-    const [id, payload] = mockUpdateTask.mock.calls[0];
-    expect(id).toBe(task.id);
-    expect(payload.discussionLog).toHaveLength(1);
-    expect(payload.discussionLog[0].note).toBe('spoke to ops');
-    expect(payload.pingedAt).toBeUndefined();
-    expect(payload.pingCooldownUntil).toBeUndefined();
-    expect(payload.snoozeCadence).toBeUndefined();
-  });
-
-  it('Log is disabled while the note is empty', () => {
-    renderPopover();
-    expect(screen.getByText('Log')).toBeDisabled();
-  });
-
-  it('Enter in the note field logs the note without re-snoozing', async () => {
-    const { user, task } = renderPopover();
-    await user.type(screen.getByPlaceholderText('What came of it?'), 'noted via enter{Enter}');
-
-    expect(mockUpdateTask).toHaveBeenCalledTimes(1);
-    const [id, payload] = mockUpdateTask.mock.calls[0];
-    expect(id).toBe(task.id);
-    expect(payload.discussionLog).toHaveLength(1);
-    expect(payload.discussionLog[0].note).toBe('noted via enter');
-    expect(payload.pingedAt).toBeUndefined();
-    expect(payload.pingCooldownUntil).toBeUndefined();
-    expect(payload.snoozeCadence).toBeUndefined();
-  });
-
-  it('Enter with an empty note logs nothing', async () => {
-    const { user } = renderPopover();
-    await user.type(screen.getByPlaceholderText('What came of it?'), '{Enter}');
-    expect(mockUpdateTask).not.toHaveBeenCalled();
-  });
-
 
   it('custom reveals a date picker and snoozes until that date', async () => {
     const { user, task, container } = renderPopover();
@@ -228,12 +203,12 @@ describe('DiscussedPopover', () => {
     }
   });
 
-  it('Escape closes it without logging or snoozing — from the note or a cadence chip', async () => {
+  it('Escape closes it without snoozing — from Snooze or a cadence chip', async () => {
     const task = makeTask('fu-1');
     const onDone = vi.fn();
     const user = userEvent.setup();
     render(<DiscussedPopover task={task} align="right" onDone={onDone} />);
-    await user.type(screen.getByPlaceholderText('What came of it?'), 'half a thought{Escape}');
+    await user.keyboard('{Escape}');
     expect(onDone).toHaveBeenCalledTimes(1);
 
     screen.getByText('30 days').focus();

@@ -116,6 +116,43 @@ test('"Sort by date" orders follow-ups by due date, and dragging is refused whil
   await expect.poll(() => cardTitles(page, titles)).toEqual(manual); // the refused drag changed nothing
 });
 
+test('a click on a follow-up opens its log: notes go in without snoozing, the two newest show, the rest behind "Show more"', async ({ page }) => {
+  await openApp(page);
+  await createFollowUpList(page, 'People');
+  await addFollowUp(page, 'Ping Bob');
+  await addFollowUp(page, 'Ping Eve');
+  const bob = followUpCard(page, 'Ping Bob');
+  const box = bob.getByPlaceholder('What was discussed?');
+
+  await bob.getByText('Ping Bob').click();
+  for (const note of ['first chat', 'second chat', 'third chat']) {
+    await box.fill(note);
+    await box.press('Enter');
+    await expect(bob.getByText(note)).toBeVisible();
+  }
+  await expect(bob.getByText('first chat')).toHaveCount(0);
+  await bob.getByRole('button', { name: 'Show more (1)' }).click();
+  await expect(bob.getByText('first chat')).toBeVisible();
+  // Logging never snoozes: nothing went to the snoozed pile.
+  await expect(page.getByRole('button', { name: /Show snoozed/ })).toHaveCount(0);
+
+  // Another click on the card closes it; the History chip opens it again.
+  await bob.getByText('Ping Bob').click();
+  await expect(box).toHaveCount(0);
+  await page.reload();
+  await page.locator('aside nav [data-focus-id]').filter({ hasText: 'People' }).locator(':scope > button').click();
+  await expect(page.getByRole('heading', { level: 2, name: 'People', exact: true })).toBeVisible();
+  await bob.getByRole('button', { name: 'History', exact: true }).click();
+  await expect(bob.getByText('third chat')).toBeVisible();
+  await expect(bob.getByText('second chat')).toBeVisible();
+  await bob.getByRole('button', { name: 'History', exact: true }).click();
+  await expect(box).toHaveCount(0);
+
+  // Reordering by the handle is a drag, not a click: no log opens.
+  await dragOnto(page, followUpCard(page, 'Ping Eve').locator('.cursor-grab').first(), bob);
+  await expect(page.getByPlaceholder('What was discussed?')).toHaveCount(0);
+});
+
 test('a custom snooze is remembered: the card says "every 11d" and Discussed reopens on that date', async ({ page }) => {
   await openApp(page);
   await createFollowUpList(page, 'People');

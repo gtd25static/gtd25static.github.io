@@ -99,7 +99,7 @@ describe('redact sweep contract', () => {
     'src/components/tasks/BulkListPicker.tsx',
     'src/components/follow-ups/FollowUpCard.tsx',
     'src/components/follow-ups/FollowUpList.tsx',
-    'src/components/follow-ups/DiscussionHistory.tsx',
+    'src/components/follow-ups/DiscussionLog.tsx',
     'src/components/subtasks/SubtaskItem.tsx',
     'src/components/subtasks/SubtaskForm.tsx',
     'src/components/focus/FocusTaskCard.tsx',

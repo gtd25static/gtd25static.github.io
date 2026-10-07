@@ -6,6 +6,7 @@ import { resetAppState, makeTask, makeTaskList } from '../helpers/component-help
 import { FollowUpCard } from '../../components/follow-ups/FollowUpCard';
 import { ConfirmDialogContainer } from '../../components/ui/ConfirmDialog';
 import { ToastContainer } from '../../components/ui/Toast';
+import { useAppState } from '../../stores/app-state';
 
 const fuList = makeTaskList({ id: 'fu-1', name: 'Follow Ups', type: 'follow-ups' });
 const workList = makeTaskList({ id: 'work', name: 'Work', type: 'tasks' });
@@ -109,17 +110,121 @@ describe('FollowUpCard', () => {
     expect(mockUpdateTask).toHaveBeenCalledWith(task.id, { archived: false });
   });
 
-  it('shows a History chip only when there is a discussion log', async () => {
-    const { user } = renderCard({
-      discussionLog: [{ id: 'd1', at: Date.now(), note: 'talked to ops team' }],
-    });
-    await user.click(screen.getByTitle('View and edit discussion history'));
-    expect(await screen.findByText('talked to ops team')).toBeInTheDocument();
+  it('shows a History chip only when there is a discussion log', () => {
+    renderCard({ discussionLog: [{ id: 'd1', at: Date.now(), note: 'talked to ops team' }] });
+    expect(screen.getByRole('button', { name: 'History' })).toBeInTheDocument();
   });
 
   it('hides the History chip when the log is empty', () => {
     renderCard();
-    expect(screen.queryByTitle('View and edit discussion history')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'History' })).not.toBeInTheDocument();
+  });
+
+  describe('inline discussion log', () => {
+    const log = [
+      { id: 'd1', at: 1000, note: 'oldest note' },
+      { id: 'd2', at: 2000, note: 'middle note' },
+      { id: 'd3', at: 3000, note: 'newest note' },
+    ];
+    const box = () => screen.queryByPlaceholderText('What was discussed?');
+
+    it('a click on the card opens it with the two newest entries; another click closes it', async () => {
+      const { user } = renderCard({ title: 'Ask Ana', discussionLog: log });
+      expect(box()).not.toBeInTheDocument();
+      await user.click(screen.getByText('Ask Ana'));
+      expect(box()).toBeInTheDocument();
+      expect(screen.getByText('newest note')).toBeInTheDocument();
+      expect(screen.getByText('middle note')).toBeInTheDocument();
+      expect(screen.queryByText('oldest note')).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Show more (1)' })).toBeInTheDocument();
+      await user.click(screen.getByText('Ask Ana'));
+      expect(box()).not.toBeInTheDocument();
+    });
+
+    it('opens on a card without a log too, so the first note can be logged', async () => {
+      const { user, task } = renderCard({ title: 'Ask Ana' });
+      await user.click(screen.getByText('Ask Ana'));
+      await user.type(box()!, 'first chat{Enter}');
+      expect(mockUpdateTask).toHaveBeenCalledWith(task.id, {
+        discussionLog: [expect.objectContaining({ note: 'first chat' })],
+      });
+    });
+
+    it('the History chip opens and closes it', async () => {
+      const { user } = renderCard({ discussionLog: log });
+      const chip = screen.getByRole('button', { name: 'History' });
+      expect(chip).toHaveAttribute('aria-expanded', 'false');
+      await user.click(chip);
+      expect(box()).toBeInTheDocument();
+      expect(chip).toHaveAttribute('aria-expanded', 'true');
+      await user.click(chip);
+      expect(box()).not.toBeInTheDocument();
+    });
+
+    it('"History" in the ⋯ menu opens it (and leaves it open)', async () => {
+      const { user, container } = renderCard();
+      for (let i = 0; i < 2; i++) {
+        await user.click(container.querySelector('[data-dropdown-trigger]')!);
+        await user.click(screen.getByRole('button', { name: 'History' })); // no log yet, so no History chip: this is the menu's
+        expect(box()).toBeInTheDocument();
+      }
+    });
+
+    it('the card\'s buttons do their own job without opening it', async () => {
+      const { user } = renderCard();
+      await user.click(screen.getByTitle('Star'));
+      await user.click(screen.getByTitle('Resolve — archive this follow-up'));
+      await user.click(await screen.findByRole('button', { name: 'Cancel' }));
+      await user.click(screen.getByRole('button', { name: 'Discussed' }));
+      expect(box()).not.toBeInTheDocument();
+    });
+
+    it('clicks inside the Discussed popover or on the drag handle don\'t open it', async () => {
+      const task = makeTask(fuList.id, { title: 'Ask Ana' });
+      const user = userEvent.setup();
+      const { container } = render(<FollowUpCard task={task} index={0} dragHandleProps={{}} />);
+      await user.click(screen.getByRole('button', { name: 'Discussed' }));
+      await user.click(screen.getByText('Snooze again in'));
+      await user.click(container.querySelector('.cursor-grab')!);
+      expect(box()).not.toBeInTheDocument();
+    });
+
+    it('clicks inside the open log don\'t close it', async () => {
+      const { user } = renderCard({ title: 'Ask Ana', discussionLog: log });
+      await user.click(screen.getByText('Ask Ana'));
+      await user.click(screen.getByText('newest note'));
+      await user.click(box()!);
+      await user.click(screen.getByRole('button', { name: 'Show more (1)' }));
+      expect(box()).toBeInTheDocument();
+      expect(screen.getByText('oldest note')).toBeInTheDocument();
+    });
+
+    it('logging a note never snoozes', async () => {
+      const { user, task } = renderCard({ title: 'Ask Ana', discussionLog: log });
+      await user.click(screen.getByText('Ask Ana'));
+      await user.type(box()!, 'spoke to ops');
+      await user.click(screen.getByRole('button', { name: 'Log' }));
+      expect(mockUpdateTask).toHaveBeenCalledTimes(1);
+      const [id, payload] = mockUpdateTask.mock.calls[0];
+      expect(id).toBe(task.id);
+      expect(Object.keys(payload)).toEqual(['discussionLog']);
+      expect(payload.discussionLog).toHaveLength(4);
+    });
+
+    it('a snoozed card is no longer faded while its log is open', async () => {
+      const { user, container } = renderCard({ title: 'Ask Ana', pingedAt: Date.now() });
+      const card = container.querySelector('[data-focus-id]')!;
+      expect(card.className).toContain('opacity-40');
+      await user.click(screen.getByText('Ask Ana'));
+      expect(card.className).not.toContain('opacity-40');
+    });
+
+    it('stays open across a remount (kept in the app state, like an expanded task)', async () => {
+      const { user, unmount, task } = renderCard({ title: 'Ask Ana' });
+      await user.click(screen.getByText('Ask Ana'));
+      unmount();
+      expect(useAppState.getState().expandedTaskIds.has(task.id)).toBe(true);
+    });
   });
 
   it('does not render a standalone Snooze button', () => {
@@ -171,9 +276,9 @@ describe('FollowUpCard', () => {
     const { user } = renderCard();
     const chip = screen.getByRole('button', { name: 'Discussed' });
     await user.click(chip);
-    expect(screen.getByPlaceholderText('What came of it?')).toHaveFocus();
+    expect(screen.getByRole('button', { name: 'Snooze' })).toHaveFocus();
     await user.keyboard('{Escape}');
-    expect(screen.queryByPlaceholderText('What came of it?')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Snooze' })).not.toBeInTheDocument();
     expect(chip).toHaveFocus();
   });
 

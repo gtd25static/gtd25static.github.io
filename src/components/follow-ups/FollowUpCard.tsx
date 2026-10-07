@@ -11,7 +11,7 @@ import { useTaskLists } from '../../hooks/use-task-lists';
 import { PingCooldownBadge } from './PingCooldownBadge';
 import { DiscussedPopover } from './DiscussedPopover';
 import { sendToList } from '../tasks/send-to-list';
-import { DiscussionHistory } from './DiscussionHistory';
+import { DiscussionLog } from './DiscussionLog';
 import { ContextMenu, type MenuItem } from '../ui/ContextMenu';
 import { DropdownMenu } from '../ui/DropdownMenu';
 import { formatDate, dueDateColor } from '../../lib/date-utils';
@@ -32,7 +32,7 @@ interface Props {
 }
 
 export function FollowUpCard({ task, index, dragHandleProps }: Props) {
-  const { focusedItemId, focusZone, editingItemId, setEditingItemId } = useAppState(useShallow(s => ({ focusedItemId: s.focusedItemId, focusZone: s.focusZone, editingItemId: s.editingItemId, setEditingItemId: s.setEditingItemId })));
+  const { focusedItemId, focusZone, editingItemId, setEditingItemId, expanded, toggleTaskExpanded, ensureTaskExpanded } = useAppState(useShallow(s => ({ focusedItemId: s.focusedItemId, focusZone: s.focusZone, editingItemId: s.editingItemId, setEditingItemId: s.setEditingItemId, expanded: s.expandedTaskIds.has(task.id), toggleTaskExpanded: s.toggleTaskExpanded, ensureTaskExpanded: s.ensureTaskExpanded })));
   const focused = focusedItemId === task.id && focusZone === 'main';
   const [editing, setEditing] = useState(false);
   const [editingTitle, setEditingTitle] = useState(false);
@@ -41,7 +41,6 @@ export function FollowUpCard({ task, index, dragHandleProps }: Props) {
   const lists = useTaskLists();
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null);
   const [showDiscussed, setShowDiscussed] = useState(false);
-  const [showHistory, setShowHistory] = useState(false);
   const discussedRef = useRef<HTMLDivElement>(null);
 
   // React to keyboard-triggered editing
@@ -82,6 +81,18 @@ export function FollowUpCard({ task, index, dragHandleProps }: Props) {
     });
   }
 
+  // A click anywhere on the card that isn't one of its controls opens or closes
+  // the discussion log. Menus are portals (their React events still bubble here,
+  // but they aren't in the card's DOM); the Discussed popover and the drag handle
+  // opt out; a drag that selected text isn't a tap.
+  function handleCardClick(e: React.MouseEvent) {
+    const target = e.target as Element;
+    if (!e.currentTarget.contains(target)) return;
+    if (target.closest('button, a, input, textarea, select, label, [data-no-card-toggle]')) return;
+    if (window.getSelection()?.toString()) return;
+    toggleTaskExpanded(task.id);
+  }
+
   const handleContextMenu = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
     setCtxMenu({ x: e.clientX, y: e.clientY });
@@ -92,7 +103,7 @@ export function FollowUpCard({ task, index, dragHandleProps }: Props) {
     const items: MenuItem[] = [
       { label: task.starred ? 'Unstar' : 'Star', onClick: () => updateTask(task.id, { starred: !task.starred }) },
       { label: task.hasWarning ? 'Clear warning' : 'Warn', onClick: () => toggleWarning('task', task.id) },
-      { label: 'History', onClick: () => setShowHistory(true) },
+      { label: 'History', onClick: () => ensureTaskExpanded(task.id) },
     ];
     if (otherLists.length > 0) {
       items.push({
@@ -129,18 +140,21 @@ export function FollowUpCard({ task, index, dragHandleProps }: Props) {
   }
 
   return (
-    <div data-focus-id={task.id} data-redact onContextMenu={handleContextMenu} className={`group mb-2 flex flex-col md:flex-row md:items-start gap-2 md:gap-3 rounded-lg border px-3 py-3 shadow-sm transition-shadow hover:shadow-md ${
+    <div data-focus-id={task.id} data-redact onContextMenu={handleContextMenu} className={`group mb-2 rounded-lg border shadow-sm transition-shadow hover:shadow-md ${
       focused
         ? 'border-accent-500 ring-2 ring-accent-500/40 dark:border-accent-400 dark:ring-accent-400/30'
         : 'border-zinc-200 dark:border-zinc-700/60'
-    } ${inCooldown ? 'opacity-40' : ''} ${
+    } ${inCooldown && !expanded ? 'opacity-40' : ''} ${
       index !== undefined && index % 2 === 1 ? 'bg-zinc-50/70 dark:bg-zinc-800/30' : 'bg-white dark:bg-zinc-900/50'
     }`}>
+      {/* Summary row — click to open/close the discussion log below */}
+      <div onClick={handleCardClick} className="flex cursor-pointer flex-col md:flex-row md:items-start gap-2 md:gap-3 px-3 py-3">
       {/* Title + content region — its own row on phones, dissolves into the card row on md+ */}
       <div className="flex items-start gap-3 md:contents">
       {/* Drag handle */}
       {dragHandleProps && (
         <div
+          data-no-card-toggle
           className="shrink-0 cursor-grab touch-none active:cursor-grabbing mt-0.5"
           {...dragHandleProps}
         >
@@ -239,13 +253,13 @@ export function FollowUpCard({ task, index, dragHandleProps }: Props) {
         </button>
       )}
 
-      {/* Discussed button — log a discussion note and/or re-snooze for a chosen cadence */}
+      {/* Discussed button — re-snooze for a chosen cadence (notes go in the log below) */}
       {!task.archived && (
-        <div className="relative shrink-0" ref={discussedRef}>
+        <div data-no-card-toggle className="relative shrink-0" ref={discussedRef}>
           <button
             onClick={() => setShowDiscussed((v) => !v)}
             className={`${chipBase} bg-emerald-50 text-emerald-700 hover:bg-emerald-100 dark:bg-emerald-900/30 dark:text-emerald-400 dark:hover:bg-emerald-800/40`}
-            title="Log a discussion note or snooze for a chosen cadence"
+            title="Snooze for a chosen cadence"
           >
             Discussed
           </button>
@@ -260,12 +274,15 @@ export function FollowUpCard({ task, index, dragHandleProps }: Props) {
         </div>
       )}
 
-      {/* History — shown when there's a discussion log to inspect/edit */}
+      {/* History — shown when there's a discussion log; opens/closes it below the card */}
       {(task.discussionLog?.length ?? 0) > 0 && (
         <button
-          onClick={() => setShowHistory(true)}
-          className={`${chipBase} bg-zinc-100 text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700`}
-          title="View and edit discussion history"
+          onClick={() => toggleTaskExpanded(task.id)}
+          aria-expanded={expanded}
+          className={`${chipBase} ${expanded
+            ? 'bg-zinc-200 text-zinc-700 hover:bg-zinc-300 dark:bg-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-600'
+            : 'bg-zinc-100 text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700'}`}
+          title={expanded ? 'Hide the discussion log' : 'Show the discussion log'}
         >
           History
         </button>
@@ -316,7 +333,7 @@ export function FollowUpCard({ task, index, dragHandleProps }: Props) {
           items={[
             { label: task.starred ? 'Unstar' : 'Star', onClick: () => updateTask(task.id, { starred: !task.starred }) },
             { label: task.hasWarning ? 'Clear warning' : 'Warn', onClick: () => toggleWarning('task', task.id) },
-            { label: 'History', onClick: () => setShowHistory(true) },
+            { label: 'History', onClick: () => ensureTaskExpanded(task.id) },
             { label: 'Edit', onClick: () => setEditing(true) },
             { label: 'Delete', onClick: async () => {
               if (!await confirmDialog('Delete this follow-up?', { confirmLabel: 'Delete' })) return;
@@ -327,6 +344,13 @@ export function FollowUpCard({ task, index, dragHandleProps }: Props) {
         />
       </div>
       </div>
+      </div>
+
+      {expanded && (
+        <div className="border-t border-zinc-200 px-3 pb-3 pt-2 dark:border-zinc-700/60">
+          <DiscussionLog task={task} />
+        </div>
+      )}
 
       {editing && (
         <TaskForm
@@ -340,8 +364,6 @@ export function FollowUpCard({ task, index, dragHandleProps }: Props) {
           }}
         />
       )}
-
-      <DiscussionHistory task={task} open={showHistory} onClose={() => setShowHistory(false)} />
 
       {ctxMenu && (
         <ContextMenu

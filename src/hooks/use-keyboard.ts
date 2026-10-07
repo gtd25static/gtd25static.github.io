@@ -339,10 +339,10 @@ export function useKeyboard() {
             } else if (item.type === 'add-subtask') {
               s.ensureTaskExpanded(item.taskId!);
               s.setAddingSubtaskToTaskId(item.taskId!);
-            } else if (item.type === 'task' && listTypeRef.current !== 'follow-ups') {
-              // A follow-up has nothing to expand, so Enter leaves it alone — it
-              // used to silently snooze it (legacy 12h cooldown), hiding the card.
-              // Snoozing is the Discussed popover's job.
+            } else if (item.type === 'task') {
+              // On a follow-up this opens/closes its discussion log. It used to
+              // silently snooze it (legacy 12h cooldown), hiding the card;
+              // snoozing is the Discussed popover's job.
               s.toggleTaskExpanded(item.id);
             }
           }

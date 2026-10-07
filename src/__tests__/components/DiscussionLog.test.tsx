@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import '../setup-component';
 import { makeTask } from '../helpers/component-helpers';
-import { DiscussionHistory } from '../../components/follow-ups/DiscussionHistory';
+import { DiscussionLog } from '../../components/follow-ups/DiscussionLog';
 import { ConfirmDialogContainer } from '../../components/ui/ConfirmDialog';
 
 const mockUpdateTask = vi.fn();
@@ -11,7 +11,7 @@ vi.mock('../../hooks/use-tasks', () => ({
   updateTask: (...args: unknown[]) => mockUpdateTask(...args),
 }));
 
-describe('DiscussionHistory (editable)', () => {
+describe('DiscussionLog (inline, editable)', () => {
   beforeEach(() => vi.clearAllMocks());
 
   function renderHistory(overrides = {}) {
@@ -23,7 +23,7 @@ describe('DiscussionHistory (editable)', () => {
     const result = render(
       <>
         <ConfirmDialogContainer />
-        <DiscussionHistory task={task} open onClose={() => {}} />
+        <DiscussionLog task={task} />
       </>,
     );
     return { task, user, ...result };
@@ -107,7 +107,7 @@ describe('DiscussionHistory (editable)', () => {
   it('appends a new entry', async () => {
     const { user, task } = renderHistory();
     await user.type(screen.getByPlaceholderText('What was discussed?'), 'a brand new entry');
-    await user.click(screen.getByText('Add entry'));
+    await user.click(screen.getByRole('button', { name: 'Log' }));
 
     expect(mockUpdateTask).toHaveBeenCalledTimes(1);
     const [id, payload] = mockUpdateTask.mock.calls[0];
@@ -128,12 +128,35 @@ describe('DiscussionHistory (editable)', () => {
     expect(payload.discussionLog[1]).toMatchObject({ note: 'entry via enter' });
   });
 
-  it('shows an empty-state message and still allows adding', async () => {
+  it('with an empty log shows just the box, and still allows adding', async () => {
     const { user } = renderHistory({ discussionLog: [] });
-    expect(screen.getByText(/No discussions logged yet/)).toBeInTheDocument();
+    expect(screen.queryByRole('listitem')).not.toBeInTheDocument();
     await user.type(screen.getByPlaceholderText('What was discussed?'), 'first one');
-    await user.click(screen.getByText('Add entry'));
+    await user.click(screen.getByRole('button', { name: 'Log' }));
     expect(mockUpdateTask).toHaveBeenCalledTimes(1);
+  });
+
+  it('Log is disabled and Enter logs nothing while the note is blank', async () => {
+    const { user } = renderHistory();
+    expect(screen.getByRole('button', { name: 'Log' })).toBeDisabled();
+    await user.type(screen.getByPlaceholderText('What was discussed?'), '   {Enter}');
+    expect(mockUpdateTask).not.toHaveBeenCalled();
+  });
+
+  it('logging only touches the log (never snoozes) and clears the box', async () => {
+    const { user } = renderHistory();
+    const box = screen.getByPlaceholderText('What was discussed?');
+    await user.type(box, 'spoke to ops{Enter}');
+    expect(Object.keys(mockUpdateTask.mock.calls[0][1])).toEqual(['discussionLog']);
+    expect(box).toHaveValue('');
+  });
+
+  it('Shift+Enter in the box inserts a newline instead of logging', async () => {
+    const { user } = renderHistory();
+    const box = screen.getByPlaceholderText('What was discussed?');
+    await user.type(box, 'line1{Shift>}{Enter}{/Shift}line2');
+    expect(mockUpdateTask).not.toHaveBeenCalled();
+    expect(box).toHaveValue('line1\nline2');
   });
 
   it('stamps a new entry with the current time, not a fixed 12:00', async () => {
@@ -147,47 +170,56 @@ describe('DiscussionHistory (editable)', () => {
     expect(entry.at).toBeLessThanOrEqual(after);
   });
 
-  it('keeps the time of day when logging on a past date', async () => {
-    const { user } = renderHistory();
-    const input = document.querySelector('input[type="date"]') as HTMLInputElement;
-    const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000);
-    const iso = `${yesterday.getFullYear()}-${String(yesterday.getMonth() + 1).padStart(2, '0')}-${String(yesterday.getDate()).padStart(2, '0')}`;
-    fireEvent.change(input, { target: { value: iso } });
-    const before = new Date();
-    await user.click(screen.getByText('Add entry'));
-
-    const at = new Date(mockUpdateTask.mock.calls[0][1].discussionLog[1].at);
-    expect(at.getDate()).toBe(yesterday.getDate());
-    // Time of day comes from "now" (within the test's run time), so it isn't pinned to noon.
-    expect(Math.abs(at.getHours() * 60 + at.getMinutes() - (before.getHours() * 60 + before.getMinutes()))).toBeLessThanOrEqual(1);
-  });
-
-  it('lists entries newest first, breaking timestamp ties by the last one added', () => {
+  it('lists entries newest first, breaking timestamp ties by the last one added', async () => {
     const noon = new Date(2026, 8, 20, 12).getTime();
-    renderHistory({
+    const { user } = renderHistory({
       discussionLog: [
         { id: 'a', at: noon - 86_400_000, note: 'day before' },
         { id: 'b', at: noon, note: 'first same-day' },
         { id: 'c', at: noon, note: 'second same-day' },
       ],
     });
+    await user.click(screen.getByRole('button', { name: 'Show more (1)' }));
     const notes = screen.getAllByText(/same-day|day before/).map((el) => el.textContent);
     expect(notes).toEqual(['second same-day', 'first same-day', 'day before']);
   });
 
-  it('uses the day of adding, not of mounting, when the date was left untouched', async () => {
-    vi.useFakeTimers({ toFake: ['Date'] });
-    try {
-      vi.setSystemTime(new Date(2026, 8, 21, 23, 58));
-      const { user } = renderHistory();
-      // The card stays mounted past midnight; the user adds without touching the date.
-      vi.setSystemTime(new Date(2026, 8, 22, 0, 3));
-      await user.type(screen.getByPlaceholderText('What was discussed?'), 'after midnight{Enter}');
+  describe('only the newest two until "Show more"', () => {
+    const log = [1, 2, 3, 4, 5].map((n) => ({ id: `e${n}`, at: n * 1000, note: `note ${n}` }));
+    const visibleNotes = () => screen.getAllByText(/^note \d$/).map((el) => el.textContent);
 
-      const at = new Date(mockUpdateTask.mock.calls[0][1].discussionLog[1].at);
-      expect([at.getDate(), at.getHours(), at.getMinutes()]).toEqual([22, 0, 3]);
-    } finally {
-      vi.useRealTimers();
-    }
+    it('shows the two newest and how many more there are', () => {
+      renderHistory({ discussionLog: log });
+      expect(visibleNotes()).toEqual(['note 5', 'note 4']);
+      expect(screen.getByRole('button', { name: 'Show more (3)' })).toBeInTheDocument();
+    });
+
+    it('"Show more" reveals all of them, "Show less" goes back to two', async () => {
+      const { user } = renderHistory({ discussionLog: log });
+      await user.click(screen.getByRole('button', { name: 'Show more (3)' }));
+      expect(visibleNotes()).toEqual(['note 5', 'note 4', 'note 3', 'note 2', 'note 1']);
+      await user.click(screen.getByRole('button', { name: 'Show less' }));
+      expect(visibleNotes()).toEqual(['note 5', 'note 4']);
+    });
+
+    it('has no "Show more" with two entries or fewer', () => {
+      renderHistory({ discussionLog: log.slice(0, 2) });
+      expect(visibleNotes()).toEqual(['note 2', 'note 1']);
+      expect(screen.queryByRole('button', { name: /Show more|Show less/ })).not.toBeInTheDocument();
+    });
+
+    it('a new note goes on top and pushes the oldest shown one behind "Show more"', async () => {
+      const { user, rerender, task } = renderHistory({ discussionLog: log.slice(0, 2) });
+      await user.type(screen.getByPlaceholderText('What was discussed?'), 'note 9{Enter}');
+      const saved = mockUpdateTask.mock.calls[0][1].discussionLog;
+      rerender(
+        <>
+          <ConfirmDialogContainer />
+          <DiscussionLog task={{ ...task, discussionLog: saved }} />
+        </>,
+      );
+      expect(visibleNotes()).toEqual(['note 9', 'note 2']);
+      expect(screen.getByRole('button', { name: 'Show more (1)' })).toBeInTheDocument();
+    });
   });
 });

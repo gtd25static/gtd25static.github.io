@@ -102,9 +102,10 @@ test('icon-only buttons have names, and Escape from Discussed returns to its but
   await page.getByPlaceholder('Task title').press('Enter');
   const discussed = followUpCard(page, 'Call Ana').getByRole('button', { name: 'Discussed' });
   await discussed.click();
-  await expect(page.getByPlaceholder('What came of it?')).toBeFocused();
+  const snooze = page.getByRole('button', { name: 'Snooze', exact: true });
+  await expect(snooze).toBeFocused();
   await page.keyboard.press('Escape');
-  await expect(page.getByPlaceholder('What came of it?')).toHaveCount(0);
+  await expect(snooze).toHaveCount(0);
   await expect(discussed).toBeFocused();
 
   await appShell(page).getByRole('button', { name: 'Mindmaps' }).click();

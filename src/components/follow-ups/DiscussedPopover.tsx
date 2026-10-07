@@ -1,8 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
-import type { Task, PingCooldown, DiscussionEntry } from '../../db/models';
+import type { Task, PingCooldown } from '../../db/models';
 import { updateTask } from '../../hooks/use-tasks';
 import { applyDiscussed } from '../../hooks/use-follow-ups';
-import { newId } from '../../lib/id';
 import { openNativePicker } from '../../lib/native-picker';
 import { toInputDate } from '../../lib/date-utils';
 
@@ -52,14 +51,12 @@ interface Props {
 }
 
 /**
- * Popover behind the "Discussed" chip: two decoupled actions. "Log" (or Enter in
- * the note field) appends the note to the discussion history without snoozing;
- * "Snooze" re-snoozes for the chosen cadence without logging. The named presets
+ * Popover behind the "Discussed" chip: re-snoozes for the chosen cadence. Notes
+ * are logged in the card's inline discussion log, never here. The named presets
  * are remembered as the topic's cadence (one-tap re-snooze next time); "custom"
  * snoozes until a specific calendar date instead.
  */
 export function DiscussedPopover({ task, align, onDone }: Props) {
-  const [note, setNote] = useState('');
   const [cadence, setCadence] = useState<PingCooldown>(initialCadence(task));
   const [customDate, setCustomDate] = useState<string>(() => {
     const days = rememberedCustomDays(task);
@@ -91,17 +88,7 @@ export function DiscussedPopover({ task, align, onDone }: Props) {
   const isCustom = cadence === 'custom';
   const customValid = !isCustom || Boolean(customDate);
 
-  // "Log" button and Enter in the note field: append the note to the discussion
-  // log without touching the snooze.
-  async function logNoteOnly() {
-    const trimmed = note.trim();
-    if (!trimmed) return;
-    const entry: DiscussionEntry = { id: newId(), at: Date.now(), note: trimmed };
-    await updateTask(task.id, { discussionLog: [...(task.discussionLog ?? []), entry] });
-    onDone();
-  }
-
-  // "Snooze" button: re-snooze for the chosen cadence/date without logging.
+  // "Snooze" button: re-snooze for the chosen cadence/date.
   async function handleSnooze() {
     if (!customValid) return;
 
@@ -137,18 +124,6 @@ export function DiscussedPopover({ task, align, onDone }: Props) {
       style={shiftX ? { transform: `translateX(${shiftX}px)` } : undefined}
       className={`absolute z-50 w-64 rounded-xl border border-zinc-200 bg-white p-3 shadow-lg dark:border-zinc-700 dark:bg-zinc-900 ${align === 'right' ? 'right-0' : 'left-0'} ${openUp ? 'bottom-full mb-1' : 'top-full mt-1'}`}
     >
-      <label className="mb-1 block text-xs font-medium text-zinc-500 dark:text-zinc-400">
-        Note (optional)
-      </label>
-      <textarea
-        value={note}
-        onChange={(e) => setNote(e.target.value)}
-        onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); logNoteOnly(); } }}
-        placeholder="What came of it?"
-        rows={2}
-        autoFocus
-        className="mb-2 w-full resize-none rounded border border-zinc-300 bg-white px-2 py-1 text-xs outline-none focus:border-accent-500 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200"
-      />
       <div className="mb-1 text-xs font-medium text-zinc-500 dark:text-zinc-400">Snooze again in</div>
       <div className="mb-2 flex flex-wrap gap-1">
         {CADENCE_PRESETS.map((opt) => (
@@ -188,24 +163,16 @@ export function DiscussedPopover({ task, align, onDone }: Props) {
           />
         </div>
       )}
-      <div className="flex gap-2">
-        <button
-          onClick={handleSnooze}
-          disabled={!customValid}
-          title="Snooze for the chosen cadence (does not log the note)"
-          className="flex-1 rounded-lg bg-zinc-100 px-3 py-1.5 text-xs font-medium text-zinc-600 hover:bg-zinc-200 disabled:opacity-40 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
-        >
-          Snooze
-        </button>
-        <button
-          onClick={logNoteOnly}
-          disabled={!note.trim()}
-          title="Add the note to the discussion history (does not snooze)"
-          className="flex-1 rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-indigo-700 disabled:opacity-40"
-        >
-          Log
-        </button>
-      </div>
+      {/* Focused on open: Discussed, then Enter, re-snoozes on the remembered cadence. */}
+      <button
+        onClick={handleSnooze}
+        disabled={!customValid}
+        autoFocus
+        title="Snooze for the chosen cadence"
+        className="w-full rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-indigo-700 disabled:opacity-40"
+      >
+        Snooze
+      </button>
     </div>
   );
 }
