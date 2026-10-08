@@ -125,6 +125,12 @@ const localMigrations: LocalMigration[] = [
     toVersion: 11,
     migrate: async () => {},
   },
+  {
+    // No-op: v12 added sharedItem.expiresAt, absent on older rows (they never expire).
+    fromVersion: 11,
+    toVersion: 12,
+    migrate: async () => {},
+  },
 ];
 
 export async function runLocalMigrations(database: Gtd25DB, from: number, to: number): Promise<void> {

@@ -142,7 +142,7 @@ describe('on the wire, at rest and in the decoy', () => {
   });
 
   it('the v10 -> v11 migration rewrites nothing', () => {
-    expect(SYNC_VERSION).toBe(11);
+    expect(SYNC_VERSION).toBeGreaterThanOrEqual(11);
     const lists = [{ id: 'l1', name: 'Work', type: 'tasks', order: 0, createdAt: 1, updatedAt: 1 }];
     const data = { syncVersion: 10, taskLists: lists, tasks: [], subtasks: [], settings: { theme: 'system' } } as unknown as SyncData;
     const migrated = runRemoteMigrations(data, 10, 11);

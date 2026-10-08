@@ -1,3 +1,4 @@
+import { useEffect, useRef } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../db';
 import type { ChangeEntry, SharedItem } from '../db/models';
@@ -9,9 +10,11 @@ import { initFieldTimestamps, stampUpdatedFields } from '../sync/field-timestamp
 import { encryptRow, getActiveAtRestKey } from '../db/vault-middleware';
 import { SYNC_VERSION } from '../sync/version';
 import { uploadSharedBlob, deleteSharedBlob, sharedBlobBlocker, withBlobBranchLock } from '../sync/shared-blobs';
-import { MAX_SHARED_FOLDER_BYTES } from '../lib/constants';
+import { MAX_SHARED_FOLDER_BYTES, PARANOID_SHARED_ITEM_TTL_MS } from '../lib/constants';
+import { isParanoidEnabled } from '../db/vault';
 import { isValidUrl } from '../lib/link-utils';
 import { toast } from '../components/ui/Toast';
+import { useMinuteTick } from './use-minute-tick';
 
 // --- Queries ---
 
@@ -128,6 +131,16 @@ async function nextOrder(): Promise<number> {
   return db.sharedItems.count();
 }
 
+/** A new item's expiry: added from a device in Paranoid Mode, it lasts PARANOID_SHARED_ITEM_TTL_MS. */
+function expiryFields(createdAt: number): Pick<SharedItem, 'expiresAt'> {
+  return isParanoidEnabled() ? { expiresAt: createdAt + PARANOID_SHARED_ITEM_TTL_MS } : {};
+}
+
+/** When `item` is deleted on its own (epoch ms), or undefined if never. Synced data: a non-number is no expiry. */
+export function sharedItemExpiry(item: SharedItem): number | undefined {
+  return Number.isFinite(item.expiresAt) && item.expiresAt! > 0 ? item.expiresAt : undefined;
+}
+
 // --- Create ---
 
 export async function createLinkItem(url: string, title?: string): Promise<SharedItem | undefined> {
@@ -151,6 +164,7 @@ export async function createLinkItem(url: string, title?: string): Promise<Share
       order: await nextOrder(),
       createdAt: now,
       updatedAt: now,
+      ...expiryFields(now),
     };
     item.fieldTimestamps = initFieldTimestamps(item as unknown as Record<string, unknown>, now);
     await putSharedItem(item);
@@ -187,6 +201,7 @@ export async function createFileItem(file: File): Promise<SharedItem | undefined
         order: await nextOrder(),
         createdAt: now,
         updatedAt: now,
+        ...expiryFields(now),
       };
       item.fieldTimestamps = initFieldTimestamps(item as unknown as Record<string, unknown>, now);
       await putSharedItem(item);
@@ -223,6 +238,7 @@ export async function createSnippetItem(name: string, text: string): Promise<Sha
         order: await nextOrder(),
         createdAt: now,
         updatedAt: now,
+        ...expiryFields(now),
       };
       item.fieldTimestamps = initFieldTimestamps(item as unknown as Record<string, unknown>, now);
       await putSharedItem(item);
@@ -254,6 +270,67 @@ export async function deleteSharedItem(id: string): Promise<void> {
   } catch (error) {
     handleDbError(error, 'delete shared item');
   }
+}
+
+/**
+ * Delete the items whose expiry has passed (added from a device in Paranoid
+ * Mode) — on whichever device sees it first, bytes included, like a Delete.
+ * Returns how many went.
+ */
+export async function expireSharedItems(now: number = Date.now()): Promise<number> {
+  try {
+    const expired = (await db.sharedItems.toArray()).filter((i) => {
+      const expiry = sharedItemExpiry(i);
+      return !i.deletedAt && expiry !== undefined && expiry <= now;
+    });
+    for (const item of expired) await deleteSharedItem(item.id);
+    return expired.length;
+  } catch (error) {
+    handleDbError(error, 'expire shared items');
+    return 0;
+  }
+}
+
+// Fire just after the expiry, so the sweep finds it due.
+const EXPIRY_SLACK_MS = 250;
+
+/**
+ * While the app is unlocked: delete the expired shared items now, and the next
+ * one when its time comes. The query also re-runs when sync brings an item in
+ * from another device, expired or not. A sweep that fails isn't retried every
+ * minute: the next unlock or start runs it again.
+ */
+export function useSharedItemExpiry(): void {
+  const nextExpiry = useLiveQuery(async () => {
+    let soonest = 0;
+    for (const item of await db.sharedItems.toArray()) {
+      const expiry = item.deletedAt ? undefined : sharedItemExpiry(item);
+      if (expiry !== undefined && (!soonest || expiry < soonest)) soonest = expiry;
+    }
+    return soonest;
+  }, [], 0);
+  // Browser timers stand still while the device sleeps (see the idle lock): one
+  // armed before a night asleep would fire hours late. So the expiry is judged
+  // on the wall clock again every minute and when the app comes back into view.
+  const tick = useMinuteTick();
+  const sweptFor = useRef(0);
+
+  useEffect(() => {
+    if (!nextExpiry || sweptFor.current === nextExpiry) return;
+    const sweep = () => {
+      if (Date.now() < nextExpiry) return; // the clock went back: the next tick judges again
+      sweptFor.current = nextExpiry;
+      void expireSharedItems();
+    };
+    const delay = nextExpiry - Date.now();
+    if (delay <= 0) {
+      sweep();
+      return;
+    }
+    // Expiries are at most a day out: well inside setTimeout's ~24.8-day range.
+    const timer = setTimeout(sweep, delay + EXPIRY_SLACK_MS);
+    return () => clearTimeout(timer);
+  }, [nextExpiry, tick]);
 }
 
 /**

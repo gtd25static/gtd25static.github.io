@@ -26,7 +26,8 @@ export const SENSITIVE_FIELDS: Record<string, string[]> = {
   subtask: ['title', 'link', 'linkTitle', 'links', FIELD_TIMESTAMPS, BASE, PUSHED],
   // Shared Folder: everything except opaque id/order/timestamps is encrypted —
   // no filename, type, size, URL or blob-ref leaks. Same exposure level as tasks.
-  sharedItem: ['type', 'name', 'size', 'url', 'blobId', 'mimeType', FIELD_TIMESTAMPS, BASE, PUSHED],
+  // `expiresAt` too: in the clear it would say which device runs Paranoid Mode.
+  sharedItem: ['type', 'name', 'size', 'url', 'blobId', 'mimeType', 'expiresAt', FIELD_TIMESTAMPS, BASE, PUSHED],
   // Mindmaps: names/labels are content; structural refs (parentId/folderId/mapId)
   // stay plaintext so structure merges without decrypting (like Task.listId).
   mindmapFolder: ['name', FIELD_TIMESTAMPS, BASE, PUSHED],

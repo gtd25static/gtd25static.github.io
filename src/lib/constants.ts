@@ -28,6 +28,10 @@ export const MAX_LIST_NAME_LENGTH = 100;
 // Shared Folder overall storage cap (30 MB). Per-item cap = remaining free space.
 export const MAX_SHARED_FOLDER_BYTES = 30 * 1024 * 1024;
 
+// What a device in Paranoid Mode adds to the Shared Folder (file, snippet or
+// link) is deleted everywhere this long after it was added.
+export const PARANOID_SHARED_ITEM_TTL_MS = 24 * 60 * 60 * 1000;
+
 // Mindmaps: node label length cap (chars) and outline-import node cap. The node
 // cap bounds both changelog volume on bulk import and the canvas render load.
 export const MAX_MINDMAP_LABEL_LENGTH = 1000;

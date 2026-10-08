@@ -184,10 +184,11 @@ describe('mindmap encryption', () => {
 });
 
 describe('version gate + migrations', () => {
-  it('SYNC_VERSION is 11; older remotes are accepted, a newer one is blocked', () => {
-    expect(SYNC_VERSION).toBe(11);
-    // Current client accepts v11 and older; a hypothetical v12 remote is blocked,
+  it('SYNC_VERSION is 12; older remotes are accepted, a newer one is blocked', () => {
+    expect(SYNC_VERSION).toBe(12);
+    // Current client accepts v12 and older; a hypothetical v13 remote is blocked,
     // which is what stops an un-updated device from writing over newer data.
+    expect(isCompatibleVersion(12)).toBe(true);
     expect(isCompatibleVersion(11)).toBe(true);
     expect(isCompatibleVersion(10)).toBe(true);
     expect(isCompatibleVersion(9)).toBe(true);
@@ -195,7 +196,7 @@ describe('version gate + migrations', () => {
     expect(isCompatibleVersion(7)).toBe(true);
     expect(isCompatibleVersion(6)).toBe(true);
     expect(isCompatibleVersion(5)).toBe(true);
-    expect(isCompatibleVersion(12)).toBe(false);
+    expect(isCompatibleVersion(13)).toBe(false);
   });
 
   it('remote migration 5→6 is additive (no data change beyond the stamp)', () => {

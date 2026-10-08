@@ -177,6 +177,11 @@ export interface SharedItem {
   createdAt: number;
   updatedAt: number;
   deletedAt?: number;
+  // Added from a device in Paranoid Mode: deleted (on whichever device is open
+  // first) once this time has passed — createdAt + PARANOID_SHARED_ITEM_TTL_MS.
+  // SENSITIVE (encrypted on the wire and at rest): in the clear it would say
+  // which device runs Paranoid Mode. Untrusted on read (a number, or ignored).
+  expiresAt?: number;
   fieldTimestamps?: Record<string, number>;
   // Local only: per field, the newest timestamp known to be on the remote
   // (sync/conflicts.ts). Rides in this device's change entries as their base.

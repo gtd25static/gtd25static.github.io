@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import type { SharedItem } from '../../db/models';
-import { formatBytes, deleteSharedItem } from '../../hooks/use-shared-items';
+import { formatBytes, deleteSharedItem, sharedItemExpiry } from '../../hooks/use-shared-items';
+import { useMinuteTick } from '../../hooks/use-minute-tick';
 import { getSharedBlobBytes } from '../../sync/shared-blobs';
 import { extractHostname, sanitizeUrl } from '../../lib/link-utils';
 import { toast } from '../ui/Toast';
@@ -60,7 +61,37 @@ function TypeIcon({ type }: { type: SharedItem['type'] }) {
   );
 }
 
+/** Time left before an expiring item goes: minutes in its last hour, else whole hours. */
+function timeLeft(ms: number): string {
+  const minutes = Math.max(1, Math.ceil(ms / 60_000));
+  return minutes < 60 ? `${minutes}m` : `${Math.floor(minutes / 60)}h`;
+}
+
+/** The mark on an item added from a device in Paranoid Mode: when it will be deleted. */
+function ExpiryBadge({ expiresAt }: { expiresAt: number }) {
+  useMinuteTick(); // the countdown moves on its own
+  const left = expiresAt - Date.now();
+  const soon = left < 60 * 60 * 1000;
+  return (
+    <span
+      className={`inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium ${
+        soon
+          ? 'bg-red-50 text-red-700 dark:bg-red-900/30 dark:text-red-300'
+          : 'bg-amber-50 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300'
+      }`}
+      title="Added from a device in Paranoid Mode: deleted from every device 24 hours after it was added"
+    >
+      <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden>
+        <circle cx="8" cy="8" r="6.5" />
+        <path d="M8 4.5V8l2.5 1.5" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+      {left > 0 ? `Deletes in ${timeLeft(left)}` : 'Deleting…'}
+    </span>
+  );
+}
+
 export function SharedItemCard({ item }: { item: SharedItem }) {
+  const expiresAt = sharedItemExpiry(item);
   const [busy, setBusy] = useState(false);
   const [previewOpen, setPreviewOpen] = useState(false);
   // Images preview in an overlay on click (Copy/Download from there); every
@@ -130,10 +161,13 @@ export function SharedItemCard({ item }: { item: SharedItem }) {
             {item.name}
           </button>
         )}
-        <div className="mt-0.5 truncate text-xs text-zinc-400">
-          {item.type === 'link' && item.url
-            ? extractHostname(item.url)
-            : `${item.type === 'snippet' ? 'Text' : (item.mimeType || 'File')} · ${formatBytes(item.size)}`}
+        <div className="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-zinc-400">
+          <span className="min-w-0 truncate">
+            {item.type === 'link' && item.url
+              ? extractHostname(item.url)
+              : `${item.type === 'snippet' ? 'Text' : (item.mimeType || 'File')} · ${formatBytes(item.size)}`}
+          </span>
+          {expiresAt !== undefined && <ExpiryBadge expiresAt={expiresAt} />}
         </div>
       </div>
 

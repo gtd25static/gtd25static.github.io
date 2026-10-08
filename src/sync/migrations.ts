@@ -106,6 +106,15 @@ const migrations: RemoteMigration[] = [
     toVersion: 11,
     migrate: (data) => ({ ...data, syncVersion: 11 }),
   },
+  {
+    // v12 adds `sharedItem.expiresAt`, an encrypted field (what a Paranoid Mode
+    // device adds to the Shared Folder is deleted 24 h later). Additive: older
+    // snapshots lack it. The bump is the point — a v11 build would write it back
+    // in the clear, and would never delete the item.
+    fromVersion: 11,
+    toVersion: 12,
+    migrate: (data) => ({ ...data, syncVersion: 12 }),
+  },
 ];
 
 export function runRemoteMigrations(data: SyncData, from: number, to: number): SyncData {

@@ -17,6 +17,7 @@ import { SyncProvider } from './sync/use-sync';
 import { usePomodoroClock } from './hooks/use-pomodoro-clock';
 import { useUrlCapture } from './hooks/use-url-capture';
 import { useShareTarget } from './hooks/use-share-target';
+import { useSharedItemExpiry } from './hooks/use-shared-items';
 import { useNudges, useLockedNudge } from './hooks/use-nudges';
 import { useRemoteWipeCommands } from './hooks/use-remote-unlock';
 import { RemoteApprovalPrompt } from './components/security/RemoteApprovalPrompt';
@@ -105,6 +106,9 @@ function UnlockedApp() {
       toast("Remote wipe can't reach GitHub: this device's token was rejected. Enter a new one in Settings → Sync.", 'error');
     }
   }, [wipeTokenRejected]);
+
+  // What a Paranoid Mode device added to the Shared Folder is deleted 24 h later.
+  useSharedItemExpiry();
 
   // Check recurring tasks on startup and every 60s. A persistent DB failure here
   // is otherwise invisible (recurring tasks silently stop resetting) — tag it in

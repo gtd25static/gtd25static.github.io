@@ -14,6 +14,7 @@ vi.mock('../../lib/clipboard-hygiene', () => ({
 }));
 vi.mock('../../hooks/use-shared-items', () => ({
   formatBytes: (n: number) => `${n} B`,
+  sharedItemExpiry: () => undefined,
   deleteSharedItem: vi.fn(),
 }));
 vi.mock('../../components/ui/Toast', () => ({ toast: vi.fn() }));

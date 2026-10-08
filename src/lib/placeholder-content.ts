@@ -47,8 +47,9 @@ export const STRUCTURAL_KEEP: Record<string, string[]> = {
   // A shared item stays the same KIND (link/file/snippet) pointing at its now-
   // dummy blob. Its name/url are decoyed, and its size/type are rewritten to
   // describe that dummy blob: a "5 MB PNG" that opens as a few words of text
-  // would give the swap away.
-  sharedItem: ['type', 'blobId'],
+  // would give the swap away. Its expiry stays too: the item still goes when the
+  // real one would have (a decoy that outlived it would stand out).
+  sharedItem: ['type', 'blobId', 'expiresAt'],
   // Canvas/node colours and shapes are cosmetic, not content.
   mindmap: ['background'],
   mindmapNode: ['shape', 'palette', 'colorBg', 'colorFg', 'colorBorder'],
