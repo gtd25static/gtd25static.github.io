@@ -64,6 +64,44 @@ describe('combineTaskContent', () => {
     const updates = combineTaskContent(survivor, [makeTask({ id: 'a', dueDate: 1 })]);
     expect(updates.dueDate).toBeUndefined();
   });
+
+  // The default survivor is the "most complete" one, so a one-off with a note
+  // won over its recurring twin, which went to Trash: the task never repeated.
+  it('a recurring source keeps the schedule when the survivor has none', () => {
+    const recurring = { recurrenceType: 'time-based', recurrenceInterval: 1, recurrenceUnit: 'months', lastCompletedAt: 5, nextOccurrence: 9 } as const;
+    expect(combineTaskContent(makeTask({ id: 's' }), [makeTask({ id: 'a', ...recurring })])).toMatchObject(recurring);
+  });
+
+  it("keeps the survivor's own recurrence", () => {
+    const survivor = makeTask({ id: 's', recurrenceType: 'date-based', recurrenceInterval: 2, recurrenceUnit: 'weeks' });
+    const updates = combineTaskContent(survivor, [makeTask({ id: 'a', recurrenceType: 'time-based', recurrenceInterval: 1, recurrenceUnit: 'days' })]);
+    expect(updates).not.toHaveProperty('recurrenceType');
+    expect(updates).not.toHaveProperty('recurrenceInterval');
+  });
+
+  // A snoozed survivor stayed hidden for its whole snooze although a merged
+  // twin was due now.
+  describe('follow-up snooze: the merged topic wakes as early as any of them', () => {
+    const DAY = 86_400_000;
+    const snoozed = (days: number) => ({ pingedAt: Date.now(), pingCooldown: 'custom' as const, pingCooldownUntil: Date.now() + days * DAY });
+
+    it('a snoozed survivor merged with an awake one is awake', () => {
+      const updates = combineTaskContent(makeTask({ id: 's', ...snoozed(30) }), [makeTask({ id: 'a' })]);
+      expect('pingedAt' in updates && updates.pingedAt === undefined).toBe(true);
+      expect('pingCooldownUntil' in updates && updates.pingCooldownUntil === undefined).toBe(true);
+    });
+
+    it('a source snoozed until sooner moves the wake earlier', () => {
+      const sooner = snoozed(2);
+      const updates = combineTaskContent(makeTask({ id: 's', ...snoozed(30) }), [makeTask({ id: 'a', ...snoozed(10) }), makeTask({ id: 'b', ...sooner })]);
+      expect(updates.pingCooldownUntil).toBe(sooner.pingCooldownUntil);
+    });
+
+    it('an awake survivor, or one waking first, keeps its own', () => {
+      expect(combineTaskContent(makeTask({ id: 's' }), [makeTask({ id: 'a', ...snoozed(5) })])).not.toHaveProperty('pingedAt');
+      expect(combineTaskContent(makeTask({ id: 's', ...snoozed(1) }), [makeTask({ id: 'a', ...snoozed(5) })])).not.toHaveProperty('pingCooldownUntil');
+    });
+  });
 });
 
 describe('mergeTasks / unmergeTasks (DB)', () => {
@@ -108,6 +146,33 @@ describe('mergeTasks / unmergeTasks (DB)', () => {
     await mergeTasks(a.id, [b.id]);
     const merged = assertDefined(await db.tasks.get(a.id));
     expect(merged.discussionLog?.map((e) => e.id)).toEqual(['d2', 'd1']);
+  });
+
+  // The banner's group can be stale: the dialog stays open while another device
+  // completes or resolves one of them. Merging sent that one to Trash.
+  it('skips a source completed meanwhile, and merges nothing into a completed survivor', async () => {
+    const survivor = assertDefined(await createTask(listId, { title: 'Call the bank' }));
+    const done = assertDefined(await createTask(listId, { title: 'call the bank' }));
+    const open = assertDefined(await createTask(listId, { title: 'Call the bank!' }));
+    await updateTask(done.id, { status: 'done' });
+
+    const snapshot = assertDefined(await mergeTasks(survivor.id, [done.id, open.id]));
+    expect(snapshot.sources.map((t) => t.id)).toEqual([open.id]);
+    expect((await db.tasks.get(done.id))?.deletedAt).toBeUndefined();
+
+    const other = assertDefined(await createTask(listId, { title: 'Pay rent' }));
+    await updateTask(survivor.id, { status: 'done' });
+    expect(await mergeTasks(survivor.id, [other.id])).toBeUndefined();
+    expect((await db.tasks.get(other.id))?.deletedAt).toBeUndefined();
+  });
+
+  it('skips a follow-up resolved meanwhile', async () => {
+    const fuListId = (await createTaskList('People', 'follow-ups')).id;
+    const survivor = assertDefined(await createTask(fuListId, { title: 'Ask Ana' }));
+    const resolved = assertDefined(await createTask(fuListId, { title: 'ask Ana' }));
+    await updateTask(resolved.id, { archived: true });
+    expect(await mergeTasks(survivor.id, [resolved.id])).toBeUndefined();
+    expect((await db.tasks.get(resolved.id))?.deletedAt).toBeUndefined();
   });
 
   it('never merges entries from another list', async () => {

@@ -29,8 +29,9 @@ export const STRUCTURAL_KEEP_ALL = ['fieldTimestamps'];
 // Sensitive fields a decoy row must not carry at all: this device's own sync
 // bookkeeping (sync/conflicts.ts). A device whose sync was never set up has
 // none — kept, it said the opposite; replaced, it became a sentence where a map
-// of numbers belongs.
-export const PLACEHOLDER_DROP = ['_base', '_pushed'];
+// of numbers belongs. And the pairs of tasks marked "not duplicates": kept, they
+// would say which real tasks looked alike; most lists have none anyway.
+export const PLACEHOLDER_DROP = ['_base', '_pushed', 'notDuplicates'];
 
 // The fields placeholderRow replaces by name (anything else would fall to its
 // generic sentence; a test holds every SENSITIVE_FIELDS key to one of the lists).

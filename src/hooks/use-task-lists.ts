@@ -8,6 +8,7 @@ import { INBOX_LIST_NAME, ARCHIVED_LIST_RETENTION_MS, pickInboxList } from '../l
 import { handleDbError } from '../lib/db-error';
 import { initFieldTimestamps, stampUpdatedFields, stampChangedFields } from '../sync/field-timestamps';
 import { sanitizeSavedSearches, sameSearch, MAX_SAVED_SEARCHES, MAX_SAVED_SEARCH_LENGTH } from '../lib/list-filter';
+import { sanitizeNotDuplicates, pairKey } from '../lib/similarity';
 
 export function useTaskLists() {
   const allLists = useLiveQuery(
@@ -95,26 +96,44 @@ async function setArchivedAt(id: string, archivedAt: number | undefined, errorCo
 export async function saveListSearch(listId: string, query: string) {
   const search = query.trim();
   if (!search || search.length > MAX_SAVED_SEARCH_LENGTH) return;
-  await setSavedSearches(listId, 'save search', (current) =>
+  await setListStrings(listId, 'savedSearches', sanitizeSavedSearches, 'save search', (current) =>
     current.some((s) => sameSearch(s, search)) || current.length >= MAX_SAVED_SEARCHES ? current : [...current, search]);
 }
 
 export async function deleteListSearch(listId: string, search: string) {
-  await setSavedSearches(listId, 'delete saved search', (current) => current.filter((s) => !sameSearch(s, search)));
+  await setListStrings(listId, 'savedSearches', sanitizeSavedSearches, 'delete saved search', (current) => current.filter((s) => !sameSearch(s, search)));
 }
 
-async function setSavedSearches(listId: string, errorContext: string, change: (current: string[]) => string[]) {
+/** "Not duplicates" on a merge suggestion: no two of these tasks are suggested together again. */
+export async function markNotDuplicates(listId: string, taskIds: string[]) {
+  const pairs: string[] = [];
+  for (let i = 0; i < taskIds.length; i++) {
+    for (let j = i + 1; j < taskIds.length; j++) pairs.push(pairKey(taskIds[i], taskIds[j]));
+  }
+  await setListStrings(listId, 'notDuplicates', sanitizeNotDuplicates, 'mark not duplicates', (current) =>
+    sanitizeNotDuplicates([...current, ...pairs]));
+}
+
+async function setListStrings(
+  listId: string,
+  field: 'savedSearches' | 'notDuplicates',
+  sanitize: (value: unknown) => string[],
+  errorContext: string,
+  change: (current: string[]) => string[],
+) {
   try {
     await ensureDeviceId();
     await db.transaction('rw', [db.taskLists, db.changeLog], async () => {
       const existing = await db.taskLists.get(listId);
       if (!existing) return;
-      const current = sanitizeSavedSearches(existing.savedSearches);
-      const savedSearches = change(current);
-      if (savedSearches.length === current.length && savedSearches.every((s, i) => s === current[i])) return;
+      const current = sanitize(existing[field]);
+      const next = change(current);
+      if (next.length === current.length && next.every((s, i) => s === current[i])) return;
       const now = Date.now();
-      const fieldTimestamps = stampUpdatedFields(existing.fieldTimestamps, ['savedSearches'], now);
-      await db.taskLists.update(listId, { savedSearches, updatedAt: now, fieldTimestamps });
+      const fieldTimestamps = stampUpdatedFields(existing.fieldTimestamps, [field], now);
+      const changes: Partial<TaskList> = { updatedAt: now, fieldTimestamps };
+      changes[field] = next;
+      await db.taskLists.update(listId, changes);
       const updated = await db.taskLists.get(listId);
       if (updated) {
         await recordChangeInTx('taskList', listId, 'upsert', updated as unknown as Record<string, unknown>);

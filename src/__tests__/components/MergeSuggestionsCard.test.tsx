@@ -12,6 +12,11 @@ vi.mock('../../hooks/use-merge-suggestions', () => ({
   useMergeSuggestions: () => h.groups,
 }));
 
+const mockMarkNotDuplicates = vi.fn();
+vi.mock('../../hooks/use-task-lists', () => ({
+  markNotDuplicates: (...args: unknown[]) => mockMarkNotDuplicates(...args),
+}));
+
 // Stub the modal so this test stays at the banner level.
 vi.mock('../../components/tasks/MergeModal', () => ({
   MergeModal: () => <div data-testid="merge-modal" />,
@@ -58,11 +63,33 @@ describe('MergeSuggestionsCard', () => {
     expect(screen.getByTestId('merge-modal')).toBeInTheDocument();
   });
 
-  it('dismisses a suggestion', async () => {
+  // The dialog vanished when its group did (say, one of them was completed on
+  // another device) but stayed armed, and popped up with stale tasks as soon as
+  // any suggestion showed again.
+  it('closes Review when its group goes away, and does not bring it back later', async () => {
+    setGroups();
+    const user = userEvent.setup();
+    const { rerender } = render(<MergeSuggestionsCard listId="l" listType="tasks" />);
+    await user.click(screen.getByRole('button', { name: 'Review' }));
+    expect(screen.getByTestId('merge-modal')).toBeInTheDocument();
+
+    h.groups = [];
+    rerender(<MergeSuggestionsCard listId="l" listType="tasks" />);
+    expect(screen.queryByTestId('merge-modal')).not.toBeInTheDocument();
+    setGroups();
+    rerender(<MergeSuggestionsCard listId="l" listType="tasks" />);
+    expect(screen.getByText(/Comprar leche/)).toBeInTheDocument();
+    expect(screen.queryByTestId('merge-modal')).not.toBeInTheDocument();
+  });
+
+  // A × only hid it for the session, so the same pairs came back again and again.
+  it('"Not duplicates" keeps the group apart for good and hides it; there is no ×', async () => {
     setGroups();
     const user = userEvent.setup();
     render(<MergeSuggestionsCard listId="l" listType="tasks" />);
-    await user.click(screen.getByRole('button', { name: 'Dismiss suggestion' }));
+    expect(screen.queryByRole('button', { name: 'Dismiss suggestion' })).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Not duplicates' }));
+    expect(mockMarkNotDuplicates).toHaveBeenCalledWith('l', ['t1', 't2']);
     expect(screen.queryByText(/Comprar leche/)).not.toBeInTheDocument();
   });
 });

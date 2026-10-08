@@ -53,6 +53,7 @@ import { syncNow, wipeAllData, importData, cheapIdleProbe, forcePushHoldingLock,
 import { cacheEncryptionKey, deriveKey, generateSalt, createVerifier, encryptSyncData, decryptSyncData, encryptChangeEntries } from '../../sync/crypto';
 import { createMindmap } from '../../hooks/use-mindmaps';
 import { updateTask } from '../../hooks/use-tasks';
+import { SYNC_VERSION } from '../../sync/version';
 
 const DAY = 24 * 60 * 60 * 1000;
 let testKey: CryptoKey;
@@ -98,7 +99,8 @@ const task = (id: string, listId: string, over: Partial<Task> = {}): Task =>
   ({ id, listId, title: id, status: 'todo', order: 0, createdAt: T0, updatedAt: T0, fieldTimestamps: { title: T0, status: T0, listId: T0, order: T0 }, ...over });
 
 async function setRemote(overrides: Partial<SyncData> = {}, changelog: ChangeEntry[] = []) {
-  const data = makeSyncData({ syncVersion: 10, encryptionSalt: testSalt, encryptionVerifier: await createVerifier(testKey), ...overrides }) as SyncData;
+  // The current version: an older remote is migrated and rewritten, which these tests don't expect.
+  const data = makeSyncData({ syncVersion: SYNC_VERSION, encryptionSalt: testSalt, encryptionVerifier: await createVerifier(testKey), ...overrides }) as SyncData;
   const s1 = `sha-${++shaCounter}`;
   remote.set(SNAPSHOT_FILE, { data: JSON.stringify(await encryptSyncData(testKey, data)), sha: s1, etag: `"${s1}"` });
   const s2 = `sha-${++shaCounter}`;

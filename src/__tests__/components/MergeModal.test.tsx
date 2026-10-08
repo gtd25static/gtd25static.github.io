@@ -51,6 +51,22 @@ describe('MergeModal', () => {
     expect(onMerged).toHaveBeenCalled();
   });
 
+  // It called onMerged regardless: on a failed merge the suggestion was hidden
+  // with nothing done, leaving nothing to retry from.
+  it('a merge that did nothing just closes, leaving the suggestion', async () => {
+    mockMerge.mockResolvedValueOnce(undefined as never);
+    const { user, onMerged, onClose } = renderModal();
+    await user.click(screen.getByRole('button', { name: /merge 3/i }));
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect(onMerged).not.toHaveBeenCalled();
+  });
+
+  it('a tap on a title picks it as the one to keep (the radio alone is tiny on a phone)', async () => {
+    const { user } = renderModal();
+    await user.click(screen.getByText('Comprar leche'));
+    expect(screen.getByRole('radio', { name: 'Keep "Comprar leche"' })).toBeChecked();
+  });
+
   it('respects a survivor change', async () => {
     const { user } = renderModal();
     await user.click(screen.getByRole('radio', { name: 'Keep "Comprar leche"' })); // t1

@@ -57,10 +57,10 @@ export function MergeModal({ group, listType, onClose, onMerged }: Props) {
       sources.map((t) => t.id),
     );
     setBusy(false);
-    if (snapshot) {
-      const n = sources.length + 1;
-      toast(`Merged ${n} entries`, 'success', () => unmergeTasks(snapshot));
-    }
+    // Nothing merged (an error, already toasted, or the entries changed
+    // meanwhile): close, but keep the suggestion if it still stands.
+    if (!snapshot) { onClose(); return; }
+    toast(`Merged ${snapshot.sources.length + 1} entries`, 'success', () => unmergeTasks(snapshot));
     onMerged();
   }
 
@@ -88,6 +88,7 @@ export function MergeModal({ group, listType, onClose, onMerged }: Props) {
             >
               <input
                 type="radio"
+                id={`merge-keep-${t.id}`}
                 name="merge-survivor"
                 checked={isSurvivor}
                 disabled={isExcluded}
@@ -95,9 +96,10 @@ export function MergeModal({ group, listType, onClose, onMerged }: Props) {
                 className="accent-accent-600"
                 aria-label={`Keep "${t.title}"`}
               />
-              <span data-redact className="min-w-0 flex-1 truncate text-sm text-zinc-700 dark:text-zinc-200">
+              {/* The whole title picks it: the radio alone is a ~13px target on a phone. */}
+              <label htmlFor={`merge-keep-${t.id}`} data-redact className={`min-w-0 flex-1 truncate py-1 text-sm text-zinc-700 dark:text-zinc-200 ${isExcluded ? '' : 'cursor-pointer'}`}>
                 {t.title || '(untitled)'}
-              </span>
+              </label>
               {isSurvivor && (
                 <span className="shrink-0 rounded-full bg-accent-600 px-2 py-0.5 text-[10px] font-medium text-white">
                   Keep

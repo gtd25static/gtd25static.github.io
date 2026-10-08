@@ -38,6 +38,11 @@ export interface TaskList {
   // someone searches for is content: SENSITIVE (encrypted on the wire and at
   // rest), merged as a whole (LWW). Untrusted on read — see lib/list-filter.ts.
   savedSearches?: string[];
+  // Pairs of this list's tasks the user marked "not duplicates" ("idA|idB", the
+  // smaller id first), never suggested for merging again. SENSITIVE (it says
+  // which tasks look alike), merged as a whole (LWW). Untrusted on read — see
+  // sanitizeNotDuplicates in lib/similarity.ts.
+  notDuplicates?: string[];
   fieldTimestamps?: Record<string, number>;
   // Local only: per field, the newest timestamp known to be on the remote
   // (sync/conflicts.ts). Rides in this device's change entries as their base.

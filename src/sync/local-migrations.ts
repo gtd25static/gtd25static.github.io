@@ -119,6 +119,12 @@ const localMigrations: LocalMigration[] = [
       if (!meta?.conflictBaseSince) await database.syncMeta.update('sync-meta', { conflictBaseSince: Date.now() });
     },
   },
+  {
+    // No-op: v11 added taskList.notDuplicates, absent on older rows.
+    fromVersion: 10,
+    toVersion: 11,
+    migrate: async () => {},
+  },
 ];
 
 export async function runLocalMigrations(database: Gtd25DB, from: number, to: number): Promise<void> {

@@ -92,16 +92,43 @@ export interface DuplicateGroup {
   score: number;
 }
 
+// Pairs the user said are "not duplicates" (taskList.notDuplicates): "idA|idB",
+// the smaller id first. The newest MAX_NOT_DUPLICATES are kept per list.
+export const MAX_NOT_DUPLICATES = 1000;
+const TASK_ID = /^[\w-]{1,64}$/;
+
+export function pairKey(a: string, b: string): string {
+  return a < b ? `${a}|${b}` : `${b}|${a}`;
+}
+
+/**
+ * Well-formed pairs only (two different ids), normalized, without repeats, the
+ * newest MAX_NOT_DUPLICATES. Rows arrive from sync and from backups, so the
+ * field is untrusted.
+ */
+export function sanitizeNotDuplicates(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set<string>();
+  for (const entry of value) {
+    if (typeof entry !== 'string') continue;
+    const ids = entry.split('|');
+    if (ids.length !== 2 || !ids.every((id) => TASK_ID.test(id)) || ids[0] === ids[1]) continue;
+    seen.add(pairKey(ids[0], ids[1]));
+  }
+  return [...seen].slice(-MAX_NOT_DUPLICATES);
+}
+
 /**
  * Group items whose titles are near-duplicates. Builds an edge for every pair
- * scoring >= `threshold`, unions the endpoints, and returns connected components
- * of size >= 2 (so A~B~C clusters together even if A and C alone are below the
- * bar). Blank-titled items are ignored; detection is skipped entirely for lists
- * larger than `maxItems` to bound the O(n^2) comparison.
+ * scoring >= `threshold` (except the pairs in `notDuplicates`), unions the
+ * endpoints, and returns connected components of size >= 2 (so A~B~C clusters
+ * together even if A and C alone are below the bar). Blank-titled items are
+ * ignored; detection is skipped entirely for lists larger than `maxItems` to
+ * bound the O(n^2) comparison.
  */
 export function findDuplicateGroups(
   items: SimilarItem[],
-  opts?: { threshold?: number; maxItems?: number },
+  opts?: { threshold?: number; maxItems?: number; notDuplicates?: ReadonlySet<string> },
 ): DuplicateGroup[] {
   const threshold = opts?.threshold ?? DEDUPE_TITLE_THRESHOLD;
   const maxItems = opts?.maxItems ?? DEDUPE_MAX_ITEMS;
@@ -122,6 +149,7 @@ export function findDuplicateGroups(
   const edges: Array<{ a: number; b: number; score: number }> = [];
   for (let i = 0; i < n; i++) {
     for (let j = i + 1; j < n; j++) {
+      if (opts?.notDuplicates?.has(pairKey(usable[i].id, usable[j].id))) continue;
       const score = titleSimilarity(usable[i].title, usable[j].title);
       if (score >= threshold) {
         edges.push({ a: i, b: j, score });

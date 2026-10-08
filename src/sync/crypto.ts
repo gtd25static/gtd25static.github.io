@@ -21,7 +21,7 @@ const BASE = '_base';
 const PUSHED = '_pushed';
 
 export const SENSITIVE_FIELDS: Record<string, string[]> = {
-  taskList: ['name', 'savedSearches', FIELD_TIMESTAMPS, BASE, PUSHED],
+  taskList: ['name', 'savedSearches', 'notDuplicates', FIELD_TIMESTAMPS, BASE, PUSHED],
   task: ['title', 'description', 'link', 'linkTitle', 'links', 'discussionLog', FIELD_TIMESTAMPS, BASE, PUSHED],
   subtask: ['title', 'link', 'linkTitle', 'links', FIELD_TIMESTAMPS, BASE, PUSHED],
   // Shared Folder: everything except opaque id/order/timestamps is encrypted —

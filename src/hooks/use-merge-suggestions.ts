@@ -2,10 +2,10 @@ import { useMemo } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../db';
 import type { Task, ListType } from '../db/models';
-import { findDuplicateGroups } from '../lib/similarity';
+import { findDuplicateGroups, sanitizeNotDuplicates } from '../lib/similarity';
 
 export interface MergeSuggestionGroup {
-  /** Stable signature (sorted member ids) used to track per-session dismissal. */
+  /** Stable signature (sorted member ids), the group's key in the banner. */
   signature: string;
   tasks: Task[];
   score: number;
@@ -28,24 +28,34 @@ export function isMergeCandidate(task: Task, listType: ListType): boolean {
 
 /**
  * Near-duplicate groups within a single list, among merge candidates (see
- * isMergeCandidate). Per-list by construction; never crosses lists.
+ * isMergeCandidate), leaving out the pairs marked "not duplicates" on the list.
+ * Per-list by construction; never crosses lists.
  */
 export function useMergeSuggestions(
   listId: string | null,
   listType: ListType,
 ): MergeSuggestionGroup[] {
-  const tasks = useLiveQuery(
+  const { tasks, notDuplicates } = useLiveQuery(
     async () => {
-      if (!listId) return [];
-      const all = await db.tasks.where('listId').equals(listId).sortBy('order');
-      return all.filter((t) => isMergeCandidate(t, listType));
+      if (!listId) return { tasks: [], notDuplicates: [] };
+      const [all, list] = await Promise.all([
+        db.tasks.where('listId').equals(listId).sortBy('order'),
+        db.taskLists.get(listId),
+      ]);
+      return {
+        tasks: all.filter((t) => isMergeCandidate(t, listType)),
+        notDuplicates: sanitizeNotDuplicates(list?.notDuplicates),
+      };
     },
     [listId, listType],
-    [],
+    { tasks: [] as Task[], notDuplicates: [] as string[] },
   );
 
   return useMemo(() => {
-    const groups = findDuplicateGroups(tasks.map((t) => ({ id: t.id, title: t.title })));
+    const groups = findDuplicateGroups(
+      tasks.map((t) => ({ id: t.id, title: t.title })),
+      { notDuplicates: new Set(notDuplicates) },
+    );
     const byId = new Map(tasks.map((t) => [t.id, t]));
     return groups
       .map((g) => ({
@@ -54,5 +64,5 @@ export function useMergeSuggestions(
         score: g.score,
       }))
       .filter((g) => g.tasks.length >= 2);
-  }, [tasks]);
+  }, [tasks, notDuplicates]);
 }

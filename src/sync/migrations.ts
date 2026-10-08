@@ -98,6 +98,14 @@ const migrations: RemoteMigration[] = [
     toVersion: 10,
     migrate: (data) => ({ ...data, syncVersion: 10 }),
   },
+  {
+    // v11 adds `taskList.notDuplicates`, an encrypted field (pairs of tasks the
+    // user said are not duplicates). Additive: older snapshots simply lack it. The
+    // bump is the point, as in v8 — a v10 build would write it back in the clear.
+    fromVersion: 10,
+    toVersion: 11,
+    migrate: (data) => ({ ...data, syncVersion: 11 }),
+  },
 ];
 
 export function runRemoteMigrations(data: SyncData, from: number, to: number): SyncData {

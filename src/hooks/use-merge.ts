@@ -14,8 +14,12 @@ import { scheduleSyncDebounced } from '../sync/sync-engine';
 import { stampUpdatedFields, stampChangedFields } from '../sync/field-timestamps';
 import { handleDbError } from '../lib/db-error';
 import { MAX_DESCRIPTION_LENGTH } from '../lib/constants';
+import { isInCooldown, cooldownUntil } from './use-follow-ups';
+import { isMergeCandidate } from './use-merge-suggestions';
 
 const DESC_DIVIDER = '\n\n———\n';
+const RECURRENCE_FIELDS = ['recurrenceType', 'recurrenceInterval', 'recurrenceUnit', 'lastCompletedAt', 'nextOccurrence'] as const;
+const PING_FIELDS = ['pingedAt', 'pingCooldown', 'pingCooldownCustomMs', 'pingCooldownUntil'] as const;
 
 type ChangeBatch = Array<{
   entityType: 'task' | 'subtask';
@@ -35,7 +39,7 @@ export interface MergeSnapshot {
 /**
  * Combine the sources' content into the survivor. Returns only the fields that
  * change (everything not listed here keeps the survivor's value — title, order,
- * status, follow-up snooze fields, etc.). Exported for preview + unit tests.
+ * status, etc.). Exported for preview + unit tests.
  */
 export function combineTaskContent(survivor: Task, sources: Task[]): Partial<Task> {
   const updates: Partial<Task> = {};
@@ -113,6 +117,23 @@ export function combineTaskContent(survivor: Task, sources: Task[]): Partial<Tas
   if (!survivor.starred && sources.some((s) => s.starred)) updates.starred = true;
   if (!survivor.hasWarning && sources.some((s) => s.hasWarning)) updates.hasWarning = 1;
 
+  // Recurrence: a one-off survivor takes the first recurring source's schedule,
+  // or merging it with its recurring twin silently ended the series.
+  const recurring = survivor.recurrenceType ? undefined : sources.find((s) => s.recurrenceType);
+  if (recurring) {
+    for (const key of RECURRENCE_FIELDS) (updates as Record<string, unknown>)[key] = recurring[key];
+  }
+
+  // Follow-up snooze: a snoozed survivor wakes as early as the earliest of the
+  // others (an awake one wakes it now), or a topic due now stayed hidden.
+  if (isInCooldown(survivor)) {
+    const wake = (t: Task) => (isInCooldown(t) ? cooldownUntil(t) : 0);
+    const earliest = sources.reduce<Task | undefined>((best, s) => (!best || wake(s) < wake(best) ? s : best), undefined);
+    if (earliest && wake(earliest) < wake(survivor)) {
+      for (const key of PING_FIELDS) (updates as Record<string, unknown>)[key] = earliest[key];
+    }
+  }
+
   return updates;
 }
 
@@ -131,13 +152,16 @@ export async function mergeTasks(
     await ensureDeviceId();
     let snapshot: MergeSnapshot | undefined;
 
-    await db.transaction('rw', [db.tasks, db.subtasks, db.changeLog], async () => {
+    await db.transaction('rw', [db.tasks, db.subtasks, db.taskLists, db.changeLog], async () => {
+      // Re-checked here: the group on screen may be stale (completed, resolved
+      // or deleted on another device since), and those must not go to Trash.
       const survivor = await db.tasks.get(survivorId);
-      if (!survivor || survivor.deletedAt) return;
+      const list = survivor && await db.taskLists.get(survivor.listId);
+      if (!survivor || !list || !isMergeCandidate(survivor, list.type)) return;
       const sources: Task[] = [];
       for (const id of ids) {
         const s = await db.tasks.get(id);
-        if (s && !s.deletedAt && s.listId === survivor.listId) sources.push(s);
+        if (s && s.listId === survivor.listId && isMergeCandidate(s, list.type)) sources.push(s);
       }
       if (sources.length === 0) return;
 
