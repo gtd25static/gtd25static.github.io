@@ -1,11 +1,13 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../db';
-import { useAppState } from '../stores/app-state';
+import { useAppState, selectFollowUpView } from '../stores/app-state';
+import { nextWakeAt } from './use-follow-ups';
+import { useWakeTick } from './use-wake-tick';
 import { setTaskStatus } from './use-tasks';
 import { setSubtaskStatus } from './use-subtasks';
 import { updateTask, restoreTask } from './use-tasks';
-import { sortTasksForDisplay, sortFollowUpsForDisplay } from '../lib/task-sort';
+import { sortTasksForDisplay, arrangeFollowUps } from '../lib/task-sort';
 import { filterTasksByQuery } from '../lib/list-filter';
 import { deleteTasksBatch } from './use-bulk-operations';
 import { toast } from '../components/ui/Toast';
@@ -44,6 +46,7 @@ export function useKeyboard() {
   const selectedListId = useAppState((s) => s.selectedListId);
   const focusedItemId = useAppState((s) => s.focusedItemId);
   const listFilter = useAppState((s) => s.listFilter);
+  const followUpView = useAppState(selectFollowUpView(selectedListId));
 
   // Paranoid-extra toggles, readable synchronously from the key handler
   // (preventDefault can't wait for an async read).
@@ -75,11 +78,15 @@ export function useKeyboard() {
     null,
   );
 
-  // Main area navigable items
+  // Main area navigable items, and when a snoozed follow-up among them next
+  // wakes (and joins them).
   const expandedKey = [...expandedTaskIds].sort().join(',');
-  const mainItems = useLiveQuery(
-    async (): Promise<NavItem[]> => {
-      if (!selectedListId) return [];
+  // (The query reports the wake time, the tick re-runs it: state bridges the two.)
+  const [wakeAt, setWakeAt] = useState(0);
+  const wakeTick = useWakeTick(wakeAt);
+  const mainNav = useLiveQuery(
+    async (): Promise<{ items: NavItem[]; wakeAt: number }> => {
+      if (!selectedListId) return { items: [], wakeAt: 0 };
 
       const items: NavItem[] = [];
 
@@ -93,6 +100,7 @@ export function useKeyboard() {
       ]);
       const isTasksList = selectedList?.type === 'tasks';
       const isFollowUps = selectedList?.type === 'follow-ups';
+      let nextWake = 0;
       // Only what the list's quick filter leaves on screen.
       const live = filterTasksByQuery(listTasks, listFilter).filter((t) => {
         if (t.deletedAt || t.archived) return false;
@@ -100,9 +108,11 @@ export function useKeyboard() {
         if (!isFollowUps && t.status === 'done') return false;
         return true;
       });
-      // Match visual sort order
+      // Match visual sort order: for follow-ups, the cards the list shows, in
+      // its order (the snoozed are left out unless "Show snoozed" is on).
       if (isFollowUps) {
-        const sorted = sortFollowUpsForDisplay(live);
+        const sorted = arrangeFollowUps(live, followUpView).visible;
+        nextWake = nextWakeAt(live);
         live.length = 0;
         live.push(...sorted);
       } else if (isTasksList) {
@@ -136,11 +146,13 @@ export function useKeyboard() {
           }
         }
       }
-      return items;
+      return { items, wakeAt: nextWake };
     },
-    [selectedListId, expandedKey, listFilter],
-    [],
+    [selectedListId, expandedKey, listFilter, followUpView, wakeTick],
+    { items: [], wakeAt: 0 },
   );
+  const mainItems = mainNav.items;
+  useEffect(() => setWakeAt(mainNav.wakeAt), [mainNav.wakeAt]);
 
   const sidebarItems: NavItem[] = [...(lists ?? []).filter((l) => l.type === 'tasks'), ...(lists ?? []).filter((l) => l.type === 'follow-ups')].map((l) => ({ id: l.id, type: 'task' as const }));
 

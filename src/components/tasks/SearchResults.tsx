@@ -1,6 +1,7 @@
 import { useSearch, type SearchResult } from '../../hooks/use-search';
 import { useShallow } from 'zustand/react/shallow';
 import { useAppState } from '../../stores/app-state';
+import { revealTask, scrollToFocusTarget } from '../../lib/reveal-task';
 
 function HighlightedText({ text, query }: { text: string; query: string }) {
   if (!query) return <>{text}</>;
@@ -57,11 +58,6 @@ function resultContext(result: SearchResult) {
   return result.listName;
 }
 
-function findFocusElement(id: string): HTMLElement | null {
-  const nodes = document.querySelectorAll<HTMLElement>('[data-focus-id]');
-  return Array.from(nodes).find((node) => node.dataset.focusId === id) ?? null;
-}
-
 function ResultItem({ result, query, onNavigate }: { result: SearchResult; query: string; onNavigate: () => void }) {
   const inactive = isInactive(result);
 
@@ -113,24 +109,8 @@ function ResultItem({ result, query, onNavigate }: { result: SearchResult; query
 }
 
 export function SearchResults() {
-  const { searchQuery, selectList, ensureTaskExpanded, setSearchQuery, setNavigateToTaskId, setFocusedItem, setFocusZone } = useAppState(useShallow(s => ({ searchQuery: s.searchQuery, selectList: s.selectList, ensureTaskExpanded: s.ensureTaskExpanded, setSearchQuery: s.setSearchQuery, setNavigateToTaskId: s.setNavigateToTaskId, setFocusedItem: s.setFocusedItem, setFocusZone: s.setFocusZone })));
+  const { searchQuery, selectList, setSearchQuery, setFocusedItem, setFocusZone } = useAppState(useShallow(s => ({ searchQuery: s.searchQuery, selectList: s.selectList, setSearchQuery: s.setSearchQuery, setFocusedItem: s.setFocusedItem, setFocusZone: s.setFocusZone })));
   const { results, isSearching, maxReached } = useSearch(searchQuery.trim());
-
-  function scrollToResult(targetId: string, fallbackId?: string) {
-    let attempts = 0;
-    const tryScroll = () => {
-      const el = findFocusElement(targetId) ?? (fallbackId ? findFocusElement(fallbackId) : null);
-      if (el) {
-        const focusedId = el.dataset.focusId ?? targetId;
-        setFocusedItem(focusedId);
-        el.scrollIntoView({ block: 'center', behavior: 'smooth' });
-        return;
-      }
-      attempts++;
-      if (attempts < 30) window.setTimeout(tryScroll, 50);
-    };
-    window.setTimeout(tryScroll, 0);
-  }
 
   function handleNavigate(result: SearchResult) {
     if (result.type === 'list') {
@@ -138,22 +118,19 @@ export function SearchResults() {
       setSearchQuery('');
       setFocusZone('sidebar');
       setFocusedItem(result.id);
-      scrollToResult(result.id);
+      scrollToFocusTarget(result.id);
       return;
     }
 
     const taskId = result.type === 'subtask' ? result.parentTaskId! : result.id;
-    const targetId = result.type === 'subtask' && result.listType === 'tasks' ? result.id : taskId;
-
-    // Signal TaskListView / FollowUpList to reveal hidden sections before scrolling.
-    setNavigateToTaskId(taskId);
-    if (result.listType === 'tasks') ensureTaskExpanded(taskId);
-
-    selectList(result.listId);
-    setSearchQuery('');
-    setFocusZone('main');
-    setFocusedItem(targetId);
-    scrollToResult(targetId, taskId);
+    revealTask({
+      taskId,
+      listId: result.listId,
+      listType: result.listType,
+      focusId: result.type === 'subtask' && result.listType === 'tasks' ? result.id : taskId,
+      resolved: result.listType === 'follow-ups' && result.archived,
+      snoozed: result.snoozed,
+    });
   }
 
   return (

@@ -9,12 +9,12 @@ import '../setup-component';
 import { useKeyboard } from '../../hooks/use-keyboard';
 import { useAppState } from '../../stores/app-state';
 
-vi.mock('dexie-react-hooks', () => ({ useLiveQuery: () => [] }));
+vi.mock('dexie-react-hooks', () => ({ useLiveQuery: (_fn: unknown, _deps: unknown, def?: unknown) => def ?? [] }));
 vi.mock('../../db', () => ({ db: {} }));
 vi.mock('../../hooks/use-tasks', () => ({ setTaskStatus: vi.fn(), updateTask: vi.fn(), restoreTask: vi.fn() }));
 vi.mock('../../hooks/use-subtasks', () => ({ setSubtaskStatus: vi.fn() }));
 vi.mock('../../hooks/use-bulk-operations', () => ({ deleteTasksBatch: vi.fn() }));
-vi.mock('../../lib/task-sort', () => ({ sortTasksForDisplay: () => [], sortFollowUpsForDisplay: () => [] }));
+vi.mock('../../lib/task-sort', () => ({ sortTasksForDisplay: () => [], arrangeFollowUps: () => ({ visible: [], snoozed: [] }) }));
 vi.mock('../../components/ui/Toast', () => ({ toast: vi.fn() }));
 vi.mock('../../components/ui/ConfirmDialog', () => ({ confirmDialog: vi.fn(async () => false) }));
 

@@ -3,6 +3,7 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../db';
 import { isLiveSubtask } from '../lib/attention';
 import { useMinuteTick } from './use-minute-tick';
+import { isInCooldown } from './use-follow-ups';
 
 export interface SpecialItem {
   id: string;
@@ -15,6 +16,8 @@ export interface SpecialItem {
   entityType: 'task' | 'subtask';
   /** A follow-up has no done state: Attention offers Resolve instead of Done. */
   followUp?: boolean;
+  /** A follow-up in its snooze: hidden in its list until revealed. */
+  snoozed?: boolean;
 }
 
 export interface SpecialListData {
@@ -70,6 +73,7 @@ function useSpecialList() {
         stateDate: t.warningAt ?? t.updatedAt,
         entityType: 'task',
         followUp: followUpLists.has(t.listId),
+        snoozed: followUpLists.has(t.listId) && isInCooldown(t),
       });
     }
 
@@ -83,6 +87,7 @@ function useSpecialList() {
         stateDate: t.blockedAt ?? t.updatedAt,
         entityType: 'task',
         followUp: followUpLists.has(t.listId),
+        snoozed: followUpLists.has(t.listId) && isInCooldown(t),
       });
     }
 
@@ -97,6 +102,7 @@ function useSpecialList() {
         stateDate: t.nextOccurrence,
         entityType: 'task',
         followUp: followUpLists.has(t.listId),
+        snoozed: followUpLists.has(t.listId) && isInCooldown(t),
       });
     }
 

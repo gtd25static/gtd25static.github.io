@@ -10,6 +10,9 @@ import { toggleWarning } from '../../hooks/use-warning';
 import { SpecialListProvider } from '../../hooks/use-special-list';
 import { SpecialListView } from '../../components/tasks/SpecialListView';
 import { ConfirmDialogContainer } from '../../components/ui/ConfirmDialog';
+import { updateTask } from '../../hooks/use-tasks';
+import { useAppState } from '../../stores/app-state';
+import { resetAppState } from '../helpers/component-helpers';
 
 function renderAttention() {
   const user = userEvent.setup();
@@ -24,6 +27,8 @@ function renderAttention() {
 
 beforeEach(async () => {
   await resetDb();
+  resetAppState();
+  HTMLElement.prototype.scrollIntoView = vi.fn();
 });
 
 describe('SpecialListView (Attention)', { timeout: 15_000 }, () => {
@@ -71,5 +76,26 @@ describe('SpecialListView (Attention)', { timeout: 15_000 }, () => {
 
     await waitFor(async () => expect((await db.tasks.get(task.id))?.status).toBe('done'));
     expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  // A click toggled the task open/closed, so on an open one it closed it; and a
+  // snoozed follow-up landed in a list that hid it.
+  it('takes you to a snoozed follow-up with it on screen and open, and a second click keeps it open', async () => {
+    const leads = await createTaskList('Leads', 'follow-ups');
+    const topic = assertDefined(await createTask(leads.id, { title: 'Call Ana' }));
+    await toggleWarning('task', topic.id);
+    await updateTask(topic.id, { pingedAt: Date.now(), pingCooldown: 'custom', pingCooldownUntil: Date.now() + 86_400_000 });
+
+    const user = renderAttention();
+    await user.click(await screen.findByText('Call Ana'));
+    let s = useAppState.getState();
+    expect(s.selectedListId).toBe(leads.id);
+    expect(s.followUpViews[leads.id]?.showSnoozed).toBe(true);
+    expect(s.expandedTaskIds.has(topic.id)).toBe(true);
+    expect(s.focusedItemId).toBe(topic.id);
+
+    await user.click(screen.getByText('Call Ana'));
+    s = useAppState.getState();
+    expect(s.expandedTaskIds.has(topic.id)).toBe(true);
   });
 });

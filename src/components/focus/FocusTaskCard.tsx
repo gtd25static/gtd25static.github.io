@@ -1,7 +1,8 @@
 import type { Task } from '../../db/models';
 import { setTaskStatus, deleteTask, restoreTask } from '../../hooks/use-tasks';
 import { useSubtasks } from '../../hooks/use-subtasks';
-import { focusTask, revealTask } from '../../hooks/use-focus';
+import { focusTask } from '../../hooks/use-focus';
+import { revealTask } from '../../lib/reveal-task';
 import { dayDiff } from '../../lib/attention';
 import { formatDate, daysUntil } from '../../lib/date-utils';
 import { toast } from '../ui/Toast';
@@ -33,7 +34,7 @@ export function FocusTaskCard({ task }: { task: Task }) {
   return (
     <div
       data-redact
-      onClick={() => revealTask(task.id, task.listId)}
+      onClick={() => revealTask({ taskId: task.id, listId: task.listId, listType: 'tasks' })}
       className="cursor-pointer rounded-xl border border-zinc-200 bg-white p-5 shadow-sm transition-colors hover:border-zinc-300 dark:border-zinc-700/60 dark:bg-zinc-900/50 dark:hover:border-zinc-600"
     >
       <div className="mb-2 flex items-center gap-2 text-xs">

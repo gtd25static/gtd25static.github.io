@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../db';
 import type { Task, TaskList, ListType } from '../db/models';
+import { isInCooldown } from './use-follow-ups';
 
 const MAX_SEARCH_RESULTS = 50;
 
@@ -14,6 +15,8 @@ export interface SearchResult {
   listName: string;
   listType: ListType;
   archived?: boolean;
+  /** A follow-up in its snooze (hidden in its list unless "Show snoozed" is on). */
+  snoozed?: boolean;
   // For subtasks
   parentTaskId?: string;
   parentTaskTitle?: string;
@@ -75,6 +78,7 @@ export async function searchDb(query: string): Promise<SearchResult[]> {
         listName: list.name,
         listType: list.type,
         archived: task.archived,
+        snoozed: list.type === 'follow-ups' && !task.archived && isInCooldown(task),
       });
     }
   }

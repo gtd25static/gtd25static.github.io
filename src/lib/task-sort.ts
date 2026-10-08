@@ -1,5 +1,5 @@
 import type { Task } from '../db/models';
-import { isInCooldown } from '../hooks/use-follow-ups';
+import { isInCooldown, lastDiscussedAt } from '../hooks/use-follow-ups';
 import { SORT_DUE_SOON_DAYS } from './constants';
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
@@ -79,6 +79,36 @@ export function sortFollowUpsForDisplay(tasks: Task[]): Task[] {
 
     return b.order - a.order;
   });
+}
+
+/** How a follow-up list orders its awake cards: by hand, by due date, or stalest topic first. */
+export type FollowUpSort = 'manual' | 'date' | 'discussed';
+
+/**
+ * Sort follow-ups by when they were last discussed, longest ago first (a topic
+ * never discussed counts from its creation), then by newest manual order.
+ */
+export function sortFollowUpsByLastDiscussed(tasks: Task[]): Task[] {
+  return [...tasks].sort((a, b) => lastDiscussedAt(a) - lastDiscussedAt(b) || b.order - a.order);
+}
+
+/**
+ * A follow-up list's active cards as the screen shows them: awake ones in the
+ * chosen order, snoozed ones after them and left out of `visible` unless shown.
+ * FollowUpList and the keyboard both use it, so j/k walk the cards on screen.
+ */
+export function arrangeFollowUps(
+  active: Task[],
+  view: { sort: FollowUpSort; showSnoozed: boolean },
+): { visible: Task[]; snoozed: Task[] } {
+  const displayed = sortFollowUpsForDisplay(active);
+  const snoozed = displayed.filter(isInCooldown);
+  const awake = displayed.filter((t) => !isInCooldown(t));
+  // By hand, a starred snoozed card keeps its place among the starred.
+  const all = view.sort === 'date' ? [...sortTasksByDate(awake), ...snoozed]
+    : view.sort === 'discussed' ? [...sortFollowUpsByLastDiscussed(awake), ...snoozed]
+    : displayed;
+  return { visible: view.showSnoozed ? all : all.filter((t) => !isInCooldown(t)), snoozed };
 }
 
 /** How long a task just marked done stays in the active list, so the tick is seen. */

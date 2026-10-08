@@ -26,6 +26,7 @@ export function resetAppState() {
     quickCaptureOpen: false,
     bulkMode: false,
     selectedTaskIds: new Set(),
+    followUpViews: {},
   });
 }
 

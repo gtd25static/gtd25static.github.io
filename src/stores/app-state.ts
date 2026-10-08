@@ -1,4 +1,14 @@
 import { create } from 'zustand';
+import type { FollowUpSort } from '../lib/task-sort';
+
+/** How one follow-up list is shown: its "Show snoozed", its Resolved section, its order. */
+export interface FollowUpView {
+  showSnoozed: boolean;
+  showResolved: boolean;
+  sort: FollowUpSort;
+}
+
+export const DEFAULT_FOLLOW_UP_VIEW: FollowUpView = { showSnoozed: false, showResolved: false, sort: 'manual' };
 
 interface AppState {
   selectedListId: string | null;
@@ -30,6 +40,10 @@ interface AppState {
   // Bulk operations
   bulkMode: boolean;
   selectedTaskIds: Set<string>;
+  // Each follow-up list's view, by list id, so leaving a list doesn't reset it.
+  // Memory only, on purpose: on disk, the ids of lists that no longer exist
+  // would outlive them.
+  followUpViews: Record<string, FollowUpView>;
 
   selectList: (id: string | null) => void;
   toggleTaskExpanded: (id: string) => void;
@@ -55,6 +69,7 @@ interface AppState {
   toggleTaskSelected: (id: string) => void;
   selectAllTasks: (ids: string[]) => void;
   clearSelection: () => void;
+  setFollowUpView: (listId: string, patch: Partial<FollowUpView>) => void;
 }
 
 export const useAppState = create<AppState>((set) => ({
@@ -82,6 +97,7 @@ export const useAppState = create<AppState>((set) => ({
   mindmapFolderId: undefined,
   bulkMode: false,
   selectedTaskIds: new Set(),
+  followUpViews: {},
 
   // The keyboard ring and any half-open form belong to the view being left: kept,
   // `d` could toggle a task of the previous list, and `n` left a new-task form
@@ -137,4 +153,17 @@ export const useAppState = create<AppState>((set) => ({
     }),
   selectAllTasks: (ids) => set({ selectedTaskIds: new Set(ids) }),
   clearSelection: () => set({ selectedTaskIds: new Set(), bulkMode: false }),
+  setFollowUpView: (listId, patch) =>
+    set((state) => ({
+      followUpViews: {
+        ...state.followUpViews,
+        [listId]: { ...(state.followUpViews[listId] ?? DEFAULT_FOLLOW_UP_VIEW), ...patch },
+      },
+    })),
 }));
+
+/** The view of follow-up list `listId` (the defaults until it's changed). */
+export function selectFollowUpView(listId: string | null) {
+  return (state: AppState): FollowUpView =>
+    (listId && state.followUpViews[listId]) || DEFAULT_FOLLOW_UP_VIEW;
+}

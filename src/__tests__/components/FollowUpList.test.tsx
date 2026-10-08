@@ -166,3 +166,56 @@ describe('FollowUpList — sort by date and the add form', () => {
     expect(screen.queryByText(/recurrence/)).toBeNull();
   });
 });
+
+describe('FollowUpList — the view is remembered, and topics wake on their own', () => {
+  beforeEach(() => {
+    resetAppState();
+    resetFactories();
+    vi.clearAllMocks();
+  });
+
+  // Show snoozed, the Resolved section and the order were local state: leaving
+  // the list (or a search) reset them every time.
+  it('keeps Show snoozed, Resolved and the order after leaving the list and coming back', async () => {
+    setFollowUps(
+      [makeTask(fuList.id, { title: 'Awake topic' }), snoozedTask('Snoozed topic')],
+      [makeTask(fuList.id, { title: 'Resolved topic', archived: true })],
+    );
+    const first = renderList();
+    await first.user.click(screen.getByRole('button', { name: /show snoozed/i }));
+    await first.user.click(screen.getByRole('button', { name: /resolved \(1\)/i }));
+    await first.user.click(first.container.querySelector('[data-dropdown-trigger]')!);
+    await first.user.click(screen.getByText('Sort by last discussed'));
+    first.unmount();
+
+    const second = renderList();
+    expect(screen.getByText('Snoozed topic')).toBeInTheDocument();
+    expect(screen.getByText('Resolved topic')).toBeInTheDocument();
+    await second.user.click(second.container.querySelector('[data-dropdown-trigger]')!);
+    expect(screen.getByText('Sort by last discussed ✓')).toBeInTheDocument();
+  });
+
+  it('"Sort by last discussed" puts the topic left longest first', async () => {
+    const old = Date.now() - 30 * DAY_MS;
+    setFollowUps([
+      makeTask(fuList.id, { title: 'Talked today', order: 2, createdAt: old, discussionLog: [{ id: 'a', at: Date.now() }] }),
+      makeTask(fuList.id, { title: 'Talked last month', order: 1, createdAt: old, discussionLog: [{ id: 'b', at: old + DAY_MS }] }),
+      makeTask(fuList.id, { title: 'Never talked', order: 0, createdAt: Date.now() - 10 * DAY_MS }),
+    ]);
+    const { user, container } = renderList();
+    await user.click(container.querySelector('[data-dropdown-trigger]')!);
+    await user.click(screen.getByText('Sort by last discussed'));
+    expect(screen.getAllByText(/^(Talked today|Talked last month|Never talked)$/).map((el) => el.textContent))
+      .toEqual(['Talked last month', 'Never talked', 'Talked today']);
+  });
+
+  it('a snoozed topic appears when it wakes, without anything else changing', async () => {
+    setFollowUps([
+      makeTask(fuList.id, { title: 'Awake topic' }),
+      makeTask(fuList.id, { title: 'Waking topic', pingedAt: Date.now(), pingCooldown: 'custom', pingCooldownUntil: Date.now() + 300 }),
+    ]);
+    renderList();
+    expect(screen.queryByText('Waking topic')).not.toBeInTheDocument();
+    expect(await screen.findByText('Waking topic', {}, { timeout: 3_000 })).toBeInTheDocument();
+  });
+});

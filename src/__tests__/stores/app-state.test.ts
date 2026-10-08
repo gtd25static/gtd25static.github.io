@@ -1,4 +1,4 @@
-import { useAppState } from '../../stores/app-state';
+import { useAppState, selectFollowUpView, DEFAULT_FOLLOW_UP_VIEW } from '../../stores/app-state';
 
 function getState() {
   return useAppState.getState();
@@ -22,6 +22,7 @@ function resetStore() {
     quickCaptureOpen: false,
     bulkMode: false,
     selectedTaskIds: new Set(),
+    followUpViews: {},
   });
 }
 
@@ -205,6 +206,29 @@ describe('app-state store', () => {
       getState().clearSelection();
       expect(getState().bulkMode).toBe(false);
       expect(getState().selectedTaskIds.size).toBe(0);
+    });
+  });
+
+  describe('follow-up list views', () => {
+    it('start from the defaults and merge each change into the list\'s own view', () => {
+      expect(selectFollowUpView('F1')(getState())).toBe(DEFAULT_FOLLOW_UP_VIEW);
+      getState().setFollowUpView('F1', { showSnoozed: true });
+      getState().setFollowUpView('F1', { sort: 'date' });
+      expect(getState().followUpViews.F1).toEqual({ showSnoozed: true, showResolved: false, sort: 'date' });
+      expect(selectFollowUpView('F2')(getState())).toBe(DEFAULT_FOLLOW_UP_VIEW);
+    });
+
+    it('outlive a change of list', () => {
+      getState().setFollowUpView('F1', { showResolved: true });
+      getState().selectList('L2');
+      getState().selectList('F1');
+      expect(getState().followUpViews.F1.showResolved).toBe(true);
+    });
+
+    it('are never written to localStorage', () => {
+      const before = { ...localStorage };
+      getState().setFollowUpView('F1', { showSnoozed: true, sort: 'discussed' });
+      expect({ ...localStorage }).toEqual(before);
     });
   });
 });

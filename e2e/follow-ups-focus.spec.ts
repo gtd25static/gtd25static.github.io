@@ -213,3 +213,93 @@ test('a capture keeps the text between "<" and ">"', async ({ page }) => {
   await appShell(page).getByRole('button', { name: /^Inbox/ }).click();
   await expect(page.getByText('Check a<b and c>d', { exact: true })).toBeVisible();
 });
+
+// QoL review (2026-10-08), batch A: a follow-up list keeps its view, a "go to"
+// lands on the card shown and open, the keyboard walks what's on screen, and a
+// snoozed topic comes back on its own when it wakes.
+
+const listRow = (page: Page, name: string): Locator =>
+  appShell(page).locator('nav [data-focus-id]').filter({ hasText: name });
+
+test('a snoozed follow-up found by search is on screen with its log open, and the list keeps its view', async ({ page }) => {
+  await openApp(page);
+  await createFollowUpList(page, 'People');
+  await addFollowUp(page, 'Ping Bob');
+  await addFollowUp(page, 'Ping Eve');
+  await followUpCard(page, 'Ping Bob').getByRole('button', { name: 'Discussed' }).click();
+  await page.getByRole('button', { name: 'Snooze', exact: true }).click();
+  await expect(followUpCard(page, 'Ping Bob')).toHaveCount(0);
+
+  await page.locator('[data-search-input]').fill('Bob');
+  await page.locator('button[data-redact]').filter({ hasText: 'Ping Bob' }).click();
+  const bob = followUpCard(page, 'Ping Bob');
+  await expect(bob).toBeVisible();
+  await expect(bob.getByPlaceholder('What was discussed?')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Hide snoozed (1)' })).toBeVisible();
+
+  // Leaving the list and coming back keeps "Show snoozed" on.
+  await createList(page, 'Work');
+  await listRow(page, 'People').locator(':scope > button').click();
+  await expect(followUpCard(page, 'Ping Bob')).toBeVisible();
+});
+
+test('j/k walk only the follow-ups on screen: a hidden snoozed one is skipped', async ({ page }) => {
+  await openApp(page);
+  await createFollowUpList(page, 'People');
+  await addFollowUp(page, 'Ping Bob');
+  await addFollowUp(page, 'Ping Eve');
+  await addFollowUp(page, 'Ping Ann');
+  await followUpCard(page, 'Ping Eve').getByRole('button', { name: 'Discussed' }).click();
+  await page.getByRole('button', { name: 'Snooze', exact: true }).click();
+  await expect(followUpCard(page, 'Ping Eve')).toHaveCount(0);
+
+  await page.locator('body').click({ position: { x: 5, y: 5 } }).catch(() => {});
+  await page.keyboard.press('Escape');
+  await page.keyboard.press('h');
+  await page.keyboard.press('l');
+  // From "Add a follow-up": Ann, then Bob, then nothing further (Eve is hidden).
+  for (let i = 0; i < 3; i++) await page.keyboard.press('j');
+  await expect(followUpCard(page, 'Ping Bob')).toHaveClass(/ring-2/);
+  await expect(followUpCard(page, 'Ping Ann')).not.toHaveClass(/ring-2/);
+});
+
+test('"Sort by last discussed" puts the topic left longest first', async ({ page }) => {
+  await openApp(page);
+  await createFollowUpList(page, 'People');
+  await addFollowUp(page, 'Old topic');
+  await addFollowUp(page, 'New topic');
+  const titles = ['Old topic', 'New topic'];
+  expect(await cardTitles(page, titles)).toEqual(['New topic', 'Old topic']);
+
+  const fresh = followUpCard(page, 'New topic');
+  await fresh.getByText('New topic').click();
+  await fresh.getByPlaceholder('What was discussed?').fill('talked just now');
+  await fresh.getByPlaceholder('What was discussed?').press('Enter');
+  await expect(fresh.getByText('talked just now')).toBeVisible();
+
+  const header = page.getByRole('heading', { level: 2, name: 'People' }).locator('xpath=ancestor::div[contains(@class,"justify-between")][1]');
+  await header.locator('[data-dropdown-trigger]').click();
+  await page.getByRole('button', { name: 'Sort by last discussed', exact: true }).click();
+  await expect.poll(() => cardTitles(page, titles)).toEqual(['Old topic', 'New topic']);
+});
+
+test('a snoozed topic comes back on its own when it wakes, and the sidebar counts the awake ones', async ({ page }) => {
+  await page.clock.install();
+  await openApp(page);
+  await createFollowUpList(page, 'People');
+  await addFollowUp(page, 'Ping Bob');
+  await addFollowUp(page, 'Ping Eve');
+  const count = listRow(page, 'People').locator(':scope > button span.text-xs');
+  await expect(count).toHaveText('2');
+
+  await followUpCard(page, 'Ping Bob').getByRole('button', { name: 'Discussed' }).click();
+  await page.getByRole('button', { name: '20h', exact: true }).click();
+  await page.getByRole('button', { name: 'Snooze', exact: true }).click();
+  await expect(followUpCard(page, 'Ping Bob')).toHaveCount(0);
+  await expect(count).toHaveText('1');
+  await expect(count).toHaveAttribute('title', '1 awake · 1 snoozed');
+
+  await page.clock.fastForward('20:01:00');
+  await expect(followUpCard(page, 'Ping Bob')).toBeVisible();
+  await expect(count).toHaveText('2');
+});

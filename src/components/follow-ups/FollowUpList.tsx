@@ -9,9 +9,10 @@ import {
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { useFollowUps, isInCooldown } from '../../hooks/use-follow-ups';
+import { useFollowUps, nextWakeAt } from '../../hooks/use-follow-ups';
+import { useWakeTick } from '../../hooks/use-wake-tick';
 import { createTask, reorderTasks } from '../../hooks/use-tasks';
-import { useAppState } from '../../stores/app-state';
+import { useAppState, selectFollowUpView } from '../../stores/app-state';
 import { useShallow } from 'zustand/react/shallow';
 import type { Task } from '../../db/models';
 import type { DragItemData } from '../layout/DndProvider';
@@ -20,7 +21,7 @@ import { InlineTaskForm } from '../tasks/InlineTaskForm';
 import { DropdownMenu } from '../ui/DropdownMenu';
 import { MergeSuggestionsCard } from '../tasks/MergeSuggestionsCard';
 import { ListFilterBar } from '../tasks/ListFilterBar';
-import { sortFollowUpsForDisplay, sortTasksByDate } from '../../lib/task-sort';
+import { arrangeFollowUps, type FollowUpSort } from '../../lib/task-sort';
 import { filterTasksByQuery } from '../../lib/list-filter';
 import { toast } from '../ui/Toast';
 
@@ -54,29 +55,31 @@ interface Props {
   listName: string;
 }
 
+const SORT_LABELS: Record<Exclude<FollowUpSort, 'manual'>, string> = {
+  date: 'Sort by date',
+  discussed: 'Sort by last discussed',
+};
+
 export function FollowUpList({ listId, listName }: Props) {
   const followUps = useFollowUps(listId);
+  // Re-render when the next snoozed follow-up wakes, so it shows up on its own.
+  useWakeTick(nextWakeAt(followUps.active));
   const listFilter = useAppState((s) => s.listFilter);
   const filtering = listFilter.trim() !== '';
   const rawActive = filterTasksByQuery(followUps.active, listFilter);
   const archived = filterTasksByQuery(followUps.archived, listFilter);
-  // "Sort by date": awake follow-ups by due date; snoozed ones still at the bottom.
-  const [sortByDate, setSortByDate] = useState(false);
-  const displayed = sortFollowUpsForDisplay(rawActive);
-  const active = sortByDate
-    ? [...sortTasksByDate(displayed.filter((t) => !isInCooldown(t))), ...displayed.filter(isInCooldown)]
-    : displayed;
-  const [showSnoozed, setShowSnoozed] = useState(false);
-  // Snoozed items always sort to the bottom of `active`; the toggle hides them by default.
-  const snoozed = active.filter(isInCooldown);
-  const visible = showSnoozed ? active : active.filter((t) => !isInCooldown(t));
+  // The list's view outlives it (app-state): Show snoozed, Resolved open, and the
+  // order — by hand, by due date, or stalest topic first (snoozed always last).
+  const { showSnoozed, showResolved, sort } = useAppState(selectFollowUpView(listId));
+  const setFollowUpView = useAppState((s) => s.setFollowUpView);
+  const { visible, snoozed } = arrangeFollowUps(rawActive, { sort, showSnoozed });
   const resolved = [...archived].sort((a, b) => {
     const aResolved = a.updatedAt ?? a.order;
     const bResolved = b.updatedAt ?? b.order;
     if (aResolved !== bResolved) return bResolved - aResolved;
     return b.order - a.order;
   });
-  const { navigateToTaskId, setNavigateToTaskId, creatingTask, setCreatingTask, focusedItemId, focusZone } = useAppState(useShallow(s => ({ navigateToTaskId: s.navigateToTaskId, setNavigateToTaskId: s.setNavigateToTaskId, creatingTask: s.creatingTask, setCreatingTask: s.setCreatingTask, focusedItemId: s.focusedItemId, focusZone: s.focusZone })));
+  const { creatingTask, setCreatingTask, focusedItemId, focusZone } = useAppState(useShallow(s => ({ creatingTask: s.creatingTask, setCreatingTask: s.setCreatingTask, focusedItemId: s.focusedItemId, focusZone: s.focusZone })));
   const [creating, setCreating] = useState(false);
 
   // React to keyboard-triggered task creation (n key) and cancellation (Esc)
@@ -87,17 +90,6 @@ export function FollowUpList({ listId, listName }: Props) {
       setCreating(false);
     }
   }, [creatingTask]);
-  const [showArchived, setShowArchived] = useState(false);
-
-  // Auto-open Archived section when navigating to an archived follow-up from search
-  useEffect(() => {
-    if (!navigateToTaskId) return;
-    const inArchived = archived.some((t) => t.id === navigateToTaskId);
-    if (inArchived) {
-      setShowArchived(true);
-    }
-    setNavigateToTaskId(null);
-  }, [navigateToTaskId, archived]);
 
   // Handle intra-list follow-up reorder via shared DndContext
   useDndMonitor({
@@ -109,9 +101,9 @@ export function FollowUpList({ listId, listName }: Props) {
       if (!activeData || !overData) return;
       if (activeData.type !== 'follow-up' || overData.type !== 'follow-up') return;
       if (activeData.listId !== overData.listId || activeData.listId !== listId) return;
-      // Sorted by date, the positions on screen aren't the manual order.
-      if (sortByDate) {
-        toast('Turn off “Sort by date” to rearrange follow-ups by hand', 'info');
+      // Sorted, the positions on screen aren't the manual order.
+      if (sort !== 'manual') {
+        toast(`Turn off “${SORT_LABELS[sort]}” to rearrange follow-ups by hand`, 'info');
         return;
       }
       // Filtered, the hidden follow-ups aren't in the order written back.
@@ -144,7 +136,7 @@ export function FollowUpList({ listId, listName }: Props) {
               {snoozed.length > 0 && (
                 <button
                   type="button"
-                  onClick={() => setShowSnoozed((v) => !v)}
+                  onClick={() => setFollowUpView(listId, { showSnoozed: !showSnoozed })}
                   aria-pressed={showSnoozed}
                   className={`shrink-0 rounded-full px-3 py-1 text-sm font-medium transition-colors ${
                     showSnoozed
@@ -165,9 +157,11 @@ export function FollowUpList({ listId, listName }: Props) {
                   <circle cx="10" cy="16" r="1.5" />
                 </svg>
               }
-              items={[
-                { label: `Sort by date${sortByDate ? ' ✓' : ''}`, onClick: () => setSortByDate(!sortByDate) },
-              ]}
+              items={(['date', 'discussed'] as const).map((mode) => ({
+                label: `${SORT_LABELS[mode]}${sort === mode ? ' ✓' : ''}`,
+                // Picking the order in use again goes back to the order by hand.
+                onClick: () => setFollowUpView(listId, { sort: sort === mode ? 'manual' : mode }),
+              }))}
             />
           </div>
 
@@ -218,7 +212,7 @@ export function FollowUpList({ listId, listName }: Props) {
           {resolved.length > 0 && (
             <div className="mt-4">
               <button
-                onClick={() => setShowArchived(!showArchived)}
+                onClick={() => setFollowUpView(listId, { showResolved: !showResolved })}
                 className="flex items-center gap-2 py-2 text-sm font-medium text-zinc-500 hover:text-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-300"
               >
                 <svg
@@ -226,13 +220,13 @@ export function FollowUpList({ listId, listName }: Props) {
                   height="12"
                   viewBox="0 0 16 16"
                   fill="currentColor"
-                  className={`transition-transform ${showArchived ? 'rotate-90' : ''}`}
+                  className={`transition-transform ${showResolved ? 'rotate-90' : ''}`}
                 >
                   <path d="M6 3l5 5-5 5z" />
                 </svg>
                 Resolved ({resolved.length})
               </button>
-              {showArchived && (
+              {showResolved && (
                 <div>
                   {resolved.map((task, i) => (
                     <div key={task.id} className="opacity-50">

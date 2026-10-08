@@ -1,22 +1,19 @@
 import { useState, useEffect, useDeferredValue } from 'react';
-import { useDueSoon } from '../../hooks/use-due-soon';
-import { useAppState } from '../../stores/app-state';
-import { useShallow } from 'zustand/react/shallow';
+import { useDueSoon, type DueSoonItem } from '../../hooks/use-due-soon';
 import { daysUntil } from '../../lib/date-utils';
-import { db } from '../../db';
+import { revealTask } from '../../lib/reveal-task';
 import { MotivationBanner } from './MotivationBanner';
 
 interface DueBucket {
   label: string;
   colorClass: string;
-  items: Array<{ type: 'task' | 'subtask'; id: string; taskId: string; title: string; dueDate: number; parentTitle?: string }>;
+  items: DueSoonItem[];
 }
 
 function DueSoonSection() {
   const [refreshKey, setRefreshKey] = useState(0);
   const rawItems = useDueSoon(refreshKey);
   const items = useDeferredValue(rawItems);
-  const { selectList, toggleTaskExpanded } = useAppState(useShallow(s => ({ selectList: s.selectList, toggleTaskExpanded: s.toggleTaskExpanded })));
 
   // Auto-refresh at midnight
   useEffect(() => {
@@ -55,23 +52,9 @@ function DueSoonSection() {
   const nonEmpty = buckets.filter((b) => b.items.length > 0);
   if (nonEmpty.length === 0) return null;
 
-  async function handleClick(item: { type: string; id: string; taskId: string }) {
-    if (item.type === 'task') {
-      const task = await db.tasks.get(item.taskId);
-      if (task) {
-        selectList(task.listId);
-        toggleTaskExpanded(task.id);
-      }
-    } else {
-      const subtask = await db.subtasks.get(item.id);
-      if (subtask) {
-        const task = await db.tasks.get(subtask.taskId);
-        if (task) {
-          selectList(task.listId);
-          toggleTaskExpanded(task.id);
-        }
-      }
-    }
+  // Due soon only lists tasks of task lists (see taskListIds).
+  function handleClick(item: DueSoonItem) {
+    revealTask({ taskId: item.taskId, listId: item.listId, listType: 'tasks', focusId: item.id });
   }
 
   return (

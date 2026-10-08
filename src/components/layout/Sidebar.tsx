@@ -34,18 +34,40 @@ import { useVault } from '../../hooks/use-vault';
 import { useLocalSettings } from '../../hooks/use-settings';
 import { lock as lockVault } from '../../db/vault';
 import { CheckForUpdatesButton } from './CheckForUpdatesButton';
+import { isInCooldown, nextWakeAt } from '../../hooks/use-follow-ups';
+import { useWakeTick } from '../../hooks/use-wake-tick';
 
-function useAllTaskCounts(listIds: string[]): Map<string, number> {
-  const key = listIds.join(',');
+interface ListCount {
+  /** Open tasks; for a follow-up list, the awake follow-ups only. */
+  count: number;
+  /** A follow-up list's snoozed follow-ups (not in `count`). */
+  snoozed: number;
+}
+
+function useAllTaskCounts(lists: { id: string; type: ListType }[]): Map<string, ListCount> {
+  const key = lists.map((l) => `${l.id}:${l.type}`).join(',');
+  // A follow-up waking moves it from `snoozed` to `count`: re-count then.
+  const [wakeAt, setWakeAt] = useState(0);
+  const wakeTick = useWakeTick(wakeAt);
   const counts = useLiveQuery(async () => {
-    const map = new Map<string, number>();
-    await Promise.all(listIds.map(async (id) => {
-      const tasks = await db.tasks.where('listId').equals(id).toArray();
-      map.set(id, tasks.filter((t) => !t.deletedAt && t.status !== 'done' && !t.archived).length);
+    const map = new Map<string, ListCount>();
+    let nextWake = 0;
+    await Promise.all(lists.map(async (list) => {
+      const tasks = await db.tasks.where('listId').equals(list.id).toArray();
+      const open = tasks.filter((t) => !t.deletedAt && t.status !== 'done' && !t.archived);
+      if (list.type !== 'follow-ups') {
+        map.set(list.id, { count: open.length, snoozed: 0 });
+        return;
+      }
+      const snoozed = open.filter(isInCooldown).length;
+      map.set(list.id, { count: open.length - snoozed, snoozed });
+      const wake = nextWakeAt(open);
+      if (wake && (!nextWake || wake < nextWake)) nextWake = wake;
     }));
-    return map;
-  }, [key]);
-  return counts ?? new Map();
+    return { map, nextWake };
+  }, [key, wakeTick]);
+  useEffect(() => setWakeAt(counts?.nextWake ?? 0), [counts?.nextWake]);
+  return counts?.map ?? new Map();
 }
 
 function HighlightedName({ name, highlight }: { name: string; highlight: string }) {
@@ -61,13 +83,14 @@ function HighlightedName({ name, highlight }: { name: string; highlight: string 
   );
 }
 
-function ListItem({ list, selected, onSelect, highlight, focused, count, allLists }: {
+function ListItem({ list, selected, onSelect, highlight, focused, count, snoozed = 0, allLists }: {
   list: { id: string; name: string; type: ListType; archivedAt?: number };
   selected: boolean;
   onSelect: () => void;
   highlight?: string;
   focused?: boolean;
   count: number;
+  snoozed?: number;
   allLists?: { id: string; name: string; type: ListType }[];
 }) {
   const archived = !!list.archivedAt;
@@ -212,7 +235,7 @@ function ListItem({ list, selected, onSelect, highlight, focused, count, allList
         )}
         <span data-redact className="flex-1 min-w-0 break-words text-left"><HighlightedName name={list.name} highlight={highlight ?? ''} /></span>
         {count > 0 && (
-          <span className="text-xs text-zinc-400">{count}</span>
+          <span className="text-xs text-zinc-400" title={snoozed > 0 ? `${count} awake · ${snoozed} snoozed` : undefined}>{count}</span>
         )}
       </button>
       <div className="mr-1 md:opacity-0 md:group-hover:opacity-100">
@@ -248,13 +271,14 @@ function ListItem({ list, selected, onSelect, highlight, focused, count, allList
   );
 }
 
-function SortableListItem({ list, selected, onSelect, highlight, focused, count, allLists }: {
+function SortableListItem({ list, selected, onSelect, highlight, focused, count, snoozed, allLists }: {
   list: { id: string; name: string; type: ListType; archivedAt?: number };
   selected: boolean;
   onSelect: () => void;
   highlight?: string;
   focused?: boolean;
   count: number;
+  snoozed?: number;
   allLists?: { id: string; name: string; type: ListType }[];
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
@@ -277,7 +301,7 @@ function SortableListItem({ list, selected, onSelect, highlight, focused, count,
 
   return (
     <div ref={setNodeRef} style={style} {...attributes} {...listeners}>
-      <ListItem list={list} selected={selected} onSelect={onSelect} highlight={highlight} focused={focused} count={count} allLists={allLists} />
+      <ListItem list={list} selected={selected} onSelect={onSelect} highlight={highlight} focused={focused} count={count} snoozed={snoozed} allLists={allLists} />
     </div>
   );
 }
@@ -321,7 +345,7 @@ export function Sidebar() {
   const searchRef = useRef<HTMLInputElement>(null);
 
   const { focusedItemId, focusZone } = useAppState(useShallow(s => ({ focusedItemId: s.focusedItemId, focusZone: s.focusZone })));
-  const taskCounts = useAllTaskCounts(lists.map((l) => l.id));
+  const taskCounts = useAllTaskCounts(lists);
   const { warningCount, blockedCount, recurringCount } = useSpecialListContext();
   const specialTotal = warningCount + blockedCount + recurringCount;
   const { enabled: paranoidEnabled } = useVault();
@@ -348,7 +372,7 @@ export function Sidebar() {
   const archivedLists = filteredLists
     .filter((l) => l.archivedAt)
     .sort((a, b) => (b.archivedAt ?? 0) - (a.archivedAt ?? 0));
-  const inboxCount = inboxList ? (taskCounts.get(inboxList.id) ?? 0) : 0;
+  const inboxCount = inboxList ? (taskCounts.get(inboxList.id)?.count ?? 0) : 0;
   // A search that matches an archived list opens the section, otherwise the
   // match would be hidden behind a collapsed header.
   const showArchived = archivedExpanded || (!!query && archivedLists.length > 0);
@@ -708,7 +732,8 @@ export function Sidebar() {
                   onSelect={() => { selectList(list.id); setSidebarOpen(false); }}
                   highlight={query}
                   focused={focusedItemId === list.id && focusZone === 'sidebar'}
-                  count={taskCounts.get(list.id) ?? 0}
+                  count={taskCounts.get(list.id)?.count ?? 0}
+                  snoozed={taskCounts.get(list.id)?.snoozed ?? 0}
                   allLists={lists}
                 />
               ))}
@@ -732,7 +757,8 @@ export function Sidebar() {
                   onSelect={() => { selectList(list.id); setSidebarOpen(false); }}
                   highlight={query}
                   focused={focusedItemId === list.id && focusZone === 'sidebar'}
-                  count={taskCounts.get(list.id) ?? 0}
+                  count={taskCounts.get(list.id)?.count ?? 0}
+                  snoozed={taskCounts.get(list.id)?.snoozed ?? 0}
                   allLists={lists}
                 />
               ))}
@@ -773,7 +799,8 @@ export function Sidebar() {
                     selected={selectedListId === list.id}
                     onSelect={() => { selectList(list.id); setSidebarOpen(false); }}
                     highlight={query}
-                    count={taskCounts.get(list.id) ?? 0}
+                    count={taskCounts.get(list.id)?.count ?? 0}
+                  snoozed={taskCounts.get(list.id)?.snoozed ?? 0}
                     allLists={lists}
                   />
                 ))}

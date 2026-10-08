@@ -62,6 +62,30 @@ function isReasonableWakeTime(value: number | undefined): value is number {
   return value <= Date.now() + MAX_REASONABLE_CUSTOM_MS;
 }
 
+/**
+ * When a topic was last dealt with: its newest discussion note or Discussed
+ * snooze, or its creation if neither. Synced data, so non-numbers are skipped.
+ */
+export function lastDiscussedAt(task: Task): number {
+  let latest = Number.isFinite(task.createdAt) ? task.createdAt : 0;
+  if (Number.isFinite(task.pingedAt) && task.pingedAt! > latest) latest = task.pingedAt!;
+  for (const entry of task.discussionLog ?? []) {
+    if (Number.isFinite(entry?.at) && entry.at > latest) latest = entry.at;
+  }
+  return latest;
+}
+
+/** The soonest moment one of `tasks` wakes from its snooze (epoch ms), or 0 if none is snoozed. */
+export function nextWakeAt(tasks: Task[]): number {
+  let soonest = 0;
+  for (const task of tasks) {
+    if (!isInCooldown(task)) continue;
+    const until = cooldownUntil(task);
+    if (!soonest || until < soonest) soonest = until;
+  }
+  return soonest;
+}
+
 export function formatCooldown(ms: number): string {
   const hours = Math.floor(ms / (1000 * 60 * 60));
   // Minutes in the last hour, which read "0h left"; never "0m" while still snoozed.

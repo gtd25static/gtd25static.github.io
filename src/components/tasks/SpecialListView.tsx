@@ -1,6 +1,5 @@
 import { useSpecialListContext, type SpecialItem } from '../../hooks/use-special-list';
-import { useShallow } from 'zustand/react/shallow';
-import { useAppState } from '../../stores/app-state';
+import { revealTask } from '../../lib/reveal-task';
 import { setTaskStatus, updateTask } from '../../hooks/use-tasks';
 import { confirmDialog } from '../ui/ConfirmDialog';
 import { setSubtaskStatus } from '../../hooks/use-subtasks';
@@ -18,12 +17,16 @@ function timeSince(timestamp: number): string {
 }
 
 function SpecialItemRow({ item }: { item: SpecialItem }) {
-  const { selectList, toggleTaskExpanded } = useAppState(useShallow(s => ({ selectList: s.selectList, toggleTaskExpanded: s.toggleTaskExpanded })));
-
   function navigateToSource() {
-    selectList(item.listId);
     const taskId = item.entityType === 'task' ? item.id : item.taskId;
-    if (taskId) toggleTaskExpanded(taskId);
+    if (!taskId) return;
+    revealTask({
+      taskId,
+      listId: item.listId,
+      listType: item.followUp ? 'follow-ups' : 'tasks',
+      focusId: item.id,
+      snoozed: item.snoozed,
+    });
   }
 
   async function handleDone(e: React.MouseEvent) {

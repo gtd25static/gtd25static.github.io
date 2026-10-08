@@ -89,7 +89,7 @@ describe('SearchResults navigation', () => {
     expect(scrollIntoView).toHaveBeenCalledWith({ block: 'center', behavior: 'smooth' });
   });
 
-  it('signals archived follow-up reveal and scrolls the follow-up card', () => {
+  it('opens the Resolved section for a resolved follow-up, opens its log and scrolls to it', () => {
     renderResults([
       makeResult({ id: 'follow-1', title: 'Archived follow-up', listId: 'fu-1', listType: 'follow-ups', archived: true }),
     ], ['follow-1']);
@@ -99,10 +99,25 @@ describe('SearchResults navigation', () => {
 
     const state = useAppState.getState();
     expect(state.selectedListId).toBe('fu-1');
-    expect(state.navigateToTaskId).toBe('follow-1');
-    expect(state.expandedTaskIds.has('follow-1')).toBe(false);
+    expect(state.followUpViews['fu-1']).toMatchObject({ showResolved: true, showSnoozed: false });
+    expect(state.expandedTaskIds.has('follow-1')).toBe(true);
     expect(state.focusZone).toBe('main');
     expect(state.focusedItemId).toBe('follow-1');
     expect(scrollIntoView).toHaveBeenCalledWith({ block: 'center', behavior: 'smooth' });
+  });
+
+  // It landed on a list that hid it: only the Resolved section was ever opened.
+  it('shows the snoozed for a snoozed follow-up, so it is on screen', () => {
+    renderResults([
+      makeResult({ id: 'follow-2', title: 'Snoozed follow-up', listId: 'fu-1', listType: 'follow-ups', snoozed: true }),
+    ], ['follow-2']);
+
+    fireEvent.click(screen.getByText('Snoozed follow-up'));
+    act(() => vi.runOnlyPendingTimers());
+
+    const state = useAppState.getState();
+    expect(state.followUpViews['fu-1']).toMatchObject({ showSnoozed: true, showResolved: false });
+    expect(state.expandedTaskIds.has('follow-2')).toBe(true);
+    expect(state.focusedItemId).toBe('follow-2');
   });
 });

@@ -1,4 +1,4 @@
-import { isInCooldown, cooldownRemaining, cooldownUntil, formatCooldown, cadenceMs, cadenceLabel, applyDiscussed } from '../../hooks/use-follow-ups';
+import { isInCooldown, cooldownRemaining, cooldownUntil, formatCooldown, cadenceMs, cadenceLabel, applyDiscussed, lastDiscussedAt, nextWakeAt } from '../../hooks/use-follow-ups';
 import type { Task } from '../../db/models';
 
 function makeTask(overrides?: Partial<Task>): Task {
@@ -213,5 +213,34 @@ describe('applyDiscussed', () => {
     const update = applyDiscussed(makeTask({ snoozeCadence: '1month' }), { untilMs: until });
     expect(update.pingCooldown).toBe('custom');
     expect(update.pingCooldownUntil).toBe(until);
+  });
+});
+
+describe('lastDiscussedAt', () => {
+  it('is the newest note or Discussed snooze, else the creation', () => {
+    expect(lastDiscussedAt(makeTask({ createdAt: 1000 }))).toBe(1000);
+    expect(lastDiscussedAt(makeTask({ createdAt: 1000, pingedAt: 4000 }))).toBe(4000);
+    expect(lastDiscussedAt(makeTask({
+      createdAt: 1000,
+      pingedAt: 4000,
+      discussionLog: [{ id: 'a', at: 2000 }, { id: 'b', at: 6000 }],
+    }))).toBe(6000);
+  });
+
+  it('skips entries whose time is not a number (synced data)', () => {
+    const task = makeTask({ createdAt: 1000, discussionLog: [{ id: 'a', at: Number.NaN }, { id: 'b', at: 'x' as unknown as number }] });
+    expect(lastDiscussedAt(task)).toBe(1000);
+  });
+});
+
+describe('nextWakeAt', () => {
+  it('is the soonest wake among the snoozed, 0 when none is snoozed', () => {
+    const now = Date.now();
+    expect(nextWakeAt([makeTask(), makeTask({ pingedAt: now - 30 * DAY, pingCooldown: '6d' })])).toBe(0);
+    expect(nextWakeAt([
+      makeTask({ id: 'a', pingedAt: now, pingCooldown: 'custom', pingCooldownUntil: now + 5000 }),
+      makeTask({ id: 'b', pingedAt: now, pingCooldown: 'custom', pingCooldownUntil: now + 2000 }),
+      makeTask({ id: 'c' }),
+    ])).toBe(now + 2000);
   });
 });

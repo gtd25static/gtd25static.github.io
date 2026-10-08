@@ -20,10 +20,10 @@ const mockUpdateTask = vi.fn();
 
 // use-keyboard runs four liveQueries; tell them apart by default value / deps.
 vi.mock('dexie-react-hooks', () => ({
-  useLiveQuery: (_fn: unknown, deps?: unknown[], def?: unknown) => {
+  useLiveQuery: (_fn: unknown, _deps?: unknown[], def?: unknown) => {
     if (def && typeof def === 'object' && 'lock' in (def as object)) return { lock: false, redact: false };
     if (def === null) return listType; // selected list type
-    if (Array.isArray(deps) && deps.length === 3) return mainItems; // main-area nav items [list, expanded, filter]
+    if (def && typeof def === 'object' && 'items' in (def as object)) return { items: mainItems, wakeAt: 0 }; // main-area nav items
     return []; // sidebar lists
   },
 }));
@@ -40,7 +40,7 @@ vi.mock('../../hooks/use-tasks', () => ({
 }));
 vi.mock('../../hooks/use-subtasks', () => ({ setSubtaskStatus: vi.fn() }));
 vi.mock('../../hooks/use-bulk-operations', () => ({ deleteTasksBatch: vi.fn() }));
-vi.mock('../../lib/task-sort', () => ({ sortTasksForDisplay: () => [], sortFollowUpsForDisplay: () => [] }));
+vi.mock('../../lib/task-sort', () => ({ sortTasksForDisplay: () => [], arrangeFollowUps: () => ({ visible: [], snoozed: [] }) }));
 vi.mock('../../components/ui/Toast', () => ({ toast: vi.fn() }));
 vi.mock('../../components/ui/ConfirmDialog', () => ({ confirmDialog: vi.fn(async () => false) }));
 

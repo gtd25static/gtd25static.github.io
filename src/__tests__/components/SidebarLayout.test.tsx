@@ -4,6 +4,7 @@ import '../setup-component';
 import {
   resetAppState,
   resetFactories,
+  makeTask,
   makeTaskList,
   renderWithUser,
 } from '../helpers/component-helpers';
@@ -125,5 +126,25 @@ describe('Sidebar compact layout', () => {
     input.closest('form')!.requestSubmit();
     await new Promise((r) => setTimeout(r, 50));
     expect((await db.taskLists.toArray()).filter((l) => l.name === 'Once')).toHaveLength(1);
+  });
+
+  // It counted the snoozed too, so the number never moved when a topic woke.
+  it('a follow-up list counts its awake topics, the snoozed in the tooltip, and re-counts when one wakes', async () => {
+    const now = Date.now();
+    await db.tasks.bulkAdd([
+      makeTask('f1', { title: 'Awake' }),
+      makeTask('f1', { title: 'Snoozed long', pingedAt: now, pingCooldown: 'custom', pingCooldownUntil: now + 86_400_000 }),
+      makeTask('f1', { title: 'Waking soon', pingedAt: now, pingCooldown: 'custom', pingCooldownUntil: now + 300 }),
+      makeTask('f1', { title: 'Resolved', archived: true }),
+      makeTask('l1', { title: 'Task one' }),
+      makeTask('l1', { title: 'Task two' }),
+    ]);
+    renderSidebar();
+    const row = () => document.querySelector('[data-focus-id="f1"]') as HTMLElement;
+    const count = await within(row()).findByText('1');
+    expect(count).toHaveAttribute('title', '1 awake · 2 snoozed');
+    expect(within(document.querySelector('[data-focus-id="l1"]') as HTMLElement).getByText('2')).toBeInTheDocument();
+
+    expect(await within(row()).findByText('2', {}, { timeout: 3_000 })).toHaveAttribute('title', '2 awake · 1 snoozed');
   });
 });

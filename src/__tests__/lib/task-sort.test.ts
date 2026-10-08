@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { sortTasksForDisplay, sortFollowUpsForDisplay, sortCompletedTasksForDisplay, sortTasksByName, recentlyDoneRemainingMs } from '../../lib/task-sort';
+import { sortTasksForDisplay, sortFollowUpsForDisplay, sortCompletedTasksForDisplay, sortTasksByName, recentlyDoneRemainingMs, arrangeFollowUps, sortFollowUpsByLastDiscussed } from '../../lib/task-sort';
 import type { Task } from '../../db/models';
 
 function makeTask(overrides: Partial<Task> & { id: string; order: number }): Task {
@@ -243,5 +243,62 @@ describe('recentlyDoneRemainingMs', () => {
   it('is nothing for a task that is not done', () => {
     const open = makeTask({ id: 'd', order: 0, status: 'todo', updatedAt: now });
     expect(recentlyDoneRemainingMs(open, now)).toBeLessThanOrEqual(0);
+  });
+});
+
+describe('arrangeFollowUps', () => {
+  const now = Date.now();
+  const snooze = { pingedAt: now, pingCooldown: '1week' as const };
+
+  it('by hand: awake in manual order, the snoozed left out unless shown', () => {
+    const tasks = [
+      makeTask({ id: 'a', order: 0 }),
+      makeTask({ id: 'z', order: 1, ...snooze }),
+      makeTask({ id: 'b', order: 2 }),
+    ];
+    expect(arrangeFollowUps(tasks, { sort: 'manual', showSnoozed: false }).visible.map((t) => t.id)).toEqual(['b', 'a']);
+    const shown = arrangeFollowUps(tasks, { sort: 'manual', showSnoozed: true });
+    expect(shown.visible.map((t) => t.id)).toEqual(['b', 'a', 'z']);
+    expect(shown.snoozed.map((t) => t.id)).toEqual(['z']);
+  });
+
+  it('by hand, a starred snoozed card keeps its place among the starred', () => {
+    const tasks = [
+      makeTask({ id: 'a', order: 0 }),
+      makeTask({ id: 's', order: 1, starred: true, ...snooze }),
+    ];
+    expect(arrangeFollowUps(tasks, { sort: 'manual', showSnoozed: true }).visible.map((t) => t.id)).toEqual(['s', 'a']);
+  });
+
+  it('by date: awake by due date, the snoozed after them', () => {
+    const tasks = [
+      makeTask({ id: 'late', order: 0, dueDate: now + 5_000 }),
+      makeTask({ id: 'z', order: 1, dueDate: now + 1, ...snooze }),
+      makeTask({ id: 'soon', order: 2, dueDate: now + 1_000 }),
+      makeTask({ id: 'none', order: 3 }),
+    ];
+    expect(arrangeFollowUps(tasks, { sort: 'date', showSnoozed: true }).visible.map((t) => t.id)).toEqual(['soon', 'late', 'none', 'z']);
+    expect(arrangeFollowUps(tasks, { sort: 'date', showSnoozed: false }).visible.map((t) => t.id)).toEqual(['soon', 'late', 'none']);
+  });
+
+  it('by last discussed: the stalest topic first, the snoozed after them', () => {
+    const tasks = [
+      makeTask({ id: 'recent', order: 0, createdAt: 100, discussionLog: [{ id: 'e1', at: 5_000 }] }),
+      makeTask({ id: 'z', order: 1, createdAt: 50, ...snooze }),
+      makeTask({ id: 'never', order: 2, createdAt: 2_000 }),
+      makeTask({ id: 'old', order: 3, createdAt: 100, discussionLog: [{ id: 'e2', at: 1_000 }] }),
+    ];
+    expect(arrangeFollowUps(tasks, { sort: 'discussed', showSnoozed: true }).visible.map((t) => t.id)).toEqual(['old', 'never', 'recent', 'z']);
+  });
+});
+
+describe('sortFollowUpsByLastDiscussed', () => {
+  it('counts a Discussed snooze as a discussion, and ties go to the newest manual order', () => {
+    const tasks = [
+      makeTask({ id: 'a', order: 0, createdAt: 100 }),
+      makeTask({ id: 'b', order: 1, createdAt: 100 }),
+      makeTask({ id: 'snoozedBefore', order: 2, createdAt: 10, pingedAt: 3_000 }),
+    ];
+    expect(sortFollowUpsByLastDiscussed(tasks).map((t) => t.id)).toEqual(['b', 'a', 'snoozedBefore']);
   });
 });
