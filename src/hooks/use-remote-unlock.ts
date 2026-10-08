@@ -11,8 +11,8 @@ import { setApprovalState } from '../lib/approval-gate';
 import {
   getMailboxPat, getRepo, requestRemoteUnlock, pollRemoteUnlock, pollRemoteCommands, cancelRemoteUnlock,
   expirePendingUnlock, hasPendingUnlock, refreshRegistryHeartbeat,
-  pollApproverInbox, listApprovedDevices, readPendingApproval, approveRemoteUnlock, publishOwnRegistryEntry,
-  dropDecommissionedDevices, recordRemoteDenial,
+  pollApproverInbox, listApprovedDevices, readPendingApproval, inspectPendingRequest, approveRemoteUnlock, publishOwnRegistryEntry,
+  dropDecommissionedDevices, recordRemoteDenial, type UndeliverableRequest,
 } from '../sync/remote-unlock';
 
 const SLOW_POLL_MS = 12_000;   // background cadence (wipe watch / invitations)
@@ -92,6 +92,8 @@ export function useLockScreenRemote() {
           pending.current = false;
           setCode(null);
           setError('Unlock request expired — request again');
+        } else if (r.status === 'wrong-key') {
+          setError(`“${r.approverName}” approved, but the key it holds no longer opens this vault. Approve on another trusted device, or unlock another way and add it again in Settings → Security.`);
         }
       } catch { /* transient */ } finally {
         inFlight.current = false;
@@ -128,11 +130,16 @@ export function useLockScreenRemote() {
     if (c) void expirePendingUnlock(c.pat, c.repo, c.deviceId).catch((err) => recordError('remoteUnlock.abandon', err));
   }, []);
 
+  // The remote cleanup of a cancelled request: a new request waits for it, or the
+  // late delete would take the new request with it.
+  const cancelling = useRef<Promise<void> | null>(null);
+
   const request = useCallback(async () => {
     const c = ctx.current;
     if (!c) return;
     setError('');
     try {
+      await cancelling.current;
       const { code } = await requestRemoteUnlock(c.pat, c.repo, c.deviceId);
       reqEtag.current = null;
       pending.current = true;
@@ -143,10 +150,19 @@ export function useLockScreenRemote() {
     }
   }, [tick]);
 
+  // Also takes the request off the backend: left there, the trusted devices kept
+  // showing it for its full two minutes, and approving it did nothing.
   const cancel = useCallback(() => {
     cancelRemoteUnlock();
     pending.current = false;
     setCode(null);
+    setError('');
+    const c = ctx.current;
+    if (c) {
+      cancelling.current = expirePendingUnlock(c.pat, c.repo, c.deviceId)
+        .catch((err) => recordError('remoteUnlock.cancel', err))
+        .finally(() => { cancelling.current = null; });
+    }
   }, []);
 
   return { enrolled, code, error, request, cancel };
@@ -260,13 +276,19 @@ const expiredMessage = (req: ApprovalRequest): string => `Unlock request from �
 export function useRemoteApprovals(): {
   pending: ApprovalRequest | null;
   held: HeldRequest | null;
-  approve: () => Promise<void>;
+  undeliverable: UndeliverableRequest | null;
+  /** Resolves true once the prompt is done with; false when it stays up to try again. */
+  approve: () => Promise<boolean>;
   deny: () => void;
   showHeld: () => void;
   ignoreHeld: () => void;
+  ignoreUndeliverable: () => void;
 } {
   const [pending, setPending] = useState<ApprovalRequest | null>(null);
   const [held, setHeld] = useState<HeldRequest | null>(null);
+  // A request that reached this device but cannot be answered here, and why.
+  const [undeliverable, setUndeliverable] = useState<UndeliverableRequest | null>(null);
+  const reportedUndeliverable = useRef<Set<string>>(new Set()); // diagnostics: once per request
   const seen = useRef<Set<string>>(new Set());
   const busy = useRef(false);
   // The salt this device's registry entry was last published under: a sync-password
@@ -330,24 +352,48 @@ export function useRemoteApprovals(): {
         if (!still || still.nonce !== cur.nonce || still.requestDigest !== cur.requestDigest || expired(cur)) {
           dismiss(expired(cur)
             ? expiredMessage(cur)
-            : `Unlock request from “${cur.fromName}” was handled by another device`);
+            : `Unlock request from “${cur.fromName}” was answered on another device or withdrawn`);
         }
         return;
       }
 
+      // Housekeeping, each step on its own: one that failed (a conflict on the
+      // registry, a flaky read of the inbox) used to skip the look for requests.
+      const housekeeping = async (what: string, step: () => Promise<unknown>) => {
+        try { await step(); } catch (err) { recordError(`remoteUnlock.${what}`, err); }
+      };
       const salt = getCachedSalt();
-      if (salt && publishedForSalt.current !== salt && await publishOwnRegistryEntry()) publishedForSalt.current = salt;
-      await pollApproverInbox(pat, repo, myId);
+      if (salt && publishedForSalt.current !== salt) {
+        await housekeeping('publishEntry', async () => { if (await publishOwnRegistryEntry()) publishedForSalt.current = salt; });
+      }
+      await housekeeping('approverInbox', () => pollApproverInbox(pat, repo, myId));
       // Devices another trusted device forgot (maybe stolen): stop showing their
       // requests here too, without waiting for someone to open the Settings.
       if (Date.now() - lastDecommissionCheck.current >= DECOMMISSION_CHECK_MS) {
         lastDecommissionCheck.current = Date.now();
-        await dropDecommissionedDevices(pat, repo);
+        await housekeeping('decommission', () => dropDecommissionedDevices(pat, repo));
       }
       const managed = await listApprovedDevices();
       let heldBack: HeldRequest | null = null;
+      let cannotAnswer: UndeliverableRequest | null = null;
       for (const m of managed) {
-        const p = await readPendingApproval(pat, repo, m.deviceId);
+        let inspected: Awaited<ReturnType<typeof inspectPendingRequest>>;
+        try {
+          inspected = await inspectPendingRequest(pat, repo, m.deviceId);
+        } catch (err) {
+          recordError('remoteUnlock.readRequest', err); // one device's failure: the others are still looked at
+          continue;
+        }
+        if (inspected && 'undeliverable' in inspected) {
+          const u = inspected.undeliverable;
+          if (!reportedUndeliverable.current.has(u.nonce)) {
+            reportedUndeliverable.current.add(u.nonce);
+            recordError('remoteUnlock.undeliverable', new Error(`Request from ${u.fromDeviceId} cannot be answered here: ${u.problem}`));
+          }
+          if (!seen.current.has(u.nonce)) cannotAnswer ??= u;
+          continue;
+        }
+        const p = inspected?.approval;
         if (!p || seen.current.has(p.nonce)) continue;
         const req: ApprovalRequest = { deviceId: m.deviceId, fromName: p.fromName, nonce: p.nonce, code: p.code, expiresAt: p.expiresAt, requestDigest: p.requestDigest };
         if (p.heldUntil && lifted.current.get(m.deviceId) !== p.heldUntil) {
@@ -360,6 +406,7 @@ export function useRemoteApprovals(): {
       }
       // Re-read every tick: a held request that expired or was answered elsewhere goes.
       setHeldRequest(current.current ? null : heldBack);
+      setUndeliverable(current.current || heldBack ? null : cannotAnswer);
     } catch (err) {
       // Mostly transient network/db errors, but a PERSISTENT failure means this
       // device silently stops approving unlocks — keep it visible in diagnostics.
@@ -424,31 +471,39 @@ export function useRemoteApprovals(): {
     return () => clearTimeout(t);
   }, [held, setHeldRequest, publish]);
 
-  const approve = useCallback(async () => {
+  const approve = useCallback(async (): Promise<boolean> => {
     const p = current.current;
-    if (!p) return;
+    if (!p) return true;
     if (expired(p)) {
       dismiss(expiredMessage(p));
-      return;
+      return true;
     }
     try {
       const local = await db.localSettings.get('local');
-      if (local?.githubPat && local.githubRepo) await approveRemoteUnlock(local.githubPat, local.githubRepo, p.deviceId, p.requestDigest);
+      if (!local?.githubPat || !local.githubRepo) throw new Error('Sync is not set up on this device');
+      await approveRemoteUnlock(local.githubPat, local.githubRepo, p.deviceId, p.requestDigest);
+      dismiss(null);
+      return true;
     } catch (err) {
+      recordError('remoteUnlock.approve', err);
+      const msg = err instanceof Error ? err.message : '';
       // Two of the throws here are the ACR-001 defence firing: the request was
       // swapped after the code was shown, or its signature does not verify.
       // Swallowing them made an active substitution attack look exactly like a
       // normal approval to the one human in the loop.
-      recordError('remoteUnlock.approve', err);
-      const msg = err instanceof Error ? err.message : '';
-      toast(
-        /changed since it was shown|signature is invalid/.test(msg)
-          ? `Approval aborted — ${msg}. Ask the other device to start a new request.`
-          : 'Could not send the approval — the other device can request again.',
-        'error',
-      );
-    } finally {
-      dismiss(null);
+      if (/changed since it was shown|signature is invalid/.test(msg)) {
+        toast(`Approval aborted — ${msg}. Ask the other device to start a new request.`, 'error');
+        dismiss(null);
+        return true;
+      }
+      if (/expired|No unlock request found|Not enrolled|dated in the future/.test(msg)) {
+        dismiss(`Unlock request from “${p.fromName}” is no longer there to approve`);
+        return true;
+      }
+      // A network failure: the request is still waiting on the other device, so
+      // the prompt stays up to try again (closing it ended the ceremony there).
+      toast('Could not send the approval — check the connection and tap Approve again.', 'error');
+      return false;
     }
   }, [dismiss]);
 
@@ -492,5 +547,11 @@ export function useRemoteApprovals(): {
     publish();
   }, [publish, setHeldRequest]);
 
-  return { pending, held, approve, deny, showHeld, ignoreHeld };
+  // Not a denial: this request stops showing; the reason stays in the diagnostics.
+  const ignoreUndeliverable = useCallback(() => {
+    if (undeliverable) seen.current.add(undeliverable.nonce);
+    setUndeliverable(null);
+  }, [undeliverable]);
+
+  return { pending, held, undeliverable, approve, deny, showHeld, ignoreHeld, ignoreUndeliverable };
 }

@@ -35,6 +35,11 @@ vi.mock('../../sync/remote-unlock', () => ({
   pollApproverInbox: vi.fn(async () => undefined),
   listApprovedDevices: h.listApprovedDevices,
   readPendingApproval: h.readPendingApproval,
+  // The hook looks through inspectPendingRequest: an answerable request comes as { approval }.
+  inspectPendingRequest: async (...a: unknown[]) => {
+    const p = await (h.readPendingApproval as (...x: unknown[]) => Promise<unknown>)(...a);
+    return p ? { approval: p } : null;
+  },
   approveRemoteUnlock: h.approveRemoteUnlock,
   publishOwnRegistryEntry: vi.fn(async () => undefined),
   dropDecommissionedDevices: vi.fn(async () => []),

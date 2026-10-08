@@ -519,12 +519,31 @@ export async function disableRemoteUnlock(): Promise<void> {
   }
 }
 
+/**
+ * Read `path`, write what `next` makes of it, and start over on a conflict: a
+ * file just written or deleted (the last request, the other approver's answer)
+ * can read back with a stale sha for a moment, and the write then failed with a
+ * bare "CONFLICT" — a request not sent, an approval lost, a re-key's hand-out
+ * aborted (which turns remote unlock off).
+ */
+async function rewriteFile(pat: string, repo: string, path: string, next: (current: string | null) => string): Promise<void> {
+  for (let attempt = 1; ; attempt++) {
+    const existing = await getFile(pat, repo, path);
+    try {
+      await putFile(pat, repo, path, next(existing?.data ?? null), existing?.sha);
+      return;
+    } catch (err) {
+      if (!(err instanceof Error && err.message === 'CONFLICT') || attempt >= 3) throw err;
+    }
+  }
+}
+
 async function postApproverInvite(pat: string, repo: string, approverDeviceId: string, invite: ApproverInvite): Promise<void> {
-  const path = approverInboxPath(approverDeviceId);
-  const existing = await getFile(pat, repo, path);
-  const inbox = existing ? safeParseObj<ApproverInvite>(existing.data) : {};
-  inbox[invite.fromDeviceId] = invite;
-  await putFile(pat, repo, path, JSON.stringify(inbox), existing?.sha);
+  await rewriteFile(pat, repo, approverInboxPath(approverDeviceId), (current) => {
+    const inbox = current ? safeParseObj<ApproverInvite>(current) : {};
+    inbox[invite.fromDeviceId] = invite;
+    return JSON.stringify(inbox);
+  });
 }
 
 async function writeApproverInbox(pat: string, repo: string, approverDeviceId: string, inbox: Record<string, ApproverInvite>, sha: string): Promise<void> {
@@ -560,11 +579,14 @@ async function removeApproverInvite(pat: string, repo: string, approverDeviceId:
  */
 export async function pollApproverInbox(pat: string, repo: string, deviceId: string, macKey?: CryptoKey): Promise<number> {
   if (isParanoidFlagSet()) return 0;
-  const key = macKey ?? (await getRegistryMacKey());
-  if (!key) return 0; // can't authenticate senders yet — skip; invites stay for next poll
+  // The inbox first: deriving the key (PBKDF2) on every 12 s poll, invites or not,
+  // cost a phone up to a second or two of CPU each time.
   const file = await getFile(pat, repo, approverInboxPath(deviceId));
   if (!file) return 0;
   const inbox = safeParseObj<ApproverInvite>(file.data);
+  if (Object.keys(inbox).length === 0) return 0;
+  const key = macKey ?? (await getRegistryMacKey());
+  if (!key) return 0; // can't authenticate senders yet — skip; invites stay for next poll
   const identity = await ensureDeviceIdentity();
   const local = await db.localSettings.get('local');
   const existing = local?.remoteApproverFor ?? {};
@@ -1059,9 +1081,7 @@ export async function requestRemoteUnlock(pat: string, repo: string, deviceId: s
 
   const sig = await signPayload(identity.ecdsaPriv, requestBytes({ fromDeviceId: deviceId, nonce, ts, kForApprover }));
   const req: UnlockRequest = { fromDeviceId: deviceId, nonce, ts, kForApprover, sig };
-  const path = unlockReqPath(deviceId);
-  const existing = await getFile(pat, repo, path);
-  await putFile(pat, repo, path, JSON.stringify(req), existing?.sha);
+  await rewriteFile(pat, repo, unlockReqPath(deviceId), () => JSON.stringify(req));
 
   const code = await verificationCode(concat(k, te.encode(nonce)));
   const digest = await requestDigest({ fromDeviceId: deviceId, nonce, ts, kForApprover });
@@ -1099,7 +1119,12 @@ export function hasPendingUnlock(): boolean {
  * signed response, decrypt RUK with the in-RAM session key and unlock. Returns
  * 'unlocked' | 'waiting'. Uses conditional requests for cheap polling.
  */
-export async function pollRemoteUnlock(pat: string, repo: string, deviceId: string, etag?: string | null): Promise<{ etag: string | null; status: 'unlocked' | 'waiting' | 'expired' }> {
+export async function pollRemoteUnlock(pat: string, repo: string, deviceId: string, etag?: string | null): Promise<{
+  etag: string | null;
+  status: 'unlocked' | 'waiting' | 'expired' | 'wrong-key';
+  /** 'wrong-key': the trusted device that approved — its key no longer opens this vault. */
+  approverName?: string;
+}> {
   if (!pendingUnlock) return { etag: etag ?? null, status: 'waiting' };
   // Enforce the TTL on the requester side too: once expired, wipe the in-RAM session
   // key and delete the stale request so a late/replayed response can't be accepted
@@ -1125,22 +1150,37 @@ export async function pollRemoteUnlock(pat: string, repo: string, deviceId: stri
   }));
   if (!ok) return { etag: res.etag, status: 'waiting' };
 
+  // Approved — with a key that does not open this vault (one this device replaced
+  // and the approver never picked up): said, where it used to wait out the TTL
+  // in silence. Still waiting: another trusted device may approve.
+  // A failure on this side (a database error) is retried: no ETag kept, so the
+  // next poll reads the response again instead of hearing "unchanged" forever.
+  const retry = { etag: null, status: 'waiting' as const };
+  let ruk: Uint8Array;
   try {
     const sessionKey = await importKekFromBytes(pendingUnlock.k);
-    const rukB64 = await decryptBlob(sessionKey, resp.respBlob);
-    const ruk = b64decode(rukB64);
-    const unlocked = await unlockWithRemoteKey(ruk);
+    ruk = b64decode(await decryptBlob(sessionKey, resp.respBlob));
+  } catch {
+    return retry;
+  }
+  let unlocked: boolean;
+  try {
+    unlocked = await unlockWithRemoteKey(ruk);
+  } catch {
+    return retry;
+  } finally {
     ruk.fill(0);
-    if (unlocked) {
-      cancelRemoteUnlock();
-      // Consume the response AND the request so it can't be replayed and so other
-      // trusted devices' prompts detect it was handled (request gone before expiry).
-      try { const r = await getFile(pat, repo, unlockRespPath(deviceId)); if (r) await deleteFile(pat, repo, unlockRespPath(deviceId), r.sha); } catch { /* best effort */ }
-      try { const q = await getFile(pat, repo, unlockReqPath(deviceId)); if (q) await deleteFile(pat, repo, unlockReqPath(deviceId), q.sha); } catch { /* best effort */ }
-      return { etag: res.etag, status: 'unlocked' };
-    }
-  } catch { /* fall through */ }
-  return { etag: res.etag, status: 'waiting' };
+  }
+  // Approved — with a key that does not open this vault (one this device replaced
+  // and the approver never picked up): said, where it used to wait out the TTL in
+  // silence. Still waiting: another trusted device may approve.
+  if (!unlocked) return { etag: res.etag, status: 'wrong-key', approverName: approver.name };
+  cancelRemoteUnlock();
+  // Consume the response AND the request so it can't be replayed and so other
+  // trusted devices' prompts detect it was handled (request gone before expiry).
+  try { const r = await getFile(pat, repo, unlockRespPath(deviceId)); if (r) await deleteFile(pat, repo, unlockRespPath(deviceId), r.sha); } catch { /* best effort */ }
+  try { const q = await getFile(pat, repo, unlockReqPath(deviceId)); if (q) await deleteFile(pat, repo, unlockReqPath(deviceId), q.sha); } catch { /* best effort */ }
+  return { etag: res.etag, status: 'unlocked' };
 }
 
 // --- Unlock exchange (approver side) ---
@@ -1159,34 +1199,75 @@ export interface PendingApproval {
  * signature + freshness, and return the request + verification code to show the
  * user. Returns null if none / invalid / not enrolled / this device is Paranoid.
  */
-export async function readPendingApproval(pat: string, repo: string, fromDeviceId: string): Promise<PendingApproval | null> {
+/**
+ * Why a request from a managed device cannot be answered here — said on screen,
+ * where it used to be dropped without a word (the locked device just waited on a
+ * code nobody saw):
+ * - 'bad-signature': not signed by the key this device holds for it (it was set
+ *   up again — or someone else wrote it);
+ * - 'dated-ahead': dated more than REQUEST_FUTURE_SKEW_MS ahead of this clock;
+ * - 'not-for-this-device': it carries no key for this device (no longer one of
+ *   its trusted devices);
+ * - 'undecryptable': made for an older key of this device.
+ */
+export type RequestProblem = 'bad-signature' | 'dated-ahead' | 'not-for-this-device' | 'undecryptable';
+export interface UndeliverableRequest { fromDeviceId: string; fromName: string; nonce: string; problem: RequestProblem; aheadMs?: number }
+export type InspectedRequest = { approval: PendingApproval } | { undeliverable: UndeliverableRequest };
+
+// A request file anyone with the token could have written: the shape is checked
+// before anything reads into it (a missing blob field threw, every poll).
+function isWellFormedRequest(v: unknown): v is UnlockRequest {
+  const r = v as Partial<UnlockRequest> | null;
+  if (!r || typeof r !== 'object' || typeof r.fromDeviceId !== 'string' || typeof r.nonce !== 'string'
+    || !Number.isFinite(r.ts) || typeof r.sig !== 'string' || !r.kForApprover || typeof r.kForApprover !== 'object') return false;
+  return Object.values(r.kForApprover).every((b) => !!b && typeof b === 'object'
+    && typeof (b as EciesBlob).ct === 'string' && typeof (b as EciesBlob).epk?.x === 'string');
+}
+
+/**
+ * Approver: read a pending unlock request from a managed device, verify its
+ * signature + freshness, and return the request + verification code to show the
+ * user — or, for one that cannot be answered here, why. Returns null if there is
+ * none / it is stale or garbage / not enrolled / this device is Paranoid.
+ */
+export async function inspectPendingRequest(pat: string, repo: string, fromDeviceId: string): Promise<InspectedRequest | null> {
   if (isParanoidFlagSet()) return null;
   const local = await db.localSettings.get('local');
   const entry = local?.remoteApproverFor?.[fromDeviceId];
   if (!entry) return null;
   const file = await getFile(pat, repo, unlockReqPath(fromDeviceId));
   if (!file) return null;
-  const req = (() => { try { return JSON.parse(file.data) as UnlockRequest; } catch { return null; } })();
-  if (!req || req.fromDeviceId !== fromDeviceId) return null;
+  const req = (() => { try { return JSON.parse(file.data) as unknown; } catch { return null; } })();
+  if (!isWellFormedRequest(req) || req.fromDeviceId !== fromDeviceId) return null;
   if (Date.now() - req.ts > REQUEST_TTL_MS) return null; // stale / replay
-  if (req.ts > Date.now() + REQUEST_FUTURE_SKEW_MS) return null; // dated ahead
-  const myId = local?.deviceId ?? '';
-  const myBlob = req.kForApprover[myId];
-  if (!myBlob) return null;
+  const undeliverable = (problem: RequestProblem, extra: Partial<UndeliverableRequest> = {}): InspectedRequest =>
+    ({ undeliverable: { fromDeviceId, fromName: entry.name, nonce: req.nonce, problem, ...extra } });
   if (!(await verifyPayload(entry.ecdsaPub, req.sig, requestBytes({ fromDeviceId: req.fromDeviceId, nonce: req.nonce, ts: req.ts, kForApprover: req.kForApprover })))) {
-    return null;
+    return undeliverable('bad-signature');
   }
+  if (req.ts > Date.now() + REQUEST_FUTURE_SKEW_MS) return undeliverable('dated-ahead', { aheadMs: req.ts - Date.now() });
+  const myId = local?.deviceId ?? '';
+  const myBlob = Object.prototype.hasOwnProperty.call(req.kForApprover, myId) ? req.kForApprover[myId] : undefined;
+  if (!myBlob) return undeliverable('not-for-this-device');
   const identity = await ensureDeviceIdentity();
   let k: Uint8Array;
-  try { k = await eciesDecrypt(identity.ecdhPriv, myBlob); } catch { return null; }
+  try { k = await eciesDecrypt(identity.ecdhPriv, myBlob); } catch { return undeliverable('undecryptable'); }
   const code = await verificationCode(concat(k, te.encode(req.nonce)));
   k.fill(0);
   const digest = await requestDigest({ fromDeviceId: req.fromDeviceId, nonce: req.nonce, ts: req.ts, kForApprover: req.kForApprover });
   const paused = !!entry.lastDeniedAt && Date.now() - entry.lastDeniedAt < DENIAL_PAUSE_MS; // just denied
   return {
-    fromDeviceId, fromName: entry.name, nonce: req.nonce, code, expiresAt: req.ts + REQUEST_TTL_MS, requestDigest: digest,
-    ...(paused ? { heldUntil: entry.lastDeniedAt! + DENIAL_PAUSE_MS } : {}),
+    approval: {
+      fromDeviceId, fromName: entry.name, nonce: req.nonce, code, expiresAt: req.ts + REQUEST_TTL_MS, requestDigest: digest,
+      ...(paused ? { heldUntil: entry.lastDeniedAt! + DENIAL_PAUSE_MS } : {}),
+    },
   };
+}
+
+/** The answerable request from `fromDeviceId`, or null (see inspectPendingRequest). */
+export async function readPendingApproval(pat: string, repo: string, fromDeviceId: string): Promise<PendingApproval | null> {
+  const inspected = await inspectPendingRequest(pat, repo, fromDeviceId);
+  return inspected && 'approval' in inspected ? inspected.approval : null;
 }
 
 /**
@@ -1207,8 +1288,10 @@ export async function approveRemoteUnlock(pat: string, repo: string, fromDeviceI
   const myId = local?.deviceId ?? '';
   const file = await getFile(pat, repo, unlockReqPath(fromDeviceId));
   if (!file) throw new Error('No unlock request found');
-  const req = (() => { try { return JSON.parse(file.data) as UnlockRequest; } catch { return null; } })();
-  if (!req || req.fromDeviceId !== fromDeviceId || !req.kForApprover?.[myId]) throw new Error('No unlock request found');
+  const req = (() => { try { return JSON.parse(file.data) as unknown; } catch { return null; } })();
+  if (!isWellFormedRequest(req) || req.fromDeviceId !== fromDeviceId || !Object.prototype.hasOwnProperty.call(req.kForApprover, myId)) {
+    throw new Error('No unlock request found');
+  }
   if (Date.now() - req.ts > REQUEST_TTL_MS) throw new Error('Request expired');
   if (req.ts > Date.now() + REQUEST_FUTURE_SKEW_MS) throw new Error('Unlock request is dated in the future — approval aborted');
   // Re-verify the requester signature (the request must be genuine)...
@@ -1227,9 +1310,7 @@ export async function approveRemoteUnlock(pat: string, repo: string, fromDeviceI
     const ts = Date.now();
     const sig = await signPayload(identity.ecdsaPriv, responseBytes({ forNonce: req.nonce, fromApproverDeviceId: myId, ts, respBlob, requestDigest: expectedDigest }));
     const resp: UnlockResponse = { forNonce: req.nonce, fromApproverDeviceId: myId, ts, respBlob, requestDigest: expectedDigest, sig };
-    const path = unlockRespPath(fromDeviceId);
-    const existing = await getFile(pat, repo, path);
-    await putFile(pat, repo, path, JSON.stringify(resp), existing?.sha);
+    await rewriteFile(pat, repo, unlockRespPath(fromDeviceId), () => JSON.stringify(resp));
   } finally {
     k.fill(0);
   }
@@ -1303,11 +1384,25 @@ export async function retireApproverRole(): Promise<void> {
   await deleteRemoteFileIfExists(pat, repo, approverInboxPath(local.deviceId));
 }
 
+// The last registry key derived on a device NOT in Paranoid Mode (its sync
+// password is on disk in the clear anyway). A Paranoid device derives it each
+// time: no key from its password outlives a lock.
+let registryMacKeyCache: { sp: string; salt: string; key: Promise<CryptoKey> } | null = null;
+
 export async function getRegistryMacKey(): Promise<CryptoKey | null> {
   const sp = await getSyncPassword();
   const salt = getCachedSalt();
   if (!sp || !salt) return null;
-  return deriveRegistryMacKey(sp, salt);
+  if (isParanoidFlagSet()) {
+    registryMacKeyCache = null;
+    return deriveRegistryMacKey(sp, salt);
+  }
+  if (registryMacKeyCache?.sp !== sp || registryMacKeyCache.salt !== salt) {
+    const key = deriveRegistryMacKey(sp, salt);
+    registryMacKeyCache = { sp, salt, key };
+    key.catch(() => { if (registryMacKeyCache?.key === key) registryMacKeyCache = null; });
+  }
+  return registryMacKeyCache.key;
 }
 
 /**

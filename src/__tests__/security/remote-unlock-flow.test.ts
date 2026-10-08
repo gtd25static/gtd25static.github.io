@@ -14,6 +14,8 @@ let files: Record<string, { data: string; sha: string }> = {};
 let failPutPaths: Set<string> = new Set();
 let failGetPaths: Set<string> = new Set();
 let failDeletePaths: Set<string> = new Set();
+// A write that meets a stale sha once (a file just written or deleted reads back old).
+let conflictOncePaths: Set<string> = new Set();
 vi.mock('../../sync/github-api', () => ({
   getFile: vi.fn((_p: string, _r: string, path: string) => {
     if (failGetPaths.has(path)) return Promise.reject(new Error(`get failed (500): ${path}`));
@@ -21,6 +23,7 @@ vi.mock('../../sync/github-api', () => ({
   }),
   putFile: vi.fn((_p: string, _r: string, path: string, content: string) => {
     if (failPutPaths.has(path)) return Promise.reject(new Error(`put failed (500): ${path}`));
+    if (conflictOncePaths.delete(path)) return Promise.reject(new Error('CONFLICT'));
     files[path] = { data: content, sha: `sha-${Math.random()}` };
     return Promise.resolve(files[path].sha);
   }),
@@ -138,6 +141,7 @@ beforeEach(async () => {
   failPutPaths = new Set();
   failGetPaths = new Set();
   failDeletePaths = new Set();
+  conflictOncePaths = new Set();
   panicSpy.mockClear();
   localStorage.removeItem(PARANOID_FLAG);
   localStorage.removeItem('gtd25-paranoid-key');
@@ -1346,3 +1350,101 @@ describe('a re-key hands the approvers a new remote-unlock key (review batch 5)'
 function b64decodeRuk(b64: string): Uint8Array {
   return Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
 }
+
+describe('unlock requests that used to fail without a word (reliability review 2026-10-08)', () => {
+  async function requestedByLaptop(): Promise<string> {
+    await enrollPair();
+    await actAsLaptop();
+    vault.lock();
+    const { code } = await ru.requestRemoteUnlock(PAT, REPO, LAP);
+    await actAsPhone();
+    return code;
+  }
+  const problemOf = async () => {
+    const inspected = await ru.inspectPendingRequest(PAT, REPO, LAP);
+    return inspected && 'undeliverable' in inspected ? inspected.undeliverable : null;
+  };
+
+  it('control: an answerable request is the approval, with its code', async () => {
+    const code = await requestedByLaptop();
+    const inspected = await ru.inspectPendingRequest(PAT, REPO, LAP);
+    expect(inspected && 'approval' in inspected && inspected.approval.code).toBe(code);
+  });
+
+  it('one that carries no key for this device says so', async () => {
+    await requestedByLaptop();
+    await db.localSettings.update('local', { deviceId: 'phone-set-up-again' });
+    expect(await problemOf()).toMatchObject({ problem: 'not-for-this-device', fromName: 'Work Laptop' });
+  });
+
+  it('one made for an older key of this device says so', async () => {
+    await requestedByLaptop();
+    await db.localSettings.update('local', { deviceIdentity: await generateIdentityKeys() });
+    expect((await problemOf())?.problem).toBe('undecryptable');
+  });
+
+  it('one not signed by the key this device holds for the sender says so', async () => {
+    await requestedByLaptop();
+    const path = ru.unlockReqPath(LAP);
+    const req = JSON.parse(files[path].data);
+    files[path] = { data: JSON.stringify({ ...req, nonce: 'another-nonce' }), sha: 'forged' };
+    expect((await problemOf())?.problem).toBe('bad-signature');
+  });
+
+  it('one dated ahead of this clock says by how much', async () => {
+    await enrollPair();
+    await actAsLaptop();
+    vault.lock();
+    vi.useFakeTimers({ now: Date.now() + 10 * 60_000, toFake: ['Date'] });
+    await ru.requestRemoteUnlock(PAT, REPO, LAP);
+    vi.useRealTimers();
+    await actAsPhone();
+    const problem = await problemOf();
+    expect(problem?.problem).toBe('dated-ahead');
+    expect(problem!.aheadMs!).toBeGreaterThan(9 * 60_000);
+    expect(await ru.readPendingApproval(PAT, REPO, LAP)).toBeNull(); // still never approvable
+  });
+
+  it('a malformed request file is nothing — it no longer throws (which stopped every look for requests)', async () => {
+    await requestedByLaptop();
+    const path = ru.unlockReqPath(LAP);
+    const req = JSON.parse(files[path].data);
+    files[path] = { data: JSON.stringify({ ...req, kForApprover: { [PHONE]: {} } }), sha: 'garbage' };
+    await expect(ru.inspectPendingRequest(PAT, REPO, LAP)).resolves.toBeNull();
+    await expect(ru.approveRemoteUnlock(PAT, REPO, LAP, 'digest')).rejects.toThrow('No unlock request found');
+  });
+
+  it('a request and an approval survive a stale sha (written again, not "CONFLICT")', async () => {
+    await enrollPair();
+    await actAsLaptop();
+    vault.lock();
+    conflictOncePaths.add(ru.unlockReqPath(LAP));
+    const { code } = await ru.requestRemoteUnlock(PAT, REPO, LAP);
+
+    await actAsPhone();
+    const pending = await ru.readPendingApproval(PAT, REPO, LAP);
+    expect(pending?.code).toBe(code);
+    conflictOncePaths.add(ru.unlockRespPath(LAP));
+    await ru.approveRemoteUnlock(PAT, REPO, LAP, pending!.requestDigest);
+
+    await actAsLaptop();
+    expect((await ru.pollRemoteUnlock(PAT, REPO, LAP)).status).toBe('unlocked');
+  });
+
+  it('an approval with a key that no longer opens the vault is said on the locked device — which keeps waiting', async () => {
+    await requestedByLaptop();
+    const stale = new Uint8Array(32).fill(7);
+    await db.localSettings.put({
+      ...phoneLocal,
+      remoteApproverFor: { [LAP]: { ...phoneLocal.remoteApproverFor![LAP], ruk: btoa(String.fromCharCode(...stale)) } },
+    });
+    const pending = await ru.readPendingApproval(PAT, REPO, LAP);
+    await ru.approveRemoteUnlock(PAT, REPO, LAP, pending!.requestDigest);
+
+    await actAsLaptop();
+    const first = await ru.pollRemoteUnlock(PAT, REPO, LAP);
+    expect(first).toMatchObject({ status: 'wrong-key', approverName: 'My Phone' });
+    expect(vault.isUnlocked()).toBe(false);
+    expect(ru.hasPendingUnlock()).toBe(true); // another trusted device may still approve
+  });
+});

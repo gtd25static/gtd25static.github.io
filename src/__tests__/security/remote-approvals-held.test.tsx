@@ -13,6 +13,8 @@ const h = vi.hoisted(() => ({
   readPendingApproval: vi.fn(async () => null as unknown),
   listApprovedDevices: vi.fn(async () => [] as Array<{ deviceId: string; name: string }>),
   recordRemoteDenial: vi.fn(async () => undefined),
+  pollApproverInbox: vi.fn(async () => 0),
+  inspectPendingRequest: vi.fn(async (..._a: unknown[]) => null as unknown),
   paranoid: false,
   toast: vi.fn(),
   recordError: vi.fn(),
@@ -28,9 +30,10 @@ vi.mock('../../sync/remote-unlock', () => ({
   expirePendingUnlock: vi.fn(async () => undefined),
   hasPendingUnlock: vi.fn(() => false),
   refreshRegistryHeartbeat: vi.fn(async () => false),
-  pollApproverInbox: vi.fn(async () => 0),
+  pollApproverInbox: h.pollApproverInbox,
   listApprovedDevices: h.listApprovedDevices,
   readPendingApproval: h.readPendingApproval,
+  inspectPendingRequest: h.inspectPendingRequest,
   approveRemoteUnlock: h.approveRemoteUnlock,
   publishOwnRegistryEntry: vi.fn(async () => false),
   dropDecommissionedDevices: vi.fn(async () => []),
@@ -71,6 +74,12 @@ beforeEach(() => {
   h.recordRemoteDenial.mockResolvedValue(undefined);
   h.listApprovedDevices.mockResolvedValue([{ deviceId: 'lap', name: 'Laptop' }]);
   h.readPendingApproval.mockResolvedValue(null);
+  h.pollApproverInbox.mockResolvedValue(0);
+  // An answerable request comes as { approval } (what readPendingApproval returns).
+  h.inspectPendingRequest.mockImplementation(async (...a: unknown[]) => {
+    const p = await (h.readPendingApproval as (...x: unknown[]) => Promise<unknown>)(...a);
+    return p ? { approval: p } : null;
+  });
   h.paranoid = false;
   __resetApprovalGateForTests('idle');
 });
@@ -248,5 +257,72 @@ describe('the update prompt waits for unlock requests', () => {
     const after = renderHook(() => useUpdatesHeldForApprovals());
     expect(after.result.current).toBe(false);
     answer(null);
+  });
+});
+
+describe('the look for requests does not give up (reliability review 2026-10-08)', () => {
+  it('a failing housekeeping step (the invitations inbox) no longer skips the requests', async () => {
+    h.pollApproverInbox.mockRejectedValue(new Error('GitHub API error: 502'));
+    h.readPendingApproval.mockResolvedValue(request());
+    const { result } = renderHook(() => useRemoteApprovals());
+    await waitFor(() => expect(result.current.pending?.nonce).toBe('n-1'));
+    expect(h.recordError).toHaveBeenCalledWith('remoteUnlock.approverInbox', expect.any(Error));
+  });
+
+  it('one managed device whose request cannot be read does not hide another\'s', async () => {
+    h.listApprovedDevices.mockResolvedValue([{ deviceId: 'broken', name: 'Old Laptop' }, { deviceId: 'lap', name: 'Laptop' }]);
+    h.inspectPendingRequest.mockImplementation(async (...a: unknown[]) => {
+      if (a[2] === 'broken') throw new Error('GitHub API error: 500');
+      return { approval: request() };
+    });
+    const { result } = renderHook(() => useRemoteApprovals());
+    await waitFor(() => expect(result.current.pending?.fromName).toBe('Laptop'));
+  });
+
+  it('a request that cannot be answered here shows why, once in the diagnostics, and Ignore drops it', async () => {
+    const undeliverable = { fromDeviceId: 'lap', fromName: 'Laptop', nonce: 'n-9', problem: 'undecryptable' };
+    h.inspectPendingRequest.mockResolvedValue({ undeliverable });
+    const { result } = renderHook(() => useBoth());
+    await waitFor(() => expect(result.current.approvals.undeliverable).toMatchObject({ problem: 'undecryptable' }));
+    expect(result.current.approvals.pending).toBeNull();
+    await waitFor(() => expect(result.current.updatesHeld).toBe(false)); // a line, above the update: it does not hold it
+
+    await tickAgain();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(h.recordError.mock.calls.filter(([what]) => what === 'remoteUnlock.undeliverable')).toHaveLength(1);
+
+    act(() => result.current.approvals.ignoreUndeliverable());
+    expect(result.current.approvals.undeliverable).toBeNull();
+    await tickAgain();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(result.current.approvals.undeliverable).toBeNull();
+  });
+
+  it('an approval that fails on the network keeps the prompt up to try again', async () => {
+    h.readPendingApproval.mockResolvedValue(request());
+    h.approveRemoteUnlock.mockRejectedValueOnce(new Error('GitHub API error: 503'));
+    const { result } = renderHook(() => useRemoteApprovals());
+    await waitFor(() => expect(result.current.pending).not.toBeNull());
+
+    let done: boolean | undefined;
+    await act(async () => { done = await result.current.approve(); });
+    expect(done).toBe(false);
+    expect(result.current.pending?.nonce).toBe('n-1');
+    expect(h.toast).toHaveBeenCalledWith(expect.stringContaining('tap Approve again'), 'error');
+
+    await act(async () => { done = await result.current.approve(); });
+    expect(done).toBe(true);
+    expect(h.approveRemoteUnlock).toHaveBeenCalledTimes(2);
+    expect(result.current.pending).toBeNull();
+  });
+
+  it('an approval for a request that is gone closes the prompt and says so', async () => {
+    h.readPendingApproval.mockResolvedValue(request());
+    h.approveRemoteUnlock.mockRejectedValueOnce(new Error('No unlock request found'));
+    const { result } = renderHook(() => useRemoteApprovals());
+    await waitFor(() => expect(result.current.pending).not.toBeNull());
+    await act(async () => { await result.current.approve(); });
+    expect(result.current.pending).toBeNull();
+    expect(h.toast).toHaveBeenCalledWith('Unlock request from “Laptop” is no longer there to approve', 'info');
   });
 });
