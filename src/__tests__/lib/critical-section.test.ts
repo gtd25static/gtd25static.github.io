@@ -91,10 +91,9 @@ it('with Web Locks, an update waits for every section and a new one waits for th
   await new Promise((r) => setTimeout(r, 0));
   expect(apply).toHaveBeenCalledTimes(1);
 
-  // Started after the update was applied: held off (the page is about to reload).
+  // Started after the update was applied: refused (the page is about to reload).
   const late = vi.fn(async () => {});
-  void inCriticalSection(late);
-  await new Promise((r) => setTimeout(r, 10));
+  await expect(inCriticalSection(late)).rejects.toThrow(/updating/);
   expect(late).not.toHaveBeenCalled();
 });
 
