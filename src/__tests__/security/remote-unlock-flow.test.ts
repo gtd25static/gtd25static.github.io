@@ -1271,21 +1271,34 @@ describe('unlock requests the approver will show (review batch 3)', () => {
     expect(await ru.readPendingApproval(PAT, REPO, LAP)).toBeNull();
   });
 
-  it('a denial is remembered, and requests from that device pause for a while', async () => {
+  it('a denial is remembered, and requests from that device are held back for a while — not dropped', async () => {
     await enrollPair();
     await actAsLaptop();
     vault.lock();
     await ru.requestRemoteUnlock(PAT, REPO, LAP);
     await actAsPhone();
-    expect(await ru.readPendingApproval(PAT, REPO, LAP)).not.toBeNull();
+    const first = await ru.readPendingApproval(PAT, REPO, LAP);
+    expect(first).not.toBeNull();
+    expect(first?.heldUntil).toBeUndefined();
     await ru.recordRemoteDenial(LAP);
-    expect((await db.localSettings.get('local'))?.remoteApproverFor?.[LAP]?.lastDeniedAt).toBeGreaterThan(0);
+    const deniedAt = (await db.localSettings.get('local'))?.remoteApproverFor?.[LAP]?.lastDeniedAt;
+    expect(deniedAt).toBeGreaterThan(0);
     phoneLocal = await snapshotLocal();
 
     await actAsLaptop();
-    await ru.requestRemoteUnlock(PAT, REPO, LAP); // asked again right away
+    const { code } = await ru.requestRemoteUnlock(PAT, REPO, LAP); // asked again right away
     await actAsPhone();
-    expect(await ru.readPendingApproval(PAT, REPO, LAP)).toBeNull();
+    const again = await ru.readPendingApproval(PAT, REPO, LAP);
+    // Held: the request is there (with the code the laptop shows), flagged as paused.
+    expect(again?.code).toBe(code);
+    expect(again?.heldUntil).toBe(deniedAt! + ru.DENIAL_PAUSE_MS);
+
+    // Once the pause has run out, it is an ordinary request again.
+    await db.localSettings.put({
+      ...phoneLocal,
+      remoteApproverFor: { ...phoneLocal.remoteApproverFor, [LAP]: { ...phoneLocal.remoteApproverFor![LAP], lastDeniedAt: Date.now() - ru.DENIAL_PAUSE_MS - 1 } },
+    });
+    expect((await ru.readPendingApproval(PAT, REPO, LAP))?.heldUntil).toBeUndefined();
   });
 });
 

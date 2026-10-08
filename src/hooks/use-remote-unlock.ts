@@ -7,6 +7,7 @@ import { getCachedSalt } from '../sync/crypto';
 import { recordError } from '../lib/diagnostics';
 import { classifySyncError } from '../sync/sync-errors';
 import { toast } from '../components/ui/Toast';
+import { setApprovalState } from '../lib/approval-gate';
 import {
   getMailboxPat, getRepo, requestRemoteUnlock, pollRemoteUnlock, pollRemoteCommands, cancelRemoteUnlock,
   expirePendingUnlock, hasPendingUnlock, refreshRegistryHeartbeat,
@@ -235,6 +236,11 @@ export function useRemoteWipeCommands() {
 }
 
 export interface ApprovalRequest { deviceId: string; fromName: string; nonce: string; code: string; expiresAt: number; requestDigest: string }
+/** A request from a device whose requests are paused (one was declined a moment ago). */
+export interface HeldRequest extends ApprovalRequest { heldUntil: number }
+
+const expired = (req: ApprovalRequest): boolean => Date.now() >= req.expiresAt;
+const expiredMessage = (req: ApprovalRequest): string => `Unlock request from “${req.fromName}” expired`;
 
 /**
  * Approver-side hook (NON-Paranoid devices): accept RUK invites and surface a
@@ -244,17 +250,48 @@ export interface ApprovalRequest { deviceId: string; fromName: string; nonce: st
  * (the requester deletes the request on success) — with a toast explaining why,
  * deferred until the app is focused. Polls only while visible; on regaining focus
  * after ≥1 min hidden it forces a catch-up poll (quick toggles don't hammer the API).
+ *
+ * A request from a device declined a moment ago is HELD: a line, not the prompt,
+ * until the user asks to see it. Expiry is judged on the wall clock (timers stand
+ * still while the device sleeps): a Deny on an expired request only closes it.
+ * Tells the update prompt to wait (lib/approval-gate) while it looks for requests
+ * and while one is on screen.
  */
-export function useRemoteApprovals(): { pending: ApprovalRequest | null; approve: () => Promise<void>; deny: () => void } {
+export function useRemoteApprovals(): {
+  pending: ApprovalRequest | null;
+  held: HeldRequest | null;
+  approve: () => Promise<void>;
+  deny: () => void;
+  showHeld: () => void;
+  ignoreHeld: () => void;
+} {
   const [pending, setPending] = useState<ApprovalRequest | null>(null);
+  const [held, setHeld] = useState<HeldRequest | null>(null);
   const seen = useRef<Set<string>>(new Set());
   const busy = useRef(false);
   // The salt this device's registry entry was last published under: a sync-password
   // change re-MACs the registry, and an entry under the old key reads as forged.
   const publishedForSalt = useRef<string | null>(null);
   const current = useRef<ApprovalRequest | null>(null); // mirror of `pending` for callbacks
+  const heldRef = useRef<HeldRequest | null>(null);     // mirror of `held`
+  // Per device, the pause the user lifted by asking to see a held request (its
+  // heldUntil). Memory only: a new denial starts a new pause, held again.
+  const lifted = useRef<Map<string, number>>(new Map());
+  // A look for requests the update prompt waits for (opening the app, coming back).
+  const checking = useRef(true);
   const deferredToast = useRef<string | null>(null);     // shown on next focus
   const lastDecommissionCheck = useRef(0);
+
+  // Only the prompt holds the update back: a held line sits above it (and is
+  // signed by a key a disk image holds — it must not be able to block updates).
+  const publish = useCallback(() => {
+    setApprovalState(checking.current ? 'checking' : current.current ? 'request' : 'idle');
+  }, []);
+
+  const setHeldRequest = useCallback((next: HeldRequest | null) => {
+    heldRef.current = next;
+    setHeld(next);
+  }, []);
 
   // Clear the on-screen prompt. Toast now if focused; otherwise defer to refocus.
   const dismiss = useCallback((toastMsg: string | null) => {
@@ -262,14 +299,20 @@ export function useRemoteApprovals(): { pending: ApprovalRequest | null; approve
     if (cur) seen.current.add(cur.nonce);
     current.current = null;
     setPending(null);
+    publish();
     if (toastMsg) {
       if (!isHidden()) toast(toastMsg, 'info');
       else deferredToast.current = toastMsg;
     }
-  }, []);
+  }, [publish]);
 
   const tick = useCallback(async () => {
-    if (busy.current || isParanoidFlagSet() || isHidden()) return;
+    if (isParanoidFlagSet()) {
+      checking.current = false;
+      publish();
+      return;
+    }
+    if (busy.current || isHidden()) return;
     busy.current = true;
     try {
       const local = await db.localSettings.get('local');
@@ -283,9 +326,10 @@ export function useRemoteApprovals(): { pending: ApprovalRequest | null; approve
       const cur = current.current;
       if (cur) {
         const still = await readPendingApproval(pat, repo, cur.deviceId);
-        if (!still || still.nonce !== cur.nonce || still.requestDigest !== cur.requestDigest) {
-          dismiss(Date.now() >= cur.expiresAt
-            ? `Unlock request from “${cur.fromName}” expired`
+        if (current.current !== cur) return; // answered meanwhile
+        if (!still || still.nonce !== cur.nonce || still.requestDigest !== cur.requestDigest || expired(cur)) {
+          dismiss(expired(cur)
+            ? expiredMessage(cur)
             : `Unlock request from “${cur.fromName}” was handled by another device`);
         }
         return;
@@ -301,35 +345,55 @@ export function useRemoteApprovals(): { pending: ApprovalRequest | null; approve
         await dropDecommissionedDevices(pat, repo);
       }
       const managed = await listApprovedDevices();
+      let heldBack: HeldRequest | null = null;
       for (const m of managed) {
         const p = await readPendingApproval(pat, repo, m.deviceId);
-        if (p && !seen.current.has(p.nonce)) {
-          const req: ApprovalRequest = { deviceId: m.deviceId, fromName: p.fromName, nonce: p.nonce, code: p.code, expiresAt: p.expiresAt, requestDigest: p.requestDigest };
-          current.current = req;
-          setPending(req);
-          break;
+        if (!p || seen.current.has(p.nonce)) continue;
+        const req: ApprovalRequest = { deviceId: m.deviceId, fromName: p.fromName, nonce: p.nonce, code: p.code, expiresAt: p.expiresAt, requestDigest: p.requestDigest };
+        if (p.heldUntil && lifted.current.get(m.deviceId) !== p.heldUntil) {
+          heldBack ??= { ...req, heldUntil: p.heldUntil };
+          continue;
         }
+        current.current = req;
+        setPending(req);
+        break;
       }
+      // Re-read every tick: a held request that expired or was answered elsewhere goes.
+      setHeldRequest(current.current ? null : heldBack);
     } catch (err) {
       // Mostly transient network/db errors, but a PERSISTENT failure means this
       // device silently stops approving unlocks — keep it visible in diagnostics.
       recordError('remoteUnlock.approverTick', err);
     } finally {
       busy.current = false;
+      checking.current = false;
+      publish();
     }
-  }, [dismiss]);
+  }, [dismiss, publish, setHeldRequest]);
 
   useEffect(() => {
     let stop = false;
     let lastHidden = 0;
     const run = () => { if (!stop) void tick(); };
+    publish(); // 'checking' until the first look is done
     run();
     const stopTimer = startJitteredInterval(run, SLOW_POLL_MS);
     const onVis = () => {
       if (document.visibilityState === 'hidden') { lastHidden = Date.now(); return; }
       if (deferredToast.current) { toast(deferredToast.current, 'info'); deferredToast.current = null; }
-      // Always revalidate a showing prompt on refocus; otherwise only catch up after a real absence.
-      if (current.current || Date.now() - lastHidden >= REFOCUS_POLL_AFTER_MS) run();
+      // Back from a sleep, a request may have run out with its timer standing still.
+      const cur = current.current;
+      if (cur && expired(cur)) dismiss(expiredMessage(cur));
+      if (heldRef.current && expired(heldRef.current)) { setHeldRequest(null); publish(); }
+      // Always revalidate a showing prompt on refocus; otherwise only catch up after a
+      // real absence — and that counts as opening the app: the update prompt waits.
+      if (Date.now() - lastHidden >= REFOCUS_POLL_AFTER_MS) {
+        checking.current = true;
+        publish();
+        run();
+      } else if (current.current) {
+        run();
+      }
     };
     document.addEventListener('visibilitychange', onVis);
     window.addEventListener('online', run);
@@ -338,21 +402,35 @@ export function useRemoteApprovals(): { pending: ApprovalRequest | null; approve
       stopTimer();
       document.removeEventListener('visibilitychange', onVis);
       window.removeEventListener('online', run);
+      setApprovalState('idle'); // nothing left to wait for
     };
-  }, [tick]);
+  }, [tick, dismiss, publish, setHeldRequest]);
 
-  // Auto-expire the showing prompt even while focused/idle (no poll needed).
+  // Auto-expire the showing prompt, or the held line, even while focused/idle (no poll needed).
   useEffect(() => {
     if (!pending) return;
     const t = setTimeout(() => {
-      dismiss(`Unlock request from “${pending.fromName}” expired`);
+      dismiss(expiredMessage(pending));
     }, Math.max(0, pending.expiresAt - Date.now()));
     return () => clearTimeout(t);
   }, [pending, dismiss]);
 
+  useEffect(() => {
+    if (!held) return;
+    const t = setTimeout(() => {
+      setHeldRequest(null);
+      publish();
+    }, Math.max(0, held.expiresAt - Date.now()));
+    return () => clearTimeout(t);
+  }, [held, setHeldRequest, publish]);
+
   const approve = useCallback(async () => {
     const p = current.current;
     if (!p) return;
+    if (expired(p)) {
+      dismiss(expiredMessage(p));
+      return;
+    }
     try {
       const local = await db.localSettings.get('local');
       if (local?.githubPat && local.githubRepo) await approveRemoteUnlock(local.githubPat, local.githubRepo, p.deviceId, p.requestDigest);
@@ -375,12 +453,44 @@ export function useRemoteApprovals(): { pending: ApprovalRequest | null; approve
   }, [dismiss]);
 
   // A denial is remembered: that device's requests pause, and Settings warns that
-  // a request you did not expect means its key is likely out.
+  // a request you did not expect means its key is likely out. Not for a request
+  // that already ran out: it can no longer be approved, so Deny only closes it —
+  // pausing there held back the next, real request with nothing said anywhere.
   const deny = useCallback(() => {
     const cur = current.current;
+    if (cur && expired(cur)) {
+      dismiss(expiredMessage(cur));
+      return;
+    }
     if (cur) void recordRemoteDenial(cur.deviceId).catch((err) => recordError('remoteUnlock.deny', err));
     dismiss(null);
   }, [dismiss]);
 
-  return { pending, approve, deny };
+  // Lift the pause for the device whose request is held, and show the request.
+  const showHeld = useCallback(() => {
+    const h = heldRef.current;
+    if (!h) return;
+    setHeldRequest(null);
+    if (expired(h)) {
+      publish();
+      toast(expiredMessage(h), 'info');
+      return;
+    }
+    lifted.current.set(h.deviceId, h.heldUntil);
+    const req: ApprovalRequest = { deviceId: h.deviceId, fromName: h.fromName, nonce: h.nonce, code: h.code, expiresAt: h.expiresAt, requestDigest: h.requestDigest };
+    current.current = req;
+    setPending(req);
+    publish();
+  }, [publish, setHeldRequest]);
+
+  // Not a denial: this request stops showing, the pause runs as it was.
+  const ignoreHeld = useCallback(() => {
+    const h = heldRef.current;
+    if (!h) return;
+    seen.current.add(h.nonce);
+    setHeldRequest(null);
+    publish();
+  }, [publish, setHeldRequest]);
+
+  return { pending, held, approve, deny, showHeld, ignoreHeld };
 }

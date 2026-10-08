@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { onVersionIncompatible, offVersionIncompatible, onSyncSuccess, offSyncSuccess } from '../../sync/sync-engine';
 import { useServiceWorker } from '../../hooks/use-service-worker';
 import { useVault } from '../../hooks/use-vault';
@@ -7,6 +7,7 @@ import { changelogFor, fetchDeployedChanges, type VersionInfo } from '../../lib/
 import { Button } from '../ui/Button';
 import { toast } from '../ui/Toast';
 import { forceServiceWorkerUpdate } from '../../lib/diagnostics';
+import { useUpdatesHeldForApprovals } from '../../lib/approval-gate';
 
 const PARANOID_UPDATE_NOTICE_KEY = 'gtd25-paranoid-update-notice';
 const PARANOID_UPDATE_NOTICE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -126,6 +127,16 @@ export function AppUpdatePrompt() {
     return () => observer.disconnect();
   }, [available]);
 
+  // On a trusted device, unlock requests come first: nothing shows while the app
+  // looks for them (opening it, coming back to it) or while one is on screen, and
+  // once that is over it looks for an update — an approval answered, then the update.
+  const heldForApprovals = useUpdatesHeldForApprovals();
+  const wasHeldForApprovals = useRef(heldForApprovals);
+  useEffect(() => {
+    if (wasHeldForApprovals.current && !heldForApprovals) checkForUpdate();
+    wasHeldForApprovals.current = heldForApprovals;
+  }, [heldForApprovals, checkForUpdate]);
+
   // Over a locked vault it is the top banner, never the modal: the modal sat
   // above the lock screen and looked the same whether the vault had locked under
   // it or not (a Mac woken after hours showed it over a vault it had left open).
@@ -176,7 +187,7 @@ export function AppUpdatePrompt() {
       </>
     );
   }
-  if (!available || waitingForVersionCheck) return null;
+  if (!available || waitingForVersionCheck || heldForApprovals) return null;
 
   const message = deferUntilLocked
     ? 'Update queued. It will install after the vault locks.'

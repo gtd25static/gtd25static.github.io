@@ -1145,7 +1145,14 @@ export async function pollRemoteUnlock(pat: string, repo: string, deviceId: stri
 
 // --- Unlock exchange (approver side) ---
 
-export interface PendingApproval { fromDeviceId: string; fromName: string; nonce: string; code: string; expiresAt: number; requestDigest: string }
+export interface PendingApproval {
+  fromDeviceId: string; fromName: string; nonce: string; code: string; expiresAt: number; requestDigest: string;
+  // Set while requests from this device are paused (one was declined less than
+  // DENIAL_PAUSE_MS ago): it is held back — not raised as a prompt — until then,
+  // unless the user asks to see it. Held back, not dropped: dropped, the paused
+  // device just waited on a code nobody would ever see.
+  heldUntil?: number;
+}
 
 /**
  * Approver: read a pending unlock request from a managed device, verify its
@@ -1163,7 +1170,6 @@ export async function readPendingApproval(pat: string, repo: string, fromDeviceI
   if (!req || req.fromDeviceId !== fromDeviceId) return null;
   if (Date.now() - req.ts > REQUEST_TTL_MS) return null; // stale / replay
   if (req.ts > Date.now() + REQUEST_FUTURE_SKEW_MS) return null; // dated ahead
-  if (entry.lastDeniedAt && Date.now() - entry.lastDeniedAt < DENIAL_PAUSE_MS) return null; // just denied
   const myId = local?.deviceId ?? '';
   const myBlob = req.kForApprover[myId];
   if (!myBlob) return null;
@@ -1176,7 +1182,11 @@ export async function readPendingApproval(pat: string, repo: string, fromDeviceI
   const code = await verificationCode(concat(k, te.encode(req.nonce)));
   k.fill(0);
   const digest = await requestDigest({ fromDeviceId: req.fromDeviceId, nonce: req.nonce, ts: req.ts, kForApprover: req.kForApprover });
-  return { fromDeviceId, fromName: entry.name, nonce: req.nonce, code, expiresAt: req.ts + REQUEST_TTL_MS, requestDigest: digest };
+  const paused = !!entry.lastDeniedAt && Date.now() - entry.lastDeniedAt < DENIAL_PAUSE_MS; // just denied
+  return {
+    fromDeviceId, fromName: entry.name, nonce: req.nonce, code, expiresAt: req.ts + REQUEST_TTL_MS, requestDigest: digest,
+    ...(paused ? { heldUntil: entry.lastDeniedAt! + DENIAL_PAUSE_MS } : {}),
+  };
 }
 
 /**
