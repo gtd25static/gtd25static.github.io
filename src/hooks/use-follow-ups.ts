@@ -1,7 +1,8 @@
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../db';
-import type { Task } from '../db/models';
+import type { Task, DiscussionEntry } from '../db/models';
 import { PING_COOLDOWN_MS } from '../lib/constants';
+import { updateTask } from './use-tasks';
 
 const ABSOLUTE_TIMESTAMP_FLOOR = Date.UTC(2000, 0, 1);
 const MAX_REASONABLE_CUSTOM_MS = 10 * 366 * 24 * 60 * 60 * 1000;
@@ -140,4 +141,28 @@ export function applyDiscussed(task: Task, opts?: { untilMs?: number }): Partial
     pingCooldownCustomMs: undefined,
     pingCooldownUntil: opts?.untilMs ?? now + cadenceMs(task),
   };
+}
+
+// Per follow-up, the end of its queue of log changes.
+const logQueues = new Map<string, Promise<void>>();
+
+/**
+ * Change a follow-up's discussion log, starting from the log as stored now, one
+ * change at a time per follow-up. Each change used to start from the log as last
+ * rendered: two notes logged in quick succession, the second write dropped the
+ * first. Stored oldest-first.
+ */
+export function editDiscussionLog(taskId: string, edit: (log: DiscussionEntry[]) => DiscussionEntry[]): Promise<void> {
+  const run = (logQueues.get(taskId) ?? Promise.resolve()).then(async () => {
+    const task = await db.tasks.get(taskId);
+    if (!task) return;
+    const log = Array.isArray(task.discussionLog) ? task.discussionLog : [];
+    await updateTask(taskId, { discussionLog: [...edit(log)].sort((a, b) => a.at - b.at) });
+  });
+  const settled = run.catch(() => {});
+  logQueues.set(taskId, settled);
+  void settled.then(() => {
+    if (logQueues.get(taskId) === settled) logQueues.delete(taskId);
+  });
+  return run;
 }

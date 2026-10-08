@@ -5,7 +5,8 @@
  * "Fuzzy" here means forgiving about case, accents and the odd typo — NOT the
  * subsequence matching of fuzzy finders, where "pan" finds "Preparar agenda
  * nueva" and a short query matches half the list. The rules:
- *  - every word of the query must match (AND), in the title or the description;
+ *  - every word of the query must match (AND), in the title, the description or
+ *    (follow-ups) a note of the discussion log;
  *  - a word matches wherever it appears as typed (substring), ignoring case and
  *    accents — so a word still being typed already finds its item;
  *  - failing that, a WHOLE word of the item within a small edit distance: one
@@ -92,10 +93,19 @@ export function matchesListFilter(query: string, texts: Array<string | undefined
   return tokens.every((t) => tokenMatches(t, haystack));
 }
 
-/** The tasks matching `query` on title or description, in their original order (the same array when blank). */
-export function filterTasksByQuery<T extends { title?: string; description?: string }>(tasks: T[], query: string): T[] {
+/** A follow-up's discussion notes, as searchable text. The log is synced data: anything odd is skipped. */
+export function discussionNotes(log: unknown): string[] {
+  if (!Array.isArray(log)) return [];
+  return log.flatMap((entry) => (typeof entry?.note === 'string' ? [entry.note] : []));
+}
+
+/**
+ * The tasks matching `query` on title, description or discussion notes, in
+ * their original order (the same array when blank).
+ */
+export function filterTasksByQuery<T extends { title?: string; description?: string; discussionLog?: unknown }>(tasks: T[], query: string): T[] {
   if (queryTokens(query).length === 0) return tasks;
-  return tasks.filter((t) => matchesListFilter(query, [t.title, t.description]));
+  return tasks.filter((t) => matchesListFilter(query, [t.title, t.description, ...discussionNotes(t.discussionLog)]));
 }
 
 /** Two searches that filter identically: case, accents and spacing aside. */

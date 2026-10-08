@@ -2,6 +2,7 @@ import { useSearch, type SearchResult } from '../../hooks/use-search';
 import { useShallow } from 'zustand/react/shallow';
 import { useAppState } from '../../stores/app-state';
 import { revealTask, scrollToFocusTarget } from '../../lib/reveal-task';
+import { formatDate } from '../../lib/date-utils';
 
 function HighlightedText({ text, query }: { text: string; query: string }) {
   if (!query) return <>{text}</>;
@@ -21,8 +22,10 @@ function isInactive(result: SearchResult) {
   return result.status === 'done' || result.archived || result.parentTaskStatus === 'done';
 }
 
-function statusLabel(result: SearchResult): string {
+// Follow-ups have no todo/done: they are snoozed, resolved, or nothing to say.
+function statusLabel(result: SearchResult): string | null {
   if (result.type === 'list') return result.listType === 'follow-ups' ? 'follow-up list' : 'task list';
+  if (result.listType === 'follow-ups') return result.archived ? 'resolved' : result.snoozed ? 'snoozed' : null;
   if (result.archived) return 'archived';
   return result.status;
 }
@@ -60,6 +63,7 @@ function resultContext(result: SearchResult) {
 
 function ResultItem({ result, query, onNavigate }: { result: SearchResult; query: string; onNavigate: () => void }) {
   const inactive = isInactive(result);
+  const status = statusLabel(result);
 
   return (
     <button
@@ -89,11 +93,22 @@ function ResultItem({ result, query, onNavigate }: { result: SearchResult; query
             </>
           )}
         </div>
+        {/* Why it matched, when not on the title: the description, or a log note and its date */}
+        {result.match && (
+          <div className="mt-1 text-xs text-zinc-600 dark:text-zinc-300">
+            {result.match.at !== undefined && (
+              <span className="mr-1.5 font-medium text-accent-700 dark:text-accent-300">{formatDate(result.match.at)}</span>
+            )}
+            <HighlightedText text={result.match.text} query={query} />
+          </div>
+        )}
       </div>
       <div className="mt-0.5 flex shrink-0 items-center gap-1.5">
-        <span className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${statusBadgeClass(result)}`}>
-          {statusLabel(result)}
-        </span>
+        {status && (
+          <span className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${statusBadgeClass(result)}`}>
+            {status}
+          </span>
+        )}
         <span className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${
           result.type === 'subtask'
             ? 'bg-zinc-100 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400'

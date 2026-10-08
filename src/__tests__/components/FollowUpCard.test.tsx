@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { render, screen, within, fireEvent } from '@testing-library/react';
+import { render, screen, within, fireEvent, waitFor, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import '../setup-component';
 import { resetAppState, makeTask, makeTaskList } from '../helpers/component-helpers';
@@ -7,6 +7,7 @@ import { FollowUpCard } from '../../components/follow-ups/FollowUpCard';
 import { ConfirmDialogContainer } from '../../components/ui/ConfirmDialog';
 import { ToastContainer } from '../../components/ui/Toast';
 import { useAppState } from '../../stores/app-state';
+import type { DiscussionEntry } from '../../db/models';
 
 const fuList = makeTaskList({ id: 'fu-1', name: 'Follow Ups', type: 'follow-ups' });
 const workList = makeTaskList({ id: 'work', name: 'Work', type: 'tasks' });
@@ -31,7 +32,12 @@ vi.mock('../../hooks/use-warning', () => ({
   toggleWarning: vi.fn(),
 }));
 
+// The log each rendered card holds, for the mocked log edit to start from.
+const cardLogs = new Map<string, DiscussionEntry[]>();
+
 vi.mock('../../hooks/use-follow-ups', () => ({
+  editDiscussionLog: async (id: string, edit: (log: DiscussionEntry[]) => DiscussionEntry[]) =>
+    mockUpdateTask(id, { discussionLog: edit(cardLogs.get(id) ?? []) }),
   isInCooldown: (t: { pingedAt?: number }) => Boolean(t.pingedAt),
   cooldownRemaining: () => 3600000,
   formatCooldown: () => '1h',
@@ -52,6 +58,7 @@ describe('FollowUpCard', () => {
 
   function renderCard(taskOverrides: Partial<Parameters<typeof makeTask>[1]> = {}) {
     const task = makeTask(fuList.id, { title: 'Follow up item', ...taskOverrides });
+    cardLogs.set(task.id, task.discussionLog ?? []);
     const user = userEvent.setup();
     const result = render(
       <>
@@ -111,12 +118,12 @@ describe('FollowUpCard', () => {
 
   it('shows a History chip only when there is a discussion log', () => {
     renderCard({ discussionLog: [{ id: 'd1', at: Date.now(), note: 'talked to ops team' }] });
-    expect(screen.getByRole('button', { name: 'History' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'History · 1' })).toBeInTheDocument();
   });
 
   it('hides the History chip when the log is empty', () => {
     renderCard();
-    expect(screen.queryByRole('button', { name: 'History' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^History/ })).not.toBeInTheDocument();
   });
 
   describe('inline discussion log', () => {
@@ -144,6 +151,7 @@ describe('FollowUpCard', () => {
       const { user, task } = renderCard({ title: 'Ask Ana' });
       await user.click(screen.getByText('Ask Ana'));
       await user.type(box()!, 'first chat{Enter}');
+      await waitFor(() => expect(mockUpdateTask).toHaveBeenCalled());
       expect(mockUpdateTask).toHaveBeenCalledWith(task.id, {
         discussionLog: [expect.objectContaining({ note: 'first chat' })],
       });
@@ -151,7 +159,7 @@ describe('FollowUpCard', () => {
 
     it('the History chip opens and closes it', async () => {
       const { user } = renderCard({ discussionLog: log });
-      const chip = screen.getByRole('button', { name: 'History' });
+      const chip = screen.getByRole('button', { name: 'History · 3' });
       expect(chip).toHaveAttribute('aria-expanded', 'false');
       await user.click(chip);
       expect(box()).toBeInTheDocument();
@@ -203,7 +211,7 @@ describe('FollowUpCard', () => {
       await user.click(screen.getByText('Ask Ana'));
       await user.type(box()!, 'spoke to ops');
       await user.click(screen.getByRole('button', { name: 'Log' }));
-      expect(mockUpdateTask).toHaveBeenCalledTimes(1);
+      await waitFor(() => expect(mockUpdateTask).toHaveBeenCalledTimes(1));
       const [id, payload] = mockUpdateTask.mock.calls[0];
       expect(id).toBe(task.id);
       expect(Object.keys(payload)).toEqual(['discussionLog']);
@@ -326,6 +334,57 @@ describe('FollowUpCard', () => {
       fireEvent.click(screen.getByText('Work'));
       expect(mockMoveTaskToList).toHaveBeenCalledWith(task.id, 'work');
       expect(await screen.findByText('Moved to Work')).toBeInTheDocument();
+    });
+  });
+
+  describe('closed and open looks', () => {
+    const log = [
+      { id: 'd1', at: Date.now() - 3 * 86_400_000, note: 'older' },
+      { id: 'd2', at: Date.now() - 2 * 86_400_000, note: 'Budget agreed\nsecond line' },
+    ];
+
+    it('closed, it says when the topic was last discussed and the first line of what was said', async () => {
+      const { user } = renderCard({ title: 'Ask Ana', discussionLog: log });
+      expect(screen.getByText('2d ago')).toBeInTheDocument();
+      const preview = screen.getByText('Budget agreed');
+      expect(preview.closest('[data-redact]')).not.toBeNull();
+      expect(screen.queryByText(/second line/)).not.toBeInTheDocument();
+      await user.click(screen.getByText('Ask Ana'));
+      expect(screen.queryByText('2d ago')).not.toBeInTheDocument(); // the log itself shows it now
+    });
+
+    it('closed, it flags a note typed in its log and not logged yet', async () => {
+      const { user, task } = renderCard({ title: 'Ask Ana' });
+      expect(screen.queryByText('Unsent note')).not.toBeInTheDocument();
+      await user.click(screen.getByText('Ask Ana'));
+      await user.type(screen.getByPlaceholderText('What was discussed?'), 'half a thought');
+      await user.click(screen.getByText('Ask Ana'));
+      expect(screen.getByText('Unsent note')).toBeInTheDocument();
+      expect(useAppState.getState().noteDrafts[task.id]).toBe('half a thought');
+    });
+
+    it('open, the card stands out from the list (accent border, no zebra tint)', async () => {
+      const task = makeTask(fuList.id, { title: 'Ask Ana' });
+      const user = userEvent.setup();
+      const { container } = render(<FollowUpCard task={task} index={1} />);
+      const card = container.querySelector('[data-focus-id]')!;
+      expect(card.className).toContain('bg-zinc-50/70');
+      await user.click(screen.getByText('Ask Ana'));
+      expect(card.className).toContain('border-accent-300');
+      expect(card.className).not.toContain('bg-zinc-50/70');
+    });
+
+    it('opened with a mouse, its note box is ready to type in; by touch it is not', () => {
+      const task = makeTask(fuList.id, { title: 'Ask Ana' });
+      render(<FollowUpCard task={task} index={0} />);
+      const click = (pointerType: string) => act(() => {
+        screen.getByText('Ask Ana').dispatchEvent(Object.assign(new MouseEvent('click', { bubbles: true }), { pointerType }));
+      });
+      click('touch');
+      expect(screen.getByPlaceholderText('What was discussed?')).not.toHaveFocus();
+      click('touch'); // closed again
+      click('mouse');
+      expect(screen.getByPlaceholderText('What was discussed?')).toHaveFocus();
     });
   });
 });

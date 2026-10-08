@@ -17,6 +17,11 @@ export interface SearchResult {
   archived?: boolean;
   /** A follow-up in its snooze (hidden in its list unless "Show snoozed" is on). */
   snoozed?: boolean;
+  /**
+   * Where the query matched when it wasn't the title: the stretch of the
+   * description or discussion note around it, and the note's date.
+   */
+  match?: { text: string; at?: number };
   // For subtasks
   parentTaskId?: string;
   parentTaskTitle?: string;
@@ -27,6 +32,33 @@ export interface SearchState {
   results: SearchResult[];
   isSearching: boolean;
   maxReached: boolean;
+}
+
+// Characters of context kept on each side of a match in the result's excerpt.
+const EXCERPT_RADIUS = 40;
+
+/** `text` on one line, cut to the stretch around `q` (lowercase), with … where it was cut. */
+export function excerptAround(text: string, q: string): string {
+  const flat = text.replace(/\s+/g, ' ').trim();
+  const at = flat.toLowerCase().indexOf(q);
+  if (at === -1) return flat.length > 2 * EXCERPT_RADIUS ? `${flat.slice(0, 2 * EXCERPT_RADIUS)}…` : flat;
+  const start = Math.max(0, at - EXCERPT_RADIUS);
+  const end = Math.min(flat.length, at + q.length + EXCERPT_RADIUS);
+  return `${start > 0 ? '…' : ''}${flat.slice(start, end)}${end < flat.length ? '…' : ''}`;
+}
+
+/** The description, else the newest discussion note, that holds `q` — as an excerpt. */
+function matchOutsideTitle(task: Task, q: string): SearchResult['match'] {
+  if (task.description?.toLowerCase().includes(q)) return { text: excerptAround(task.description, q) };
+  // The log is synced data: entries without a string note are skipped.
+  const notes = Array.isArray(task.discussionLog) ? task.discussionLog : [];
+  let newest: { note: string; at: number } | undefined;
+  for (const entry of notes) {
+    if (typeof entry?.note !== 'string' || !entry.note.toLowerCase().includes(q)) continue;
+    const at = Number.isFinite(entry.at) ? entry.at : 0;
+    if (!newest || at >= newest.at) newest = { note: entry.note, at };
+  }
+  return newest ? { text: excerptAround(newest.note, q), at: newest.at || undefined } : undefined;
 }
 
 export async function searchDb(query: string): Promise<SearchResult[]> {
@@ -67,7 +99,9 @@ export async function searchDb(query: string): Promise<SearchResult[]> {
 
   for (const task of liveTasks) {
     if (results.length >= MAX_SEARCH_RESULTS) return results;
-    if (task.title?.toLowerCase().includes(q) || task.description?.toLowerCase().includes(q)) {
+    const inTitle = task.title?.toLowerCase().includes(q);
+    const match = inTitle ? undefined : matchOutsideTitle(task, q);
+    if (inTitle || match) {
       const list = listMap.get(task.listId)!;
       results.push({
         type: 'task',
@@ -79,6 +113,7 @@ export async function searchDb(query: string): Promise<SearchResult[]> {
         listType: list.type,
         archived: task.archived,
         snoozed: list.type === 'follow-ups' && !task.archived && isInCooldown(task),
+        match,
       });
     }
   }

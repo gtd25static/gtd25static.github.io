@@ -354,7 +354,9 @@ export function useKeyboard() {
             } else if (item.type === 'task') {
               // On a follow-up this opens/closes its discussion log. It used to
               // silently snooze it (legacy 12h cooldown), hiding the card;
-              // snoozing is the Discussed popover's job.
+              // snoozing is the Discussed popover's job. Opened, its note box
+              // takes the focus (Escape hands the keys back to the ring).
+              if (listTypeRef.current === 'follow-ups' && !s.expandedTaskIds.has(item.id)) s.setNoteFocusTaskId(item.id);
               s.toggleTaskExpanded(item.id);
             }
           }

@@ -66,6 +66,19 @@ describe('locking forgets the session', () => {
     stop();
   });
 
+  it('forgets unsent discussion notes (decrypted content kept outside the cards)', async () => {
+    const stop = startForgettingSessionOnLock();
+    await enableParanoid(PASS);
+    useAppState.getState().setNoteDraft('t1', 'FIRE_THE_CFO');
+    useAppState.getState().setNoteFocusTaskId('t1');
+
+    lock();
+
+    expect(useAppState.getState().noteDrafts).toEqual({});
+    expect(useAppState.getState().noteFocusTaskId).toBeNull();
+    stop();
+  });
+
   it('control: while unlocked, nothing is forgotten', async () => {
     const stop = startForgettingSessionOnLock();
     await enableParanoid(PASS);

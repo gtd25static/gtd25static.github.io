@@ -136,6 +136,24 @@ describe('filterTasksByQuery', () => {
   it('returns the very same array for a blank query', () => {
     expect(filterTasksByQuery(tasks, '  ')).toBe(tasks);
   });
+
+  // A logbook is searched for what was said, not just for the topic's name.
+  it('also matches a follow-up by its discussion notes, words spread over title and notes', () => {
+    const topics = [
+      { id: 'a', title: 'Presupuesto Q4', discussionLog: [{ id: 'e1', at: 1, note: 'Finanzas pide el desglose' }] },
+      { id: 'b', title: 'Onboarding', discussionLog: [{ id: 'e2', at: 1 }] },
+    ];
+    expect(filterTasksByQuery(topics, 'desglose').map((t) => t.id)).toEqual(['a']);
+    expect(filterTasksByQuery(topics, 'presupuesto finanzas').map((t) => t.id)).toEqual(['a']);
+  });
+
+  it('skips a malformed log (synced data) instead of failing', () => {
+    const odd = [
+      { id: 'x', title: 'Topic', discussionLog: 'not a log' as unknown },
+      { id: 'y', title: 'Other', discussionLog: [null, { note: 42 }, { note: 'mentions topic' }] as unknown },
+    ];
+    expect(filterTasksByQuery(odd, 'topic').map((t) => t.id)).toEqual(['x', 'y']);
+  });
 });
 
 describe('saved searches', () => {

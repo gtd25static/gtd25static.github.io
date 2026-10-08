@@ -1,9 +1,9 @@
 import { db } from '../../db';
 import { resetDb, assertDefined } from '../helpers/db-helpers';
 import { createTaskList } from '../../hooks/use-task-lists';
-import { createTask, deleteTask } from '../../hooks/use-tasks';
+import { createTask, deleteTask, updateTask } from '../../hooks/use-tasks';
 import { createSubtask, deleteSubtask } from '../../hooks/use-subtasks';
-import { searchDb } from '../../hooks/use-search';
+import { searchDb, excerptAround } from '../../hooks/use-search';
 
 let listId: string;
 
@@ -155,5 +155,46 @@ describe('search over rows without a title', () => {
     const results = await searchDb('find');
 
     expect(results.map((r) => r.id)).toEqual([assertDefined(task).id]);
+  });
+
+  describe('inside a follow-up\'s discussion log', () => {
+    it('finds a topic by what was said, with an excerpt of the newest matching note and its date', async () => {
+      const people = await createTaskList('People', 'follow-ups');
+      const topic = assertDefined(await createTask(people.id, { title: 'Budget Q4' }));
+      await updateTask(topic.id, {
+        discussionLog: [
+          { id: 'e1', at: 1000, note: 'Finance wants the breakdown by department' },
+          { id: 'e2', at: 5000, note: 'Sent the breakdown; waiting for sign-off' },
+          { id: 'e3', at: 9000, note: 'Unrelated' },
+        ],
+      });
+
+      const [hit] = await searchDb('breakdown');
+      expect(hit).toEqual(expect.objectContaining({ id: topic.id, title: 'Budget Q4', match: { text: 'Sent the breakdown; waiting for sign-off', at: 5000 } }));
+    });
+
+    it('a title match carries no excerpt; a description match carries the description', async () => {
+      await createTask(listId, { title: 'Breakdown review' });
+      await createTask(listId, { title: 'Call', description: 'ask about the breakdown' });
+      const results = await searchDb('breakdown');
+      expect(results.find((r) => r.title === 'Breakdown review')?.match).toBeUndefined();
+      expect(results.find((r) => r.title === 'Call')?.match).toEqual({ text: 'ask about the breakdown' });
+    });
+
+    it('says a follow-up is snoozed', async () => {
+      const people = await createTaskList('People', 'follow-ups');
+      const topic = assertDefined(await createTask(people.id, { title: 'Ping Rosa' }));
+      await updateTask(topic.id, { pingedAt: Date.now(), pingCooldown: 'custom', pingCooldownUntil: Date.now() + 86_400_000 });
+      expect((await searchDb('rosa'))[0].snoozed).toBe(true);
+    });
+  });
+
+  it('excerptAround keeps the stretch around the match on one line, marking the cuts', () => {
+    const long = `${'a'.repeat(60)} the needle\nin a\n${'b'.repeat(60)}`;
+    const excerpt = excerptAround(long, 'needle');
+    expect(excerpt.startsWith('…')).toBe(true);
+    expect(excerpt.endsWith('…')).toBe(true);
+    expect(excerpt).toContain('the needle in a');
+    expect(excerptAround('short note', 'note')).toBe('short note');
   });
 });

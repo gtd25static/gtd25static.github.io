@@ -142,10 +142,10 @@ test('a click on a follow-up opens its log: notes go in without snoozing, the tw
   await page.reload();
   await page.locator('aside nav [data-focus-id]').filter({ hasText: 'People' }).locator(':scope > button').click();
   await expect(page.getByRole('heading', { level: 2, name: 'People', exact: true })).toBeVisible();
-  await bob.getByRole('button', { name: 'History', exact: true }).click();
+  await bob.getByRole('button', { name: 'History · 3', exact: true }).click();
   await expect(bob.getByText('third chat')).toBeVisible();
   await expect(bob.getByText('second chat')).toBeVisible();
-  await bob.getByRole('button', { name: 'History', exact: true }).click();
+  await bob.getByRole('button', { name: 'History · 3', exact: true }).click();
   await expect(box).toHaveCount(0);
 
   // Reordering by the handle is a drag, not a click: no log opens.
@@ -302,4 +302,60 @@ test('a snoozed topic comes back on its own when it wakes, and the sidebar count
   await page.clock.fastForward('20:01:00');
   await expect(followUpCard(page, 'Ping Bob')).toBeVisible();
   await expect(count).toHaveText('2');
+});
+
+// QoL review (2026-10-08), batch B: the logbook — what the closed card tells,
+// a note that isn't lost, notes logged back to back, and finding what was said.
+
+test('the closed card tells what was said last; an unsent note waits for you; quick notes are all kept', async ({ page }) => {
+  await openApp(page);
+  await createFollowUpList(page, 'People');
+  await addFollowUp(page, 'Budget Q4');
+  const card = followUpCard(page, 'Budget Q4');
+  const box = card.getByPlaceholder('What was discussed?');
+
+  await card.getByText('Budget Q4').click();
+  await expect(box).toBeFocused(); // opened with the mouse: ready to type
+  // Back to back, without waiting for the first to show: the second used to drop it.
+  await box.fill('Finance wants the breakdown');
+  await box.press('Enter');
+  await box.fill('Sent it\nwaiting for sign-off');
+  await box.press('Enter');
+  await expect(card.getByText('Finance wants the breakdown')).toBeVisible();
+  await expect(card.getByText(/Sent it/)).toBeVisible();
+  await expect(card.getByRole('heading', { name: 'Discussion log · 2' })).toBeVisible();
+
+  await box.fill('half a thought');
+  await card.getByText('Budget Q4').click(); // closed with the note unsent
+  await expect(card.getByText('Unsent note')).toBeVisible();
+  await expect(card.getByText('Sent it', { exact: true })).toBeVisible(); // the last note's first line
+  await expect(card.getByText('just now')).toBeVisible();
+  await expect(card.getByRole('button', { name: 'History · 2' })).toBeVisible();
+
+  await createList(page, 'Work');
+  await listRow(page, 'People').locator(':scope > button').click();
+  await followUpCard(page, 'Budget Q4').getByText('Budget Q4').click();
+  await expect(followUpCard(page, 'Budget Q4').getByPlaceholder('What was discussed?')).toHaveValue('half a thought');
+});
+
+test('what was said is found: by the list filter, and by search with an excerpt of the note', async ({ page }) => {
+  await openApp(page);
+  await createFollowUpList(page, 'People');
+  await addFollowUp(page, 'Budget Q4');
+  await addFollowUp(page, 'Onboarding');
+  const card = followUpCard(page, 'Budget Q4');
+  await card.getByText('Budget Q4').click();
+  await card.getByPlaceholder('What was discussed?').fill('Finance wants the breakdown by department');
+  await card.getByPlaceholder('What was discussed?').press('Enter');
+  await expect(card.getByText(/breakdown by department/)).toBeVisible();
+
+  await page.getByPlaceholder('Filter…').fill('department');
+  await expect(followUpCard(page, 'Budget Q4')).toBeVisible();
+  await expect(followUpCard(page, 'Onboarding')).toHaveCount(0);
+  await page.getByPlaceholder('Filter…').fill('');
+
+  await page.locator('[data-search-input]').fill('department');
+  const result = page.locator('button[data-redact]').filter({ hasText: 'Budget Q4' });
+  await expect(result).toContainText('breakdown by department');
+  await expect(result).not.toContainText('todo');
 });

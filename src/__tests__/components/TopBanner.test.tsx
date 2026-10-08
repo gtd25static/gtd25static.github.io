@@ -9,8 +9,19 @@ import { useDueSoon } from '../../hooks/use-due-soon';
 vi.mock('../../components/banners/MotivationBanner', () => ({ MotivationBanner: () => null }));
 vi.mock('../../hooks/use-due-soon', () => ({ useDueSoon: vi.fn() }));
 
+// The rows the chips lead to, so the reveal's scroll finds them at once instead
+// of retrying past the end of the test.
+function addTargets() {
+  for (const id of ['t1', 's1']) {
+    const el = document.createElement('div');
+    el.dataset.focusId = id;
+    document.body.appendChild(el);
+  }
+}
+
 beforeEach(() => {
   resetAppState();
+  addTargets();
   HTMLElement.prototype.scrollIntoView = vi.fn();
   vi.mocked(useDueSoon).mockReturnValue([
     { type: 'task', id: 't1', taskId: 't1', listId: 'L1', title: 'Pay rent', dueDate: Date.now() },

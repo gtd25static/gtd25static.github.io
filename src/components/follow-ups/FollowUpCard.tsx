@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import type { Task } from '../../db/models';
+import type { Task, DiscussionEntry } from '../../db/models';
 import { updateTask, deleteTask, restoreTask, moveTaskToList } from '../../hooks/use-tasks';
 import { toast } from '../ui/Toast';
 import { confirmDialog } from '../ui/ConfirmDialog';
@@ -14,7 +14,7 @@ import { sendToList } from '../tasks/send-to-list';
 import { DiscussionLog } from './DiscussionLog';
 import { ContextMenu, type MenuItem } from '../ui/ContextMenu';
 import { DropdownMenu } from '../ui/DropdownMenu';
-import { formatDate, dueDateColor } from '../../lib/date-utils';
+import { formatDate, dueDateColor, formatTimeAgo } from '../../lib/date-utils';
 import { LinksList } from '../shared/LinksList';
 import { ExpandableText } from '../shared/ExpandableText';
 import { TaskForm } from '../tasks/TaskForm';
@@ -32,7 +32,7 @@ interface Props {
 }
 
 export function FollowUpCard({ task, index, dragHandleProps }: Props) {
-  const { focusedItemId, focusZone, editingItemId, setEditingItemId, expanded, toggleTaskExpanded, ensureTaskExpanded } = useAppState(useShallow(s => ({ focusedItemId: s.focusedItemId, focusZone: s.focusZone, editingItemId: s.editingItemId, setEditingItemId: s.setEditingItemId, expanded: s.expandedTaskIds.has(task.id), toggleTaskExpanded: s.toggleTaskExpanded, ensureTaskExpanded: s.ensureTaskExpanded })));
+  const { focusedItemId, focusZone, editingItemId, setEditingItemId, expanded, toggleTaskExpanded, ensureTaskExpanded, hasDraft, setNoteFocusTaskId } = useAppState(useShallow(s => ({ focusedItemId: s.focusedItemId, focusZone: s.focusZone, editingItemId: s.editingItemId, setEditingItemId: s.setEditingItemId, expanded: s.expandedTaskIds.has(task.id), toggleTaskExpanded: s.toggleTaskExpanded, ensureTaskExpanded: s.ensureTaskExpanded, hasDraft: Boolean(s.noteDrafts[task.id]), setNoteFocusTaskId: s.setNoteFocusTaskId })));
   const focused = focusedItemId === task.id && focusZone === 'main';
   const [editing, setEditing] = useState(false);
   const [editingTitle, setEditingTitle] = useState(false);
@@ -90,8 +90,18 @@ export function FollowUpCard({ task, index, dragHandleProps }: Props) {
     if (!e.currentTarget.contains(target)) return;
     if (target.closest('button, a, input, textarea, select, label, [data-no-card-toggle]')) return;
     if (window.getSelection()?.toString()) return;
+    // Opened with a mouse, the note box is ready to type in; by touch it isn't
+    // focused (the on-screen keyboard would cover the log).
+    if (!expanded && (e.nativeEvent as PointerEvent).pointerType === 'mouse') setNoteFocusTaskId(task.id);
     toggleTaskExpanded(task.id);
   }
+
+  // The newest log entry (the last added among equal times), for the closed card.
+  const logLength = task.discussionLog?.length ?? 0;
+  const latest = (task.discussionLog ?? []).reduce<DiscussionEntry | undefined>(
+    (newest, entry) => (!newest || entry.at >= newest.at ? entry : newest),
+    undefined,
+  );
 
   const handleContextMenu = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
@@ -140,12 +150,16 @@ export function FollowUpCard({ task, index, dragHandleProps }: Props) {
   }
 
   return (
-    <div data-focus-id={task.id} data-redact onContextMenu={handleContextMenu} className={`group mb-2 rounded-lg border shadow-sm transition-shadow hover:shadow-md ${
+    // Open, the card stands out from the list around it: accent border, more
+    // shadow, a little room above and below, and no zebra tint.
+    <div data-focus-id={task.id} data-redact onContextMenu={handleContextMenu} className={`group rounded-lg border transition-shadow ${
+      expanded ? 'my-3 shadow-md' : 'mb-2 shadow-sm hover:shadow-md'
+    } ${
       focused
         ? 'border-accent-500 ring-2 ring-accent-500/40 dark:border-accent-400 dark:ring-accent-400/30'
-        : 'border-zinc-200 dark:border-zinc-700/60'
+        : expanded ? 'border-accent-300 dark:border-accent-700' : 'border-zinc-200 dark:border-zinc-700/60'
     } ${inCooldown && !expanded ? 'opacity-40' : ''} ${
-      index !== undefined && index % 2 === 1 ? 'bg-zinc-50/70 dark:bg-zinc-800/30' : 'bg-white dark:bg-zinc-900/50'
+      !expanded && index !== undefined && index % 2 === 1 ? 'bg-zinc-50/70 dark:bg-zinc-800/30' : 'bg-white dark:bg-zinc-900/50'
     }`}>
       {/* Summary row — click to open/close the discussion log below */}
       <div onClick={handleCardClick} className="flex cursor-pointer flex-col md:flex-row md:items-start gap-2 md:gap-3 px-3 py-3">
@@ -235,8 +249,22 @@ export function FollowUpCard({ task, index, dragHandleProps }: Props) {
               {formatDate(task.dueDate)}
             </span>
           )}
+          {!expanded && hasDraft && (
+            <span className="rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-900/30 dark:text-amber-300" title="A note typed in the log and not logged yet">
+              Unsent note
+            </span>
+          )}
           <LinksList primaryLink={task.link} primaryTitle={task.linkTitle} links={task.links} />
         </div>
+        {/* Closed: when it was last discussed, and the first line of what was said */}
+        {!expanded && latest && (
+          <p className="mt-1 flex min-w-0 items-baseline gap-1.5 text-xs text-zinc-500 dark:text-zinc-400">
+            <span className="shrink-0 font-medium text-accent-700 dark:text-accent-300">{formatTimeAgo(latest.at)}</span>
+            {latest.note
+              ? <span data-redact className="truncate">{latest.note.split('\n')[0]}</span>
+              : <span className="italic">No note</span>}
+          </p>
+        )}
       </div>
       </div>
 
@@ -275,7 +303,7 @@ export function FollowUpCard({ task, index, dragHandleProps }: Props) {
       )}
 
       {/* History — shown when there's a discussion log; opens/closes it below the card */}
-      {(task.discussionLog?.length ?? 0) > 0 && (
+      {logLength > 0 && (
         <button
           onClick={() => toggleTaskExpanded(task.id)}
           aria-expanded={expanded}
@@ -284,7 +312,7 @@ export function FollowUpCard({ task, index, dragHandleProps }: Props) {
             : 'bg-zinc-100 text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700'}`}
           title={expanded ? 'Hide the discussion log' : 'Show the discussion log'}
         >
-          History
+          History · {logLength}
         </button>
       )}
 
@@ -346,8 +374,9 @@ export function FollowUpCard({ task, index, dragHandleProps }: Props) {
       </div>
       </div>
 
+      {/* The log on its own tinted panel, so it doesn't read as more cards (7px: inside the card's 8px corner) */}
       {expanded && (
-        <div className="border-t border-zinc-200 px-3 pb-3 pt-2 dark:border-zinc-700/60">
+        <div className="rounded-b-[7px] border-t border-accent-100 bg-accent-50/60 px-3 pb-3 pt-2.5 dark:border-accent-900/60 dark:bg-accent-950/25">
           <DiscussionLog task={task} />
         </div>
       )}

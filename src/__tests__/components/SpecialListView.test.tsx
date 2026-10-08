@@ -87,6 +87,9 @@ describe('SpecialListView (Attention)', { timeout: 15_000 }, () => {
     await updateTask(topic.id, { pingedAt: Date.now(), pingCooldown: 'custom', pingCooldownUntil: Date.now() + 86_400_000 });
 
     const user = renderAttention();
+    const row = document.createElement('div'); // the card it leads to, for the reveal's scroll
+    row.dataset.focusId = topic.id;
+    document.body.appendChild(row);
     await user.click(await screen.findByText('Call Ana'));
     let s = useAppState.getState();
     expect(s.selectedListId).toBe(leads.id);

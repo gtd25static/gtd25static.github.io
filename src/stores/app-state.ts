@@ -44,6 +44,14 @@ interface AppState {
   // Memory only, on purpose: on disk, the ids of lists that no longer exist
   // would outlive them.
   followUpViews: Record<string, FollowUpView>;
+  // Unsent text in a follow-up's "What was discussed?" box, by task id, so that
+  // closing the card or leaving the list doesn't lose it. Decrypted content:
+  // memory only, and forgotten on lock (lib/forget-on-lock.ts).
+  noteDrafts: Record<string, string>;
+  // The follow-up whose note box takes the focus once its log opens: opened from
+  // the keyboard or with a mouse — not by touch, where it would pop up the
+  // on-screen keyboard over the log.
+  noteFocusTaskId: string | null;
 
   selectList: (id: string | null) => void;
   toggleTaskExpanded: (id: string) => void;
@@ -70,6 +78,9 @@ interface AppState {
   selectAllTasks: (ids: string[]) => void;
   clearSelection: () => void;
   setFollowUpView: (listId: string, patch: Partial<FollowUpView>) => void;
+  setNoteDraft: (taskId: string, text: string) => void;
+  clearNoteDrafts: () => void;
+  setNoteFocusTaskId: (id: string | null) => void;
 }
 
 export const useAppState = create<AppState>((set) => ({
@@ -98,6 +109,8 @@ export const useAppState = create<AppState>((set) => ({
   bulkMode: false,
   selectedTaskIds: new Set(),
   followUpViews: {},
+  noteDrafts: {},
+  noteFocusTaskId: null,
 
   // The keyboard ring and any half-open form belong to the view being left: kept,
   // `d` could toggle a task of the previous list, and `n` left a new-task form
@@ -160,6 +173,15 @@ export const useAppState = create<AppState>((set) => ({
         [listId]: { ...(state.followUpViews[listId] ?? DEFAULT_FOLLOW_UP_VIEW), ...patch },
       },
     })),
+  setNoteDraft: (taskId, text) =>
+    set((state) => {
+      const noteDrafts = { ...state.noteDrafts };
+      if (text) noteDrafts[taskId] = text;
+      else delete noteDrafts[taskId];
+      return { noteDrafts };
+    }),
+  clearNoteDrafts: () => set({ noteDrafts: {}, noteFocusTaskId: null }),
+  setNoteFocusTaskId: (id) => set({ noteFocusTaskId: id }),
 }));
 
 /** The view of follow-up list `listId` (the defaults until it's changed). */

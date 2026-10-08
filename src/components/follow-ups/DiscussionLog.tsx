@@ -1,7 +1,8 @@
-import { useState } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import type { Task, DiscussionEntry } from '../../db/models';
 import { confirmDialog } from '../ui/ConfirmDialog';
-import { updateTask } from '../../hooks/use-tasks';
+import { editDiscussionLog } from '../../hooks/use-follow-ups';
+import { useAppState } from '../../stores/app-state';
 import { newId } from '../../lib/id';
 import { splitBareUrls } from '../../lib/link-utils';
 
@@ -61,15 +62,19 @@ function NoteText({ note }: { note: string }) {
   );
 }
 
+// White on the log's tinted panel, so the box reads as the place to write.
 const sharedTextarea =
-  'w-full resize-none rounded border border-zinc-300 bg-white px-2 py-1 text-sm outline-none focus:border-accent-500 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200';
+  'w-full resize-none rounded-md border border-accent-200 bg-white px-2 py-1 text-sm text-zinc-800 outline-none focus:border-accent-500 dark:border-accent-800/70 dark:bg-zinc-900 dark:text-zinc-100';
 
 /**
  * The discussion log of a follow-up, shown inline under its card: a box to log
  * a new note (stamped now; logging never snoozes — that's the Discussed chip),
- * then the newest entries, the rest behind "Show more". The pencil turns an
- * entry into an editor, the trash deletes it (confirm-gated). The whole log is
- * rewritten and re-encrypted as a unit on save, so no special handling is needed.
+ * then the newest entries as a timeline, the rest behind "Show more". Drawn as
+ * a timeline on its own tinted panel, not as boxes: boxed, the entries looked
+ * like more follow-up cards. The pencil turns an entry into an editor, the
+ * trash deletes it (confirm-gated). The whole log is rewritten and re-encrypted
+ * as a unit on save. An unsent note is kept as a draft (app-state) until it is
+ * logged, cleared, or the vault locks.
  */
 export function DiscussionLog({ task }: Props) {
   const log = task.discussionLog ?? [];
@@ -80,18 +85,21 @@ export function DiscussionLog({ task }: Props) {
     .sort((a, b) => b.entry.at - a.entry.at || b.index - a.index)
     .map(({ entry }) => entry);
 
-  const [newNote, setNewNote] = useState('');
+  const newNote = useAppState((s) => s.noteDrafts[task.id] ?? '');
+  const setNoteDraft = useAppState((s) => s.setNoteDraft);
+  const focusRequested = useAppState((s) => s.noteFocusTaskId === task.id);
+  const noteRef = useRef<HTMLTextAreaElement>(null);
   const [showAll, setShowAll] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editText, setEditText] = useState('');
   const shown = showAll ? entries : entries.slice(0, RECENT_COUNT);
   const hiddenCount = entries.length - shown.length;
 
-  // Persist the log oldest-first to match how it's stored elsewhere.
-  function persist(next: DiscussionEntry[]) {
-    const sorted = [...next].sort((a, b) => a.at - b.at);
-    return updateTask(task.id, { discussionLog: sorted });
-  }
+  useEffect(() => {
+    if (!focusRequested) return;
+    noteRef.current?.focus();
+    useAppState.getState().setNoteFocusTaskId(null);
+  }, [focusRequested]);
 
   function startEdit(entry: DiscussionEntry) {
     setEditingId(entry.id);
@@ -100,32 +108,35 @@ export function DiscussionLog({ task }: Props) {
 
   async function saveEdit(id: string) {
     const trimmed = editText.trim();
-    const next = log.map((e) =>
-      e.id === id ? { ...e, ...(trimmed ? { note: trimmed } : { note: undefined }) } : e,
-    );
     setEditingId(null);
-    await persist(next);
+    await editDiscussionLog(task.id, (current) =>
+      current.map((e) => (e.id === id ? { ...e, ...(trimmed ? { note: trimmed } : { note: undefined }) } : e)),
+    );
   }
 
   async function removeEntry(entry: DiscussionEntry) {
     if (!(await confirmDialog('Delete this discussion entry?', { confirmLabel: 'Delete' }))) return;
-    await persist(log.filter((e) => e.id !== entry.id));
+    await editDiscussionLog(task.id, (current) => current.filter((e) => e.id !== entry.id));
   }
 
   async function addEntry() {
     const trimmed = newNote.trim();
     if (!trimmed) return;
-    await persist([...log, { id: newId(), at: Date.now(), note: trimmed }]);
-    setNewNote('');
+    setNoteDraft(task.id, '');
+    await editDiscussionLog(task.id, (current) => [...current, { id: newId(), at: Date.now(), note: trimmed }]);
   }
 
   return (
-    <div className="space-y-2">
+    <div className="space-y-3">
+      <h3 className="text-[11px] font-semibold uppercase tracking-wider text-accent-700 dark:text-accent-300">
+        Discussion log{entries.length > 0 ? ` · ${entries.length}` : ''}
+      </h3>
       <div className="flex items-end gap-2">
         <textarea
+          ref={noteRef}
           data-redact
           value={newNote}
-          onChange={(e) => setNewNote(e.target.value)}
+          onChange={(e) => setNoteDraft(task.id, e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); addEntry(); } }}
           placeholder="What was discussed?"
           aria-label="New discussion note"
@@ -143,28 +154,32 @@ export function DiscussionLog({ task }: Props) {
       </div>
 
       {shown.length > 0 && (
-        <ul className="space-y-1.5">
-          {shown.map((entry) => (
-            <li
-              key={entry.id}
-              className="group/entry rounded-lg border border-zinc-200 bg-zinc-50 px-2.5 py-1.5 dark:border-zinc-700/60 dark:bg-zinc-800/40"
-            >
+        // A rail with a dot per entry, the newest one filled.
+        <ol className="ml-1.5 space-y-3 border-l-2 border-accent-200 pl-4 dark:border-accent-800/70">
+          {shown.map((entry, i) => (
+            <li key={entry.id} className="group/entry relative">
+              <span
+                aria-hidden
+                className={`absolute -left-[23px] top-1 h-3 w-3 rounded-full border-2 border-white dark:border-zinc-900 ${
+                  i === 0 ? 'bg-accent-500' : 'bg-accent-300 dark:bg-accent-700'
+                }`}
+              />
               <div className="flex items-start justify-between gap-2">
-                <div className="text-xs font-medium text-zinc-500 dark:text-zinc-400">
+                <time dateTime={new Date(entry.at).toISOString()} className="text-xs font-medium text-accent-700 dark:text-accent-300">
                   {formatWhen(entry.at)}
-                </div>
+                </time>
                 {editingId !== entry.id && (
-                  <div className="-my-1 flex shrink-0 items-center gap-1 text-zinc-400 md:opacity-0 md:transition-opacity md:group-hover/entry:opacity-100">
+                  <div className="-my-1 flex shrink-0 items-center gap-1 text-zinc-400 md:opacity-0 md:transition-opacity md:group-hover/entry:opacity-100 md:focus-within:opacity-100">
                     <button
                       onClick={() => startEdit(entry)}
-                      className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg hover:bg-zinc-200 hover:text-accent-600 dark:hover:bg-zinc-700 dark:hover:text-accent-400 md:min-h-0 md:min-w-0 md:p-1"
+                      className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg hover:bg-accent-100 hover:text-accent-600 dark:hover:bg-accent-900/40 dark:hover:text-accent-400 md:min-h-0 md:min-w-0 md:p-1"
                       title="Edit this entry"
                     >
                       <PencilIcon />
                     </button>
                     <button
                       onClick={() => removeEntry(entry)}
-                      className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg hover:bg-zinc-200 hover:text-red-600 dark:hover:bg-zinc-700 dark:hover:text-red-400 md:min-h-0 md:min-w-0 md:p-1"
+                      className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg hover:bg-accent-100 hover:text-red-600 dark:hover:bg-accent-900/40 dark:hover:text-red-400 md:min-h-0 md:min-w-0 md:p-1"
                       title="Delete this entry"
                     >
                       <TrashIcon />
@@ -187,7 +202,7 @@ export function DiscussionLog({ task }: Props) {
                   <div className="mt-2 flex justify-end gap-2">
                     <button
                       onClick={() => setEditingId(null)}
-                      className="min-h-[44px] rounded-lg px-4 text-sm font-medium text-zinc-500 hover:bg-zinc-200 dark:text-zinc-400 dark:hover:bg-zinc-700 md:min-h-0 md:py-1.5"
+                      className="min-h-[44px] rounded-lg px-4 text-sm font-medium text-zinc-500 hover:bg-accent-100 dark:text-zinc-400 dark:hover:bg-accent-900/40 md:min-h-0 md:py-1.5"
                     >
                       Cancel
                     </button>
@@ -200,7 +215,7 @@ export function DiscussionLog({ task }: Props) {
                   </div>
                 </div>
               ) : entry.note ? (
-                <p data-redact className="mt-0.5 whitespace-pre-wrap break-words text-sm text-zinc-700 dark:text-zinc-300">
+                <p data-redact className="mt-0.5 whitespace-pre-wrap break-words text-sm leading-relaxed text-zinc-800 dark:text-zinc-100">
                   <NoteText note={entry.note} />
                 </p>
               ) : (
@@ -208,13 +223,13 @@ export function DiscussionLog({ task }: Props) {
               )}
             </li>
           ))}
-        </ul>
+        </ol>
       )}
 
       {entries.length > RECENT_COUNT && (
         <button
           onClick={() => setShowAll((v) => !v)}
-          className="min-h-[44px] w-full rounded-lg text-xs font-medium text-zinc-500 hover:bg-zinc-100 hover:text-zinc-700 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-200 md:min-h-0 md:py-1"
+          className="min-h-[44px] rounded-lg px-2 text-xs font-medium text-accent-700 hover:bg-accent-100 dark:text-accent-300 dark:hover:bg-accent-900/40 md:min-h-0 md:py-1"
         >
           {showAll ? 'Show less' : `Show more (${hiddenCount})`}
         </button>

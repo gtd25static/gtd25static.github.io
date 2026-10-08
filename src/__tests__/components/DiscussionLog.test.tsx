@@ -1,24 +1,42 @@
 // @vitest-environment jsdom
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import '../setup-component';
-import { makeTask } from '../helpers/component-helpers';
+import { makeTask, resetAppState } from '../helpers/component-helpers';
 import { DiscussionLog } from '../../components/follow-ups/DiscussionLog';
 import { ConfirmDialogContainer } from '../../components/ui/ConfirmDialog';
+import { useAppState } from '../../stores/app-state';
+import type { Task } from '../../db/models';
 
-const mockUpdateTask = vi.fn();
+// The stored rows: each log change re-reads its follow-up from here, and the
+// mocked updateTask writes back to it.
+const stored = new Map<string, Task>();
+vi.mock('../../db', () => ({
+  db: { tasks: { get: async (id: string) => stored.get(id) } },
+}));
+const mockUpdateTask = vi.fn(async (id: string, updates: Partial<Task>) => {
+  stored.set(id, { ...stored.get(id)!, ...updates });
+});
 vi.mock('../../hooks/use-tasks', () => ({
-  updateTask: (...args: unknown[]) => mockUpdateTask(...args),
+  updateTask: (...args: [string, Partial<Task>]) => mockUpdateTask(...args),
 }));
 
+/** Wait for the log change a click or Enter set off (it reads the stored row first). */
+const saved = () => waitFor(() => expect(mockUpdateTask).toHaveBeenCalled());
+
 describe('DiscussionLog (inline, editable)', () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    stored.clear();
+    resetAppState();
+  });
 
   function renderHistory(overrides = {}) {
     const task = makeTask('fu-1', {
       discussionLog: [{ id: 'd1', at: 1000, note: 'old note' }],
       ...overrides,
     });
+    stored.set(task.id, task);
     const user = userEvent.setup();
     const result = render(
       <>
@@ -58,6 +76,7 @@ describe('DiscussionLog (inline, editable)', () => {
     await user.clear(textarea);
     await user.type(textarea, 'edited note');
     await user.click(screen.getByText('Save'));
+    await saved();
 
     expect(mockUpdateTask).toHaveBeenCalledWith(task.id, {
       discussionLog: [expect.objectContaining({ id: 'd1', note: 'edited note' })],
@@ -70,6 +89,7 @@ describe('DiscussionLog (inline, editable)', () => {
     const textarea = screen.getByDisplayValue('old note');
     await user.clear(textarea);
     await user.type(textarea, 'edited via enter{Enter}');
+    await saved();
 
     expect(mockUpdateTask).toHaveBeenCalledWith(task.id, {
       discussionLog: [expect.objectContaining({ id: 'd1', note: 'edited via enter' })],
@@ -101,6 +121,7 @@ describe('DiscussionLog (inline, editable)', () => {
     await user.click(screen.getByTitle('Delete this entry'));
     expect(mockUpdateTask).not.toHaveBeenCalled(); // confirm gate
     await user.click(await screen.findByRole('button', { name: 'Delete' }));
+    await saved();
     expect(mockUpdateTask).toHaveBeenCalledWith(task.id, { discussionLog: [] });
   });
 
@@ -108,24 +129,26 @@ describe('DiscussionLog (inline, editable)', () => {
     const { user, task } = renderHistory();
     await user.type(screen.getByPlaceholderText('What was discussed?'), 'a brand new entry');
     await user.click(screen.getByRole('button', { name: 'Log' }));
+    await saved();
 
     expect(mockUpdateTask).toHaveBeenCalledTimes(1);
     const [id, payload] = mockUpdateTask.mock.calls[0];
     expect(id).toBe(task.id);
     expect(payload.discussionLog).toHaveLength(2);
     // Stored oldest-first; the original entry is preserved.
-    expect(payload.discussionLog[0]).toMatchObject({ id: 'd1' });
-    expect(payload.discussionLog[1]).toMatchObject({ note: 'a brand new entry' });
+    expect(payload.discussionLog![0]).toMatchObject({ id: 'd1' });
+    expect(payload.discussionLog![1]).toMatchObject({ note: 'a brand new entry' });
   });
 
   it('appends a new entry with Enter', async () => {
     const { user, task } = renderHistory();
     await user.type(screen.getByPlaceholderText('What was discussed?'), 'entry via enter{Enter}');
+    await saved();
 
     expect(mockUpdateTask).toHaveBeenCalledTimes(1);
     const [id, payload] = mockUpdateTask.mock.calls[0];
     expect(id).toBe(task.id);
-    expect(payload.discussionLog[1]).toMatchObject({ note: 'entry via enter' });
+    expect(payload.discussionLog![1]).toMatchObject({ note: 'entry via enter' });
   });
 
   it('with an empty log shows just the box, and still allows adding', async () => {
@@ -133,6 +156,7 @@ describe('DiscussionLog (inline, editable)', () => {
     expect(screen.queryByRole('listitem')).not.toBeInTheDocument();
     await user.type(screen.getByPlaceholderText('What was discussed?'), 'first one');
     await user.click(screen.getByRole('button', { name: 'Log' }));
+    await saved();
     expect(mockUpdateTask).toHaveBeenCalledTimes(1);
   });
 
@@ -147,6 +171,7 @@ describe('DiscussionLog (inline, editable)', () => {
     const { user } = renderHistory();
     const box = screen.getByPlaceholderText('What was discussed?');
     await user.type(box, 'spoke to ops{Enter}');
+    await saved();
     expect(Object.keys(mockUpdateTask.mock.calls[0][1])).toEqual(['discussionLog']);
     expect(box).toHaveValue('');
   });
@@ -164,8 +189,9 @@ describe('DiscussionLog (inline, editable)', () => {
     const before = Date.now();
     await user.type(screen.getByPlaceholderText('What was discussed?'), 'now-ish{Enter}');
     const after = Date.now();
+    await saved();
 
-    const entry = mockUpdateTask.mock.calls[0][1].discussionLog[1];
+    const entry = mockUpdateTask.mock.calls[0][1].discussionLog![1];
     expect(entry.at).toBeGreaterThanOrEqual(before);
     expect(entry.at).toBeLessThanOrEqual(after);
   });
@@ -211,15 +237,54 @@ describe('DiscussionLog (inline, editable)', () => {
     it('a new note goes on top and pushes the oldest shown one behind "Show more"', async () => {
       const { user, rerender, task } = renderHistory({ discussionLog: log.slice(0, 2) });
       await user.type(screen.getByPlaceholderText('What was discussed?'), 'note 9{Enter}');
-      const saved = mockUpdateTask.mock.calls[0][1].discussionLog;
+      await saved();
+      const newLog = mockUpdateTask.mock.calls[0][1].discussionLog;
       rerender(
         <>
           <ConfirmDialogContainer />
-          <DiscussionLog task={{ ...task, discussionLog: saved }} />
+          <DiscussionLog task={{ ...task, discussionLog: newLog }} />
         </>,
       );
       expect(visibleNotes()).toEqual(['note 9', 'note 2']);
       expect(screen.getByRole('button', { name: 'Show more (1)' })).toBeInTheDocument();
     });
+  });
+
+  // Two notes in quick succession each started from the log as last rendered:
+  // the second write dropped the first.
+  it('keeps both of two notes logged one right after the other', async () => {
+    const { user, task } = renderHistory();
+    const box = screen.getByPlaceholderText('What was discussed?');
+    await user.type(box, 'first{Enter}');
+    await user.type(box, 'second{Enter}'); // the card still shows the old log
+    await waitFor(() => expect(mockUpdateTask).toHaveBeenCalledTimes(2));
+    expect(stored.get(task.id)!.discussionLog!.map((e) => e.note)).toEqual(['old note', 'first', 'second']);
+  });
+
+  it('keeps an unsent note when the log closes and opens again, until it is logged', async () => {
+    const first = renderHistory();
+    await first.user.type(screen.getByPlaceholderText('What was discussed?'), 'half a thought');
+    first.unmount();
+
+    render(<DiscussionLog task={first.task} />);
+    const box = screen.getByPlaceholderText('What was discussed?');
+    expect(box).toHaveValue('half a thought');
+    await userEvent.setup().type(box, '{Enter}');
+    await saved();
+    expect(box).toHaveValue('');
+    expect(useAppState.getState().noteDrafts[first.task.id]).toBeUndefined();
+  });
+
+  it('takes the focus when asked to (opened from the keyboard or with a mouse)', () => {
+    const task = makeTask('fu-1');
+    useAppState.getState().setNoteFocusTaskId(task.id);
+    render(<DiscussionLog task={task} />);
+    expect(screen.getByPlaceholderText('What was discussed?')).toHaveFocus();
+    expect(useAppState.getState().noteFocusTaskId).toBeNull();
+  });
+
+  it('is headed as the discussion log, with its size', () => {
+    renderHistory();
+    expect(screen.getByRole('heading', { name: 'Discussion log · 1' })).toBeInTheDocument();
   });
 });

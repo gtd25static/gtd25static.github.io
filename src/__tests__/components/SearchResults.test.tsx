@@ -120,4 +120,18 @@ describe('SearchResults navigation', () => {
     expect(state.expandedTaskIds.has('follow-2')).toBe(true);
     expect(state.focusedItemId).toBe('follow-2');
   });
+
+  it('labels follow-ups as snoozed or resolved (never "todo"), and shows why a result matched', () => {
+    renderResults([
+      makeResult({ id: 'f1', title: 'Awake topic', listType: 'follow-ups', match: { text: 'what we said', at: new Date(2026, 9, 1).getTime() } }),
+      makeResult({ id: 'f2', title: 'Snoozed topic', listType: 'follow-ups', snoozed: true }),
+      makeResult({ id: 'f3', title: 'Resolved topic', listType: 'follow-ups', archived: true }),
+    ], []);
+    const row = (title: string) => screen.getByText(title).closest('button')!;
+    expect(row('Awake topic').textContent).not.toMatch(/todo|snoozed|resolved/);
+    expect(row('Snoozed topic').textContent).toContain('snoozed');
+    expect(row('Resolved topic').textContent).toContain('resolved');
+    expect(row('Awake topic').textContent).toContain('01/10');
+    expect(row('Awake topic').textContent).toContain('what we said');
+  });
 });

@@ -22,6 +22,8 @@ export function startForgettingSessionOnLock(): () => void {
     endSyncSession();
     useAppState.getState().setSearchQuery('');
     useAppState.getState().setListFilter('');
+    // Unsent discussion notes are decrypted content held outside the cards.
+    useAppState.getState().clearNoteDrafts();
     dismissFocusNudge();
     // Two retainers of decrypted content that outlive the DEK: the text held for
     // the clipboard auto-clear's comparison, and any blob: URL still resolvable
