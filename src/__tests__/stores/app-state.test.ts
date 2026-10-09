@@ -1,4 +1,4 @@
-import { useAppState, selectFollowUpView, DEFAULT_FOLLOW_UP_VIEW } from '../../stores/app-state';
+import { useAppState, selectFollowUpView, DEFAULT_FOLLOW_UP_VIEW, readFollowUpStalestFirst } from '../../stores/app-state';
 
 function getState() {
   return useAppState.getState();
@@ -23,7 +23,9 @@ function resetStore() {
     bulkMode: false,
     selectedTaskIds: new Set(),
     followUpViews: {},
+    followUpStalestFirst: false,
   });
+  localStorage.removeItem('gtd25-follow-up-stalest');
 }
 
 describe('app-state store', () => {
@@ -229,6 +231,42 @@ describe('app-state store', () => {
       const before = { ...localStorage };
       getState().setFollowUpView('F1', { showSnoozed: true, sort: 'discussed' });
       expect({ ...localStorage }).toEqual(before);
+    });
+
+    it('"Stalest first" orders every follow-up list by last discussed, over each list\'s own order', () => {
+      getState().setFollowUpView('F1', { sort: 'date' });
+      getState().setFollowUpStalestFirst(true);
+      expect(selectFollowUpView('F1')(getState()).sort).toBe('discussed');
+      expect(selectFollowUpView('F2')(getState()).sort).toBe('discussed');
+      expect(selectFollowUpView('F1')(getState()).showSnoozed).toBe(false);
+      // The same object on every call: a fresh one re-renders its subscriber forever.
+      expect(selectFollowUpView('F1')(getState())).toBe(selectFollowUpView('F1')(getState()));
+      expect(selectFollowUpView('F2')(getState())).toBe(selectFollowUpView('F2')(getState()));
+      getState().setFollowUpStalestFirst(false);
+      expect(selectFollowUpView('F1')(getState()).sort).toBe('date');
+      expect(selectFollowUpView('F2')(getState())).toBe(DEFAULT_FOLLOW_UP_VIEW);
+    });
+
+    it('"Stalest first" is remembered on this device as a bare flag (no list ids)', () => {
+      getState().setFollowUpStalestFirst(true);
+      expect(localStorage.getItem('gtd25-follow-up-stalest')).toBe('1');
+      expect(readFollowUpStalestFirst()).toBe(true);
+      getState().setFollowUpStalestFirst(false);
+      expect(localStorage.getItem('gtd25-follow-up-stalest')).toBeNull();
+      expect(readFollowUpStalestFirst()).toBe(false);
+    });
+
+    it('"Stalest first" still works for the session when storage refuses it', () => {
+      const setItem = vi.spyOn(localStorage, 'setItem').mockImplementation(() => { throw new Error('QuotaExceededError'); });
+      const getItem = vi.spyOn(localStorage, 'getItem').mockImplementation(() => { throw new Error('SecurityError'); });
+      try {
+        getState().setFollowUpStalestFirst(true);
+        expect(getState().followUpStalestFirst).toBe(true);
+        expect(readFollowUpStalestFirst()).toBe(false);
+      } finally {
+        setItem.mockRestore();
+        getItem.mockRestore();
+      }
     });
   });
 });

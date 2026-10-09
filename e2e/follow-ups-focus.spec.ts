@@ -263,7 +263,7 @@ test('j/k walk only the follow-ups on screen: a hidden snoozed one is skipped', 
   await expect(followUpCard(page, 'Ping Ann')).not.toHaveClass(/ring-2/);
 });
 
-test('"Sort by last discussed" puts the topic left longest first', async ({ page }) => {
+test('"Stalest first" puts the topic left longest first, says how long each has been idle, and is remembered', async ({ page }) => {
   await openApp(page);
   await createFollowUpList(page, 'People');
   await addFollowUp(page, 'Old topic');
@@ -277,10 +277,27 @@ test('"Sort by last discussed" puts the topic left longest first', async ({ page
   await fresh.getByPlaceholder('What was discussed?').press('Enter');
   await expect(fresh.getByText('talked just now')).toBeVisible();
 
-  const header = page.getByRole('heading', { level: 2, name: 'People' }).locator('xpath=ancestor::div[contains(@class,"justify-between")][1]');
-  await header.locator('[data-dropdown-trigger]').click();
-  await page.getByRole('button', { name: 'Sort by last discussed', exact: true }).click();
+  const stalest = page.getByRole('button', { name: 'Stalest first', exact: true });
+  await stalest.click();
+  await expect(stalest).toHaveAttribute('aria-pressed', 'true');
   await expect.poll(() => cardTitles(page, titles)).toEqual(['Old topic', 'New topic']);
+  await expect(followUpCard(page, 'Old topic').getByText(/^idle \d+m$/)).toBeVisible();
+
+  // Discussed, then Unsnooze: still handled just now, so it goes after the other.
+  const old = followUpCard(page, 'Old topic');
+  await old.getByRole('button', { name: 'Discussed' }).click();
+  await page.getByRole('button', { name: 'Snooze', exact: true }).click();
+  await page.getByRole('button', { name: /show snoozed/i }).click();
+  await followUpCard(page, 'Old topic').getByRole('button', { name: /^Unsnooze/ }).click();
+  await expect(followUpCard(page, 'Old topic').getByRole('button', { name: /^Unsnooze/ })).toHaveCount(0);
+  await expect.poll(() => cardTitles(page, titles)).toEqual(['New topic', 'Old topic']);
+
+  // Kept on this device, for every follow-up list.
+  await page.reload();
+  await expect(appShell(page)).toBeVisible();
+  await listRow(page, 'People').locator(':scope > button').click();
+  await expect(page.getByRole('button', { name: 'Stalest first', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await expect.poll(() => cardTitles(page, titles)).toEqual(['New topic', 'Old topic']);
 });
 
 test('a snoozed topic comes back on its own when it wakes, and the sidebar counts the awake ones', async ({ page }) => {

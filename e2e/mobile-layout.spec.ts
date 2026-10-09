@@ -35,6 +35,32 @@ test.describe('on a phone', () => {
     await expect(fab(page)).toHaveCount(0);
   });
 
+  // The "Ready to discuss" strip went for running off a phone's edge.
+  test('a follow-up list\'s header chips stay on screen at 360px', async ({ page }) => {
+    await page.setViewportSize({ width: 360, height: 760 });
+    await openApp(page);
+    await page.getByRole('button', { name: 'Open sidebar' }).click();
+    await page.getByRole('button', { name: 'Create new list' }).click();
+    await page.getByPlaceholder('List name').fill('Weekly one-to-one with the team lead');
+    await page.getByRole('button', { name: 'Follow-ups', exact: true }).click();
+    await page.getByPlaceholder('List name').press('Enter');
+    for (const title of ['Budget', 'Hiring']) {
+      await page.getByRole('button', { name: 'Add a follow-up' }).click();
+      await page.getByPlaceholder('Task title').fill(title);
+      await page.getByPlaceholder('Task title').press('Enter');
+    }
+    const card = page.locator('[data-focus-id]').filter({ hasText: 'Budget' }).filter({ has: page.getByRole('button', { name: 'Discussed' }) });
+    await card.getByRole('button', { name: 'Discussed' }).click();
+    await page.getByRole('button', { name: 'Snooze', exact: true }).click();
+
+    for (const chip of [page.getByRole('button', { name: /show snoozed \(1\)/i }), page.getByRole('button', { name: 'Stalest first', exact: true })]) {
+      await expect(chip).toBeVisible();
+      const box = (await chip.boundingBox())!;
+      expect(box.x + box.width, 'the chip ends inside the screen').toBeLessThanOrEqual(360);
+    }
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(360);
+  });
+
   test('a new mindmap node\'s editor is on screen, and a long label stays inside its node', async ({ page }) => {
     await openApp(page);
     await page.getByRole('button', { name: 'Open sidebar' }).click();

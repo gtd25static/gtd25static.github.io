@@ -47,6 +47,15 @@ describe('DiscussionLog (inline, editable)', () => {
     return { task, user, ...result };
   }
 
+  it('says how long the topic has been open and how often it gets a note', () => {
+    const DAY = 24 * 60 * 60 * 1000;
+    renderHistory({
+      createdAt: Date.now() - 30 * DAY - 1000,
+      discussionLog: [{ id: 'd1', at: Date.now() - 20 * DAY, note: 'first' }, { id: 'd2', at: Date.now() - 10 * DAY, note: 'second' }],
+    });
+    expect(screen.getByText('Open 30 days · a note every ~10 days')).toBeInTheDocument();
+  });
+
   it('shows the note read-only until the pencil is clicked', () => {
     renderHistory();
     expect(screen.getByText('old note')).toBeInTheDocument();

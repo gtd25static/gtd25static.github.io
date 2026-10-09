@@ -27,6 +27,7 @@ export function resetAppState() {
     bulkMode: false,
     selectedTaskIds: new Set(),
     followUpViews: {},
+    followUpStalestFirst: false,
     noteDrafts: {},
     noteFocusTaskId: null,
   });

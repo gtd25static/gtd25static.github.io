@@ -8,6 +8,10 @@ const mockUseInsights = vi.fn();
 vi.mock('../../hooks/use-insights', () => ({
   useInsights: (range: unknown) => mockUseInsights(range),
 }));
+const mockRevealTask = vi.fn();
+vi.mock('../../lib/reveal-task', () => ({
+  revealTask: (...args: unknown[]) => mockRevealTask(...args),
+}));
 
 import { InsightsView } from '../../components/insights/InsightsView';
 
@@ -55,7 +59,10 @@ function makeData(overrides: Partial<InsightsData> = {}): InsightsData {
       totalDiscussions: 5,
       activeCount: 1,
       resolvedCount: 1,
-      topTopics: [{ title: 'Budget', count: 3 }],
+      topTopics: [{ id: 'budget', title: 'Budget', count: 3 }],
+      goingStale: [],
+      oldestOpen: [],
+      medianResolveMs: null,
     },
     streak: { current: 4, longest: 9 },
     totals: {
@@ -102,12 +109,54 @@ describe('InsightsView', () => {
   it('hides the Follow-ups section when the user has none', () => {
     mockUseInsights.mockReturnValue(
       makeData({
-        followUps: { discussionsInRange: 0, totalDiscussions: 0, activeCount: 0, resolvedCount: 0, topTopics: [] },
+        followUps: { discussionsInRange: 0, totalDiscussions: 0, activeCount: 0, resolvedCount: 0, topTopics: [], goingStale: [], oldestOpen: [], medianResolveMs: null },
       }),
     );
     render(<InsightsView />);
     // (the Totals section still has a "Follow-ups" stat label, so target the section heading)
     expect(screen.queryByRole('heading', { name: 'Follow-ups' })).not.toBeInTheDocument();
+  });
+
+  describe('topic health', () => {
+    const DAY = 24 * 60 * 60 * 1000;
+    const withHealth = () => makeData({
+      followUps: {
+        ...makeData().followUps,
+        goingStale: [{ id: 'hire', listId: 'L1', title: 'Hiring plan', ms: 23 * DAY, cadenceMs: 6 * DAY, snoozed: false }],
+        oldestOpen: [{ id: 'office', listId: 'L2', title: 'Office move', ms: 120 * DAY, snoozed: true }],
+        medianResolveMs: 9 * DAY,
+      },
+    });
+
+    it('lists the topics going stale and the oldest open, with the median time to resolve', () => {
+      mockUseInsights.mockReturnValue(withHealth());
+      render(<InsightsView />);
+      expect(screen.getByText('Going stale')).toBeInTheDocument();
+      expect(screen.getByText('Hiring plan')).toHaveAttribute('data-redact');
+      expect(screen.getByText('idle 23d · every 6d')).toBeInTheDocument();
+      expect(screen.getByText('Oldest open')).toBeInTheDocument();
+      expect(screen.getByText('Office move')).toHaveAttribute('data-redact');
+      expect(screen.getByText('open 120d')).toBeInTheDocument();
+      expect(screen.getByText('median 9d to resolve')).toBeInTheDocument();
+    });
+
+    it('a topic opens in its list on a click', async () => {
+      mockUseInsights.mockReturnValue(withHealth());
+      const user = userEvent.setup();
+      render(<InsightsView />);
+      await user.click(screen.getByText('Hiring plan'));
+      expect(mockRevealTask).toHaveBeenCalledWith({ taskId: 'hire', listId: 'L1', listType: 'follow-ups', snoozed: false });
+      await user.click(screen.getByText('Office move'));
+      expect(mockRevealTask).toHaveBeenLastCalledWith({ taskId: 'office', listId: 'L2', listType: 'follow-ups', snoozed: true });
+    });
+
+    it('neither list, and no median, when there is nothing to show', () => {
+      mockUseInsights.mockReturnValue(makeData());
+      render(<InsightsView />);
+      expect(screen.queryByText('Going stale')).not.toBeInTheDocument();
+      expect(screen.queryByText('Oldest open')).not.toBeInTheDocument();
+      expect(screen.queryByText(/to resolve/)).not.toBeInTheDocument();
+    });
   });
 
   // One task in 30 days read "0.0/day".

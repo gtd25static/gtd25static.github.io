@@ -57,8 +57,17 @@ interface Props {
 
 const SORT_LABELS: Record<Exclude<FollowUpSort, 'manual'>, string> = {
   date: 'Sort by date',
-  discussed: 'Sort by last discussed',
+  discussed: 'Stalest first',
 };
+
+// The header's chips: Show snoozed, Stalest first.
+function headerChipClass(pressed: boolean): string {
+  return `shrink-0 rounded-full px-3 py-1 text-sm font-medium transition-colors ${
+    pressed
+      ? 'bg-accent-100 text-accent-700 dark:bg-accent-900/40 dark:text-accent-300'
+      : 'text-zinc-500 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800'
+  }`;
+}
 
 export function FollowUpList({ listId, listName }: Props) {
   const followUps = useFollowUps(listId);
@@ -69,9 +78,12 @@ export function FollowUpList({ listId, listName }: Props) {
   const rawActive = filterTasksByQuery(followUps.active, listFilter);
   const archived = filterTasksByQuery(followUps.archived, listFilter);
   // The list's view outlives it (app-state): Show snoozed, Resolved open, and the
-  // order — by hand, by due date, or stalest topic first (snoozed always last).
+  // order — by hand or by due date, or stalest topic first (snoozed always last)
+  // while "Stalest first" is on, which every follow-up list shares.
   const { showSnoozed, showResolved, sort } = useAppState(selectFollowUpView(listId));
   const setFollowUpView = useAppState((s) => s.setFollowUpView);
+  const stalestFirst = useAppState((s) => s.followUpStalestFirst);
+  const setStalestFirst = useAppState((s) => s.setFollowUpStalestFirst);
   const { visible, snoozed } = arrangeFollowUps(rawActive, { sort, showSnoozed });
   const resolved = [...archived].sort((a, b) => {
     const aResolved = a.updatedAt ?? a.order;
@@ -131,22 +143,28 @@ export function FollowUpList({ listId, listName }: Props) {
         <div className="mx-auto w-full max-w-2xl lg:max-w-3xl xl:max-w-4xl px-4 py-4">
           {/* Header */}
           <div className="mb-1 flex items-center justify-between gap-2">
-            <div className="flex min-w-0 items-center gap-2">
-              <h2 data-redact className="truncate text-lg font-normal text-zinc-800 dark:text-zinc-200">{listName}</h2>
+            {/* On a phone the chips go to a second line rather than off the edge. */}
+            <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+              <h2 data-redact className="min-w-0 truncate text-lg font-normal text-zinc-800 dark:text-zinc-200">{listName}</h2>
               {snoozed.length > 0 && (
                 <button
                   type="button"
                   onClick={() => setFollowUpView(listId, { showSnoozed: !showSnoozed })}
                   aria-pressed={showSnoozed}
-                  className={`shrink-0 rounded-full px-3 py-1 text-sm font-medium transition-colors ${
-                    showSnoozed
-                      ? 'bg-accent-100 text-accent-700 dark:bg-accent-900/40 dark:text-accent-300'
-                      : 'text-zinc-500 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800'
-                  }`}
+                  className={headerChipClass(showSnoozed)}
                 >
                   {showSnoozed ? 'Hide' : 'Show'} snoozed ({snoozed.length})
                 </button>
               )}
+              <button
+                type="button"
+                onClick={() => setStalestFirst(!stalestFirst)}
+                aria-pressed={stalestFirst}
+                title="Topics without a Discussed or a note for longest come first"
+                className={headerChipClass(stalestFirst)}
+              >
+                {SORT_LABELS.discussed}
+              </button>
             </div>
             <DropdownMenu
               label="List options"
@@ -157,11 +175,15 @@ export function FollowUpList({ listId, listName }: Props) {
                   <circle cx="10" cy="16" r="1.5" />
                 </svg>
               }
-              items={(['date', 'discussed'] as const).map((mode) => ({
-                label: `${SORT_LABELS[mode]}${sort === mode ? ' ✓' : ''}`,
+              items={[{
+                label: `${SORT_LABELS.date}${sort === 'date' ? ' ✓' : ''}`,
                 // Picking the order in use again goes back to the order by hand.
-                onClick: () => setFollowUpView(listId, { sort: sort === mode ? 'manual' : mode }),
-              }))}
+                // Picked over "Stalest first", it takes over: one order at a time.
+                onClick: () => {
+                  setFollowUpView(listId, { sort: sort === 'date' ? 'manual' : 'date' });
+                  if (stalestFirst) setStalestFirst(false);
+                },
+              }]}
             />
           </div>
 

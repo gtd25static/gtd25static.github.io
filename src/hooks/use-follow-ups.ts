@@ -76,6 +76,34 @@ export function lastDiscussedAt(task: Task): number {
   return latest;
 }
 
+/** When a resolved topic was resolved: when `archived` last changed, else its last change. */
+export function resolvedAt(task: Task): number {
+  const stamped = task.fieldTimestamps?.archived;
+  return Number.isFinite(stamped) ? stamped! : task.updatedAt;
+}
+
+/**
+ * The open log's one line about the topic's life: "Open 47 days · a note every
+ * ~8 days" (a resolved one counts up to its resolution; the rhythm needs two
+ * notes). Null without a usable creation time — synced data.
+ */
+export function topicAgeLine(task: Task, now = Date.now()): string | null {
+  if (typeof task.createdAt !== 'number' || !Number.isFinite(task.createdAt)) return null;
+  const end = task.archived ? resolvedAt(task) : now;
+  const days = Math.max(0, Math.floor((end - task.createdAt) / DAY_MS));
+  const plural = (n: number) => `${n} day${n === 1 ? '' : 's'}`;
+  const age = task.archived
+    ? (days < 1 ? 'Resolved within a day' : `Was open ${plural(days)}`)
+    : (days < 1 ? 'Opened today' : `Open ${plural(days)}`);
+
+  const times = (task.discussionLog ?? []).map((entry) => entry?.at).filter((at): at is number => Number.isFinite(at));
+  if (times.length < 2) return age;
+  const first = times.reduce((a, b) => Math.min(a, b));
+  const last = times.reduce((a, b) => Math.max(a, b));
+  const gapDays = Math.round((last - first) / (times.length - 1) / DAY_MS);
+  return `${age} · ${gapDays <= 1 ? 'about a note a day' : `a note every ~${gapDays} days`}`;
+}
+
 /** The soonest moment one of `tasks` wakes from its snooze (epoch ms), or 0 if none is snoozed. */
 export function nextWakeAt(tasks: Task[]): number {
   let soonest = 0;

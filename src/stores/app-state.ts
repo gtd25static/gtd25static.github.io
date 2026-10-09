@@ -10,6 +10,18 @@ export interface FollowUpView {
 
 export const DEFAULT_FOLLOW_UP_VIEW: FollowUpView = { showSnoozed: false, showResolved: false, sort: 'manual' };
 
+// "Stalest first" on the follow-up lists: device-local, never synced. A bare
+// flag on purpose — no list ids, no content (see followUpViews below).
+const STALEST_FIRST_KEY = 'gtd25-follow-up-stalest';
+
+export function readFollowUpStalestFirst(): boolean {
+  try {
+    return localStorage.getItem(STALEST_FIRST_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
 interface AppState {
   selectedListId: string | null;
   expandedTaskIds: Set<string>;
@@ -44,6 +56,9 @@ interface AppState {
   // Memory only, on purpose: on disk, the ids of lists that no longer exist
   // would outlive them.
   followUpViews: Record<string, FollowUpView>;
+  // "Stalest first": every follow-up list in last-discussed order, over its own
+  // order. Kept on this device (STALEST_FIRST_KEY).
+  followUpStalestFirst: boolean;
   // Unsent text in a follow-up's "What was discussed?" box, by task id, so that
   // closing the card or leaving the list doesn't lose it. Decrypted content:
   // memory only, and forgotten on lock (lib/forget-on-lock.ts).
@@ -78,6 +93,7 @@ interface AppState {
   selectAllTasks: (ids: string[]) => void;
   clearSelection: () => void;
   setFollowUpView: (listId: string, patch: Partial<FollowUpView>) => void;
+  setFollowUpStalestFirst: (on: boolean) => void;
   setNoteDraft: (taskId: string, text: string) => void;
   clearNoteDrafts: () => void;
   setNoteFocusTaskId: (id: string | null) => void;
@@ -109,6 +125,7 @@ export const useAppState = create<AppState>((set) => ({
   bulkMode: false,
   selectedTaskIds: new Set(),
   followUpViews: {},
+  followUpStalestFirst: readFollowUpStalestFirst(),
   noteDrafts: {},
   noteFocusTaskId: null,
 
@@ -173,6 +190,13 @@ export const useAppState = create<AppState>((set) => ({
         [listId]: { ...(state.followUpViews[listId] ?? DEFAULT_FOLLOW_UP_VIEW), ...patch },
       },
     })),
+  setFollowUpStalestFirst: (on) => {
+    try {
+      if (on) localStorage.setItem(STALEST_FIRST_KEY, '1');
+      else localStorage.removeItem(STALEST_FIRST_KEY);
+    } catch { /* best-effort: still on for this session */ }
+    set({ followUpStalestFirst: on });
+  },
   setNoteDraft: (taskId, text) =>
     set((state) => {
       const noteDrafts = { ...state.noteDrafts };
@@ -184,8 +208,24 @@ export const useAppState = create<AppState>((set) => ({
   setNoteFocusTaskId: (id) => set({ noteFocusTaskId: id }),
 }));
 
-/** The view of follow-up list `listId` (the defaults until it's changed). */
+// Each view as "Stalest first" shows it, one object per view: a selector that
+// returned a fresh object on every call would re-render its component forever.
+const stalestViews = new WeakMap<FollowUpView, FollowUpView>();
+
+/**
+ * The view of follow-up list `listId` (the defaults until it's changed), in
+ * last-discussed order while "Stalest first" is on — the list and j/k both read
+ * it, so they walk the same order.
+ */
 export function selectFollowUpView(listId: string | null) {
-  return (state: AppState): FollowUpView =>
-    (listId && state.followUpViews[listId]) || DEFAULT_FOLLOW_UP_VIEW;
+  return (state: AppState): FollowUpView => {
+    const view = (listId && state.followUpViews[listId]) || DEFAULT_FOLLOW_UP_VIEW;
+    if (!state.followUpStalestFirst) return view;
+    let stalest = stalestViews.get(view);
+    if (!stalest) {
+      stalest = { ...view, sort: 'discussed' };
+      stalestViews.set(view, stalest);
+    }
+    return stalest;
+  };
 }

@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../db';
-import type { DiscussionEntry } from '../db/models';
+import type { Task } from '../db/models';
+import { cadenceMs, cooldownUntil, lastDiscussedAt, resolvedAt } from './use-follow-ups';
 import {
   startOfDay,
   startOfWeek,
@@ -74,8 +75,21 @@ export interface CycleTimeResult {
 }
 
 export interface TopicCount {
+  /** The topic's id (busiest topics); lists are keyed by their title. */
+  id?: string;
   title: string;
   count: number;
+}
+
+/** A follow-up topic in the health lists, with how long (idle, or open) in `ms`. */
+export interface TopicHealth {
+  id: string;
+  listId: string;
+  title: string;
+  ms: number;
+  /** Its snooze cadence (going stale only). */
+  cadenceMs?: number;
+  snoozed: boolean;
 }
 
 export interface FollowUpResult {
@@ -84,7 +98,18 @@ export interface FollowUpResult {
   activeCount: number;
   resolvedCount: number;
   topTopics: TopicCount[];
+  /** Awake topics left more than twice their cadence, longest first (≤ 5). */
+  goingStale: TopicHealth[];
+  /** The open topics created longest ago (≤ 3). */
+  oldestOpen: TopicHealth[];
+  /** Median time from creation to resolution, all-time; null with none resolved. */
+  medianResolveMs: number | null;
 }
+
+/** A follow-up as `followUpStats` reads it: only `title` is certain. */
+export type FollowUpInput = Pick<Task, 'title'> & Partial<Pick<Task,
+  'id' | 'listId' | 'archived' | 'discussionLog' | 'createdAt' | 'updatedAt' | 'fieldTimestamps'
+  | 'pingedAt' | 'pingCooldown' | 'pingCooldownCustomMs' | 'pingCooldownUntil' | 'snoozeCadence' | 'snoozeCadenceDays'>>;
 
 export interface InsightsData {
   range: InsightsRange;
@@ -305,16 +330,28 @@ export function cycleTimeStats(items: ReadonlyArray<WorkItem>, now: number): Cyc
   };
 }
 
-/** Follow-up engagement: discussions logged, active vs resolved, busiest topics. */
+const STALE_AFTER_CADENCES = 2;
+
+/**
+ * Follow-up engagement: discussions logged, active vs resolved, busiest topics —
+ * and their health: topics going stale, the oldest open, the median time to
+ * resolve. Topics of `inactiveListIds` (archived lists) stay out of the health
+ * lists, as they do of every other reminder.
+ */
 export function followUpStats(
-  followUps: ReadonlyArray<{ title: string; archived?: boolean; discussionLog?: DiscussionEntry[] }>,
+  followUps: ReadonlyArray<FollowUpInput>,
   rangeStart: number,
+  now: number = Date.now(),
+  inactiveListIds: ReadonlySet<string> = new Set(),
 ): FollowUpResult {
   let discussionsInRange = 0;
   let totalDiscussions = 0;
   let activeCount = 0;
   let resolvedCount = 0;
   const topics: TopicCount[] = [];
+  const stale: TopicHealth[] = [];
+  const open: TopicHealth[] = [];
+  const resolveTimes: number[] = [];
 
   for (const t of followUps) {
     if (t.archived) resolvedCount++;
@@ -324,7 +361,25 @@ export function followUpStats(
     for (const entry of log) {
       if (entry.at >= rangeStart) discussionsInRange++;
     }
-    if (log.length > 0) topics.push({ title: t.title, count: log.length });
+    if (log.length > 0) topics.push({ id: t.id, title: t.title, count: log.length });
+
+    // The health figures need the dates; synced rows may lack them.
+    const task = t as Task;
+    if (!Number.isFinite(task.createdAt)) continue;
+    if (t.archived) {
+      const took = resolvedAt(task) - task.createdAt;
+      if (Number.isFinite(took) && took >= 0) resolveTimes.push(took);
+      continue;
+    }
+    if (!t.id || !t.listId || inactiveListIds.has(t.listId)) continue;
+    const snoozed = cooldownUntil(task) > now;
+    open.push({ id: t.id, listId: t.listId, title: t.title, ms: Math.max(0, now - task.createdAt), snoozed });
+    if (snoozed) continue;
+    const idle = now - lastDiscussedAt(task);
+    const cadence = cadenceMs(task);
+    if (idle > STALE_AFTER_CADENCES * cadence) {
+      stale.push({ id: t.id, listId: t.listId, title: t.title, ms: idle, cadenceMs: cadence, snoozed });
+    }
   }
 
   topics.sort((a, b) => b.count - a.count);
@@ -334,6 +389,9 @@ export function followUpStats(
     activeCount,
     resolvedCount,
     topTopics: topics.slice(0, 5),
+    goingStale: stale.sort((a, b) => b.ms - a.ms).slice(0, 5),
+    oldestOpen: open.sort((a, b) => b.ms - a.ms).slice(0, 3),
+    medianResolveMs: resolveTimes.length ? median(resolveTimes) : null,
   };
 }
 
@@ -427,7 +485,8 @@ export function useInsights(range: InsightsRange): InsightsData | undefined {
     const heatmap = buildHeatmap(completions, now);
     const rhythm = rhythmHistograms(completions);
     const cycle = cycleTimeStats(items, now);
-    const followUps = followUpStats(followUpTasks, rangeStartFor(range, now));
+    const archivedListIds = new Set(lists.filter((l) => l.archivedAt).map((l) => l.id));
+    const followUps = followUpStats(followUpTasks, rangeStartFor(range, now), now, archivedListIds);
 
     const activeTasks = workTasks.filter((t) => t.status !== 'done').length;
     const hasAnyData = items.length > 0 || followUpTasks.length > 0;

@@ -40,7 +40,9 @@ vi.mock('../../hooks/use-follow-ups', () => ({
     mockUpdateTask(id, { discussionLog: edit(cardLogs.get(id) ?? []) }),
   isInCooldown: (t: { pingedAt?: number }) => Boolean(t.pingedAt),
   cooldownRemaining: () => 3600000,
-  formatCooldown: () => '1h',
+  formatCooldown: (ms: number) => `${Math.floor(ms / (24 * 60 * 60 * 1000))}d`,
+  lastDiscussedAt: (t: { createdAt: number }) => t.createdAt,
+  topicAgeLine: () => null,
   cadenceMs: () => 7 * 24 * 60 * 60 * 1000,
   cadenceLabel: () => 'every 1w',
   applyDiscussed: () => ({
@@ -244,14 +246,39 @@ describe('FollowUpCard', () => {
     expect(screen.getByTitle('Unsnooze — remove snooze')).toBeInTheDocument();
   });
 
-  it('clears the ping fields when Unsnooze is clicked', async () => {
+  // The snooze goes; when it was last Discussed stays (what "Stalest first" and
+  // Insights count from) — cleared, an unsnoozed topic read as never handled.
+  it('Unsnooze clears the snooze but keeps when it was last Discussed', async () => {
     const { user, task } = renderCard({ pingedAt: Date.now() });
     await user.click(screen.getByTitle('Unsnooze — remove snooze'));
     expect(mockUpdateTask).toHaveBeenCalledWith(task.id, {
-      pingedAt: undefined,
       pingCooldown: undefined,
       pingCooldownCustomMs: undefined,
       pingCooldownUntil: undefined,
+    });
+    expect(mockUpdateTask.mock.calls[0][1]).not.toHaveProperty('pingedAt');
+  });
+
+  describe('with "Stalest first" on', () => {
+    const DAY = 24 * 60 * 60 * 1000;
+
+    it('an awake card says how long it has gone without a Discussed or a note', () => {
+      useAppState.setState({ followUpStalestFirst: true });
+      renderCard({ createdAt: Date.now() - 12 * DAY - 1000 });
+      expect(screen.getByText('idle 12d')).toBeInTheDocument();
+      expect(screen.getByText('idle 12d')).toHaveAttribute('title', 'Time since the last Discussed or note');
+    });
+
+    it('not on a snoozed or a resolved card', () => {
+      useAppState.setState({ followUpStalestFirst: true });
+      renderCard({ title: 'Snoozed', pingedAt: Date.now(), createdAt: Date.now() - 12 * DAY });
+      renderCard({ title: 'Resolved', archived: true, createdAt: Date.now() - 12 * DAY });
+      expect(screen.queryByText(/^idle /)).not.toBeInTheDocument();
+    });
+
+    it('and not at all with it off', () => {
+      renderCard({ createdAt: Date.now() - 12 * DAY });
+      expect(screen.queryByText(/^idle /)).not.toBeInTheDocument();
     });
   });
 

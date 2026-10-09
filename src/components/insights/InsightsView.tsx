@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import type { ReactNode } from 'react';
-import { useInsights, type InsightsRange } from '../../hooks/use-insights';
+import { useInsights, type InsightsRange, type TopicHealth } from '../../hooks/use-insights';
+import { formatCooldown, cadenceLabel } from '../../hooks/use-follow-ups';
+import { revealTask } from '../../lib/reveal-task';
 import { FlowChart } from './FlowChart';
 import { CompletionHeatmap } from './CompletionHeatmap';
 import { RhythmBars } from './RhythmBars';
@@ -114,6 +116,20 @@ function BarRow({
         {count}
       </span>
     </div>
+  );
+}
+
+// A topic in the follow-up health lists; a click opens it in its list.
+function TopicRow({ topic, detail }: { topic: TopicHealth; detail: string }) {
+  return (
+    <button
+      type="button"
+      onClick={() => revealTask({ taskId: topic.id, listId: topic.listId, listType: 'follow-ups', snoozed: topic.snoozed })}
+      className="flex min-h-[44px] w-full min-w-0 items-center justify-between gap-3 rounded-md px-1 text-left hover:bg-zinc-50 dark:hover:bg-zinc-800/60 md:min-h-0 md:py-1"
+    >
+      <span data-redact className="min-w-0 truncate text-sm text-zinc-600 dark:text-zinc-300">{topic.title}</span>
+      <span className="shrink-0 text-xs tabular-nums text-zinc-500 dark:text-zinc-400">{detail}</span>
+    </button>
   );
 }
 
@@ -260,13 +276,33 @@ export function InsightsView() {
                     sub={`${data.followUps.totalDiscussions} all-time`}
                   />
                   <StatCard label="Active" value={data.followUps.activeCount} />
-                  <StatCard label="Resolved" value={data.followUps.resolvedCount} />
+                  <StatCard
+                    label="Resolved"
+                    value={data.followUps.resolvedCount}
+                    sub={data.followUps.medianResolveMs !== null ? `median ${formatCooldown(data.followUps.medianResolveMs)} to resolve` : undefined}
+                  />
                 </div>
                 {data.followUps.topTopics.length > 0 && (
                   <>
                     <p className="mb-1 text-xs font-medium text-zinc-500 dark:text-zinc-400">Most discussed</p>
                     {data.followUps.topTopics.map((t) => (
-                      <BarRow key={t.title} label={t.title} count={t.count} max={topicMax} />
+                      <BarRow key={t.id ?? t.title} label={t.title} count={t.count} max={topicMax} />
+                    ))}
+                  </>
+                )}
+                {data.followUps.goingStale.length > 0 && (
+                  <>
+                    <p className="mb-1 mt-4 text-xs font-medium text-zinc-500 dark:text-zinc-400" title="Awake, and left more than twice their cadence without a Discussed or a note">Going stale</p>
+                    {data.followUps.goingStale.map((t) => (
+                      <TopicRow key={t.id} topic={t} detail={`idle ${formatCooldown(t.ms)} · ${cadenceLabel(t.cadenceMs ?? 0)}`} />
+                    ))}
+                  </>
+                )}
+                {data.followUps.oldestOpen.length > 0 && (
+                  <>
+                    <p className="mb-1 mt-4 text-xs font-medium text-zinc-500 dark:text-zinc-400">Oldest open</p>
+                    {data.followUps.oldestOpen.map((t) => (
+                      <TopicRow key={t.id} topic={t} detail={`open ${formatCooldown(t.ms)}`} />
                     ))}
                   </>
                 )}

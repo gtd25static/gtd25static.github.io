@@ -1,4 +1,4 @@
-import { isInCooldown, cooldownRemaining, cooldownUntil, formatCooldown, cadenceMs, cadenceLabel, applyDiscussed, lastDiscussedAt, nextWakeAt } from '../../hooks/use-follow-ups';
+import { isInCooldown, cooldownRemaining, cooldownUntil, formatCooldown, cadenceMs, cadenceLabel, applyDiscussed, lastDiscussedAt, nextWakeAt, resolvedAt, topicAgeLine } from '../../hooks/use-follow-ups';
 import type { Task } from '../../db/models';
 
 function makeTask(overrides?: Partial<Task>): Task {
@@ -242,5 +242,56 @@ describe('nextWakeAt', () => {
       makeTask({ id: 'b', pingedAt: now, pingCooldown: 'custom', pingCooldownUntil: now + 2000 }),
       makeTask({ id: 'c' }),
     ])).toBe(now + 2000);
+  });
+});
+
+describe('resolvedAt', () => {
+  it('is when `archived` last changed, else when the topic last changed', () => {
+    expect(resolvedAt(makeTask({ archived: true, updatedAt: 9000, fieldTimestamps: { archived: 5000 } }))).toBe(5000);
+    expect(resolvedAt(makeTask({ archived: true, updatedAt: 9000 }))).toBe(9000);
+  });
+});
+
+describe('topicAgeLine', () => {
+  const DAY = 24 * 60 * 60 * 1000;
+  const now = () => Date.now();
+
+  it('how long the topic has been open, and how often it gets a note', () => {
+    const task = makeTask({
+      createdAt: now() - 47 * DAY - 1000,
+      discussionLog: [
+        { id: 'a', at: now() - 20 * DAY },
+        { id: 'c', at: now() - 4 * DAY },
+        { id: 'b', at: now() - 12 * DAY },
+      ],
+    });
+    expect(topicAgeLine(task)).toBe('Open 47 days · a note every ~8 days');
+  });
+
+  it('just the age with fewer than two notes; days in the singular; today', () => {
+    expect(topicAgeLine(makeTask({ createdAt: now() - 47 * DAY, discussionLog: [{ id: 'a', at: now() }] }))).toBe('Open 47 days');
+    expect(topicAgeLine(makeTask({ createdAt: now() - DAY - 1000 }))).toBe('Open 1 day');
+    expect(topicAgeLine(makeTask({ createdAt: now() - 3 * 60 * 60 * 1000 }))).toBe('Opened today');
+  });
+
+  it('notes a day apart or closer read as about a note a day', () => {
+    const task = makeTask({
+      createdAt: now() - 10 * DAY,
+      discussionLog: [{ id: 'a', at: now() - 2 * DAY }, { id: 'b', at: now() - DAY }, { id: 'c', at: now() - DAY + 1000 }],
+    });
+    expect(topicAgeLine(task)).toBe('Open 10 days · about a note a day');
+  });
+
+  it('a resolved topic counts up to when it was resolved', () => {
+    expect(topicAgeLine(makeTask({ archived: true, createdAt: now() - 50 * DAY, fieldTimestamps: { archived: now() - 3 * DAY } })))
+      .toBe('Was open 47 days');
+    expect(topicAgeLine(makeTask({ archived: true, createdAt: now() - 50 * DAY, updatedAt: now() - 50 * DAY + 1000 })))
+      .toBe('Resolved within a day');
+  });
+
+  // Synced data: a row without a usable creation time gets no line.
+  it('nothing for a topic without a creation time', () => {
+    expect(topicAgeLine(makeTask({ createdAt: Number.NaN }))).toBeNull();
+    expect(topicAgeLine(makeTask({ createdAt: 'yesterday' as unknown as number }))).toBeNull();
   });
 });

@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import type { Task, DiscussionEntry } from '../../db/models';
 import { confirmDialog } from '../ui/ConfirmDialog';
-import { editDiscussionLog } from '../../hooks/use-follow-ups';
+import { editDiscussionLog, topicAgeLine } from '../../hooks/use-follow-ups';
 import { useAppState } from '../../stores/app-state';
 import { newId } from '../../lib/id';
 import { splitBareUrls } from '../../lib/link-utils';
@@ -92,6 +92,7 @@ export function DiscussionLog({ task }: Props) {
   const [showAll, setShowAll] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editText, setEditText] = useState('');
+  const ageLine = topicAgeLine(task);
   const shown = showAll ? entries : entries.slice(0, RECENT_COUNT);
   const hiddenCount = entries.length - shown.length;
 
@@ -128,9 +129,12 @@ export function DiscussionLog({ task }: Props) {
 
   return (
     <div className="space-y-3">
-      <h3 className="text-[11px] font-semibold uppercase tracking-wider text-accent-700 dark:text-accent-300">
-        Discussion log{entries.length > 0 ? ` · ${entries.length}` : ''}
-      </h3>
+      <div>
+        <h3 className="text-[11px] font-semibold uppercase tracking-wider text-accent-700 dark:text-accent-300">
+          Discussion log{entries.length > 0 ? ` · ${entries.length}` : ''}
+        </h3>
+        {ageLine && <p className="mt-0.5 text-xs text-zinc-500 dark:text-zinc-400">{ageLine}</p>}
+      </div>
       <div className="flex items-end gap-2">
         <textarea
           ref={noteRef}

@@ -185,28 +185,14 @@ describe('FollowUpList — the view is remembered, and topics wake on their own'
     await first.user.click(screen.getByRole('button', { name: /show snoozed/i }));
     await first.user.click(screen.getByRole('button', { name: /resolved \(1\)/i }));
     await first.user.click(first.container.querySelector('[data-dropdown-trigger]')!);
-    await first.user.click(screen.getByText('Sort by last discussed'));
+    await first.user.click(screen.getByText('Sort by date'));
     first.unmount();
 
     const second = renderList();
     expect(screen.getByText('Snoozed topic')).toBeInTheDocument();
     expect(screen.getByText('Resolved topic')).toBeInTheDocument();
     await second.user.click(second.container.querySelector('[data-dropdown-trigger]')!);
-    expect(screen.getByText('Sort by last discussed ✓')).toBeInTheDocument();
-  });
-
-  it('"Sort by last discussed" puts the topic left longest first', async () => {
-    const old = Date.now() - 30 * DAY_MS;
-    setFollowUps([
-      makeTask(fuList.id, { title: 'Talked today', order: 2, createdAt: old, discussionLog: [{ id: 'a', at: Date.now() }] }),
-      makeTask(fuList.id, { title: 'Talked last month', order: 1, createdAt: old, discussionLog: [{ id: 'b', at: old + DAY_MS }] }),
-      makeTask(fuList.id, { title: 'Never talked', order: 0, createdAt: Date.now() - 10 * DAY_MS }),
-    ]);
-    const { user, container } = renderList();
-    await user.click(container.querySelector('[data-dropdown-trigger]')!);
-    await user.click(screen.getByText('Sort by last discussed'));
-    expect(screen.getAllByText(/^(Talked today|Talked last month|Never talked)$/).map((el) => el.textContent))
-      .toEqual(['Talked last month', 'Never talked', 'Talked today']);
+    expect(screen.getByText('Sort by date ✓')).toBeInTheDocument();
   });
 
   it('a snoozed topic appears when it wakes, without anything else changing', async () => {
@@ -217,5 +203,76 @@ describe('FollowUpList — the view is remembered, and topics wake on their own'
     renderList();
     expect(screen.queryByText('Waking topic')).not.toBeInTheDocument();
     expect(await screen.findByText('Waking topic', {}, { timeout: 3_000 })).toBeInTheDocument();
+  });
+});
+
+describe('FollowUpList — "Stalest first"', () => {
+  beforeEach(() => {
+    resetAppState();
+    resetFactories();
+    vi.clearAllMocks();
+    localStorage.removeItem('gtd25-follow-up-stalest');
+  });
+
+  const old = Date.now() - 30 * DAY_MS;
+  const topics = () => [
+    makeTask(fuList.id, { title: 'Talked today', order: 3, createdAt: old, discussionLog: [{ id: 'a', at: Date.now() }] }),
+    makeTask(fuList.id, { title: 'Talked last month', order: 2, createdAt: old, discussionLog: [{ id: 'b', at: old + DAY_MS }] }),
+    // A Discussed (snooze) a week ago that was unsnoozed counts as handled then.
+    makeTask(fuList.id, { title: 'Discussed last week', order: 1, createdAt: old, pingedAt: Date.now() - 7 * DAY_MS }),
+    makeTask(fuList.id, { title: 'Never talked', order: 0, createdAt: Date.now() - 10 * DAY_MS }),
+  ];
+  const titlesInOrder = () =>
+    screen.getAllByText(/^(Talked today|Talked last month|Discussed last week|Never talked)$/).map((el) => el.textContent);
+  const stalestChip = () => screen.getByRole('button', { name: 'Stalest first' });
+
+  it('a chip in the header puts the topic left longest first, and back to the order by hand', async () => {
+    setFollowUps(topics());
+    const { user } = renderList();
+    const byHand = titlesInOrder();
+    expect(stalestChip()).toHaveAttribute('aria-pressed', 'false');
+
+    await user.click(stalestChip());
+    expect(stalestChip()).toHaveAttribute('aria-pressed', 'true');
+    expect(titlesInOrder()).toEqual(['Talked last month', 'Never talked', 'Discussed last week', 'Talked today']);
+
+    await user.click(stalestChip());
+    expect(titlesInOrder()).toEqual(byHand);
+  });
+
+  it('is shown even with every topic awake, and the list menu no longer has its own copy', async () => {
+    setFollowUps(topics());
+    const { user, container } = renderList();
+    expect(stalestChip()).toBeInTheDocument();
+    await user.click(container.querySelector('[data-dropdown-trigger]')!);
+    expect(screen.getByText('Sort by date')).toBeInTheDocument();
+    expect(screen.queryByText(/last discussed/i)).not.toBeInTheDocument();
+  });
+
+  it('is remembered on this device and applies to every follow-up list', async () => {
+    setFollowUps(topics());
+    const first = renderList();
+    await first.user.click(stalestChip());
+    first.unmount();
+    expect(localStorage.getItem('gtd25-follow-up-stalest')).toBe('1');
+
+    renderWithDnd(<FollowUpList listId="fu-2" listName="Another list" />);
+    expect(stalestChip()).toHaveAttribute('aria-pressed', 'true');
+    expect(titlesInOrder()[0]).toBe('Talked last month');
+  });
+
+  it('"Sort by date" turns it off: one order at a time, the one just picked', async () => {
+    setFollowUps([
+      makeTask(fuList.id, { title: 'Later', dueDate: Date.now() + 5 * DAY_MS, order: 1, createdAt: old }),
+      makeTask(fuList.id, { title: 'Sooner', dueDate: Date.now() + DAY_MS, order: 0, createdAt: Date.now() }),
+    ]);
+    const { user, container } = renderList();
+    await user.click(stalestChip());
+    expect(screen.getAllByText(/^(Later|Sooner)$/).map((el) => el.textContent)).toEqual(['Later', 'Sooner']);
+
+    await user.click(container.querySelector('[data-dropdown-trigger]')!);
+    await user.click(screen.getByText('Sort by date'));
+    expect(stalestChip()).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.getAllByText(/^(Later|Sooner)$/).map((el) => el.textContent)).toEqual(['Sooner', 'Later']);
   });
 });

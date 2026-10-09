@@ -167,6 +167,87 @@ describe('followUpStats', () => {
   });
 });
 
+describe('followUpStats — topic health', () => {
+  const now = dayTs('2026-03-18');
+  const topic = (id: string, overrides: Record<string, unknown> = {}) => ({
+    id, listId: 'L', title: id, archived: false, createdAt: now - 100 * DAY, updatedAt: now - 100 * DAY, ...overrides,
+  });
+
+  it('"going stale": awake topics left over twice their cadence, longest first, at most five', () => {
+    const r = followUpStats([
+      topic('weekly-20d', { createdAt: now - 20 * DAY, snoozeCadence: '6d' }), // 20d > 2 × 6d
+      topic('weekly-10d', { createdAt: now - 10 * DAY, snoozeCadence: '6d' }), // 10d < 12d
+      topic('monthly-40d', { discussionLog: [{ id: 'x', at: now - 40 * DAY }], snoozeCadence: '30d' }), // 40d < 60d
+      topic('monthly-70d', { createdAt: now - 70 * DAY, snoozeCadence: '30d' }),
+      // Discussed 90 days ago and still snoozed: not awake, so not stale.
+      topic('snoozed', { pingedAt: now - 90 * DAY, pingCooldown: 'custom', pingCooldownUntil: now + DAY }),
+      topic('resolved', { archived: true }),
+    ], 0, now);
+    expect(r.goingStale.map((t) => t.id)).toEqual(['monthly-70d', 'weekly-20d']);
+    expect(r.goingStale[0]).toEqual({ id: 'monthly-70d', listId: 'L', title: 'monthly-70d', ms: 70 * DAY, cadenceMs: 30 * DAY, snoozed: false });
+
+    const many = followUpStats(Array.from({ length: 8 }, (_, i) => topic(`t${i}`, { createdAt: now - (20 + i) * DAY, snoozeCadence: '6d' })), 0, now);
+    expect(many.goingStale.map((t) => t.id)).toEqual(['t7', 't6', 't5', 't4', 't3']);
+  });
+
+  it('counts a Discussed snooze that has run out as handled, like a note', () => {
+    const r = followUpStats([
+      topic('discussed-3d', { pingedAt: now - 3 * DAY, pingCooldown: 'custom', pingCooldownUntil: now - DAY, snoozeCadence: '20h' }),
+    ], 0, now);
+    expect(r.goingStale.map((t) => t.id)).toEqual(['discussed-3d']); // 3d > 2 × 20h
+    expect(r.goingStale[0].ms).toBe(3 * DAY);
+  });
+
+  it('"oldest open": the three open topics created longest ago, snoozed ones included', () => {
+    const r = followUpStats([
+      topic('newest', { createdAt: now - DAY }),
+      topic('oldest', { createdAt: now - 400 * DAY, pingedAt: now - DAY, pingCooldown: 'custom', pingCooldownUntil: now + DAY }),
+      topic('middle', { createdAt: now - 50 * DAY }),
+      topic('second', { createdAt: now - 200 * DAY }),
+      topic('resolved-older', { createdAt: now - 900 * DAY, archived: true }),
+    ], 0, now);
+    expect(r.oldestOpen.map((t) => [t.id, t.ms, t.snoozed])).toEqual([
+      ['oldest', 400 * DAY, true],
+      ['second', 200 * DAY, false],
+      ['middle', 50 * DAY, false],
+    ]);
+  });
+
+  it('leaves the topics of archived lists out of both', () => {
+    const r = followUpStats([topic('in-archived-list', { createdAt: now - 70 * DAY, snoozeCadence: '6d' })], 0, now, new Set(['L']));
+    expect(r.goingStale).toEqual([]);
+    expect(r.oldestOpen).toEqual([]);
+    expect(r.activeCount).toBe(1); // counted as before
+  });
+
+  it('the median time to resolve runs from creation to when it was resolved', () => {
+    const r = followUpStats([
+      topic('2d', { archived: true, createdAt: now - 30 * DAY, fieldTimestamps: { archived: now - 28 * DAY }, updatedAt: now }),
+      topic('10d', { archived: true, createdAt: now - 30 * DAY, fieldTimestamps: { archived: now - 20 * DAY } }),
+      // No stamp (an older row): when it last changed.
+      topic('4d', { archived: true, createdAt: now - 30 * DAY, updatedAt: now - 26 * DAY }),
+      topic('open', { createdAt: now - 300 * DAY }),
+    ], 0, now);
+    expect(r.medianResolveMs).toBe(4 * DAY);
+
+    const even = followUpStats([
+      topic('a', { archived: true, createdAt: now - 10 * DAY, updatedAt: now - 8 * DAY }),
+      topic('b', { archived: true, createdAt: now - 10 * DAY, updatedAt: now - 4 * DAY }),
+    ], 0, now);
+    expect(even.medianResolveMs).toBe(4 * DAY);
+    expect(followUpStats([topic('open')], 0, now).medianResolveMs).toBeNull();
+  });
+
+  // Two topics with the same title collided as React keys.
+  it('the busiest topics carry their id', () => {
+    const r = followUpStats([
+      topic('one', { title: 'Same', discussionLog: [{ id: 'a', at: now }] }),
+      topic('two', { title: 'Same', discussionLog: [{ id: 'b', at: now }] }),
+    ], 0, now);
+    expect(r.topTopics.map((t) => t.id).sort()).toEqual(['one', 'two']);
+  });
+});
+
 describe('longestStreak', () => {
   it('finds the longest consecutive-weekday run, bridging weekends', () => {
     const dates = [

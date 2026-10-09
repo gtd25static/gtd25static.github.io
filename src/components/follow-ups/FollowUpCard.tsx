@@ -5,7 +5,7 @@ import { toast } from '../ui/Toast';
 import { confirmDialog } from '../ui/ConfirmDialog';
 import { useAppState } from '../../stores/app-state';
 import { useShallow } from 'zustand/react/shallow';
-import { isInCooldown, cooldownRemaining, formatCooldown, cadenceMs, cadenceLabel } from '../../hooks/use-follow-ups';
+import { isInCooldown, cooldownRemaining, formatCooldown, cadenceMs, cadenceLabel, lastDiscussedAt } from '../../hooks/use-follow-ups';
 import { toggleWarning } from '../../hooks/use-warning';
 import { useTaskLists } from '../../hooks/use-task-lists';
 import { PingCooldownBadge } from './PingCooldownBadge';
@@ -32,7 +32,7 @@ interface Props {
 }
 
 export function FollowUpCard({ task, index, dragHandleProps }: Props) {
-  const { focusedItemId, focusZone, editingItemId, setEditingItemId, expanded, toggleTaskExpanded, ensureTaskExpanded, hasDraft, setNoteFocusTaskId } = useAppState(useShallow(s => ({ focusedItemId: s.focusedItemId, focusZone: s.focusZone, editingItemId: s.editingItemId, setEditingItemId: s.setEditingItemId, expanded: s.expandedTaskIds.has(task.id), toggleTaskExpanded: s.toggleTaskExpanded, ensureTaskExpanded: s.ensureTaskExpanded, hasDraft: Boolean(s.noteDrafts[task.id]), setNoteFocusTaskId: s.setNoteFocusTaskId })));
+  const { focusedItemId, focusZone, editingItemId, setEditingItemId, expanded, toggleTaskExpanded, ensureTaskExpanded, hasDraft, setNoteFocusTaskId, stalestFirst } = useAppState(useShallow(s => ({ focusedItemId: s.focusedItemId, focusZone: s.focusZone, editingItemId: s.editingItemId, setEditingItemId: s.setEditingItemId, expanded: s.expandedTaskIds.has(task.id), toggleTaskExpanded: s.toggleTaskExpanded, ensureTaskExpanded: s.ensureTaskExpanded, hasDraft: Boolean(s.noteDrafts[task.id]), setNoteFocusTaskId: s.setNoteFocusTaskId, stalestFirst: s.followUpStalestFirst })));
   const focused = focusedItemId === task.id && focusZone === 'main';
   const [editing, setEditing] = useState(false);
   const [editingTitle, setEditingTitle] = useState(false);
@@ -72,9 +72,10 @@ export function FollowUpCard({ task, index, dragHandleProps }: Props) {
     await updateTask(task.id, { archived: false });
   }
 
+  // Ends the snooze only: pingedAt stays, as when it was last Discussed ("Stalest
+  // first" and Insights count from it; cleared, the topic read as never handled).
   async function handleUnsnooze() {
     await updateTask(task.id, {
-      pingedAt: undefined,
       pingCooldown: undefined,
       pingCooldownCustomMs: undefined,
       pingCooldownUntil: undefined,
@@ -239,6 +240,12 @@ export function FollowUpCard({ task, index, dragHandleProps }: Props) {
         )}
         <div className="mt-1 flex items-center gap-2 flex-wrap">
           <PingCooldownBadge task={task} />
+          {/* With "Stalest first" on: why this card sits where it does */}
+          {stalestFirst && !task.archived && !inCooldown && (
+            <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-xs font-medium text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400" title="Time since the last Discussed or note">
+              idle {formatCooldown(Math.max(0, Date.now() - lastDiscussedAt(task)))}
+            </span>
+          )}
           {!task.archived && task.snoozeCadence && (
             <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-xs font-medium text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400" title="Default snooze cadence">
               {cadenceLabel(cadenceMs(task))}
