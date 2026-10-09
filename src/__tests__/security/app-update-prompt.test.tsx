@@ -10,7 +10,9 @@ const h = vi.hoisted(() => ({
   vault: { enabled: false, unlocked: false, locked: false, hasSecurityKey: false },
   incompatHandlers: [] as Array<() => void>,
   toast: vi.fn(),
+  safe: false,
 }));
+vi.mock('../../lib/locked-update', () => ({ safeToUpdateWhileLocked: async () => h.safe }));
 vi.mock('../../components/ui/Toast', () => ({ toast: h.toast }));
 vi.mock('../../hooks/use-service-worker', () => ({ useServiceWorker: () => h.sw }));
 vi.mock('../../hooks/use-vault', () => ({ useVault: () => h.vault }));
@@ -37,6 +39,7 @@ beforeEach(() => {
   h.sw.forceCheck = vi.fn();
   h.vault = { enabled: false, unlocked: false, locked: false, hasSecurityKey: false };
   h.incompatHandlers.length = 0;
+  h.safe = false;
   localStorage.removeItem(PARANOID_UPDATE_NOTICE_KEY);
   global.fetch = vi.fn().mockResolvedValue({
     ok: true,
@@ -88,6 +91,7 @@ describe('AppUpdatePrompt', () => {
     expect(screen.getByText('Update queued. It will install after the vault locks.')).toBeInTheDocument();
 
     h.vault = { enabled: true, unlocked: false, locked: true, hasSecurityKey: false };
+    h.safe = true;
     rerender(<AppUpdatePrompt />);
 
     await waitFor(() => expect(h.sw.applyUpdate).toHaveBeenCalled());
@@ -135,6 +139,7 @@ describe('AppUpdatePrompt', () => {
 
   it('auto-dismisses the post-update notice after 5s, with a filling Dismiss button', () => {
     vi.useFakeTimers();
+    vi.spyOn(document, 'hasFocus').mockReturnValue(true);
     try {
       h.sw.needRefresh = false;
       localStorage.setItem(PARANOID_UPDATE_NOTICE_KEY, JSON.stringify({ from: 'old1', to: 'dev', at: Date.now() }));
@@ -268,5 +273,144 @@ describe('AppUpdatePrompt', () => {
     expect(await screen.findByText('Update required')).toBeInTheDocument();
     expect(await screen.findByText('Current commit dev')).toBeInTheDocument();
     expect(screen.queryByText('dev → dev')).not.toBeInTheDocument();
+  });
+});
+
+describe('AppUpdatePrompt — a locked Paranoid vault updates on its own', () => {
+  const LOCKED = { enabled: true, unlocked: false, locked: true, hasSecurityKey: false };
+  const settle = () => act(async () => { await new Promise((r) => setTimeout(r, 50)); });
+
+  it('applies a waiting update without a click when it is safe, and leaves the notice for after the reload', async () => {
+    h.vault = LOCKED;
+    h.safe = true;
+    render(<AppUpdatePrompt />);
+    await waitFor(() => expect(h.sw.applyUpdate).toHaveBeenCalledTimes(1));
+    expect(JSON.parse(localStorage.getItem(PARANOID_UPDATE_NOTICE_KEY) ?? '{}')).toMatchObject({ from: 'dev', to: 'new1' });
+  });
+
+  it('while it is not safe it waits, with the banner and its "Update now", and applies once it is', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      h.vault = LOCKED;
+      render(<AppUpdatePrompt />);
+      expect(await screen.findByText('A new version of GTD25 is available.')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /update now/i })).toBeInTheDocument();
+      await act(async () => { await vi.advanceTimersByTimeAsync(12_000); });
+      expect(h.sw.applyUpdate).not.toHaveBeenCalled();
+
+      h.safe = true;
+      await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+      expect(h.sw.applyUpdate).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('never unasked while the vault is open, nor without Paranoid Mode', async () => {
+    h.safe = true;
+    h.vault = { enabled: true, unlocked: true, locked: false, hasSecurityKey: false };
+    const open = render(<AppUpdatePrompt />);
+    await screen.findByText('Update available');
+    await settle();
+    open.unmount();
+    h.vault = { enabled: false, unlocked: false, locked: false, hasSecurityKey: false };
+    render(<AppUpdatePrompt />);
+    await screen.findByText('Update available');
+    await settle();
+    expect(h.sw.applyUpdate).not.toHaveBeenCalled();
+  });
+
+  // An update that did not take (the same build after the reload) must not
+  // reload the device over and over.
+  it('not again within the hour after one that did not take, and again after it', async () => {
+    h.vault = LOCKED;
+    h.safe = true;
+    localStorage.setItem(PARANOID_UPDATE_NOTICE_KEY, JSON.stringify({ from: 'dev', to: 'new1', at: Date.now() - 10 * 60_000 }));
+    const first = render(<AppUpdatePrompt />);
+    expect(await screen.findByText('A new version of GTD25 is available.')).toBeInTheDocument();
+    await settle();
+    expect(h.sw.applyUpdate).not.toHaveBeenCalled();
+    first.unmount();
+
+    localStorage.setItem(PARANOID_UPDATE_NOTICE_KEY, JSON.stringify({ from: 'dev', to: 'new1', at: Date.now() - 61 * 60_000 }));
+    render(<AppUpdatePrompt />);
+    await waitFor(() => expect(h.sw.applyUpdate).toHaveBeenCalledTimes(1));
+  });
+
+  // Required by sync, with no new build waiting yet: a reload would only rerun
+  // this build. The regular check finds the build when it is published.
+  it('required by sync with nothing waiting, it does not reload', async () => {
+    const reload = vi.fn();
+    vi.stubGlobal('location', { ...window.location, reload });
+    try {
+      h.sw.needRefresh = false;
+      h.vault = LOCKED;
+      h.safe = true;
+      render(<AppUpdatePrompt />);
+      act(() => { h.incompatHandlers.forEach((cb) => cb()); });
+      expect(await screen.findByText('A newer version of GTD25 is required to sync.')).toBeInTheDocument();
+      await settle();
+      expect(reload).not.toHaveBeenCalled();
+      expect(h.sw.applyUpdate).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
+describe('AppUpdatePrompt — the post-update notice waits for you', () => {
+  const NOTICE = 'GTD25 updated. Your Paranoid vault is locked for safety.';
+  let visibility: DocumentVisibilityState = 'visible';
+
+  beforeEach(() => {
+    visibility = 'visible';
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => visibility });
+    h.sw.needRefresh = false;
+    localStorage.setItem(PARANOID_UPDATE_NOTICE_KEY, JSON.stringify({ from: 'old1', to: 'dev', at: Date.now() }));
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'visible' });
+  });
+
+  const fill = () => screen.getByRole('button', { name: 'Dismiss' }).querySelector('[style*="update-notice-fill"]');
+
+  it('stays put while the app is not in focus, and counts down once it is', () => {
+    const hasFocus = vi.spyOn(document, 'hasFocus').mockReturnValue(false);
+    render(<AppUpdatePrompt />);
+    expect(fill()).toBeNull(); // no countdown yet
+    act(() => { vi.advanceTimersByTime(60_000); });
+    expect(screen.getByText(NOTICE)).toBeInTheDocument();
+
+    hasFocus.mockReturnValue(true);
+    act(() => { window.dispatchEvent(new Event('focus')); });
+    expect(fill()).not.toBeNull();
+    act(() => { vi.advanceTimersByTime(4_999); });
+    expect(screen.getByText(NOTICE)).toBeInTheDocument();
+    act(() => { vi.advanceTimersByTime(1); });
+    expect(screen.queryByText(NOTICE)).not.toBeInTheDocument();
+  });
+
+  it('a hidden app counts as away, even with focus', () => {
+    vi.spyOn(document, 'hasFocus').mockReturnValue(true);
+    visibility = 'hidden';
+    render(<AppUpdatePrompt />);
+    act(() => { vi.advanceTimersByTime(60_000); });
+    expect(screen.getByText(NOTICE)).toBeInTheDocument();
+    expect(fill()).toBeNull();
+
+    visibility = 'visible';
+    act(() => { document.dispatchEvent(new Event('visibilitychange')); });
+    expect(fill()).not.toBeNull();
+    act(() => { vi.advanceTimersByTime(5_000); });
+    expect(screen.queryByText(NOTICE)).not.toBeInTheDocument();
+  });
+
+  it('Dismiss still closes it at once, counting down or not', () => {
+    vi.spyOn(document, 'hasFocus').mockReturnValue(false);
+    render(<AppUpdatePrompt />);
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
+    expect(screen.queryByText(NOTICE)).not.toBeInTheDocument();
   });
 });

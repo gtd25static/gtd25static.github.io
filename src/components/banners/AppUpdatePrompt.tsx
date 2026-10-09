@@ -8,10 +8,15 @@ import { Button } from '../ui/Button';
 import { toast } from '../ui/Toast';
 import { forceServiceWorkerUpdate } from '../../lib/diagnostics';
 import { useUpdatesHeldForApprovals } from '../../lib/approval-gate';
+import { safeToUpdateWhileLocked } from '../../lib/locked-update';
 
 const PARANOID_UPDATE_NOTICE_KEY = 'gtd25-paranoid-update-notice';
 const PARANOID_UPDATE_NOTICE_TTL_MS = 24 * 60 * 60 * 1000;
 const UPDATE_NOTICE_AUTO_DISMISS_MS = 5000;
+// A locked vault's update waits for a safe moment, looked for this often.
+const LOCKED_UPDATE_RETRY_MS = 5000;
+// After an update that did not take, no second one unasked for this long.
+const LOCKED_UPDATE_LOOP_GUARD_MS = 60 * 60 * 1000;
 
 type ParanoidUpdateNotice = {
   from: string;
@@ -47,6 +52,21 @@ function readCompletedParanoidUpdateNotice(): boolean {
   return true;
 }
 
+/**
+ * Until when an update must not be applied unasked: an update that did not take
+ * (this same build after its reload) left its notice behind (see above), and
+ * trying again at once would reload the device over and over. 0: no hold.
+ */
+function lockedUpdateHeldUntil(): number {
+  try {
+    const notice = JSON.parse(localStorage.getItem(PARANOID_UPDATE_NOTICE_KEY) ?? 'null') as Partial<ParanoidUpdateNotice> | null;
+    if (notice?.from !== GIT_COMMIT || typeof notice.at !== 'number') return 0;
+    return notice.at + LOCKED_UPDATE_LOOP_GUARD_MS;
+  } catch {
+    return 0;
+  }
+}
+
 function armParanoidUpdateNotice(targetCommit?: string): void {
   const notice: ParanoidUpdateNotice = {
     from: GIT_COMMIT,
@@ -75,6 +95,8 @@ export function AppUpdatePrompt() {
   const [versionChecked, setVersionChecked] = useState(false);
   const [deferUntilLocked, setDeferUntilLocked] = useState(false);
   const [updateInstalledNoticeVisible, setUpdateInstalledNoticeVisible] = useState(() => readCompletedParanoidUpdateNotice());
+  const [noticeCountdown, setNoticeCountdown] = useState(false);
+  const [lockedUpdateHeldUntilMs] = useState(lockedUpdateHeldUntil);
 
   // Fetch the LIVE changes.json (cache-busted, bypassing the SW) to show what the
   // pending update contains — for BOTH a detected new build and a sync-required
@@ -142,23 +164,64 @@ export function AppUpdatePrompt() {
   // it or not (a Mac woken after hours showed it over a vault it had left open).
   const asModal = !dismissed && !vault.locked && !dialogOpen;
 
+  // A locked Paranoid vault installs a waiting update on its own — queued with
+  // "Update when locked" or found while locked — at a safe moment: nobody on the
+  // lock screen, no unlock under way, no other tab with its vault open, nothing
+  // playing (lib/locked-update). Until then the banner stays, with "Update now".
+  // Only a build that is really waiting: with none (required by sync, not yet
+  // published) a reload would rerun this one; the regular check finds it later.
+  // The notice is armed first, so the reload ends on the green notice.
+  const lockedUpdate = vault.enabled && vault.locked && needRefresh && available
+    && !waitingForVersionCheck && !heldForApprovals && !updating;
   useEffect(() => {
-    if (deferUntilLocked && vault.locked && !updating) {
+    if (!lockedUpdate) return;
+    let stopped = false;
+    let checking = false;
+    const attempt = async () => {
+      if (stopped || checking || Date.now() < lockedUpdateHeldUntilMs) return;
+      checking = true;
+      const safe = await safeToUpdateWhileLocked().catch(() => false);
+      checking = false;
+      if (!safe || stopped) return;
+      stopped = true;
       setUpdating(true);
       armParanoidUpdateNotice(info?.commit);
-      if (needRefresh) applyUpdate();
-      else window.location.reload();
-    }
-  }, [applyUpdate, deferUntilLocked, info?.commit, needRefresh, updating, vault.locked]);
+      applyUpdate();
+    };
+    void attempt();
+    const timer = setInterval(() => void attempt(), LOCKED_UPDATE_RETRY_MS);
+    return () => { stopped = true; clearInterval(timer); };
+  }, [lockedUpdate, lockedUpdateHeldUntilMs, applyUpdate, info?.commit]);
 
-  // The post-update green notice auto-dismisses after a few seconds; the Dismiss
-  // button's fill animation visualizes the same countdown. This timer is the
-  // authoritative dismissal (robust even if the CSS animation is suppressed).
+  // The post-update notice counts down once someone is there to read it: the app
+  // in view and in focus, or a touch or key on it. An update applied while the
+  // app was in the background (or behind another window) keeps it up until then.
   useEffect(() => {
-    if (!updateInstalledNoticeVisible) return;
+    if (!updateInstalledNoticeVisible || noticeCountdown) return;
+    const attended = () => document.visibilityState === 'visible' && document.hasFocus();
+    if (attended()) { setNoticeCountdown(true); return; }
+    const onBack = () => { if (attended()) setNoticeCountdown(true); };
+    const onInput = () => setNoticeCountdown(true);
+    window.addEventListener('focus', onBack);
+    document.addEventListener('visibilitychange', onBack);
+    window.addEventListener('pointerdown', onInput, true);
+    window.addEventListener('keydown', onInput, true);
+    return () => {
+      window.removeEventListener('focus', onBack);
+      document.removeEventListener('visibilitychange', onBack);
+      window.removeEventListener('pointerdown', onInput, true);
+      window.removeEventListener('keydown', onInput, true);
+    };
+  }, [updateInstalledNoticeVisible, noticeCountdown]);
+
+  // Then it goes after a few seconds; the Dismiss button's fill animation shows
+  // the same countdown. This timer is the authoritative dismissal (robust even if
+  // the CSS animation is suppressed).
+  useEffect(() => {
+    if (!updateInstalledNoticeVisible || !noticeCountdown) return;
     const timer = setTimeout(() => setUpdateInstalledNoticeVisible(false), UPDATE_NOTICE_AUTO_DISMISS_MS);
     return () => clearTimeout(timer);
-  }, [updateInstalledNoticeVisible]);
+  }, [updateInstalledNoticeVisible, noticeCountdown]);
 
   if (updateInstalledNoticeVisible) {
     return (
@@ -176,11 +239,13 @@ export function AppUpdatePrompt() {
             onClick={() => setUpdateInstalledNoticeVisible(false)}
             className="relative shrink-0 overflow-hidden rounded-md bg-white/20 px-3 py-1 text-xs font-bold hover:bg-white/30"
           >
-            <span
-              aria-hidden
-              className="absolute inset-y-0 left-0 bg-white/40"
-              style={{ animation: `update-notice-fill ${UPDATE_NOTICE_AUTO_DISMISS_MS}ms linear forwards` }}
-            />
+            {noticeCountdown && (
+              <span
+                aria-hidden
+                className="absolute inset-y-0 left-0 bg-white/40"
+                style={{ animation: `update-notice-fill ${UPDATE_NOTICE_AUTO_DISMISS_MS}ms linear forwards` }}
+              />
+            )}
             <span className="relative">Dismiss</span>
           </button>
         </div>

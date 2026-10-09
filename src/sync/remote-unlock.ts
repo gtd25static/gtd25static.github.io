@@ -1109,6 +1109,11 @@ export function cancelRemoteUnlock(): void {
   if (pendingUnlock) { pendingUnlock.k.fill(0); pendingUnlock = null; }
 }
 
+/** Whether a request this device posted can still be approved (it hasn't run out). */
+export function isUnlockRequestLive(): boolean {
+  return !pendingUnlockExpired();
+}
+
 /** Whether a ceremony is in flight — lets a caller skip the teardown's network I/O. */
 export function hasPendingUnlock(): boolean {
   return pendingUnlock !== null;

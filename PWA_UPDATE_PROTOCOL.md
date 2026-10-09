@@ -85,6 +85,10 @@ for anything but a trivial read-only app:
 Use prompt-based updates. The cost is the ~200 lines in this document; the benefit is that the user is never
 surprised and never stuck.
 
+The one exception this app makes is narrow and still prompt-based underneath (`registerType: 'prompt'`): a
+**locked** Paranoid vault applies a waiting build on its own, because nothing is open to lose — and only at a safe
+moment it can name, with a notice afterwards (see "Deferring to a safe moment").
+
 ---
 
 ## 2. Architecture
@@ -570,6 +574,25 @@ function readCompletedNotice(): boolean {
 
 The `n.from === GIT_COMMIT` check is the important line: if the running commit is still the one we recorded leaving,
 the update did **not** happen, and claiming success would be a lie.
+
+**A locked vault updates on its own (2026-10-09).** In this app the deferred update above became the general rule
+for a locked Paranoid vault: a waiting build is applied without a click, whether it was queued while unlocked or
+found while locked. "Locked" alone is not a safe moment, though — the reload hits every tab and the lock screen is
+itself in use at times. `lib/locked-update` names the conditions, rechecked every 5 s while it waits:
+
+- no unlock under way (`isUnlocking()` — the vault reads "locked" until an unlock has finished all its work);
+- no trusted-device unlock request that can still be approved;
+- nobody on the lock screen: text in the passphrase field, the wipe confirmation open, or a touch or key in the
+  last 10 s;
+- the ambient sound not playing (a reload stops it, and it cannot restart without a click);
+- **no other tab with its vault open**: each such tab holds a shared Web Lock (`gtd25-unlocked`), queried first; a
+  browser without Web Locks never updates unasked.
+
+Only a build that is really waiting is applied — never a bare reload, which would rerun the same build. The notice is
+armed before the reload, as above, and doubles as a loop guard: still on the same build after the reload (the update
+did not take), nothing more is applied unasked for an hour. And the notice's own countdown waits until someone is
+there to read it (in view and in focus, or touched), so an update applied while the user was away is still on screen
+when they come back. Anything in the way leaves the ordinary banner, with its "Update now".
 
 ### Make the prompt actually visible
 

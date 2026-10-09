@@ -27,6 +27,7 @@ import { useBackgroundLock, DEFAULT_BACKGROUND_LOCK_SECONDS } from './hooks/use-
 import { useAppBadge } from './hooks/use-app-badge';
 import { ServiceWorkerProvider } from './hooks/use-service-worker';
 import { AppUpdatePrompt } from './components/banners/AppUpdatePrompt';
+import { holdUnlockedPresence } from './lib/unlocked-presence';
 import { useLocalSettings, updateLocalSettings } from './hooks/use-settings';
 import { useRelaxedUnlock } from './hooks/use-relaxed-unlock';
 import { useUnlockAudit } from './hooks/use-unlock-audit';
@@ -47,6 +48,11 @@ export default function App() {
   usePomodoroClock();
   useLockedNudge();
   useRemoteWipeCommands();
+
+  // While this tab's vault is open (a re-key's wait screen included), the other
+  // tabs know: a locked one won't apply an update on its own, whose reload would
+  // take this one down too (lib/unlocked-presence).
+  useEffect(() => (locked ? undefined : holdUnlockedPresence()), [locked]);
 
   // Another tab upgraded (or deleted) the database, so this tab's connection was
   // closed under it and every query from here on would fail. Nothing recovers

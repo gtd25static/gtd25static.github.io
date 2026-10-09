@@ -3,7 +3,7 @@ vi.setConfig({ testTimeout: 20_000 });
 import { db } from '../../db';
 import { resetDb } from '../helpers/db-helpers';
 import {
-  enableParanoid, lock, unlockWithPassphrase, isUnlocked,
+  enableParanoid, lock, unlockWithPassphrase, unlockWithSecurityKey, unlockWithRemoteKey, isUnlocked, isUnlocking,
   getDEK, getVaultSecrets, touchVaultActivity, setRuntimeIdleTimeoutMs, lockIfIdleExpired,
   __resetVaultStateForTests, __setIdleTimeoutMsForTests,
 } from '../../db/vault';
@@ -137,5 +137,37 @@ describe('vault lock/unlock', () => {
     const hist = (await db.localSettings.get('local'))?.unlockHistory ?? [];
     expect(hist).toHaveLength(1);
     expect(typeof hist[0]).toBe('number');
+  });
+});
+
+// The lock screen shows "locked" until an unlock has finished all its work, so an
+// update applied on its own (AppUpdatePrompt) needs this to stay out of the way.
+describe('isUnlocking', () => {
+  it('is true from the moment a passphrase unlock starts until it settles, right or wrong', async () => {
+    await enableParanoid(PASSPHRASE);
+    lock();
+    expect(isUnlocking()).toBe(false);
+
+    const wrong = unlockWithPassphrase('not it');
+    expect(isUnlocking()).toBe(true);
+    expect(await wrong).toBe(false);
+    expect(isUnlocking()).toBe(false);
+
+    const right = unlockWithPassphrase(PASSPHRASE);
+    expect(isUnlocking()).toBe(true);
+    expect(await right).toBe(true);
+    expect(isUnlocking()).toBe(false);
+  });
+
+  it('covers the security-key and trusted-device unlocks too', async () => {
+    await enableParanoid(PASSPHRASE);
+    lock();
+    const key = unlockWithSecurityKey();
+    expect(isUnlocking()).toBe(true);
+    expect(await key).toBe(false); // none enrolled
+    const remote = unlockWithRemoteKey(new Uint8Array(32));
+    expect(isUnlocking()).toBe(true);
+    expect(await remote).toBe(false); // not enrolled
+    expect(isUnlocking()).toBe(false);
   });
 });

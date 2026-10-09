@@ -541,9 +541,27 @@ function serializeUnlock<T>(fn: () => Promise<T>): Promise<T> {
   return run;
 }
 
+// Unlocks under way, of any kind. The snapshot reads "locked" until the very end
+// of finishUnlock, so this is the only sign of one — for the update a locked
+// device applies on its own (lib/locked-update), which must not reload under it.
+let unlocksInFlight = 0;
+async function trackUnlock<T>(fn: () => Promise<T>): Promise<T> {
+  unlocksInFlight++;
+  try {
+    return await fn();
+  } finally {
+    unlocksInFlight--;
+  }
+}
+
+/** True while an unlock (passphrase, security key, trusted device) is running. */
+export function isUnlocking(): boolean {
+  return unlocksInFlight > 0;
+}
+
 /** Returns false on a wrong passphrase; true once unlocked. */
 export function unlockWithPassphrase(passphrase: string): Promise<boolean> {
-  return serializeUnlock(() => doUnlockWithPassphrase(passphrase));
+  return trackUnlock(() => serializeUnlock(() => doUnlockWithPassphrase(passphrase)));
 }
 
 // A passphrase is stored trimmed — enable and every change of passphrase have
@@ -873,7 +891,11 @@ export async function confirmOwnerWithSecurityKey(): Promise<boolean> {
   }
 }
 
-export async function unlockWithSecurityKey(): Promise<boolean> {
+export function unlockWithSecurityKey(): Promise<boolean> {
+  return trackUnlock(doUnlockWithSecurityKey);
+}
+
+async function doUnlockWithSecurityKey(): Promise<boolean> {
   lastUnlockFailure = null;
   const vault = await db.vault.get('vault');
   if (!vault?.prfSalt) return false;
@@ -1146,7 +1168,11 @@ export async function getRukRaw(): Promise<Uint8Array | null> {
 }
 
 /** Unlock using a remote-unlock key (RUK) relayed from a trusted device. */
-export async function unlockWithRemoteKey(rukRaw: Uint8Array): Promise<boolean> {
+export function unlockWithRemoteKey(rukRaw: Uint8Array): Promise<boolean> {
+  return trackUnlock(() => doUnlockWithRemoteKey(rukRaw));
+}
+
+async function doUnlockWithRemoteKey(rukRaw: Uint8Array): Promise<boolean> {
   const vault = await db.vault.get('vault');
   if (!vault?.dekWrappedByRuk && !vault?.dekWrappedByRukNext) return false;
   const kek = await importKekFromBytes(rukRaw);
@@ -1387,6 +1413,7 @@ export function __resetVaultStateForTests(): void {
   rekeying = false;
   lockDeferredByRekey = false;
   lockHolds = 0;
+  unlocksInFlight = 0;
   if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
   idleTimeoutMs = DEFAULT_IDLE_MINUTES * 60_000;
   emit();

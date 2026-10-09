@@ -9,6 +9,7 @@ import { useServiceWorker } from '../../hooks/use-service-worker';
 import { panicWipe } from '../../lib/panic-wipe';
 import { hasFreshShareStash, purgeExpiredShareStash, SHARE_STASH_TTL_MS } from '../../lib/share-target';
 import { PomodoroBar } from '../pomodoro/PomodoroBar';
+import { setLockScreenState, noteLockScreenInput } from '../../lib/lock-screen-activity';
 
 // Full-screen gate shown when Paranoid Mode is enabled but the vault is locked.
 // Until the passphrase or security key unlocks the DEK, no decrypted data is
@@ -30,6 +31,13 @@ export function LockScreen() {
   const [showPass, setShowPass] = useState(false); // passphrase is a hidden last resort
   const { forceCheck } = useServiceWorker();
   const [checkingUpdate, setCheckingUpdate] = useState(false);
+
+  // An update applied on its own while locked reloads the page: not under a
+  // passphrase being typed or a wipe being confirmed (lib/lock-screen-activity).
+  useEffect(() => {
+    setLockScreenState({ typed: passphrase !== '', confirmingWipe: showWipe });
+  }, [passphrase, showWipe]);
+  useEffect(() => () => setLockScreenState({ typed: false, confirmingWipe: false }), []);
 
   // Self-heal the security-key affordance from authoritative vault metadata, so a
   // cleared/tampered localStorage cache can't hide the hardware-key unlock path and
@@ -120,7 +128,11 @@ export function LockScreen() {
   const hasOtherMethod = hasSecurityKey || remote.enrolled;
 
   return (
-    <div className="fixed inset-0 z-[200] flex items-center justify-center bg-zinc-100 p-4 dark:bg-zinc-950">
+    <div
+      className="fixed inset-0 z-[200] flex items-center justify-center bg-zinc-100 p-4 dark:bg-zinc-950"
+      onPointerDownCapture={() => noteLockScreenInput()}
+      onKeyDownCapture={() => noteLockScreenInput()}
+    >
       <div className="w-full max-w-sm rounded-2xl border border-zinc-200 bg-white p-6 shadow-2xl dark:border-zinc-800 dark:bg-zinc-900">
         <div className="mb-4 flex items-center gap-2">
           <span aria-hidden className="text-xl">🔒</span>
