@@ -59,6 +59,20 @@ describe('resolveHoverTarget', () => {
     expect(resolveHoverTarget({ x: 900, y: 900 }, rects, hovering('a', A))).toBeNull();
   });
 
+  it('keeps the hover all the way from the box to "add child", across the collapse toggle', () => {
+    // With children, "add child" sits past the toggle — further right than the
+    // grace band alone reaches. Walk every pixel of the way, on and off centre.
+    const withToggle = { id: 'a', anchors: anchorsOf(A, false, true) };
+    const addChild = nodeActionAnchors(A, { isRoot: false, hasToggle: true }).addChild;
+    for (const dy of [-12, 0, 12]) {
+      for (let x = A.x + A.w - 5; x <= addChild.x; x++) {
+        expect(resolveHoverTarget({ x, y: addChild.y + dy }, rects, withToggle), `x=${x} dy=${dy}`).toBe('a');
+      }
+    }
+    // Past the button, the channel to the children is let go again.
+    expect(resolveHoverTarget({ x: addChild.x + ACTION_HIT_R + 1, y: addChild.y }, rects, withToggle)).toBeNull();
+  });
+
   it('reports nothing when the pointer is on empty canvas', () => {
     expect(resolveHoverTarget({ x: 0, y: 300 }, rects, null)).toBeNull();
   });

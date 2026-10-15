@@ -52,6 +52,9 @@ export function anchorPoints(a: NodeActionAnchors): Point[] {
  *  2. A node box containing the pointer (layout boxes never overlap, so this is
  *     unambiguous and switches immediately — no delay to feel sluggish).
  *  3. The current node's grace band, so crossing a 12px gap doesn't drop it.
+ *     It stretches right to the furthest button: with children, "add child"
+ *     sits past the collapse toggle, beyond HOVER_PAD, and the strip over the
+ *     toggle would otherwise drop the hover on the way to it.
  */
 export function resolveHoverTarget(
   world: Point,
@@ -68,9 +71,10 @@ export function resolveHoverTarget(
 
   if (current) {
     const r = rects.get(current.id);
+    const right = r ? Math.max(r.x + r.w + HOVER_PAD, ...current.anchors.map((a) => a.x)) : 0;
     if (
       r &&
-      world.x >= r.x - HOVER_PAD && world.x <= r.x + r.w + HOVER_PAD &&
+      world.x >= r.x - HOVER_PAD && world.x <= right &&
       world.y >= r.y - HOVER_PAD && world.y <= r.y + r.h + HOVER_PAD
     ) {
       return current.id;
