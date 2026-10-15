@@ -89,16 +89,18 @@ describe('secondary-passphrase re-init (duress)', () => {
   });
 
   it('replaces pages captured while locked — same number, nothing real in them', async () => {
-    const { holdCapture, takeHeldCaptures } = await import('../../lib/held-captures');
+    const { holdCapture, takeCapturesToFile, capturesToConfirm } = await import('../../lib/held-captures');
     await enableParanoid(REAL);
     await setSecondaryPassphrase(SECONDARY);
     lock();
     holdCapture({ title: 'WHISTLEBLOWER page', link: 'https://x.example.org/secret-doc-url', linkTitle: 'WHISTLEBLOWER page' });
-    holdCapture({ title: 'FIRE_THE_CFO note', description: 'admitted the fraud' });
+    holdCapture({ title: 'FIRE_THE_CFO note', description: 'admitted the fraud' }, true); // waiting for a confirmation
 
     expect(await unlockWithPassphrase(SECONDARY)).toBe(true);
 
-    const held = takeHeldCaptures();
+    const asked = capturesToConfirm();
+    expect(asked).toHaveLength(1); // still asks — with placeholder content
+    const held = [...takeCapturesToFile(), ...asked.map((h) => h.capture)];
     expect(held).toHaveLength(2);
     const text = JSON.stringify(held);
     for (const marker of MARKERS) expect(text.includes(marker), `real capture "${marker}" survived`).toBe(false);

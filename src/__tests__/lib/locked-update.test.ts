@@ -10,7 +10,7 @@ vi.mock('../../stores/pomodoro-store', () => ({ usePomodoroStore: { getState: ()
 vi.mock('../../lib/unlocked-presence', () => ({ anyTabUnlocked: async () => h.others }));
 
 import { safeToUpdateWhileLocked } from '../../lib/locked-update';
-import { holdCapture, takeHeldCaptures } from '../../lib/held-captures';
+import { holdCapture, takeCapturesToFile, capturesToConfirm, releaseCapture } from '../../lib/held-captures';
 import {
   setLockScreenState, noteLockScreenInput, lockScreenInUse, __resetLockScreenActivityForTests,
 } from '../../lib/lock-screen-activity';
@@ -18,7 +18,8 @@ import {
 beforeEach(() => {
   Object.assign(h, { unlocking: false, requestLive: false, ambient: false, others: false });
   __resetLockScreenActivityForTests();
-  takeHeldCaptures();
+  takeCapturesToFile();
+  for (const h of capturesToConfirm()) releaseCapture(h.id);
 });
 
 describe('lock-screen activity', () => {
@@ -49,6 +50,7 @@ describe('safeToUpdateWhileLocked', () => {
     ['the lock screen was just touched', () => noteLockScreenInput()],
     ['the ambient sound is playing', () => { h.ambient = true; }],
     ['a captured page waits in memory for the unlock (a reload would lose it)', () => holdCapture({ title: 'Page' })],
+    ['a captured page waits for a confirmation', () => holdCapture({ title: 'Page' }, true)],
     ['another tab is unlocked', () => { h.others = true; }],
     ['this browser cannot tell about other tabs', () => { h.others = null; }],
   ])('no while %s', async (_why, arrange) => {

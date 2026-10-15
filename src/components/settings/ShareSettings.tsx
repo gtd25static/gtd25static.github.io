@@ -67,7 +67,8 @@ export function ShareSettings() {
                 open <code className="rounded bg-zinc-100 px-1 dark:bg-zinc-700">{CAPTURE_PROTOCOL}</code>{' '}
                 links — allow it. Needs the app installed. If clicking it does nothing,
                 open the app once (the browser refreshes its link registration as it
-                loads), then try again.
+                loads), then try again. In Paranoid Mode the app asks before adding
+                a capture: any website you click a link on can send one.
               </p>
             </div>
             <div>

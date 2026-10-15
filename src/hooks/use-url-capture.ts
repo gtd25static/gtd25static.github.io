@@ -1,11 +1,14 @@
-import { useEffect } from 'react';
+import { useCallback, useEffect, useSyncExternalStore } from 'react';
 import { createTask } from './use-tasks';
 import { getOrCreateInbox } from './use-task-lists';
 import { toast } from '../components/ui/Toast';
 import { MAX_TITLE_LENGTH, MAX_DESCRIPTION_LENGTH } from '../lib/constants';
 import { extractUrl, isValidUrl } from '../lib/link-utils';
 import { isParanoidEnabled, isUnlocked, lockIfIdleExpired } from '../db/vault';
-import { holdCapture, takeHeldCaptures } from '../lib/held-captures';
+import {
+  holdCapture, takeCapturesToFile, capturesToConfirm, releaseCapture,
+  subscribeHeldCaptures, heldCapturesVersion,
+} from '../lib/held-captures';
 
 /**
  * Sanitize a capture param: trim, truncate (to a title's length unless the
@@ -154,7 +157,7 @@ export function takeCaptureFromUrl(): void {
   cleanUrl();
   if (!capture) return;
   bootCapture = JSON.stringify(capture);
-  holdCapture(capture);
+  holdCapture(capture, isParanoidEnabled());
 }
 
 /**
@@ -163,7 +166,8 @@ export function takeCaptureFromUrl(): void {
  * launch URL to window.launchQueue, where a new window — which in Paranoid Mode
  * starts locked, however unlocked this one is — used to open. Nothing touches
  * the address bar here. Filed at once while unlocked, otherwise held for the
- * unlock. A window opened BY a launch gets that launch queued first; it was
+ * unlock — in Paranoid Mode always held, to ask first (useCaptureConfirm).
+ * A window opened BY a launch gets that launch queued first; it was
  * already taken from the address bar, so it is skipped. main.tsx calls this.
  */
 export function listenForLaunches(): void {
@@ -176,11 +180,16 @@ export function listenForLaunches(): void {
     if (url.origin !== window.location.origin || !isCaptureUrl(url)) return;
     const capture = captureFromUrl(url);
     if (!capture || JSON.stringify(capture) === boot) return;
-    // Brought forward after its idle time ran out — before the focus check
-    // has locked it: lock first, and hold the capture for after the unlock.
-    lockIfIdleExpired();
-    if (mounted && !(isParanoidEnabled() && !isUnlocked())) fileCapture(capture);
-    else holdCapture(capture);
+    if (isParanoidEnabled()) {
+      // Brought forward after its idle time ran out — before the focus check
+      // has locked it: lock first, so the question waits for the unlock.
+      lockIfIdleExpired();
+      holdCapture(capture, true);
+    } else if (mounted) {
+      fileCapture(capture);
+    } else {
+      holdCapture(capture);
+    }
   });
 }
 
@@ -192,10 +201,32 @@ interface LaunchQueue {
 export function useUrlCapture() {
   useEffect(() => {
     takeCaptureFromUrl(); // already done by main.tsx in the app; a no-op then
-    for (const capture of takeHeldCaptures()) fileCapture(capture);
+    for (const capture of takeCapturesToFile()) fileCapture(capture);
     mounted = true;
     return () => { mounted = false; };
   }, []);
+}
+
+/**
+ * In Paranoid Mode every capture asks before it is filed (CaptureConfirmPrompt):
+ * any page whose link you click can send one — Chrome hands a plain https link
+ * to the app window without a prompt — and with the app window open and
+ * unlocked there is no unlock in between any more to stop it. The question,
+ * oldest first; `count` is how many are waiting.
+ */
+export function useCaptureConfirm() {
+  useSyncExternalStore(subscribeHeldCaptures, heldCapturesVersion);
+  const waiting = capturesToConfirm();
+  const current = waiting[0] ?? null;
+  const id = current?.id;
+  const add = useCallback(() => {
+    const capture = id === undefined ? null : releaseCapture(id);
+    if (capture) fileCapture(capture);
+  }, [id]);
+  const discard = useCallback(() => {
+    if (id !== undefined) releaseCapture(id);
+  }, [id]);
+  return { capture: current?.capture ?? null, count: waiting.length, add, discard };
 }
 
 /**

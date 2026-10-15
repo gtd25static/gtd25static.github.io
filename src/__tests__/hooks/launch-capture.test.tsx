@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { render } from '@testing-library/react';
+import { render, screen, fireEvent, act } from '@testing-library/react';
 import '../setup-component';
 import { vi, beforeEach } from 'vitest';
 
@@ -33,11 +33,14 @@ vi.mock('../../db/vault', () => ({
 type Consumer = (params: { targetURL?: string }) => void;
 let consumer: Consumer | null = null;
 
-// The module keeps the queue and the boot launch in module state: a fresh copy per test.
+// The modules keep the held captures and the boot launch in module state: a
+// fresh copy per test. Harness = the unlocked app's part in this: it files
+// held captures and shows the Paranoid Mode question.
 async function load() {
   vi.resetModules();
   const mod = await import('../../hooks/use-url-capture');
-  function Harness() { mod.useUrlCapture(); return null; }
+  const { CaptureConfirmPrompt } = await import('../../components/banners/CaptureConfirmPrompt');
+  function Harness() { mod.useUrlCapture(); return <CaptureConfirmPrompt />; }
   return { ...mod, Harness };
 }
 
@@ -61,9 +64,8 @@ beforeEach(() => {
 });
 
 describe('listenForLaunches — captures that reach an already open app window', () => {
-  it('files a capture launched at the open, unlocked window at once', async () => {
+  it('files a capture launched at the open window at once (Paranoid Mode off)', async () => {
     const { listenForLaunches, Harness } = await load();
-    Object.assign(vault, { paranoid: true, unlocked: true });
     listenForLaunches();
     render(<Harness />);
     launch(launchUrl('Captured page'));
@@ -95,20 +97,6 @@ describe('listenForLaunches — captures that reach an already open app window',
     await vi.waitFor(() => expect(filedTitles()).toEqual(['First', 'Second']));
   });
 
-  it('a window brought forward after its idle time ran out locks first, and files the capture on unlock', async () => {
-    const { listenForLaunches, Harness } = await load();
-    Object.assign(vault, { paranoid: true, unlocked: true, expireOnCheck: true });
-    listenForLaunches();
-    const { unmount } = render(<Harness />);
-    launch(launchUrl('Late'));
-    await Promise.resolve();
-    expect(lockIfIdleExpired).toHaveBeenCalled();
-    expect(createTask).not.toHaveBeenCalled();
-    unmount(); // the lock screen
-    Object.assign(vault, { unlocked: true, expireOnCheck: false });
-    render(<Harness />);
-    await vi.waitFor(() => expect(filedTitles()).toEqual(['Late']));
-  });
 
   it('files captures one at a time, oldest first', async () => {
     const { listenForLaunches, Harness } = await load();
@@ -120,20 +108,6 @@ describe('listenForLaunches — captures that reach an already open app window',
     expect(maxInFlight).toBe(1);
   });
 
-  it('a capture whose write met a lock is kept for the next unlock', async () => {
-    const { listenForLaunches, Harness } = await load();
-    Object.assign(vault, { paranoid: true, unlocked: true });
-    listenForLaunches();
-    const { unmount } = render(<Harness />);
-    // Locks while the write is under way: the vault fails it closed.
-    createTask.mockImplementationOnce(async () => { vault.unlocked = false; return undefined; });
-    launch(launchUrl('Raced'));
-    await vi.waitFor(() => expect(createTask).toHaveBeenCalledTimes(1));
-    unmount();
-    vault.unlocked = true;
-    render(<Harness />);
-    await vi.waitFor(() => expect(filedTitles()).toEqual(['Raced', 'Raced']));
-  });
 
   it('holds at most 20 captures while locked', async () => {
     const { listenForLaunches, Harness } = await load();
@@ -180,5 +154,104 @@ describe('listenForLaunches — captures that reach an already open app window',
     const { listenForLaunches } = await load();
     Reflect.deleteProperty(window, 'launchQueue');
     expect(() => listenForLaunches()).not.toThrow();
+  });
+});
+
+describe('Paranoid Mode — a capture asks before it goes into the Inbox', () => {
+  const addButton = () => screen.queryByRole('button', { name: 'Add to Inbox' });
+
+  beforeEach(() => { Object.assign(vault, { paranoid: true, unlocked: true }); });
+
+  it('a capture launched at the open, unlocked window waits for "Add to Inbox"', async () => {
+    const { listenForLaunches, Harness } = await load();
+    listenForLaunches();
+    render(<Harness />);
+    act(() => launch(launchUrl('Captured page')));
+    expect(screen.getByText('Captured page')).toBeInTheDocument();
+    expect(screen.getByText('https://x.com/a')).toBeInTheDocument();
+    await Promise.resolve();
+    expect(createTask).not.toHaveBeenCalled();
+    fireEvent.click(addButton()!);
+    await vi.waitFor(() => expect(filedTitles()).toEqual(['Captured page']));
+    expect(addButton()).toBeNull();
+  });
+
+  it('Discard, and closing the dialog, file nothing', async () => {
+    const { listenForLaunches, Harness } = await load();
+    listenForLaunches();
+    render(<Harness />);
+    act(() => { launch(launchUrl('Lure one')); launch(launchUrl('Lure two')); });
+    fireEvent.click(screen.getByRole('button', { name: 'Discard' }));
+    expect(screen.getByText('Lure two')).toBeInTheDocument();
+    // Esc / the ✕ / the backdrop close the <dialog>: that discards too.
+    fireEvent(screen.getByRole('dialog'), new Event('close'));
+    expect(addButton()).toBeNull();
+    await new Promise((r) => setTimeout(r, 10));
+    expect(createTask).not.toHaveBeenCalled();
+  });
+
+  it('several captures are asked one at a time, oldest first, with a count', async () => {
+    const { listenForLaunches, Harness } = await load();
+    listenForLaunches();
+    render(<Harness />);
+    act(() => { for (const t of ['A', 'B', 'C']) launch(launchUrl(t)); });
+    expect(screen.getByText('Add to Inbox? (1 of 3)')).toBeInTheDocument();
+    fireEvent.click(addButton()!);
+    expect(screen.getByText('Add to Inbox? (1 of 2)')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Discard' }));
+    expect(screen.getByText('Add to Inbox?')).toBeInTheDocument();
+    fireEvent.click(addButton()!);
+    await vi.waitFor(() => expect(filedTitles()).toEqual(['A', 'C']));
+  });
+
+  it('"Add to Inbox" is not focused: a stray Enter as the window jumps forward files nothing', async () => {
+    const { listenForLaunches, Harness } = await load();
+    listenForLaunches();
+    render(<Harness />);
+    act(() => launch(launchUrl('Sudden')));
+    expect(document.activeElement).not.toBe(addButton());
+  });
+
+  it('the capture that opened a new, locked window asks too, after the unlock', async () => {
+    const { listenForLaunches, takeCaptureFromUrl, Harness } = await load();
+    vault.unlocked = false;
+    window.history.replaceState({}, '', `/?protocol=${encodeURIComponent(payload('Cold start'))}`);
+    takeCaptureFromUrl();
+    listenForLaunches();
+    launch(launchUrl('Cold start')); // the same launch, handed over again: skipped
+    vault.unlocked = true;
+    render(<Harness />);
+    expect(screen.getByText('Add to Inbox?')).toBeInTheDocument();
+    fireEvent.click(addButton()!);
+    await vi.waitFor(() => expect(filedTitles()).toEqual(['Cold start']));
+  });
+
+  it('a window brought forward after its idle time ran out locks first; the question waits for the unlock', async () => {
+    const { listenForLaunches, Harness } = await load();
+    vault.expireOnCheck = true;
+    listenForLaunches();
+    const { unmount } = render(<Harness />);
+    launch(launchUrl('Late'));
+    expect(lockIfIdleExpired).toHaveBeenCalled();
+    unmount(); // the lock screen
+    Object.assign(vault, { unlocked: true, expireOnCheck: false });
+    render(<Harness />);
+    expect(screen.getByText('Late')).toBeInTheDocument();
+  });
+
+  it('a confirmed capture whose write met a lock is filed by the next unlock, without asking again', async () => {
+    const { listenForLaunches, Harness } = await load();
+    listenForLaunches();
+    const { unmount } = render(<Harness />);
+    // Locks while the write is under way: the vault fails it closed.
+    createTask.mockImplementationOnce(async () => { vault.unlocked = false; return undefined; });
+    act(() => launch(launchUrl('Raced')));
+    fireEvent.click(addButton()!);
+    await vi.waitFor(() => expect(createTask).toHaveBeenCalledTimes(1));
+    unmount();
+    vault.unlocked = true;
+    render(<Harness />);
+    expect(addButton()).toBeNull();
+    await vi.waitFor(() => expect(filedTitles()).toEqual(['Raced', 'Raced']));
   });
 });
