@@ -8,6 +8,7 @@ const mockUseNodes = vi.fn<() => MindmapNode[]>(() => []);
 const mockCreateNode = vi.fn(async () => undefined as MindmapNode | undefined);
 const mockUpdateLabel = vi.fn(async () => true);
 const mockReparent = vi.fn(async () => true);
+const mockMoveBeside = vi.fn(async () => true);
 const mockDeleteSubtree = vi.fn(async () => [] as string[]);
 const mockRestoreSubtree = vi.fn(async () => {});
 const mockToast = vi.fn();
@@ -21,6 +22,7 @@ vi.mock('../../hooks/use-mindmaps', () => ({
   createMindmapNode: (...a: unknown[]) => (mockCreateNode as (...x: unknown[]) => unknown)(...a),
   updateMindmapNodeLabel: (...a: unknown[]) => (mockUpdateLabel as (...x: unknown[]) => unknown)(...a),
   reparentMindmapNode: (...a: unknown[]) => (mockReparent as (...x: unknown[]) => unknown)(...a),
+  moveMindmapNodeBeside: (...a: unknown[]) => (mockMoveBeside as (...x: unknown[]) => unknown)(...a),
   deleteMindmapNodeSubtree: (...a: unknown[]) => (mockDeleteSubtree as (...x: unknown[]) => unknown)(...a),
   restoreMindmapNodeSubtree: (...a: unknown[]) => (mockRestoreSubtree as (...x: unknown[]) => unknown)(...a),
 }));
@@ -379,6 +381,55 @@ describe('MindmapCanvas', () => {
     expect(actionButton('Delete (Del)')).toBeDefined();
     fireEvent.keyDown(canvas, { key: 'Tab' });
     await waitFor(() => expect(mockCreateNode).toHaveBeenCalledWith('map-1', 'b', undefined, undefined));
+  });
+
+  describe('dragging a node', () => {
+    // Press on `id`, move past the drag threshold, then hover `fy` of the way
+    // down `targetId`'s box (client = world + the initial {40,40} pan).
+    function dragOnto(id: string, targetId: string, fy: number) {
+      const svg = document.querySelector('svg')!;
+      const from = nodeBox(id);
+      const to = nodeBox(targetId);
+      fireEvent.pointerDown(nodeEl(id), { pointerId: 1, clientX: from.x + 40 + 10, clientY: from.y + 40 + 10 });
+      fireEvent.pointerMove(svg, { pointerId: 1, clientX: from.x + 40 + 30, clientY: from.y + 40 + 30 });
+      fireEvent.pointerMove(svg, { pointerId: 1, clientX: to.x + 40 + to.w / 2, clientY: to.y + 40 + to.h * fy });
+    }
+    const release = () => fireEvent.pointerUp(document.querySelector('svg')!, { pointerId: 1 });
+
+    it('onto the top edge of a sibling places it before, with an insertion line', () => {
+      render(<MindmapCanvas mapId="map-1" />);
+      dragOnto('b', 'a', 0.1);
+      expect(screen.getByTestId('mindmap-drop-line')).toBeInTheDocument();
+      release();
+      expect(mockMoveBeside).toHaveBeenCalledWith('b', 'a', 'before');
+      expect(mockReparent).not.toHaveBeenCalled();
+      expect(screen.queryByTestId('mindmap-drop-line')).toBeNull();
+    });
+
+    it('onto the bottom edge places it after', () => {
+      render(<MindmapCanvas mapId="map-1" />);
+      dragOnto('a', 'b', 0.9);
+      release();
+      expect(mockMoveBeside).toHaveBeenCalledWith('a', 'b', 'after');
+    });
+
+    it('onto the middle still re-parents, without the line', () => {
+      render(<MindmapCanvas mapId="map-1" />);
+      dragOnto('b', 'a1', 0.5);
+      expect(screen.queryByTestId('mindmap-drop-line')).toBeNull();
+      release();
+      expect(mockReparent).toHaveBeenCalledWith('b', 'a1');
+      expect(mockMoveBeside).not.toHaveBeenCalled();
+    });
+
+    it('never drops into its own subtree', () => {
+      render(<MindmapCanvas mapId="map-1" />);
+      dragOnto('a', 'a1', 0.1);
+      expect(screen.queryByTestId('mindmap-drop-line')).toBeNull();
+      release();
+      expect(mockMoveBeside).not.toHaveBeenCalled();
+      expect(mockReparent).not.toHaveBeenCalled();
+    });
   });
 
   // Motion stays off until the map has been measured and fitted — which never

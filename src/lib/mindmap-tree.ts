@@ -19,7 +19,8 @@ export interface MindmapTree {
   byId: Map<string, MindmapTreeNode>;
 }
 
-function sortSiblings(a: MindmapNode, b: MindmapNode): number {
+/** Sibling order everywhere a map is drawn or rearranged: order, then createdAt, then id. */
+export function sortSiblings(a: MindmapNode, b: MindmapNode): number {
   return a.order - b.order || a.createdAt - b.createdAt || (a.id < b.id ? -1 : 1);
 }
 

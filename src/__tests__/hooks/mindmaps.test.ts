@@ -1,4 +1,5 @@
 import { db } from '../../db';
+import type { MindmapNode } from '../../db/models';
 import { resetDb, assertDefined } from '../helpers/db-helpers';
 import {
   createMindmapFolder,
@@ -15,6 +16,7 @@ import {
   createMindmapNode,
   updateMindmapNodeLabel,
   reparentMindmapNode,
+  moveMindmapNodeBeside,
   deleteMindmapNodeSubtree,
   restoreMindmapNodeSubtree,
   updateMindmapNodeStyle,
@@ -120,6 +122,106 @@ describe('nodes', () => {
     const other = assertDefined(await createMindmap('Other'));
     const otherRoot = await rootOf(other.id);
     expect(await reparentMindmapNode(a.id, otherRoot.id)).toBe(false); // cross-map
+  });
+
+  describe('moveMindmapNodeBeside', () => {
+    async function threeKids() {
+      const map = assertDefined(await createMindmap('M'));
+      const root = await rootOf(map.id);
+      const a = assertDefined(await createMindmapNode(map.id, root.id, 'A'));
+      const b = assertDefined(await createMindmapNode(map.id, root.id, 'B'));
+      const c = assertDefined(await createMindmapNode(map.id, root.id, 'C'));
+      return { map, root, a, b, c };
+    }
+    async function kidLabels(parentId: string) {
+      const rows = (await db.mindmapNodes.toArray()).filter((n) => n.parentId === parentId && !n.deletedAt);
+      return rows.sort((x, y) => x.order - y.order).map((n) => n.label);
+    }
+
+    it('reorders a node among its own siblings (before and after)', async () => {
+      const { root, a, c } = await threeKids();
+      expect(await moveMindmapNodeBeside(c.id, a.id, 'before')).toBe(true);
+      expect(await kidLabels(root.id)).toEqual(['C', 'A', 'B']);
+      expect(await moveMindmapNodeBeside(c.id, a.id, 'after')).toBe(true);
+      expect(await kidLabels(root.id)).toEqual(['A', 'C', 'B']);
+    });
+
+    it('moves a node into another branch at the chosen spot', async () => {
+      const { map, root, a, b } = await threeKids();
+      const a1 = assertDefined(await createMindmapNode(map.id, a.id, 'A1'));
+      await createMindmapNode(map.id, a.id, 'A2');
+      await tick();
+      expect(await moveMindmapNodeBeside(b.id, a1.id, 'after')).toBe(true);
+      expect(await kidLabels(a.id)).toEqual(['A1', 'B', 'A2']);
+      expect(await kidLabels(root.id)).toEqual(['A', 'C']);
+      const movedB = assertDefined(await db.mindmapNodes.get(b.id));
+      expect(movedB.parentId).toBe(a.id);
+      // Both fields must be re-stamped, or other devices would keep their copy.
+      expect(movedB.fieldTimestamps?.parentId).toBeGreaterThan(b.fieldTimestamps!.parentId);
+      expect(movedB.fieldTimestamps?.order).toBeGreaterThan(b.fieldTimestamps!.order);
+    });
+
+    it('only rewrites the rows whose order actually changes', async () => {
+      const { a, b, c } = await threeKids();
+      const before = await db.changeLog.count();
+      // [A, B, C] → [A, C, B]: A keeps order 0.
+      await tick();
+      expect(await moveMindmapNodeBeside(c.id, b.id, 'before')).toBe(true);
+      expect(await db.changeLog.count()).toBe(before + 2);
+      expect(assertDefined(await db.mindmapNodes.get(a.id)).fieldTimestamps?.order).toBe(a.fieldTimestamps?.order);
+      // Dropping a node where it already is writes nothing.
+      const settled = await db.changeLog.count();
+      expect(await moveMindmapNodeBeside(c.id, a.id, 'after')).toBe(true);
+      expect(await db.changeLog.count()).toBe(settled);
+    });
+
+    it('untangles siblings that share an order (concurrent adds on two devices)', async () => {
+      const { root, a, b, c } = await threeKids();
+      // All three at order 0: the tree breaks the tie by createdAt, then id.
+      for (const [i, n] of [a, b, c].entries()) await db.mindmapNodes.update(n.id, { order: 0, createdAt: i + 1 });
+      expect(await moveMindmapNodeBeside(a.id, c.id, 'after')).toBe(true);
+      expect(await kidLabels(root.id)).toEqual(['B', 'C', 'A']);
+      const orders = (await db.mindmapNodes.bulkGet([b.id, c.id, a.id])).map((n) => n?.order);
+      expect(orders).toEqual([0, 1, 2]);
+    });
+
+    it('rejects the root, self, beside the root, inside its own subtree, and cross-map', async () => {
+      const { map, root, a, b } = await threeKids();
+      const a1 = assertDefined(await createMindmapNode(map.id, a.id, 'A1'));
+      expect(await moveMindmapNodeBeside(root.id, a.id, 'before')).toBe(false); // root immovable
+      expect(await moveMindmapNodeBeside(a.id, a.id, 'after')).toBe(false);     // self
+      expect(await moveMindmapNodeBeside(a.id, root.id, 'after')).toBe(false);  // root has no siblings
+      expect(await moveMindmapNodeBeside(a.id, a1.id, 'before')).toBe(false);   // own descendant
+      const other = assertDefined(await createMindmap('Other'));
+      const otherKid = assertDefined(await createMindmapNode(other.id, (await rootOf(other.id)).id, 'X'));
+      expect(await moveMindmapNodeBeside(b.id, otherKid.id, 'before')).toBe(false); // cross-map
+      expect(await moveMindmapNodeBeside(b.id, 'missing', 'before')).toBe(false);
+      expect(await kidLabels(root.id)).toEqual(['A', 'B', 'C']);
+    });
+
+    it('rejects a deleted node or anchor, and an orphan anchor (its parent is deleted)', async () => {
+      const { map, root, a, b, c } = await threeKids();
+      const p = assertDefined(await createMindmapNode(map.id, root.id, 'P'));
+      const orphan = assertDefined(await createMindmapNode(map.id, p.id, 'Orphan'));
+      await db.mindmapNodes.update(p.id, { deletedAt: Date.now() });
+      expect(await moveMindmapNodeBeside(a.id, orphan.id, 'before')).toBe(false);
+      await db.mindmapNodes.update(c.id, { deletedAt: Date.now() });
+      expect(await moveMindmapNodeBeside(c.id, a.id, 'before')).toBe(false);
+      expect(await moveMindmapNodeBeside(b.id, c.id, 'after')).toBe(false);
+      expect(assertDefined(await db.mindmapNodes.get(a.id)).parentId).toBe(root.id);
+    });
+
+    it('never writes back a row this device cannot read (its ciphertext would be lost)', async () => {
+      const { a, b, c } = await threeKids();
+      await db.mindmapNodes.update(a.id, { _decryptError: true } as Partial<MindmapNode>);
+      const before = await db.changeLog.count();
+      // [A, B, C] → [C, A, B] would renumber A; it is skipped, C and B are written.
+      expect(await moveMindmapNodeBeside(c.id, a.id, 'before')).toBe(true);
+      expect(await db.changeLog.count()).toBe(before + 2);
+      expect(assertDefined(await db.mindmapNodes.get(a.id)).order).toBe(0);
+      // And the unreadable node itself doesn't move.
+      expect(await moveMindmapNodeBeside(a.id, b.id, 'after')).toBe(false);
+    });
   });
 
   it('deleteMindmapNodeSubtree tombstones the node and all descendants, not the root', async () => {

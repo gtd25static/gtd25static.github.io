@@ -9,7 +9,7 @@ import { initFieldTimestamps, stampUpdatedFields } from '../sync/field-timestamp
 import { encryptRow, getActiveAtRestKey } from '../db/vault-middleware';
 import { SYNC_VERSION } from '../sync/version';
 import { MAX_MINDMAP_LABEL_LENGTH, MAX_MINDMAP_IMPORT_NODES } from '../lib/constants';
-import { buildTree } from '../lib/mindmap-tree';
+import { buildTree, sortSiblings } from '../lib/mindmap-tree';
 import { mapToOutline, type OutlineNode } from '../lib/mindmap-outline';
 import { isHexColor, isNodeShape, isPaletteId, type NodeStylePatch } from '../lib/mindmap-style';
 import { linkifyLabel } from '../lib/mindmap-links';
@@ -697,6 +697,59 @@ export async function reparentMindmapNode(id: string, newParentId: string): Prom
     return true;
   } catch (error) {
     handleDbError(error, 'reparent mindmap node');
+    return false;
+  }
+}
+
+const unreadable = (row: object) => !!(row as { _decryptError?: boolean })._decryptError;
+
+/**
+ * Move a node next to `anchorId` — right before or after it, under the anchor's
+ * parent (a reorder when that is already the node's parent). The new parent's
+ * children are renumbered 0..n and only rows whose order changes are written,
+ * which also untangles siblings left sharing an order by concurrent adds.
+ * Rejects: the root, self, an anchor that is the root or an orphan, inside its
+ * own subtree, cross-map, and a node this device can't read.
+ */
+export async function moveMindmapNodeBeside(id: string, anchorId: string, side: 'before' | 'after'): Promise<boolean> {
+  try {
+    const node = await db.mindmapNodes.get(id);
+    if (!node || node.deletedAt || !node.parentId || anchorId === id || unreadable(node)) return false;
+    const anchor = await db.mindmapNodes.get(anchorId);
+    if (!anchor || anchor.deletedAt || !anchor.parentId || anchor.mapId !== node.mapId) return false;
+    const newParentId = anchor.parentId;
+    // An orphan (parent deleted, drawn under the root until repaired) offers no
+    // live parent to join.
+    const parent = await db.mindmapNodes.get(newParentId);
+    if (!parent || parent.deletedAt) return false;
+    const descendants = await descendantNodeIds(id, node.mapId);
+    if (newParentId === id || descendants.has(newParentId)) return false;
+
+    const siblings = (await db.mindmapNodes.where('mapId').equals(node.mapId).toArray())
+      .filter((n) => !n.deletedAt && n.parentId === newParentId && n.id !== id)
+      .sort(sortSiblings);
+    const at = siblings.findIndex((n) => n.id === anchorId) + (side === 'after' ? 1 : 0);
+    siblings.splice(at, 0, node);
+
+    const now = Date.now();
+    const writes: MindmapWrite[] = [];
+    siblings.forEach((row, order) => {
+      const moved = row.id === id && row.parentId !== newParentId;
+      // A sibling this device can't read is the vault's placeholder: writing it
+      // back would replace its ciphertext (same rule as cleanOrphans). It keeps
+      // its old order — the result is still the same on every device.
+      if ((row.order === order && !moved) || unreadable(row)) return;
+      const fields = moved ? ['parentId', 'order'] : ['order'];
+      writes.push({
+        table: 'mindmapNodes',
+        entityType: 'mindmapNode',
+        row: { ...row, parentId: newParentId, order, updatedAt: now, fieldTimestamps: stampUpdatedFields(row.fieldTimestamps, fields, now) },
+      });
+    });
+    await putMindmapRows(writes);
+    return true;
+  } catch (error) {
+    handleDbError(error, 'move mindmap node');
     return false;
   }
 }

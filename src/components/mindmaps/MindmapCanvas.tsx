@@ -3,12 +3,14 @@ import type { MindmapNode } from '../../db/models';
 import { buildTree, descendantIds } from '../../lib/mindmap-tree';
 import { layoutMindmap, translateLayoutY, type LayoutRect, type MindmapLayout, type NodeSize } from '../../lib/mindmap-layout';
 import { anchorPoints, nodeActionAnchors, resolveHoverTarget } from '../../lib/mindmap-hover';
+import { dropLineY, resolveDropTarget, type DropTarget } from '../../lib/mindmap-drop';
 import { useAnimatedLayout } from '../../hooks/use-animated-layout';
 import {
   useMindmapNodes,
   createMindmapNode,
   updateMindmapNodeLabel,
   reparentMindmapNode,
+  moveMindmapNodeBeside,
   deleteMindmapNodeSubtree,
   restoreMindmapNodeSubtree,
 } from '../../hooks/use-mindmaps';
@@ -40,8 +42,11 @@ const UNDO_TOAST_MS = 8000;
 // translated+scaled <g>. All gestures are raw pointer events (dnd-kit is
 // list-oriented and doesn't fit a free canvas):
 //   background drag = pan · wheel = zoom at cursor · two pointers = pinch
-//   node drag past 8px = re-parent (ghost + drop-target ring; the root, the
-//   node itself and its descendants are not valid targets) · tap = select ·
+//   node drag past 8px = move (ghost): onto a node's middle = re-parent under it
+//   (drop-target ring), onto its top/bottom edge or the gap beside it = insert
+//   before/after it as a sibling (insertion line) — see mindmap-drop.ts; the
+//   root doesn't drag and only takes children, the node itself and its
+//   descendants are not valid targets · tap = select ·
 //   double-click / double-tap / F2 = edit label inline · press anywhere outside
 //   the open editor = commit and leave edit mode.
 // The per-node action buttons follow the mouse (see mindmap-hover.ts) and fall
@@ -111,7 +116,7 @@ export function MindmapCanvas({ mapId, background, smartColoring }: { mapId: str
   const editingIdRef = useRef<string | null>(null);
   editingIdRef.current = editingId;
 
-  const [drag, setDrag] = useState<{ id: string; x: number; y: number; targetId: string | null } | null>(null);
+  const [drag, setDrag] = useState<{ id: string; x: number; y: number; target: DropTarget | null } | null>(null);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
@@ -434,15 +439,8 @@ export function MindmapCanvas({ mapId, background, smartColoring }: { mapId: str
         dragState.forbidden = new Set([dragState.id, ...descendantIds(treeRef.current, dragState.id)]);
       }
       const world = screenToWorld(e.clientX, e.clientY);
-      let targetId: string | null = null;
-      for (const [id, rect] of layoutRef.current.rects) {
-        if (dragState.forbidden.has(id)) continue;
-        if (world.x >= rect.x && world.x <= rect.x + rect.w && world.y >= rect.y && world.y <= rect.y + rect.h) {
-          targetId = id;
-          break;
-        }
-      }
-      setDrag({ id: dragState.id, x: world.x, y: world.y, targetId });
+      const target = resolveDropTarget(world, layoutRef.current.rects, dragState.forbidden, treeRef.current.root?.node.id);
+      setDrag({ id: dragState.id, x: world.x, y: world.y, target });
       return;
     }
 
@@ -467,11 +465,13 @@ export function MindmapCanvas({ mapId, background, smartColoring }: { mapId: str
     if (dragState) {
       dragRef.current = null;
       if (dragState.active) {
-        const dropTarget = drag?.targetId ?? null;
+        const drop = drag?.target ?? null;
         setDrag(null);
-        if (dropTarget) {
-          expandNode(mapId, dropTarget);
-          void reparentMindmapNode(dragState.id, dropTarget);
+        if (drop?.position === 'child') {
+          expandNode(mapId, drop.id);
+          void reparentMindmapNode(dragState.id, drop.id);
+        } else if (drop) {
+          void moveMindmapNodeBeside(dragState.id, drop.id, drop.position);
         }
       } else {
         setSelectedId(dragState.id);
@@ -590,6 +590,14 @@ export function MindmapCanvas({ mapId, background, smartColoring }: { mapId: str
     ? { rect: actionsRect!, row: actionsRow! }
     : motionReady ? lastActionsRef.current : null;
 
+  // A before/after drop draws an insertion line in the gap instead of the ring.
+  let dropLine: { x: number; y: number; w: number } | null = null;
+  const dropTarget = drag?.target;
+  if (dropTarget && dropTarget.position !== 'child') {
+    const r = layout.rects.get(dropTarget.id);
+    if (r) dropLine = { x: r.x, y: dropLineY(r, dropTarget.position), w: r.w };
+  }
+
   return (
     <div
       ref={containerRef}
@@ -630,7 +638,7 @@ export function MindmapCanvas({ mapId, background, smartColoring }: { mapId: str
               editing={n.id === editingId}
               isRoot={tree.root?.node.id === n.id}
               isDragSource={drag?.id === n.id}
-              isDropTarget={drag?.targetId === n.id}
+              isDropTarget={dropTarget?.id === n.id && dropTarget.position === 'child'}
               animateIn={motionReady}
               stylePreview={n.id === selectedId ? stylePreview : null}
               onMeasure={onMeasure}
@@ -690,6 +698,12 @@ export function MindmapCanvas({ mapId, background, smartColoring }: { mapId: str
               onEdit={() => startEdit(actions.row.id)}
               onDelete={() => void deleteSubtree(actions.row.id)}
             />
+          )}
+          {dropLine && (
+            <g className="pointer-events-none" data-testid="mindmap-drop-line">
+              <line x1={dropLine.x} y1={dropLine.y} x2={dropLine.x + dropLine.w} y2={dropLine.y} className="stroke-accent-500" strokeWidth={3} strokeLinecap="round" />
+              <circle cx={dropLine.x} cy={dropLine.y} r={4} className="fill-white stroke-accent-500 dark:fill-zinc-900" strokeWidth={2} />
+            </g>
           )}
           {drag && (
             <g transform={`translate(${drag.x + 14},${drag.y + 14})`} className="pointer-events-none opacity-75">
