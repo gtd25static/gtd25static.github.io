@@ -124,11 +124,17 @@ export default defineConfig({
         // Chrome does not implement `handle_links` (it captures in-scope links
         // by default since 139 on desktop, opt-out per app); this is declared
         // for browsers that do, and it costs nothing where it is ignored.
-        // Deliberately NO `launch_handler`: the Android share target is a POST
-        // the service worker intercepts, and a `focus-existing`/`navigate-existing`
-        // client mode could change whether that POST is delivered at all. Not
-        // worth risking a working share flow for a nicer capture window.
         handle_links: 'preferred',
+        // A launch (the capture bookmarklet's web+gtd: link, a captured link,
+        // the app icon) brings forward the window already open instead of
+        // opening another: in Paranoid Mode a new window starts locked, so every
+        // capture asked for an unlock although a window was open and unlocked.
+        // The launch URL reaches that window through window.launchQueue
+        // (listenForLaunches, src/hooks/use-url-capture.ts). Desktop only, and
+        // Chrome ignores launch_handler for share_target launches — the Android
+        // share POST, the reason this was once left out, is untouched
+        // (blink-dev "Intent to Ship: Web app launch handler").
+        launch_handler: { client_mode: 'focus-existing' },
         // …but link capturing alone cannot serve the capture bookmarklet.
         // Chrome only captures navigations that create a new frame WITHOUT an
         // auxiliary browsing context, and `window.open` is exactly an auxiliary
@@ -138,8 +144,14 @@ export default defineConfig({
         // whatever opened them. `%s` arrives percent-encoded and is parsed by
         // parseProtocolCapture (src/hooks/use-url-capture.ts), which sanitises
         // it exactly like the ?capture query it replaces.
+        // `&v=2` changes nothing in the app: it changes the handler Chrome has
+        // on record, and Chrome re-registers a scheme with the OS only when the
+        // manifest's handlers differ from that record (protocol_handling_sub_manager).
+        // An install whose OS registration was missing (Win11: "the scheme does
+        // not have a registered handler") gets it back the next time the app
+        // loads, without reinstalling. Old registrations' URLs keep working.
         protocol_handlers: [
-          { protocol: 'web+gtd', url: '/?protocol=%s' },
+          { protocol: 'web+gtd', url: '/?protocol=%s&v=2' },
         ],
         icons: [
           { src: 'pwa-192.png', sizes: '192x192', type: 'image/png' },

@@ -62,11 +62,12 @@ export function ShareSettings() {
             <div>
               <BookmarkletLink code={appBookmarklet}>Capture to GTD25 (app)</BookmarkletLink>
               <p className="mt-1 text-xs">
-                Opens the installed app. The first time, the browser asks whether to let
-                this site open <code className="rounded bg-zinc-100 px-1 dark:bg-zinc-700">{CAPTURE_PROTOCOL}</code>{' '}
-                links — allow it. Needs the app installed; if it was installed before this
-                setting existed, relaunch it once (or reinstall) so the browser picks up
-                the handler.
+                Saves to the installed app — in the window you already have open, if
+                there is one. The first time, the browser asks whether to let this site
+                open <code className="rounded bg-zinc-100 px-1 dark:bg-zinc-700">{CAPTURE_PROTOCOL}</code>{' '}
+                links — allow it. Needs the app installed. If clicking it does nothing,
+                open the app once (the browser refreshes its link registration as it
+                loads), then try again.
               </p>
             </div>
             <div>

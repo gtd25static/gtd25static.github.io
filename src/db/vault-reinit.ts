@@ -6,6 +6,7 @@ import { clearDeviceIdCache } from '../sync/change-log';
 import { CONTENT_TABLES, readContentRows, encryptContentRows } from './vault-content';
 import { placeholderRow, placeholderBlobBytes, createPlaceholderContext } from '../lib/placeholder-content';
 import { replaceShareStashWithPlaceholder } from '../lib/share-target';
+import { replaceHeldCaptures } from '../lib/held-captures';
 import { purgeLocalBackups } from './backup';
 import { clearErrorLog } from '../lib/diagnostics';
 import { closeAllNotifications } from '../lib/notifications';
@@ -35,7 +36,8 @@ import { DEFAULT_MAX_ATTEMPTS } from '../lib/constants';
 //    device-local safety backups (encrypted under the old DEK — unreadable, but
 //    listed with their dates in Settings and failing to restore, which would
 //    expose the swap), a share stashed while locked (PLAINTEXT, and offered by
-//    the share prompt on the next unlocked start), the diagnostics log (sync
+//    the share prompt on the next unlocked start), pages captured while locked
+//    (held in memory, filed by the unlock that follows), the diagnostics log (sync
 //    activity, remote file names), sync bookkeeping in localStorage, and the
 //    app's notifications (nudges quote real task titles). None of it can join the
 //    Dexie transaction; a tab killed in between leaves it behind on an already
@@ -185,6 +187,18 @@ export async function reinitVaultWithPlaceholders(vault: Vault, realDek: CryptoK
         const file = placeholderRow('sharedItem', { id: `share-${meta.ts}-${i}`, type: 'file', name: 'x' }, ctx);
         return { name: String(file.name), type: 'text/plain', size: bytes.length, bytes };
       }),
+    };
+  });
+  // Pages captured while locked are held in memory and filed by the unlock that
+  // follows this — into the placeholder Inbox. Replaced the same way: as many
+  // captures, each a placeholder page (title = its link's title, like a capture).
+  const captureCtx = createPlaceholderContext();
+  replaceHeldCaptures((capture, i) => {
+    const row = placeholderRow('task', { id: `capture-${i}`, listId: 'inbox', title: 'x', link: 'x', linkTitle: 'x', description: 'x' }, captureCtx);
+    return {
+      title: String(capture.link ? row.linkTitle : row.title),
+      ...(capture.link ? { link: String(row.link), linkTitle: String(row.linkTitle) } : {}),
+      ...(capture.description ? { description: String(row.description) } : {}),
     };
   });
   await closeAllNotifications();

@@ -4,6 +4,8 @@ import { getOrCreateInbox } from './use-task-lists';
 import { toast } from '../components/ui/Toast';
 import { MAX_TITLE_LENGTH, MAX_DESCRIPTION_LENGTH } from '../lib/constants';
 import { extractUrl, isValidUrl } from '../lib/link-utils';
+import { isParanoidEnabled, isUnlocked, lockIfIdleExpired } from '../db/vault';
+import { holdCapture, takeHeldCaptures } from '../lib/held-captures';
 
 /**
  * Sanitize a capture param: trim, truncate (to a title's length unless the
@@ -95,51 +97,104 @@ export function formatCaptureResult(title: string, url: string, text: string): C
   return { title: title || text };
 }
 
-// A capture read from the address bar, waiting for the app to be up to file it.
-let pendingCapture: CaptureResult | null = null;
-
 /**
- * Take a capture from the address bar and scrub it at once (ACR-004). Triggers on:
+ * Whether a URL of this app is a capture link:
  *   - /capture?title=...&url=...&text=... (Web Share Target on Android)
  *   - /?capture&title=...&url=... (bookmarklet, browser tab)
  *   - /?protocol=web%2Bgtd%3Acapture%3F... (bookmarklet, installed app —
  *     Chrome's protocol handler launch; see parseProtocolCapture)
+ */
+function isCaptureUrl(url: URL): boolean {
+  return url.pathname === '/capture' || url.searchParams.has('capture') || url.searchParams.has('protocol');
+}
+
+/** The capture a capture link carries, sanitised — or null when nothing usable is in it. */
+function captureFromUrl(url: URL): CaptureResult | null {
+  const params = url.searchParams;
+  // A protocol launch carries everything inside its own URL.
+  if (params.has('protocol')) return parseProtocolCapture(params.get('protocol'));
+  const title = sanitize(params.get('title'));
+  const link = sanitize(params.get('url'));
+  const text = sanitize(params.get('text'));
+  if (!title && !link && !text) return null;
+  const result = formatCaptureResult(title, link, text);
+  result.title = result.title.slice(0, MAX_TITLE_LENGTH);
+  return result.title ? result : null;
+}
+
+// Set while the unlocked app is mounted (useUrlCapture): a capture that reaches
+// an open window is filed at once; otherwise it is held (lib/held-captures).
+let mounted = false;
+// The capture this window was opened with. The launch queue hands that same
+// launch over again, and it was already taken from the address bar.
+let bootCapture: string | null = null;
+// One capture at a time: filed together, each could create the Inbox.
+let filing: Promise<void> = Promise.resolve();
+
+function fileCapture(capture: CaptureResult): void {
+  filing = filing.then(async () => {
+    let filed = false;
+    try { filed = await captureToInbox(capture); } catch { /* not filed: handled below */ }
+    // The vault locked under it (writes fail closed while locked): keep it for the next unlock.
+    if (!filed && isParanoidEnabled() && !isUnlocked()) holdCapture(capture);
+  });
+}
+
+/**
+ * Take a capture from the address bar and scrub it at once (ACR-004).
  * main.tsx calls this before the first render: on a locked Paranoid device the
  * app shows the lock screen, and the captured page's title and URL used to sit
  * in the address bar until someone unlocked. useUrlCapture files it later.
  */
 export function takeCaptureFromUrl(): void {
-  const params = new URLSearchParams(window.location.search);
-  const isShareTarget = window.location.pathname === '/capture';
-  const isBookmarklet = params.has('capture');
-  const isProtocol = params.has('protocol');
-  if (!isShareTarget && !isBookmarklet && !isProtocol) return;
-
-  // The sanitized values are read into locals before the scrub.
-  const protocolResult = isProtocol ? parseProtocolCapture(params.get('protocol')) : null;
-  const title = sanitize(params.get('title'));
-  const url = sanitize(params.get('url'));
-  const text = sanitize(params.get('text'));
+  const url = new URL(window.location.href);
+  if (!isCaptureUrl(url)) return;
+  // Read (and sanitised) before the scrub.
+  const capture = captureFromUrl(url);
   cleanUrl();
-
-  // A protocol launch carries everything inside its own URL.
-  if (isProtocol) {
-    pendingCapture = protocolResult;
-    return;
-  }
-  if (!title && !url && !text) return;
-  const result = formatCaptureResult(title, url, text);
-  result.title = result.title.slice(0, MAX_TITLE_LENGTH);
-  if (result.title) pendingCapture = result;
+  if (!capture) return;
+  bootCapture = JSON.stringify(capture);
+  holdCapture(capture);
 }
 
-/** Files the capture taken from the address bar (see takeCaptureFromUrl) into the Inbox, once. */
+/**
+ * Captures launched at an app window that is ALREADY OPEN. The manifest's
+ * launch_handler (focus-existing) brings that window forward and hands the
+ * launch URL to window.launchQueue, where a new window — which in Paranoid Mode
+ * starts locked, however unlocked this one is — used to open. Nothing touches
+ * the address bar here. Filed at once while unlocked, otherwise held for the
+ * unlock. A window opened BY a launch gets that launch queued first; it was
+ * already taken from the address bar, so it is skipped. main.tsx calls this.
+ */
+export function listenForLaunches(): void {
+  const queue = (window as Window & { launchQueue?: LaunchQueue }).launchQueue;
+  queue?.setConsumer(({ targetURL }) => {
+    const boot = bootCapture;
+    bootCapture = null;
+    let url: URL;
+    try { url = new URL(targetURL ?? ''); } catch { return; }
+    if (url.origin !== window.location.origin || !isCaptureUrl(url)) return;
+    const capture = captureFromUrl(url);
+    if (!capture || JSON.stringify(capture) === boot) return;
+    // Brought forward after its idle time ran out — before the focus check
+    // has locked it: lock first, and hold the capture for after the unlock.
+    lockIfIdleExpired();
+    if (mounted && !(isParanoidEnabled() && !isUnlocked())) fileCapture(capture);
+    else holdCapture(capture);
+  });
+}
+
+interface LaunchQueue {
+  setConsumer(consumer: (params: { targetURL?: string }) => void): void;
+}
+
+/** Files held captures into the Inbox, and later ones as they arrive, while mounted (unlocked). */
 export function useUrlCapture() {
   useEffect(() => {
     takeCaptureFromUrl(); // already done by main.tsx in the app; a no-op then
-    const capture = pendingCapture;
-    pendingCapture = null;
-    if (capture) void captureToInbox(capture);
+    for (const capture of takeHeldCaptures()) fileCapture(capture);
+    mounted = true;
+    return () => { mounted = false; };
   }, []);
 }
 
@@ -147,8 +202,9 @@ export function useUrlCapture() {
  * Create an Inbox task from a capture result. `link`/`linkTitle` are passed straight
  * through to createTask so the task renders the URL as a clickable link (sanitized +
  * rel="noopener noreferrer" by the task UI). Reused by the share-target flow.
+ * Resolves to whether the task was created.
  */
-export async function captureToInbox({ title, link, linkTitle, description }: CaptureResult) {
+export async function captureToInbox({ title, link, linkTitle, description }: CaptureResult): Promise<boolean> {
   // Too long for a title (a shared note): a short title, and all of it in the
   // description — everything past 500 characters used to be lost.
   if (title.length > MAX_TITLE_LENGTH) {
@@ -165,6 +221,7 @@ export async function captureToInbox({ title, link, linkTitle, description }: Ca
   if (task) {
     toast('Captured to Inbox', 'success');
   }
+  return !!task;
 }
 
 function cleanUrl() {

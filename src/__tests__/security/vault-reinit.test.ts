@@ -88,6 +88,27 @@ describe('secondary-passphrase re-init (duress)', () => {
     expect(tasks[0].title.length).toBeGreaterThan(0);
   });
 
+  it('replaces pages captured while locked — same number, nothing real in them', async () => {
+    const { holdCapture, takeHeldCaptures } = await import('../../lib/held-captures');
+    await enableParanoid(REAL);
+    await setSecondaryPassphrase(SECONDARY);
+    lock();
+    holdCapture({ title: 'WHISTLEBLOWER page', link: 'https://x.example.org/secret-doc-url', linkTitle: 'WHISTLEBLOWER page' });
+    holdCapture({ title: 'FIRE_THE_CFO note', description: 'admitted the fraud' });
+
+    expect(await unlockWithPassphrase(SECONDARY)).toBe(true);
+
+    const held = takeHeldCaptures();
+    expect(held).toHaveLength(2);
+    const text = JSON.stringify(held);
+    for (const marker of MARKERS) expect(text.includes(marker), `real capture "${marker}" survived`).toBe(false);
+    // Shaped like captures: a page keeps title = its link's title; a note keeps its description.
+    expect(held[0].link).toMatch(/^https:\/\//);
+    expect(held[0].title).toBe(held[0].linkTitle);
+    expect(held[1].link).toBeUndefined();
+    expect(held[1].description?.length).toBeGreaterThan(0);
+  });
+
   it('keeps structure byte-identical: ids, refs, order, status, timestamps', async () => {
     await seedRealContent();
     await enableParanoid(REAL);

@@ -9,7 +9,7 @@ import { startCrossTabLock, reconcileParanoidFlag, enforceFailedAttemptLimit } f
 import { onTabSignal } from './lib/tab-channel';
 import { startForgettingSessionOnLock } from './lib/forget-on-lock';
 import { flushPendingClipboardClear, catchUpPendingClipboardClear } from './lib/clipboard-hygiene';
-import { takeCaptureFromUrl } from './hooks/use-url-capture';
+import { listenForLaunches, takeCaptureFromUrl } from './hooks/use-url-capture';
 import { noticeIfSlow, showBootNotice } from './lib/boot-notice';
 
 // Capture uncaught errors for the in-app diagnostics log, and ask the browser to
@@ -47,6 +47,9 @@ onTabSignal((signal) => {
 // captured page in the URL: take it out of the address bar before anything renders
 // — on a locked Paranoid device the lock screen stays up until someone unlocks.
 takeCaptureFromUrl();
+// Later captures launched at this window while it is open (launch_handler
+// focus-existing) arrive through the launch queue instead.
+listenForLaunches();
 
 // Finish any wipe whose IndexedDB deletion was blocked (e.g. by a second tab)
 // BEFORE the app opens the database again; renders immediately when none is pending.

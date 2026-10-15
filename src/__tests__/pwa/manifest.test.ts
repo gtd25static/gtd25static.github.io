@@ -18,13 +18,17 @@ describe('PWA manifest', () => {
   it('registers the capture protocol the desktop bookmarklet launches', () => {
     // Chrome will not capture window.open into an installed app, so this scheme
     // is the only reliable route from a bookmarklet to the app window.
-    expect(config).toContain("url: '/?protocol=%s'");
+    expect(config).toContain("url: '/?protocol=%s&v=2'");
     // Must match the scheme the app builds its links with, and must be
     // registrable: "web+" + ASCII lower alphas only (a digit in it is why the
     // first attempt never registered).
     const declared = /protocol: '([^']+)'/.exec(config)?.[1];
     expect(declared).toMatch(/^web\+[a-z]+$/);
     expect(`${declared}:`).toBe(CAPTURE_PROTOCOL);
+  });
+
+  it('brings an open window forward on a launch instead of opening a new, locked one', () => {
+    expect(config).toContain("launch_handler: { client_mode: 'focus-existing' }");
   });
 
   it('still declares the POST share target Android shares arrive through', () => {
