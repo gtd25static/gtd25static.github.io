@@ -298,7 +298,8 @@ function sync(manual = false, pushLimit = null) -> remainingCount:
 
   ── 1. FETCH ─────────────────────────────────────────────────────────────
   (changelogFile, snapshotFile) = parallel(GET changelog, GET snapshot)
-  remoteEntries = parseJsonSafe(changelogFile) ?? []     # parse failure → treat as empty
+  remoteEntries = parseChangelog(changelogFile)          # not JSON, or not an array →
+  if remoteEntries == UNREADABLE: return CORRUPT_REMOTE  #   refuse, write NOTHING (§9 rule 1)
   changelogSha  = changelogFile.sha
 
   ── 2. OVERSIZE GUARD ────────────────────────────────────────────────────
@@ -306,9 +307,12 @@ function sync(manual = false, pushLimit = null) -> remainingCount:
       compact(); refetch changelog
 
   ── 3. BOOTSTRAP PATHS (mutually exclusive, ordered) ──────────────────────
-  if no snapshot and no changelog:            → FIRST SYNC: push local as snapshot, changelog=[]
+  if changelog and no snapshot and (repo seen encrypted or any entry has ciphertext):
+                                              → REFUSE (corrupt-remote; Force Push recreates it)
+  if no snapshot and changelog empty/absent:  → FIRST SYNC: push local as snapshot, changelog=[]
   if snapshot and no changelog:               → ADOPT: replace local from snapshot, changelog=[]
-  if snapshot and changelog and never pulled: → FRESH DEVICE: delegate to forcePull()
+  if snapshot and changelog and never pulled: → own interrupted first upload? carry on
+                                                else FRESH DEVICE: delegate to forcePull()
 
   ── 4. VERSION GATE ──────────────────────────────────────────────────────
   if snapshot.syncVersion > LOCAL_SYNC_VERSION:
@@ -316,7 +320,7 @@ function sync(manual = false, pushLimit = null) -> remainingCount:
   # older remote is handled in step 7
 
   ── 5. WIPE GATE ─────────────────────────────────────────────────────────
-  if snapshot.wipedAt and snapshot.wipedAt != lastWipeSeenAt and snapshot.wipedAt > lastPulledAt:
+  if snapshot.wipedAt and snapshot.wipedAt != lastWipeSeenAt:   # by identity, never by clock
       verifyPassphrase(); local safety backup; replace local from snapshot;
       keep own pending entries newer than wipedAt (re-apply them), drop older ones;
       lastWipeSeenAt = snapshot.wipedAt; continue    # the normal pull/push below
@@ -334,6 +338,10 @@ function sync(manual = false, pushLimit = null) -> remainingCount:
       decrypt → runMigrations → re-encrypt → PUT snapshot
 
   ── 8. APPLY REMOTE ──────────────────────────────────────────────────────
+  # Pending entries the remote already has (a keepalive flush or a lost reply):
+  # in the changelog (readable copy) or folded by a compaction
+  # (snapshot.compactedEntryIds). Cleared and noted as pushed BEFORE any merge.
+  dropDelivered(pending, remoteEntries, snapshot.compactedEntryIds)
   foreign = remoteEntries.filter(e => e.deviceId != myDeviceId)
   foreign = decrypt(foreign)
   applyEntries(foreign)                       # field-level merge, see §7
@@ -341,14 +349,14 @@ function sync(manual = false, pushLimit = null) -> remainingCount:
   ── 9. RECONCILE AGAINST SNAPSHOT  ← DO NOT SKIP ─────────────────────────
   if snapshot.sha != lastSeenSnapshotSha:
       reconcile(decrypt(snapshot))            # field-level merge, not replace
+      reapply(foreign deletes)                # their rows may have arrived just now
       store lastSeenSnapshotSha = snapshot.sha
   # Rationale: entries this device never saw may have been absorbed into the
   # snapshot and erased from the changelog while it was offline. Without this
   # step those changes are lost forever. See §14, lesson 1.
 
   ── 10. PUSH LOCAL ───────────────────────────────────────────────────────
-  pending = getPendingEntries(limit = pushLimit)
-  pending = pending.filter(e => e.id not in remoteEntries)   # dedup, see §14 lesson 3
+  pending = getPendingEntries(limit = pushLimit)  # already deduplicated in step 8
   if pending:
       body = remoteEntries ++ encrypt(pending)
       putWithConflictRetry(changelog, body, changelogSha)     # §7
@@ -359,7 +367,8 @@ function sync(manual = false, pushLimit = null) -> remainingCount:
       compact()
 
   ── 12. FINISH ───────────────────────────────────────────────────────────
-  updateSyncMeta(lastPulledAt, lastPushedAt, snapshotSha, pendingChanges)
+  updateSyncMeta(lastPulledAt, lastPushedAt, snapshotSha, pendingChanges,
+                 lastWipeSeenAt = snapshot.wipedAt ?? 0)   # the reset this run READ
   consecutiveErrors = 0
   setDirtyFlag(false)
   fireAndForget(createBackups, compactBlobBranch, squashHistory)
@@ -378,7 +387,10 @@ function compact():
 
   for entry in changelog sorted by timestamp ascending:
       if entry.operation == delete:  mark tombstone on snapshot entity
-      else:                          snapshot[entity] = merge(snapshot[entity], entry.data, entry.timestamp)
+                                     (absent entity: retried after the loop — see §7 Layer 3)
+      else:                          validate + migrate entry; skip if malformed
+                                     snapshot[entity] = merge(snapshot[entity], entry.data, entry.timestamp)
+  snapshot.compactedEntryIds = newest 1000 of (previous ++ ids just folded)
 
   snapshot = dropTombstonesOlderThan(30 days)      # bounded tombstone retention
   snapshot = applyRetentionPolicies(snapshot)      # e.g. archive old completed items
@@ -486,8 +498,13 @@ because append dominates. If deletion matters in your domain, put tombstones ins
 
 ### Layer 3 — Deletion
 
-Soft delete (`deletedAt`), propagated as a normal field. A delete entry wins if `entry.timestamp >= local.updatedAt`.
-Tombstones are dropped from the snapshot after **30 days** during compaction.
+Soft delete (`deletedAt`), propagated as a normal field. A delete entry wins unless the row's own `deletedAt` field
+timestamp is newer (a restore). Tombstones are dropped from the snapshot after **30 days** during compaction.
+
+Entries are applied in timestamp order — the *writers'* clocks. The delete of an entity created on a device whose clock
+runs ahead sorts before the create, finds nothing, and the create then brings the entity in alive, for good, wherever
+both arrive together (a new device, a compaction). So a delete of an entity not (yet) present is retried after the rest
+of the batch. Likewise a delete applied before the snapshot reconcile brought its entity in is applied again after it.
 
 The retention window is a bet: *no device stays offline longer than 30 days*. A device offline for 31 days will
 resurrect every entity it holds that was deleted elsewhere, because the tombstone is gone and its local copy looks
@@ -713,10 +730,11 @@ unretrievable. Never treat a squash as a security control.
 ### The `wipedAt` mechanism
 
 A destructive operation (wipe, import, restore) stamps the snapshot with `wipedAt = now`, resets the changelog to
-`[]` and records `lastWipeSeenAt = wipedAt` on the device that did it. Every other device checks:
+an empty array and records `lastWipeSeenAt = wipedAt` on the device that did it. Every successful sync records the
+`wipedAt` of the snapshot it read (0 for none). Every device checks:
 
 ```
-if snapshot.wipedAt != myLastWipeSeenAt and snapshot.wipedAt > myLastPulledAt:
+if snapshot.wipedAt and snapshot.wipedAt != myLastWipeSeenAt:
     → this device has NOT seen the wipe → bootstrap from the snapshot, keep only its own
       pending edits newer than the wipe, record lastWipeSeenAt, then sync normally
 ```
@@ -727,9 +745,15 @@ clearing it (clearing it destroyed other devices' post-reset edits).
 
 - **Keep `wipedAt` through compaction.** A device offline through the reset must still adopt it when it returns,
   however many compactions happened meanwhile.
-- **Adopt a reset once, by identity.** `wipedAt` comes from the resetting device's clock and `lastPulledAt` from this
-  one's; with a clock running behind, the comparison alone stays true and the device would re-adopt the reset on
-  every sync, discarding its own edits each time. `lastWipeSeenAt` makes it a one-time event.
+- **Adopt a reset once, by identity — never by comparing clocks.** `wipedAt` comes from the resetting device's clock
+  and `lastPulledAt` from this one's, set when a sync *ends*. Comparing them re-adopted the reset on every sync on a
+  device running behind, and never adopted it on one running ahead — or on any device whose sync was under way when
+  the reset landed (it read the old snapshot, then stamped `lastPulledAt` after `wipedAt`). Recording the `wipedAt`
+  each sync actually read closes all three.
+- **Reset the changelog to bytes it never held.** The Contents API's sha is the *content's* hash: a reset to `[]` gets
+  back the sha every compaction leaves, and a device holding that sha from before the reset can append its pre-reset
+  entries over it (its push only looks for a reset on a 409). gtd25 writes `[]` followed by the reset's time encoded
+  as whitespace — still valid JSON for every reader.
 - **Repair a missing changelog.** Older builds deleted it; a snapshot carrying `wipedAt` with no changelog is
   recreated with `[]` and then handled as above.
 
@@ -883,7 +907,17 @@ mis-click right after a wipe, or before the first pull completes.
 **Fix:** refuse the push when local is empty and remote is not, and back up the remote before any destructive
 overwrite. Both guards are three lines each.
 
-### 10. Test with realistic data volumes
+### 10. Never encrypt ciphertext as if it were plaintext
+
+A "first-time encryption" path (a remote with no salt yet) encrypted every remote entry — including entries that
+already carried ciphertext, whose `_enc` field was then replaced by the encryption of an empty record. Reached
+without any attacker: a first sync from a device with no data uploaded only an empty changelog, the first edits were
+pushed under a salt that lived only in that page, and when the compaction meant to upload the snapshot never ran, the
+next start minted a new salt and took the repository for unencrypted. **Fix:** a changelog without a snapshot is
+refused when the repository was ever seen encrypted or any entry carries ciphertext; an empty changelog alone counts
+as an empty remote; already-encrypted entries are never re-encrypted; a page reuses the salt it already has.
+
+### 11. Test with realistic data volumes
 
 Behaviour verified on 3 entities can be completely different on 100. This bit us in a non-sync area (an animation that
 never armed on large datasets because the layout landed across several commits instead of one), and the lesson
@@ -987,8 +1021,11 @@ else's device, and destructively.
 - Own-device entries are filtered out on pull; **all** entries are applied on force pull.
 - Push returns the remaining pending count for batch continuation.
 - Version gate blocks on a newer remote.
-- `wipedAt` forces a bootstrap when newer than `lastPulledAt`, once per reset (`lastWipeSeenAt`), keeping
-  post-reset entries from other devices and this device's own post-reset edits.
+- `wipedAt` forces a bootstrap once per reset, by identity (`lastWipeSeenAt` = the `wipedAt` each sync read) —
+  including a reset that lands while a sync is under way — keeping post-reset entries from other devices and this
+  device's own post-reset edits.
+- A changelog without a snapshot is refused when it holds ciphertext; an empty one is a first sync.
+- A delete sorted before its entity's create (writer clock ahead) still deletes it.
 
 **Concurrency**
 - 409 retry re-fetches, applies foreign entries, rebuilds, and succeeds.

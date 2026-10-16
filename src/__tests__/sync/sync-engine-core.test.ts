@@ -726,7 +726,11 @@ describe('wipeAllData', () => {
     mockPutFile.mockResolvedValue('sha');
 
     await wipeAllData();
-    expect(mockPutFile).toHaveBeenCalledWith('ghp_test123', 'user/repo', CHANGELOG_FILE, '[]', 'cl-sha', expect.anything());
+    const reset = mockPutFile.mock.calls.find((c) => c[2] === CHANGELOG_FILE && c[4] === 'cl-sha');
+    expect(reset).toBeDefined();
+    // Empty — in bytes no changelog has held before (see resetRemoteChangelog).
+    expect(JSON.parse(reset![3])).toEqual([]);
+    expect(reset![3]).not.toBe('[]');
     expect(mockDeleteFile).not.toHaveBeenCalledWith(expect.anything(), expect.anything(), CHANGELOG_FILE, expect.anything());
   });
 

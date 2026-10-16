@@ -128,7 +128,8 @@ export function isKnownEntityType(entityType: unknown): entityType is ChangeEntr
   return typeof entityType === 'string' && Object.hasOwn(requiredFields, entityType);
 }
 
-function validateEntityShape(data: Record<string, unknown> | undefined, entityType: ChangeEntry['entityType']): boolean {
+/** Whether a row carries every field its kind requires (a remote one is skipped otherwise). */
+export function validateEntityShape(data: Record<string, unknown> | undefined, entityType: ChangeEntry['entityType']): boolean {
   if (!data || typeof data !== 'object') return false;
   const fields = requiredFields[entityType];
   for (const field of fields) {
@@ -271,39 +272,51 @@ async function applyRemoteEntriesOnce(entries: ChangeEntry[]): Promise<boolean> 
     writes[entityType].set(entityId, row);
   }
 
+  function applyDelete(entry: ChangeEntry, existing: EntityRow): void {
+    // A delete is a change to one field, deletedAt, and loses only to a newer
+    // change of that same field (a restore). Weighing it against the whole
+    // row's updatedAt let an edit of another field made just after the delete
+    // keep the row alive here, while the field merge on the deleting device
+    // and compaction kept the tombstone — the devices then disagreed. Rows
+    // without field timestamps (pre-v5 data) keep the row-level rule.
+    const row = existing as unknown as Record<string, unknown>;
+    if (isConflictEntity(entry.entityType)) {
+      const conflict = detectDeleteConflict(entry.entityType, row, entry.timestamp, { since });
+      if (conflict) record(conflict);
+    }
+    const currentBase = effectiveBase(row, since);
+    const nextBase = advanceBase(currentBase, { deletedAt: entry.timestamp });
+    const localFT = row.fieldTimestamps as Record<string, number> | undefined;
+    const newerLocal = localFT ? localFT.deletedAt ?? 0 : existing.updatedAt ?? 0;
+    // Applied already (the changelog is read whole at every sync): no rewrite.
+    const applied = existing.deletedAt === entry.timestamp && (!localFT || localFT.deletedAt === entry.timestamp);
+    if (entry.timestamp >= newerLocal && !applied) {
+      if (!existing.deletedAt) newlyDeleted.push(entry.entityId);
+      const updated = {
+        ...existing,
+        deletedAt: entry.timestamp,
+        updatedAt: Math.max(existing.updatedAt ?? 0, entry.timestamp),
+        fieldTimestamps: stampUpdatedFields(localFT, ['deletedAt'], entry.timestamp),
+        _base: nextBase,
+      };
+      setChanged(entry.entityType, entry.entityId, updated as EntityRow);
+    } else if (nextBase !== currentBase && !row._decryptError) {
+      setChanged(entry.entityType, entry.entityId, { ...existing, _base: nextBase } as EntityRow);
+    }
+  }
+
+  // Deletes of items not here (yet): applied after the rest of the batch. Its
+  // order is the writers' clocks, so the delete of an item created on a device
+  // whose clock runs ahead sorts before the create — it found nothing, the create
+  // then brought the item in alive, and it stayed so here (and in a snapshot
+  // compacted from this order) while the deleting device kept it deleted.
+  const deferredDeletes: ChangeEntry[] = [];
+
   for (const entry of sorted) {
     if (entry.operation === 'delete') {
       const existing = await getCurrent(entry.entityType, entry.entityId);
-      if (existing) {
-        // A delete is a change to one field, deletedAt, and loses only to a newer
-        // change of that same field (a restore). Weighing it against the whole
-        // row's updatedAt let an edit of another field made just after the delete
-        // keep the row alive here, while the field merge on the deleting device
-        // and compaction kept the tombstone — the devices then disagreed. Rows
-        // without field timestamps (pre-v5 data) keep the row-level rule.
-        const row = existing as unknown as Record<string, unknown>;
-        if (isConflictEntity(entry.entityType)) {
-          const conflict = detectDeleteConflict(entry.entityType, row, entry.timestamp, { since });
-          if (conflict) record(conflict);
-        }
-        const currentBase = effectiveBase(row, since);
-        const nextBase = advanceBase(currentBase, { deletedAt: entry.timestamp });
-        const localFT = row.fieldTimestamps as Record<string, number> | undefined;
-        const newerLocal = localFT ? localFT.deletedAt ?? 0 : existing.updatedAt ?? 0;
-        if (entry.timestamp >= newerLocal) {
-          if (!existing.deletedAt) newlyDeleted.push(entry.entityId);
-          const updated = {
-            ...existing,
-            deletedAt: entry.timestamp,
-            updatedAt: Math.max(existing.updatedAt ?? 0, entry.timestamp),
-            fieldTimestamps: stampUpdatedFields(localFT, ['deletedAt'], entry.timestamp),
-            _base: nextBase,
-          };
-          setChanged(entry.entityType, entry.entityId, updated as EntityRow);
-        } else if (nextBase !== currentBase && !row._decryptError) {
-          setChanged(entry.entityType, entry.entityId, { ...existing, _base: nextBase } as EntityRow);
-        }
-      }
+      if (existing) applyDelete(entry, existing);
+      else deferredDeletes.push(entry);
       continue;
     }
 
@@ -346,6 +359,10 @@ async function applyRemoteEntriesOnce(entries: ChangeEntry[]): Promise<boolean> 
       const fresh = withoutLocalSyncFields(remote);
       setChanged(entry.entityType, entry.entityId, { ...fresh, _base: remoteFT ? { ...remoteFT } : undefined } as unknown as EntityRow);
     }
+  }
+  for (const entry of deferredDeletes) {
+    const existing = localState[entry.entityType].get(entry.entityId);
+    if (existing) applyDelete(entry, existing);
   }
   const conflictRows = await prepareConflictRowsForAtRest([...conflicts.values()]);
 

@@ -320,10 +320,13 @@ export interface SyncMeta {
   // and a verifier of the new key, pinned so a retry rotates to the same key and
   // refuses a different password. Cleared when the rotation completes.
   keyRotation?: { newSalt: string; newVerifier: string; startedAt: number };
-  // The `wipedAt` of the last wipe / import / backup restore this device adopted
-  // (or performed). A reset is adopted once, by identity: comparing it with
-  // lastPulledAt alone mixes two devices' clocks, and a device running behind
-  // would re-adopt it on every sync, discarding its own edits each time.
+  // The `wipedAt` of the snapshot the last successful sync read — a reset this
+  // device adopted, performed, or found already adopted; 0 for a snapshot without
+  // one. A reset is adopted by identity: any other wipedAt is news. Comparing it
+  // with lastPulledAt mixes two devices' clocks (a device running behind re-adopted
+  // it on every sync, one running ahead never did), and lastPulledAt is set when a
+  // sync ends, so a reset landing during one was missed for good. Undefined only
+  // in an older build's metadata, which falls back to that comparison once.
   lastWipeSeenAt?: number;
   // The repository this device has seen encrypted (opened with a verified key).
   // That repository showing up without a salt was stripped by whoever can write
@@ -583,6 +586,11 @@ export interface SyncData {
   // reset that failed, a device that read the changelog before it — they are
   // ignored; they used to be replayed over the reset on every device.
   supersededEntryIds?: string[];
+  // Written by compaction: the ids of the changelog entries it folded in (the
+  // newest ones, bounded). A device whose push of one landed without its knowing
+  // — a keepalive flush, a reply lost — recognises it here as delivered once the
+  // changelog no longer holds it, instead of pushing that old change again.
+  compactedEntryIds?: string[];
   encryptionSalt?: string;
   encryptionVerifier?: string;
   taskLists: TaskList[];

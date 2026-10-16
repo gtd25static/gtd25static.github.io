@@ -56,7 +56,11 @@ export function classifySyncError(err: unknown): SyncErrorInfo {
   if (message.startsWith('Malformed GitHub response') || message.startsWith('Failed to decode base64')) {
     return { category: 'corrupt-remote', message };
   }
-  if (err instanceof TypeError || /network|fetch|offline/i.test(message)) {
+  // fetch() rejects with a TypeError: "Failed to fetch" (Chrome), "NetworkError
+  // when attempting to fetch resource." (Firefox), "Load failed" (Safari). Any
+  // other TypeError is a bug or malformed data, not a connection — every one
+  // used to read "No connection" while online.
+  if (/network|fetch|offline|load failed/i.test(message)) {
     return { category: 'network', message };
   }
   if (/decrypt/i.test(message)) {

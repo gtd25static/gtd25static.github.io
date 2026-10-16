@@ -96,10 +96,15 @@ describe('syncNow — corrupted JSON handling', () => {
       return Promise.resolve(null);
     });
     mockPutFile.mockResolvedValue('sha');
+    const progress: SyncProgress[] = [];
+    setSyncProgressCallback((p) => progress.push(p));
 
-    // Should not throw — treats corrupted changelog as empty
+    // Never written over (its entries may be the only copy): refused, not taken for empty.
     const result = await syncNow();
-    expect(result).toBe(0);
+    expect(result).toBe(-1);
+    expect(mockPutFile).not.toHaveBeenCalled();
+    expect(progress.at(-1)?.errorInfo?.category).toBe('corrupt-remote');
+    setSyncProgressCallback(null);
   });
 
   it('handles truncated snapshot JSON', async () => {
