@@ -7,7 +7,10 @@ import { extractHostname, sanitizeUrl } from '../../lib/link-utils';
 import { toast } from '../ui/Toast';
 import { confirmDialog } from '../ui/ConfirmDialog';
 import { SharedImagePreview } from './SharedImagePreview';
+import { SharedTextPreview } from './SharedTextPreview';
+import { loadSnippetText, snippetErrorMessage } from './snippet-text';
 import { createSessionObjectUrl } from '../../lib/session-object-urls';
+import { writeTextWithHygiene } from '../../lib/clipboard-hygiene';
 
 // Common MIME → extension fallbacks, used only when the stored name lacks one
 // (e.g. snippets named "notes", or a file dropped without an extension).
@@ -94,11 +97,13 @@ export function SharedItemCard({ item }: { item: SharedItem }) {
   const expiresAt = sharedItemExpiry(item);
   const [busy, setBusy] = useState(false);
   const [previewOpen, setPreviewOpen] = useState(false);
-  // Images preview in an overlay on click (Copy/Download from there); every
-  // other file type keeps the direct download. Not SVG: it is a document that can
-  // carry script, and the preview's blob: URL opened in a tab ("Open image in new
-  // tab") would render it in this app's origin.
+  // Images and text snippets preview in an overlay on click (Copy/Download from
+  // there); every other file type keeps the direct download. Not SVG: it is a
+  // document that can carry script, and the preview's blob: URL opened in a tab
+  // ("Open image in new tab") would render it in this app's origin.
   const isImage = item.type === 'file' && !!item.mimeType?.startsWith('image/') && !item.mimeType.includes('svg');
+  const isSnippet = item.type === 'snippet';
+  const previews = isImage || isSnippet;
 
   async function download() {
     if (!item.blobId) return;
@@ -132,6 +137,26 @@ export function SharedItemCard({ item }: { item: SharedItem }) {
     }
   }
 
+  // A snippet copies straight from its card, without opening it.
+  async function copySnippet() {
+    setBusy(true);
+    let text: string;
+    try {
+      text = await loadSnippetText(item);
+    } catch (err) {
+      toast(snippetErrorMessage(err), 'error');
+      return;
+    } finally {
+      setBusy(false);
+    }
+    try {
+      await writeTextWithHygiene(text);
+      toast('Text copied', 'success');
+    } catch {
+      toast('Could not copy the text', 'error');
+    }
+  }
+
   async function handleDelete() {
     if (!await confirmDialog(`Delete “${item.name}” from the shared folder?`, { confirmLabel: 'Delete' })) return;
     await deleteSharedItem(item.id);
@@ -153,10 +178,10 @@ export function SharedItemCard({ item }: { item: SharedItem }) {
           </a>
         ) : (
           <button
-            onClick={() => { if (isImage) setPreviewOpen(true); else void download(); }}
+            onClick={() => { if (previews) setPreviewOpen(true); else void download(); }}
             disabled={busy}
             className="block max-w-full truncate text-left text-sm font-medium text-zinc-800 hover:underline disabled:opacity-50 dark:text-zinc-100"
-            title={isImage ? `Preview ${item.name}` : `Download ${downloadName(item)}`}
+            title={previews ? `Preview ${item.name}` : `Download ${downloadName(item)}`}
           >
             {item.name}
           </button>
@@ -174,6 +199,20 @@ export function SharedItemCard({ item }: { item: SharedItem }) {
       {/* Actions: phones have no hover, so they stay visible there (44px tap
           targets); on md+ they keep the reveal-on-hover treatment. */}
       <div className="flex shrink-0 items-center gap-1 md:opacity-0 md:transition-opacity md:group-hover:opacity-100">
+        {isSnippet && (
+          <button
+            onClick={() => void copySnippet()}
+            disabled={busy}
+            className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-full text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 disabled:opacity-50 md:min-h-0 md:min-w-0 md:p-1.5 dark:hover:bg-zinc-700"
+            aria-label="Copy text"
+            title="Copy text"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+              <rect x="9" y="9" width="12" height="12" rx="2" strokeLinejoin="round" />
+              <path d="M5 15H4a1 1 0 01-1-1V4a1 1 0 011-1h10a1 1 0 011 1v1" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </button>
+        )}
         {item.type !== 'link' && (
           <button
             onClick={download}
@@ -204,8 +243,11 @@ export function SharedItemCard({ item }: { item: SharedItem }) {
           <path d="M12 2a10 10 0 0110 10" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
         </svg>
       )}
-      {previewOpen && (
+      {previewOpen && isImage && (
         <SharedImagePreview item={item} filename={downloadName(item)} onClose={() => setPreviewOpen(false)} />
+      )}
+      {previewOpen && isSnippet && (
+        <SharedTextPreview item={item} onDownload={() => void download()} onClose={() => setPreviewOpen(false)} />
       )}
     </div>
   );
