@@ -59,6 +59,16 @@ export function useMindmapNodes(mapId: string | null): MindmapNode[] {
   );
 }
 
+// Every live node of every map, for the browser's search inside nodes — read
+// only while that search is on (`enabled`), and [] otherwise.
+export function useAllMindmapNodes(enabled: boolean): MindmapNode[] {
+  return useLiveQuery(
+    async () => (enabled ? (await db.mindmapNodes.toArray()).filter((n) => !n.deletedAt) : []),
+    [enabled],
+    [],
+  );
+}
+
 // Live node counts per map, for the browser's "N nodes" badges.
 export function useMindmapNodeCounts(): Map<string, number> {
   return useLiveQuery(

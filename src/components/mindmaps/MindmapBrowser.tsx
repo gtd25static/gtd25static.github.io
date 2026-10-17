@@ -6,11 +6,15 @@ import { Modal } from '../ui/Modal';
 import { DropdownMenu } from '../ui/DropdownMenu';
 import { confirmDialog } from '../ui/ConfirmDialog';
 import { useAppState } from '../../stores/app-state';
+import { useMindmapUi } from '../../stores/mindmap-ui';
 import type { Mindmap, MindmapFolder } from '../../db/models';
+import { isBlankFilter, MAX_SAVED_SEARCH_LENGTH } from '../../lib/list-filter';
+import { folderPathNames, searchMindmaps } from '../../lib/mindmap-search';
 import {
   useMindmapFolders,
   useMindmaps,
   useMindmapNodeCounts,
+  useAllMindmapNodes,
   createMindmapFolder,
   renameMindmapFolder,
   moveMindmapFolder,
@@ -50,7 +54,39 @@ export function MindmapBrowser() {
   const [moveDialog, setMoveDialog] = useState<MoveDialog | null>(null);
   const [importOpen, setImportOpen] = useState(false);
 
+  // The search spans every folder; with "Node text" on it also looks inside
+  // each map, one node at a time (lib/mindmap-search.ts).
+  const { query, setQuery, searchNodeText, setSearchNodeText, setMapSearch } = useMindmapUi(useShallow((s) => ({
+    query: s.browserSearch,
+    setQuery: s.setBrowserSearch,
+    searchNodeText: s.searchNodeText,
+    setSearchNodeText: s.setSearchNodeText,
+    setMapSearch: s.setMapSearch,
+  })));
+  const searching = !isBlankFilter(query);
+  const searchedNodes = useAllMindmapNodes(searching && searchNodeText);
+
   const folderById = useMemo(() => new Map(folders.map((f) => [f.id, f])), [folders]);
+  const results = useMemo(
+    () => searchMindmaps(query, folders, maps, searchNodeText ? searchedNodes : null),
+    [query, folders, maps, searchNodeText, searchedNodes],
+  );
+  // Folder names are content: redact mode hides them here as in the breadcrumb.
+  const pathLabel = (folderId: string | undefined) => (
+    <span data-redact>{folderPathNames(folderId, folderById).join(' › ') || 'Top level'}</span>
+  );
+
+  // Every open from here starts the map with the search it was found by (a
+  // node hit), or none — never with one left over from its last visit.
+  function openMap(id: string, nodeQuery = '') {
+    setMapSearch(nodeQuery ? { mapId: id, query: nodeQuery } : null);
+    setOpenMindmapId(id);
+  }
+
+  function openFolder(id: string) {
+    setQuery('');
+    setCurrentFolderId(id);
+  }
 
   // A folder deleted (or synced away) under our feet ⇒ fall back to top level.
   const currentFolder = currentFolderId ? folderById.get(currentFolderId) : undefined;
@@ -112,6 +148,20 @@ export function MindmapBrowser() {
     if (ok) await deleteMindmap(map.id);
   }
 
+  const folderMenu = (folder: MindmapFolder) => [
+    { label: 'Open', onClick: () => openFolder(folder.id) },
+    { label: 'Rename', onClick: () => setNameDialog({ kind: 'rename-folder', folder }) },
+    { label: 'Move to…', onClick: () => setMoveDialog({ kind: 'folder', folder }) },
+    { label: 'Delete', danger: true, onClick: () => void handleDeleteFolder(folder) },
+  ];
+  const mapMenu = (map: Mindmap) => [
+    { label: 'Open', onClick: () => openMap(map.id) },
+    { label: 'Rename', onClick: () => setNameDialog({ kind: 'rename-map', map }) },
+    { label: 'Move to…', onClick: () => setMoveDialog({ kind: 'map', map }) },
+    { label: 'Export outline (.md)', onClick: () => void downloadOutline(map.id) },
+    { label: 'Delete', danger: true, onClick: () => void handleDeleteMap(map) },
+  ];
+
   return (
     <div className="flex flex-1 flex-col overflow-hidden">
       {/* Header */}
@@ -143,11 +193,90 @@ export function MindmapBrowser() {
             <Button size="sm" variant="secondary" onClick={() => setImportOpen(true)}>Import</Button>
           </div>
         </div>
+        <div className="mt-2 flex items-center gap-1.5">
+          <div className="relative w-52 sm:w-64">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-zinc-400">
+              <circle cx="11" cy="11" r="8" />
+              <path d="M21 21l-4.35-4.35" strokeLinecap="round" />
+            </svg>
+            <input
+              type="text"
+              enterKeyHint="search"
+              data-redact
+              value={query}
+              maxLength={MAX_SAVED_SEARCH_LENGTH}
+              onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Escape') setQuery('');
+                if (e.key === 'Escape' || e.key === 'Enter') e.currentTarget.blur();
+              }}
+              placeholder={searchNodeText ? 'Search maps and nodes…' : 'Search maps…'}
+              aria-label="Search mindmaps"
+              className="h-8 w-full rounded-full border border-transparent bg-zinc-100 pl-7 pr-7 text-sm text-zinc-800 placeholder:text-zinc-400 focus:border-accent-500 focus:bg-white focus:outline-none md:h-7 dark:bg-zinc-800 dark:text-zinc-200 dark:placeholder:text-zinc-500 dark:focus:bg-zinc-900"
+            />
+            {query && (
+              <button
+                type="button"
+                onClick={() => setQuery('')}
+                aria-label="Clear search"
+                className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded-full p-1 text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300"
+              >
+                <svg width="12" height="12" viewBox="0 0 20 20" fill="currentColor">
+                  <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
+                </svg>
+              </button>
+            )}
+          </div>
+          <button
+            type="button"
+            aria-pressed={searchNodeText}
+            onClick={() => setSearchNodeText(!searchNodeText)}
+            title="Also search the text of every node, in every map"
+            className={`flex h-8 shrink-0 items-center rounded-full px-3 text-sm md:h-7 md:text-xs ${
+              searchNodeText
+                ? 'bg-accent-100 text-accent-700 dark:bg-accent-900/40 dark:text-accent-300'
+                : 'bg-zinc-100 text-zinc-600 hover:text-zinc-800 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:text-zinc-100'
+            }`}
+          >
+            Node text
+          </button>
+        </div>
       </div>
 
       {/* Rows */}
       <div className="flex-1 overflow-y-auto px-4 pb-24 pt-3 scrollbar-thin">
-        {shownFolders.length === 0 && shownMaps.length === 0 ? (
+        {searching ? (
+          results.folders.length === 0 && results.maps.length === 0 ? (
+            <div className="flex h-full flex-col items-center justify-center text-center text-zinc-400">
+              <p data-redact className="text-sm">Nothing matches “{query.trim()}”.</p>
+              {!searchNodeText && <p className="mt-1 text-xs">Turn on “Node text” to search inside the maps too.</p>}
+            </div>
+          ) : (
+            <div className="mx-auto w-full max-w-3xl space-y-1">
+              {results.folders.map((folder) => (
+                <BrowserRow
+                  key={folder.id}
+                  icon={<FolderIcon />}
+                  name={folder.name}
+                  detail={pathLabel(folder.parentId)}
+                  onOpen={() => openFolder(folder.id)}
+                  menu={folderMenu(folder)}
+                />
+              ))}
+              {results.maps.map(({ map, nodeTexts }) => (
+                <BrowserRow
+                  key={map.id}
+                  icon={<MapIcon />}
+                  name={map.name}
+                  detail={<>{pathLabel(map.folderId)} · {nodeCounts.get(map.id) ?? 0} node(s)</>}
+                  onOpen={() => openMap(map.id, nodeTexts.length > 0 ? query : '')}
+                  menu={mapMenu(map)}
+                  nodeHits={nodeTexts}
+                />
+              ))}
+            </div>
+          )
+        ) : shownFolders.length === 0 && shownMaps.length === 0 ? (
           <div className="flex h-full flex-col items-center justify-center text-center text-zinc-400">
             <p className="text-sm">Nothing here yet.</p>
             <p className="mt-1 text-xs">Create a mindmap or a folder to get started.</p>
@@ -161,12 +290,7 @@ export function MindmapBrowser() {
                 name={folder.name}
                 detail={`${mapCountByFolder.get(folder.id) ?? 0} item(s)`}
                 onOpen={() => setCurrentFolderId(folder.id)}
-                menu={[
-                  { label: 'Open', onClick: () => setCurrentFolderId(folder.id) },
-                  { label: 'Rename', onClick: () => setNameDialog({ kind: 'rename-folder', folder }) },
-                  { label: 'Move to…', onClick: () => setMoveDialog({ kind: 'folder', folder }) },
-                  { label: 'Delete', danger: true, onClick: () => void handleDeleteFolder(folder) },
-                ]}
+                menu={folderMenu(folder)}
               />
             ))}
             {shownMaps.map((map) => (
@@ -175,14 +299,8 @@ export function MindmapBrowser() {
                 icon={<MapIcon />}
                 name={map.name}
                 detail={`${nodeCounts.get(map.id) ?? 0} node(s)`}
-                onOpen={() => setOpenMindmapId(map.id)}
-                menu={[
-                  { label: 'Open', onClick: () => setOpenMindmapId(map.id) },
-                  { label: 'Rename', onClick: () => setNameDialog({ kind: 'rename-map', map }) },
-                  { label: 'Move to…', onClick: () => setMoveDialog({ kind: 'map', map }) },
-                  { label: 'Export outline (.md)', onClick: () => void downloadOutline(map.id) },
-                  { label: 'Delete', danger: true, onClick: () => void handleDeleteMap(map) },
-                ]}
+                onOpen={() => openMap(map.id)}
+                menu={mapMenu(map)}
               />
             ))}
           </div>
@@ -220,12 +338,17 @@ export function MindmapBrowser() {
   );
 }
 
-function BrowserRow({ icon, name, detail, onOpen, menu }: {
+// How many matching nodes a search result names before "+N more".
+const NODE_HITS_SHOWN = 3;
+
+function BrowserRow({ icon, name, detail, onOpen, menu, nodeHits }: {
   icon: React.ReactNode;
   name: string;
-  detail: string;
+  detail: React.ReactNode;
   onOpen: () => void;
   menu: { label: string; onClick: () => void; danger?: boolean }[];
+  /** A search result's matching nodes, as text. */
+  nodeHits?: string[];
 }) {
   return (
     <div className="group flex min-h-[52px] md:min-h-[44px] items-center gap-3 rounded-xl border border-zinc-200 bg-white px-3 py-2 transition-colors hover:border-zinc-300 dark:border-zinc-700 dark:bg-zinc-800 dark:hover:border-zinc-600">
@@ -233,7 +356,13 @@ function BrowserRow({ icon, name, detail, onOpen, menu }: {
         <span className="shrink-0 text-zinc-400">{icon}</span>
         <span className="min-w-0 flex-1">
           <span data-redact className="block truncate text-sm text-zinc-800 dark:text-zinc-100">{name}</span>
-          <span className="block text-xs text-zinc-400">{detail}</span>
+          <span className="block truncate text-xs text-zinc-400">{detail}</span>
+          {nodeHits && nodeHits.length > 0 && (
+            <span data-redact className="block truncate text-xs text-amber-700 dark:text-amber-400">
+              {nodeHits.slice(0, NODE_HITS_SHOWN).map((t) => t.replace(/\s+/g, ' ')).join(' · ')}
+              {nodeHits.length > NODE_HITS_SHOWN && ` · +${nodeHits.length - NODE_HITS_SHOWN} more`}
+            </span>
+          )}
         </span>
       </button>
       <DropdownMenu

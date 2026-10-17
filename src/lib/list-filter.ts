@@ -85,6 +85,11 @@ function queryTokens(query: string): string[] {
   return fold(query).split(/\s+/).filter(Boolean);
 }
 
+/** A query with nothing to match on: empty, spaces, or only accents. */
+export function isBlankFilter(query: string): boolean {
+  return queryTokens(query).length === 0;
+}
+
 /** Whether `texts` (an item's title, description…) match `query`. A blank query matches everything. */
 export function matchesListFilter(query: string, texts: Array<string | undefined>): boolean {
   const tokens = queryTokens(query);

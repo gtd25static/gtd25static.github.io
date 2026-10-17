@@ -67,7 +67,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockDeleteSubtree.mockResolvedValue([]);
   localStorage.removeItem('gtd25-mindmap-ui');
-  useMindmapUi.setState({ collapsed: {}, selectedNodeId: null, stylePreview: null });
+  useMindmapUi.setState({ collapsed: {}, selectedNodeId: null, stylePreview: null, mapSearch: null });
   mockUseNodes.mockReturnValue([
     node('root', { label: 'Root topic' }),
     node('a', { parentId: 'root', label: 'Child A' }),
@@ -596,5 +596,146 @@ describe('MindmapCanvas — "Collapse all" brings the root back into view', () =
     act(() => useMindmapUi.getState().collapseAll('map-2', ['x']));
     await new Promise((r) => setTimeout(r, 50));
     expect(viewport()).toEqual(before);
+  });
+});
+
+describe('MindmapCanvas — search inside the map', () => {
+  // Fixture: root › a (Child A) › a1 (Grandchild); root › b (Child B).
+  // "child" matches all three of a, a1 ("Grandchild") and b.
+  const findBox = () => screen.getByRole('textbox', { name: 'Search this map' });
+  // The node's <g> wrapper (two levels up, past the foreignObject).
+  const group = (id: string) => nodeEl(id).parentElement!.parentElement!;
+  const isHit = (id: string) => group(id).hasAttribute('data-search-hit');
+  const isDimmed = (id: string) => group(id).style.opacity === '0.35';
+  // Unmeasured nodes stay mounted, invisible, to report a size (jsdom never measures).
+  const shown = (id: string) => group(id).style.opacity !== '0';
+
+  async function search(text: string) {
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'Search this map (Ctrl+F)' }));
+    await user.type(findBox(), text);
+    return user;
+  }
+
+  it('highlights the matches, fades the rest and goes to the first one', async () => {
+    render(<MindmapCanvas mapId="map-1" />);
+    await search('child b');
+    expect(isHit('b')).toBe(true);
+    expect(isHit('a')).toBe(false);
+    expect(isDimmed('root')).toBe(true);
+    expect(isDimmed('a')).toBe(true);
+    expect(isDimmed('b')).toBe(false);
+    expect(useMindmapUi.getState().selectedNodeId).toBe('b');
+    expect(screen.getByText('1/1')).toBeInTheDocument();
+  });
+
+  it('Enter / Shift+Enter step through the matches, in reading order, without the canvas keys firing', async () => {
+    render(<MindmapCanvas mapId="map-1" />);
+    const user = await search('child');
+    expect(useMindmapUi.getState().selectedNodeId).toBe('a');
+    expect(screen.getByText('1/3')).toBeInTheDocument();
+    await user.keyboard('{Enter}');
+    expect(useMindmapUi.getState().selectedNodeId).toBe('a1'); // a's child before a's sibling
+    await user.keyboard('{Enter}');
+    expect(useMindmapUi.getState().selectedNodeId).toBe('b');
+    expect(screen.getByText('3/3')).toBeInTheDocument();
+    await user.keyboard('{Enter}');
+    expect(useMindmapUi.getState().selectedNodeId).toBe('a'); // wraps
+    await user.keyboard('{Shift>}{Enter}{/Shift}');
+    expect(useMindmapUi.getState().selectedNodeId).toBe('b');
+    expect(mockCreateNode).not.toHaveBeenCalled(); // Enter on the canvas adds a sibling
+  });
+
+  it('no match: says so, and fades nothing', async () => {
+    render(<MindmapCanvas mapId="map-1" />);
+    await search('zebra');
+    expect(screen.getByText('No matches')).toBeInTheDocument();
+    expect(isDimmed('root')).toBe(false);
+  });
+
+  it('opens a collapsed branch holding a match for the search only, keeping the way to the selected match', async () => {
+    useMindmapUi.getState().collapseAll('map-1', ['a']);
+    render(<MindmapCanvas mapId="map-1" />);
+    expect(shown('a1')).toBe(false);
+
+    const user = await search('grand');
+    expect(shown('a1')).toBe(true);
+    expect(isHit('a1')).toBe(true);
+    expect(useMindmapUi.getState().collapsed['map-1']).toEqual(['a']); // stored state untouched
+
+    // Ending the search with the match selected keeps the way to it open.
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('textbox', { name: 'Search this map' })).not.toBeInTheDocument();
+    expect(useMindmapUi.getState().mapSearch).toBeNull();
+    expect(shown('a1')).toBe(true);
+    expect(useMindmapUi.getState().collapsed['map-1'] ?? []).toEqual([]);
+  });
+
+  it('clearing the search folds back what it opened when the selection is elsewhere', async () => {
+    useMindmapUi.getState().collapseAll('map-1', ['a']);
+    render(<MindmapCanvas mapId="map-1" />);
+    const user = await search('grand');
+    expect(shown('a1')).toBe(true);
+    act(() => useMindmapUi.getState().setSelectedNodeId('b'));
+    await user.clear(findBox());
+    expect(shown('a1')).toBe(false);
+    expect(useMindmapUi.getState().collapsed['map-1']).toEqual(['a']);
+  });
+
+  it('a branch closed again during the search stays closed, until stepping to a match inside it', async () => {
+    useMindmapUi.getState().collapseAll('map-1', ['a']);
+    render(<MindmapCanvas mapId="map-1" />);
+    const user = await search('grand');
+    act(() => useMindmapUi.getState().setSelectedNodeId('a'));
+    fireEvent.keyDown(screen.getByTestId('mindmap-canvas'), { key: ' ' }); // collapse 'a'
+    expect(shown('a1')).toBe(false);
+    expect(useMindmapUi.getState().collapsed['map-1']).toEqual(['a']); // still only the search's business
+
+    await user.click(screen.getByRole('button', { name: 'Next match (Enter)' }));
+    expect(shown('a1')).toBe(true);
+    expect(useMindmapUi.getState().selectedNodeId).toBe('a1');
+  });
+
+  it('collapsing a branch the search did not open is a normal, stored collapse', async () => {
+    render(<MindmapCanvas mapId="map-1" />);
+    await search('grand');
+    act(() => useMindmapUi.getState().setSelectedNodeId('a'));
+    fireEvent.keyDown(screen.getByTestId('mindmap-canvas'), { key: ' ' });
+    expect(useMindmapUi.getState().collapsed['map-1']).toEqual(['a']);
+  });
+
+  it('a map opened with a search (from the browser) shows it, without grabbing focus', () => {
+    useMindmapUi.setState({ mapSearch: { mapId: 'map-1', query: 'child' } });
+    render(<MindmapCanvas mapId="map-1" />);
+    expect(findBox()).toHaveValue('child');
+    expect(findBox()).not.toHaveFocus();
+    expect(isHit('a')).toBe(true);
+  });
+
+  it('once laid out, a map opened with a search selects its first match', async () => {
+    // The first fit only happens once nodes are measured — fake it, as the motion tests do.
+    Object.defineProperty(HTMLElement.prototype, 'offsetWidth', { configurable: true, value: 120 });
+    Object.defineProperty(HTMLElement.prototype, 'offsetHeight', { configurable: true, value: 36 });
+    try {
+      useMindmapUi.setState({ mapSearch: { mapId: 'map-1', query: 'child b' } });
+      render(<MindmapCanvas mapId="map-1" />);
+      await waitFor(() => expect(useMindmapUi.getState().selectedNodeId).toBe('b'));
+    } finally {
+      Reflect.deleteProperty(HTMLElement.prototype, 'offsetWidth');
+      Reflect.deleteProperty(HTMLElement.prototype, 'offsetHeight');
+    }
+  });
+
+  it("another map's search does not apply here", () => {
+    useMindmapUi.setState({ mapSearch: { mapId: 'map-2', query: 'child' } });
+    render(<MindmapCanvas mapId="map-1" />);
+    expect(screen.queryByRole('textbox', { name: 'Search this map' })).not.toBeInTheDocument();
+    expect(isHit('a')).toBe(false);
+  });
+
+  it('Ctrl+F opens the search and focuses it', async () => {
+    render(<MindmapCanvas mapId="map-1" />);
+    fireEvent.keyDown(window, { key: 'f', ctrlKey: true });
+    await waitFor(() => expect(findBox()).toHaveFocus());
   });
 });

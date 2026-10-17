@@ -3,8 +3,8 @@ import type { CustomPalette, NodeStylePatch } from '../lib/mindmap-style';
 import { isHexColor } from '../lib/mindmap-style';
 
 // Device-local mindmap view state: which nodes are collapsed, per map, the
-// user's saved colour presets, and whether new maps start with smart colouring
-// on. None of it is synced: collapse state is per-device by design, a saved
+// user's saved colour presets, whether new maps start with smart colouring
+// on, and whether the browser search looks inside nodes. None of it is synced: collapse state is per-device by design, a saved
 // preset is only an authoring shortcut — applying one writes the literal colours
 // onto the node, so a styled node looks the same on every device whether or not
 // that device has the preset — and the smart-colouring default is an authoring
@@ -22,6 +22,8 @@ interface PersistedUi {
   customPalettes: CustomPalette[];
   /** What the smart-colouring toggle was last set to — the seed for new maps. */
   smartColoringDefault: boolean;
+  /** The browser search's "Node text" toggle: a preference, never a query. */
+  searchNodeText: boolean;
 }
 
 interface MindmapUiState {
@@ -54,12 +56,25 @@ interface MindmapUiState {
    *  big layout may have left off screen. `seq` makes each request new. Not persisted. */
   recenterRequest: { mapId: string; seq: number } | null;
   expandAll: (mapId: string) => void;
+  /**
+   * What the browser's search box holds, and the search inside the open map
+   * (scoped to that map: a search must not follow you into another one). What
+   * someone searches for is content, so both live in memory only — never in
+   * localStorage — and are forgotten on lock (lib/forget-on-lock.ts).
+   */
+  browserSearch: string;
+  setBrowserSearch: (query: string) => void;
+  mapSearch: { mapId: string; query: string } | null;
+  setMapSearch: (search: { mapId: string; query: string } | null) => void;
+  /** Whether the browser search also looks inside the maps' nodes. */
+  searchNodeText: boolean;
+  setSearchNodeText: (on: boolean) => void;
   /** Drop stored state for maps that no longer exist (called on purge). */
   pruneMaps: (liveMapIds: Set<string>) => void;
 }
 
 function loadInitial(): PersistedUi {
-  const empty: PersistedUi = { collapsed: {}, customPalettes: [], smartColoringDefault: false };
+  const empty: PersistedUi = { collapsed: {}, customPalettes: [], smartColoringDefault: false, searchNodeText: false };
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return empty;
@@ -77,7 +92,12 @@ function loadInitial(): PersistedUi {
     const customPalettes: CustomPalette[] = Array.isArray(record.customPalettes)
       ? (record.customPalettes as unknown[]).filter(isCustomPalette).slice(0, MAX_CUSTOM_PALETTES)
       : [];
-    return { collapsed, customPalettes, smartColoringDefault: record.smartColoringDefault === true };
+    return {
+      collapsed,
+      customPalettes,
+      smartColoringDefault: record.smartColoringDefault === true,
+      searchNodeText: record.searchNodeText === true,
+    };
   } catch {
     return empty;
   }
@@ -106,6 +126,7 @@ function persistWith(state: MindmapUiState, changed: Partial<PersistedUi>) {
     collapsed: state.collapsed,
     customPalettes: state.customPalettes,
     smartColoringDefault: state.smartColoringDefault,
+    searchNodeText: state.searchNodeText,
     ...changed,
   });
 }
@@ -117,6 +138,16 @@ export const useMindmapUi = create<MindmapUiState>((set, get) => ({
   stylePreview: null,
   setStylePreview: (patch) => set({ stylePreview: patch }),
   recenterRequest: null,
+  browserSearch: '',
+  setBrowserSearch: (query) => set({ browserSearch: query }),
+  mapSearch: null,
+  setMapSearch: (search) => set({ mapSearch: search }),
+  setSearchNodeText: (on) =>
+    set((state) => {
+      if (state.searchNodeText === on) return state;
+      persistWith(state, { searchNodeText: on });
+      return { searchNodeText: on };
+    }),
   toggleCollapsed: (mapId, nodeId) =>
     set((state) => {
       const current = state.collapsed[mapId] ?? [];

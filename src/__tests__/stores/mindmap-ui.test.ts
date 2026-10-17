@@ -5,7 +5,10 @@ const stored = (): Record<string, unknown> => JSON.parse(localStorage.getItem(KE
 
 beforeEach(() => {
   localStorage.removeItem(KEY);
-  useMindmapUi.setState({ collapsed: {}, customPalettes: [], smartColoringDefault: false });
+  useMindmapUi.setState({
+    collapsed: {}, customPalettes: [], smartColoringDefault: false,
+    searchNodeText: false, browserSearch: '', mapSearch: null,
+  });
 });
 
 describe('mindmap-ui persistence', () => {
@@ -51,6 +54,35 @@ describe('mindmap-ui persistence', () => {
     vi.resetModules();
     const garbage = (await import('../../stores/mindmap-ui')).useMindmapUi;
     expect(garbage.getState().smartColoringDefault).toBe(false);
+  });
+});
+
+describe('mindmap searches', () => {
+  it('remembers the "Node text" toggle, through writes from other setters', () => {
+    useMindmapUi.getState().setSearchNodeText(true);
+    useMindmapUi.getState().toggleCollapsed('map-1', 'n1');
+    useMindmapUi.getState().setSmartColoringDefault(true);
+    expect(stored().searchNodeText).toBe(true);
+
+    useMindmapUi.getState().setSearchNodeText(false);
+    expect(stored().searchNodeText).toBe(false);
+  });
+
+  it('never writes what was searched for to storage', () => {
+    useMindmapUi.getState().setBrowserSearch('SECRET_QUERY');
+    useMindmapUi.getState().setMapSearch({ mapId: 'map-1', query: 'SECRET_QUERY' });
+    useMindmapUi.getState().toggleCollapsed('map-1', 'n1'); // forces a write of the blob
+    expect(localStorage.getItem(KEY)).not.toContain('SECRET_QUERY');
+    expect(useMindmapUi.getState().mapSearch).toEqual({ mapId: 'map-1', query: 'SECRET_QUERY' });
+  });
+
+  it('the toggle defaults to off, and only a real true turns it on', async () => {
+    localStorage.setItem(KEY, JSON.stringify({ collapsed: {}, customPalettes: [], searchNodeText: 'yes' }));
+    vi.resetModules();
+    expect((await import('../../stores/mindmap-ui')).useMindmapUi.getState().searchNodeText).toBe(false);
+    localStorage.setItem(KEY, JSON.stringify({ collapsed: {}, customPalettes: [], searchNodeText: true }));
+    vi.resetModules();
+    expect((await import('../../stores/mindmap-ui')).useMindmapUi.getState().searchNodeText).toBe(true);
   });
 });
 

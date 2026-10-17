@@ -1,6 +1,7 @@
 import { subscribeVault, getVaultSnapshot } from '../db/vault';
 import { endSyncSession } from '../sync/sync-engine';
 import { useAppState } from '../stores/app-state';
+import { useMindmapUi } from '../stores/mindmap-ui';
 import { dismissFocusNudge } from '../stores/focus-nudge';
 import { forgetPendingClipboardText } from './clipboard-hygiene';
 import { revokeSessionObjectUrls } from './session-object-urls';
@@ -22,6 +23,8 @@ export function startForgettingSessionOnLock(): () => void {
     endSyncSession();
     useAppState.getState().setSearchQuery('');
     useAppState.getState().setListFilter('');
+    useMindmapUi.getState().setBrowserSearch('');
+    useMindmapUi.getState().setMapSearch(null);
     // Unsent discussion notes are decrypted content held outside the cards.
     useAppState.getState().clearNoteDrafts();
     dismissFocusNudge();

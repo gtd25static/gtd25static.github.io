@@ -4,6 +4,7 @@ import { resetDb } from '../helpers/db-helpers';
 import { enableParanoid, lock, __resetVaultStateForTests } from '../../db/vault';
 import * as syncEngine from '../../sync/sync-engine';
 import { useAppState } from '../../stores/app-state';
+import { useMindmapUi } from '../../stores/mindmap-ui';
 import { useFocusNudgeStore, showFocusNudge } from '../../stores/focus-nudge';
 import type { NudgeContent } from '../../lib/nudges';
 import { startForgettingSessionOnLock } from '../../lib/forget-on-lock';
@@ -63,6 +64,19 @@ describe('locking forgets the session', () => {
     expect(useAppState.getState().listFilter).toBe('');
     expect(useFocusNudgeStore.getState().nudge).toBeNull();
     expect(endSession).toHaveBeenCalled();
+    stop();
+  });
+
+  it('forgets the mindmap searches: the browser box and the one inside a map', async () => {
+    const stop = startForgettingSessionOnLock();
+    await enableParanoid(PASS);
+    useMindmapUi.getState().setBrowserSearch('FIRE_THE_CFO');
+    useMindmapUi.getState().setMapSearch({ mapId: 'm1', query: 'FIRE_THE_CFO' });
+
+    lock();
+
+    expect(useMindmapUi.getState().browserSearch).toBe('');
+    expect(useMindmapUi.getState().mapSearch).toBeNull();
     stop();
   });
 

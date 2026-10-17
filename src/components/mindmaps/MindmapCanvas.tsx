@@ -22,6 +22,9 @@ import { MindmapEdges } from './MindmapEdges';
 import { confirmDialog } from '../ui/ConfirmDialog';
 import { mdToPlainText } from '../../lib/mini-markdown';
 import { isHexColor } from '../../lib/mindmap-style';
+import { isBlankFilter } from '../../lib/list-filter';
+import { ancestorsOf, findNodeMatches } from '../../lib/mindmap-search';
+import { MindmapFindBar } from './MindmapFindBar';
 
 interface Viewport { tx: number; ty: number; k: number }
 
@@ -53,6 +56,7 @@ const UNDO_TOAST_MS = 8000;
 // back to the selected node, which is what touch — no hover — and the keyboard use.
 // Room kept on screen for the label editor of a narrow (new, empty) node.
 const EDITOR_MIN_WIDTH = 160;
+const NO_IDS: ReadonlySet<string> = new Set();
 
 export function MindmapCanvas({ mapId, background, smartColoring }: { mapId: string; background?: string; smartColoring?: boolean }) {
   const nodes = useMindmapNodes(mapId);
@@ -78,6 +82,34 @@ export function MindmapCanvas({ mapId, background, smartColoring }: { mapId: str
     return map;
   }, [tree]);
 
+  // --- Search inside the map (the find bar) ---
+  // The query lives in the store so the browser can open a map with the search
+  // that found it; it belongs to one map only.
+  const mapSearch = useMindmapUi((s) => s.mapSearch);
+  const setMapSearch = useMindmapUi((s) => s.setMapSearch);
+  const query = mapSearch?.mapId === mapId ? mapSearch.query : '';
+  const [findOpen, setFindOpen] = useState(() => !isBlankFilter(query));
+  const matchIds = useMemo(() => findNodeMatches(tree, query), [tree, query]);
+  const matchSet = useMemo(() => new Set(matchIds), [matchIds]);
+  // The collapsed branches that hide a match open for as long as the search
+  // lasts, WITHOUT touching the stored collapse state: clear the search and the
+  // map folds back the way it was. A branch the user closes again meanwhile
+  // stays closed (`reclosed`, tied to the query it was closed under).
+  const searchOpened = useMemo(() => {
+    const opened = new Set<string>();
+    for (const id of ancestorsOf(matchIds, parentOf)) if (collapsedSet.has(id)) opened.add(id);
+    return opened;
+  }, [matchIds, parentOf, collapsedSet]);
+  const [reclosedState, setReclosedState] = useState<{ query: string; ids: ReadonlySet<string> }>({ query: '', ids: NO_IDS });
+  const reclosed = reclosedState.query === query ? reclosedState.ids : NO_IDS;
+  // What the canvas draws as collapsed: the stored state, minus what the search opened.
+  const viewCollapsed = useMemo(
+    () => (searchOpened.size === 0
+      ? collapsedSet
+      : new Set([...collapsedSet].filter((id) => !searchOpened.has(id) || reclosed.has(id)))),
+    [collapsedSet, searchOpened, reclosed],
+  );
+
   const [sizes, setSizes] = useState<Map<string, NodeSize>>(new Map());
   const onMeasure = useCallback((id: string, size: NodeSize) => {
     setSizes((prev) => {
@@ -89,7 +121,7 @@ export function MindmapCanvas({ mapId, background, smartColoring }: { mapId: str
     });
   }, []);
 
-  const rawLayout = useMemo(() => layoutMindmap(tree, sizes, collapsedSet), [tree, sizes, collapsedSet]);
+  const rawLayout = useMemo(() => layoutMindmap(tree, sizes, viewCollapsed), [tree, sizes, viewCollapsed]);
   // Collapsing/expanding pins the toggled node in place (see toggleCollapsedAnchored):
   // the whole layout is shifted so that node keeps its world y, so a collapse near
   // the top no longer drags the map upward. The offset persists across renders.
@@ -138,8 +170,12 @@ export function MindmapCanvas({ mapId, background, smartColoring }: { mapId: str
   targetLayoutRef.current = targetLayout;
   const sizesRef = useRef(sizes);
   sizesRef.current = sizes;
-  const collapsedSetRef = useRef(collapsedSet);
-  collapsedSetRef.current = collapsedSet;
+  const viewCollapsedRef = useRef(viewCollapsed);
+  viewCollapsedRef.current = viewCollapsed;
+  const searchOpenedRef = useRef(searchOpened);
+  searchOpenedRef.current = searchOpened;
+  const queryRef = useRef(query);
+  queryRef.current = query;
 
   useEffect(() => () => setSelectedId(null), [mapId, setSelectedId]);
   // A fresh map starts unshifted; the previous map's pin offset must not carry over.
@@ -225,11 +261,18 @@ export function MindmapCanvas({ mapId, background, smartColoring }: { mapId: str
     if (motionReady || layout.rects.size === 0 || sizes.size === 0) return;
     if (!didFitRef.current) {
       didFitRef.current = true;
-      zoomToFit();
+      // Opened with a search (from the browser): show its matches, the first one selected.
+      const matchBounds = boundsOf(matchIds, layout.rects);
+      if (matchBounds) {
+        fitBounds(matchBounds);
+        setSelectedId(matchIds[0]);
+      } else {
+        zoomToFit();
+      }
     }
     const raf = requestAnimationFrame(() => setMotionReady(true));
     return () => cancelAnimationFrame(raf);
-  }, [motionReady, layout, sizes, zoomToFit]);
+  }, [motionReady, layout, sizes, zoomToFit]); // eslint-disable-line react-hooks/exhaustive-deps -- matchIds: read once, at the first fit
 
   // --- Node actions ---
 
@@ -308,11 +351,21 @@ export function MindmapCanvas({ mapId, background, smartColoring }: { mapId: str
   // the top no longer bumps the whole diagram upward.
   const toggleCollapsedAnchored = useCallback((nodeId: string) => {
     const before = targetLayoutRef.current.rects.get(nodeId);
-    const next = new Set(collapsedSetRef.current);
+    const next = new Set(viewCollapsedRef.current);
     if (next.has(nodeId)) next.delete(nodeId); else next.add(nodeId);
     const after = layoutMindmap(treeRef.current, sizesRef.current, next).rects.get(nodeId);
     if (before && after) setAnchorY(before.y - after.y);
-    toggleCollapsed(mapId, nodeId);
+    if (searchOpenedRef.current.has(nodeId)) {
+      // A branch the search opened: fold or unfold it for this search only.
+      const searched = queryRef.current;
+      setReclosedState((prev) => {
+        const ids = new Set(prev.query === searched ? prev.ids : NO_IDS);
+        if (ids.has(nodeId)) ids.delete(nodeId); else ids.add(nodeId);
+        return { query: searched, ids };
+      });
+    } else {
+      toggleCollapsed(mapId, nodeId);
+    }
   }, [mapId, toggleCollapsed]);
 
   const deleteSubtree = useCallback(async (id: string) => {
@@ -338,6 +391,75 @@ export function MindmapCanvas({ mapId, background, smartColoring }: { mapId: str
       UNDO_TOAST_MS,
     );
   }, [nodesById, setSelectedId]);
+
+  // --- Find bar ---
+
+  const findInputRef = useRef<HTMLInputElement>(null);
+  const [findFocusSeq, setFindFocusSeq] = useState(0);
+  useEffect(() => {
+    const input = findInputRef.current;
+    if (findFocusSeq === 0 || !input) return;
+    input.focus();
+    input.select();
+  }, [findFocusSeq]);
+
+  // Focus only when asked: a map opened from a browser result shows its search
+  // without popping up a phone's keyboard.
+  const openFind = useCallback(() => {
+    setFindOpen(true);
+    setFindFocusSeq((n) => n + 1);
+  }, []);
+
+  // Ctrl/Cmd+F searches the map: the browser's own find can't see inside
+  // collapsed branches. Not while a dialog is up.
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey || e.key.toLowerCase() !== 'f') return;
+      if (document.querySelector('dialog[open], [aria-modal="true"]')) return;
+      e.preventDefault();
+      openFind();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [openFind]);
+
+  // Ending a search folds what it opened — except the way to the selected node:
+  // the match you went to must not vanish from under you.
+  const keepSelectedOpen = () => {
+    if (!selectedId) return;
+    for (const id of ancestorsOf([selectedId], parentOf)) {
+      if (searchOpened.has(id) && !reclosed.has(id)) expandNode(mapId, id);
+    }
+  };
+
+  const changeQuery = (next: string) => {
+    if (isBlankFilter(next)) keepSelectedOpen();
+    setMapSearch({ mapId, query: next });
+    // Like find-in-page: go to the first match — unless the selected node still is one.
+    const nextMatches = findNodeMatches(tree, next);
+    if (nextMatches.length > 0 && !(selectedId && nextMatches.includes(selectedId))) setSelectedId(nextMatches[0]);
+  };
+
+  const closeFind = () => {
+    keepSelectedOpen();
+    setMapSearch(null);
+    setFindOpen(false);
+    containerRef.current?.focus({ preventScroll: true });
+  };
+
+  const currentMatch = selectedId ? matchIds.indexOf(selectedId) : -1;
+  const stepMatch = (step: 1 | -1) => {
+    const count = matchIds.length;
+    if (count === 0) return;
+    const index = currentMatch === -1 ? (step === 1 ? 0 : count - 1) : (currentMatch + step + count) % count;
+    const id = matchIds[index];
+    // A match inside a branch closed again during this search: open the way to it.
+    const path = ancestorsOf([id], parentOf);
+    if ([...reclosed].some((a) => path.has(a))) {
+      setReclosedState({ query, ids: new Set([...reclosed].filter((a) => !path.has(a))) });
+    }
+    setSelectedId(id); // the keep-on-screen effect above pans to it
+  };
 
   // --- Pointer gestures ---
 
@@ -625,7 +747,7 @@ export function MindmapCanvas({ mapId, background, smartColoring }: { mapId: str
           <MindmapEdges
             layout={layout}
             parentIds={parentIds}
-            collapsed={collapsedSet}
+            collapsed={viewCollapsed}
             onToggle={toggleCollapsedAnchored}
           />
           {visibleNodes.map((n) => (
@@ -639,6 +761,9 @@ export function MindmapCanvas({ mapId, background, smartColoring }: { mapId: str
               isRoot={tree.root?.node.id === n.id}
               isDragSource={drag?.id === n.id}
               isDropTarget={dropTarget?.id === n.id && dropTarget.position === 'child'}
+              searchHit={matchSet.has(n.id)}
+              // The rest fades while a search has matches — never the node being worked on.
+              dimmed={matchIds.length > 0 && !matchSet.has(n.id) && n.id !== selectedId && n.id !== editingId}
               animateIn={motionReady}
               stylePreview={n.id === selectedId ? stylePreview : null}
               onMeasure={onMeasure}
@@ -722,6 +847,27 @@ export function MindmapCanvas({ mapId, background, smartColoring }: { mapId: str
         </div>
       )}
 
+      {findOpen ? (
+        <MindmapFindBar
+          inputRef={findInputRef}
+          query={query}
+          onQueryChange={changeQuery}
+          matchCount={matchIds.length}
+          current={currentMatch}
+          onStep={stepMatch}
+          onClose={closeFind}
+        />
+      ) : (
+        <div className="absolute right-3 top-3 rounded-xl border border-zinc-200 bg-white/90 p-1 shadow-sm backdrop-blur dark:border-zinc-700 dark:bg-zinc-800/90">
+          <CanvasButton label="Search this map (Ctrl+F)" onClick={openFind}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <circle cx="11" cy="11" r="7" />
+              <path d="M20 20l-3.5-3.5" strokeLinecap="round" />
+            </svg>
+          </CanvasButton>
+        </div>
+      )}
+
       {/* Floating zoom controls */}
       <div className="absolute bottom-4 left-4 flex flex-col gap-1 rounded-xl border border-zinc-200 bg-white/90 p-1 shadow-sm backdrop-blur dark:border-zinc-700 dark:bg-zinc-800/90">
         <CanvasButton label="Zoom in" onClick={() => zoomBy(1.25)}>+</CanvasButton>
@@ -730,6 +876,24 @@ export function MindmapCanvas({ mapId, background, smartColoring }: { mapId: str
       </div>
     </div>
   );
+}
+
+/** The box around the given nodes' rects, or null when none of them is placed. */
+function boundsOf(ids: string[], rects: Map<string, LayoutRect>): MindmapLayout['bounds'] | null {
+  let bounds: MindmapLayout['bounds'] | null = null;
+  for (const id of ids) {
+    const r = rects.get(id);
+    if (!r) continue;
+    bounds = bounds
+      ? {
+          minX: Math.min(bounds.minX, r.x),
+          minY: Math.min(bounds.minY, r.y),
+          maxX: Math.max(bounds.maxX, r.x + r.w),
+          maxY: Math.max(bounds.maxY, r.y + r.h),
+        }
+      : { minX: r.x, minY: r.y, maxX: r.x + r.w, maxY: r.y + r.h };
+  }
+  return bounds;
 }
 
 function truncate(s: string, max: number): string {

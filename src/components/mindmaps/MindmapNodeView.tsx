@@ -23,6 +23,10 @@ interface Props {
   isRoot: boolean;
   isDragSource: boolean;
   isDropTarget: boolean;
+  /** Matches the map's search: drawn with a highlighter halo. */
+  searchHit?: boolean;
+  /** A search has matches and this node isn't one: faded back. */
+  dimmed?: boolean;
   /** Animate the box in on mount (off until the canvas has settled). */
   animateIn: boolean;
   /** A ghost of a node that just left, playing its exit animation. */
@@ -42,7 +46,7 @@ interface Props {
 // shapeSize() of that — so a circle takes its label's diagonal and a diamond
 // grows both ways. Long labels clamp to 4 lines unless selected/editing.
 export const MindmapNodeView = memo(function MindmapNodeView({
-  node, rect, selected, hovered, editing, isRoot, isDragSource, isDropTarget,
+  node, rect, selected, hovered, editing, isRoot, isDragSource, isDropTarget, searchHit, dimmed,
   animateIn, leaving, stylePreview, onMeasure, onPointerDown, onCommitEdit, onCancelEdit,
 }: Props) {
   const boxRef = useRef<HTMLDivElement>(null);
@@ -101,13 +105,17 @@ export const MindmapNodeView = memo(function MindmapNodeView({
 
   // Selection/hover draw an accent outline *around* the shape instead of
   // recolouring its border, so a node's own colours survive being pointed at.
-  const outline = isDropTarget
+  // A search match gets a wide, soft halo instead — a highlighter stroke, so it
+  // can't pass for the thin border of a node styled amber.
+  const outline: { grow: number; width: number; color?: string; className?: string; opacity?: number } | null = isDropTarget
     ? { grow: 4, color: 'var(--color-accent-500)', width: 3 }
     : selected
       ? { grow: 3, color: 'var(--color-accent-500)', width: 2 }
-      : hovered
-        ? { grow: 3, color: 'var(--color-accent-400)', width: 1.5 }
-        : null;
+      : searchHit
+        ? { grow: 5, className: 'stroke-yellow-400 dark:stroke-yellow-300', width: 6, opacity: 0.75 }
+        : hovered
+          ? { grow: 3, color: 'var(--color-accent-400)', width: 1.5 }
+          : null;
 
   const placed = rect ?? { x: 0, y: 0, w: NODE_MAX_WIDTH + 40, h: 600 };
 
@@ -116,10 +124,11 @@ export const MindmapNodeView = memo(function MindmapNodeView({
       className={`mm-node-box ${editing ? 'mm-node-editing' : ''} ${
         leaving ? 'mm-node-out' : animateInRef.current && rect ? 'mm-node-in' : ''
       }`}
+      data-search-hit={searchHit || undefined}
       style={{
         // Scale pivot comes from CSS (.mm-node-box → transform-box: fill-box);
         // a px transform-origin here would be in the wrong SVG coordinate space.
-        opacity: rect ? (isDragSource ? 0.4 : undefined) : 0,
+        opacity: rect ? (isDragSource ? 0.4 : dimmed ? 0.35 : undefined) : 0,
         pointerEvents: rect && !leaving ? undefined : 'none',
       }}
     >
@@ -132,7 +141,9 @@ export const MindmapNodeView = memo(function MindmapNodeView({
               grow={outline.grow}
               fill="none"
               stroke={outline.color}
+              className={outline.className}
               strokeWidth={outline.width}
+              strokeOpacity={outline.opacity}
             />
           )}
           <NodeShape
