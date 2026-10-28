@@ -23,6 +23,9 @@ vi.mock('../../hooks/use-shared-items', () => ({
   deleteAllSharedItems: h.deleteAllSharedItems,
   formatBytes: (n: number) => `${n} B`,
   sharedItemExpiry: () => undefined,
+  paranoidExpiry: () => undefined,
+  createdTime: () => 0,
+  sharedItemOpacity: () => 1,
 }));
 vi.mock('../../sync/shared-blobs', () => ({ getSharedBlobBytes: vi.fn() }));
 vi.mock('../../hooks/use-vault', () => ({ useVault: () => ({ locked: false }) }));

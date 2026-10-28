@@ -1,6 +1,8 @@
 # GTD25 — Security Review & Threat Model
 
-**Last updated:** 2026-10-18 (**Shared Folder text snippets readable without a download.** A snippet opens in a preview (text shown inline as a text node — never markup — with Copy and Download) and copies straight from its card; both copies go through the clipboard-hygiene wrapper, so Paranoid's auto-clear applies. Reading a snippet used to require downloading it into a file on disk; now it is held in the preview's memory while open and dropped on close (the view unmounts on lock). No `blob:` URL is made for the preview. **Impact on prior conclusions:** Scenario 3 (memory dump while unlocked) gains one more short-lived retainer of plaintext, an open snippet's text, dropped on close and on lock. Scenario 2 (disk image) slightly improves: a snippet no longer has to land in the Downloads folder to be read. Nothing at rest, on the wire, or in the encrypted/plaintext split changes.)
+**Last updated:** 2026-10-28 (**Shared Folder: everything is deleted 30 days after it was added; a Paranoid Mode device's items after 12 h instead of 24 h.** (1) Every item (file, snippet or link) is now deleted by the first unlocked device that holds it past `createdAt` + 30 days — the same ordinary Delete the Paranoid expiry already used (tombstone, change entry, cached bytes dropped, compaction so the bytes leave the `gtd25-blobs` tip at that device's next sync). Over its last 10 days the card fades into the page. The items already in the folder when the rule arrived are not deleted before 2026-11-07 (a fixed date in the code, so every device agrees). The rule is derived from the plaintext `createdAt`: **no new field, nothing new in the clear, no SYNC_VERSION bump** — an older build simply never deletes on its own and receives the tombstone. (2) `PARANOID_SHARED_ITEM_TTL_MS` goes 24 h → 12 h for items created from now on; items already created keep the 24 h `expiresAt` they carry. (3) The folder lists items newest first and each card shows when it was added (from the same plaintext `createdAt` — nothing a backend reader didn't already see). **Impact on prior conclusions:** improves Scenarios 2 (device disk image) and 7 (backend reader): nothing in the Shared Folder stays on the devices or at the blob-branch tip much past 30 days (12 h for Paranoid-device uploads), where before non-Paranoid items stayed until deleted by hand. The same residuals as the Paranoid expiry apply (no backend timer, device clocks decide, backups/history/tombstones keep encrypted metadata a while — see the Shared Folder section). One new honest residual: the 30 days key off `createdAt`, plaintext metadata a backend writer can tamper with inside the existing timestamp window — it could make an item go early (it could already tombstone or delete it) or postpone its deletion; it gains no read access either way.)
+
+**Previously updated:** 2026-10-18 (**Shared Folder text snippets readable without a download.** A snippet opens in a preview (text shown inline as a text node — never markup — with Copy and Download) and copies straight from its card; both copies go through the clipboard-hygiene wrapper, so Paranoid's auto-clear applies. Reading a snippet used to require downloading it into a file on disk; now it is held in the preview's memory while open and dropped on close (the view unmounts on lock). No `blob:` URL is made for the preview. **Impact on prior conclusions:** Scenario 3 (memory dump while unlocked) gains one more short-lived retainer of plaintext, an open snippet's text, dropped on close and on lock. Scenario 2 (disk image) slightly improves: a snippet no longer has to land in the Downloads folder to be read. Nothing at rest, on the wire, or in the encrypted/plaintext split changes.)
 
 **Previously updated:** 2026-10-18 (**Mindmap search.** The browser's search spans every folder by folder/map name and, with its "Node text" toggle on, the label of every node in every map; inside a map a find bar highlights the matching nodes and opens the collapsed branches hiding them for as long as the search lasts. What is searched for is content, so both queries live **in the app's memory only** (`mindmap-ui` store, never in `gtd25-mindmap-ui`) and are **forgotten on every lock** with the other searches (`forget-on-lock`); the only new thing on disk is the toggle itself, one boolean. Node search reads the same decrypted rows the browser's node counts already read; a result's matching-node excerpts and folder path render inside `data-redact`. A per-row cache of each label's plain text (a `WeakMap` keyed by the decrypted row) holds nothing the row doesn't and goes with it. The search's temporary branch opening never touches the stored collapse state. **Impact on prior conclusions:** Scenario 3 (memory dump while unlocked) gains one more short-lived retainer of plaintext, the search text, inside what an unlocked session already holds and dropped on lock. Nothing at rest, on the wire, or in the encrypted/plaintext split changes.)
 
@@ -120,8 +122,8 @@ Encryption is **field-level**. Encrypted fields (`SENSITIVE_FIELDS`):
   `timestamp`/`deviceId` stay plaintext, as does every plaintext column of the
   changed row — a changelog entry is not an opaque blob);
   `sharedItem.type/name/size/url/blobId/mimeType/expiresAt` (Shared Folder —
-  see below; `expiresAt`, the 24 h expiry of what a Paranoid Mode device adds,
-  since SYNC_VERSION 12);
+  see below; `expiresAt`, the 12 h expiry of what a Paranoid Mode device adds
+  — 24 h before 2026-10-28 — since SYNC_VERSION 12);
   and `mindmapFolder.name` / `mindmap.name` / `mindmap.background` /
   `mindmap.smartColoring` /
   `mindmapNode.label` + `mindmapNode.shape/palette/colorBg/colorFg/colorBorder`
@@ -393,14 +395,15 @@ sharing; same single sync key as everything else).
   since 2026-10-04 the backend sees one branch rewrite, not a burst of a GET and a
   DELETE per file). Both are gated on an unlocked vault, and the at-rest middleware
   would refuse the write regardless.
-- **What a Paranoid Mode device adds expires after 24 h (since 2026-10-08,
-  SYNC_VERSION 12).** Every item (file, snippet or link) created on a device with
-  Paranoid Mode on carries `expiresAt = createdAt + 24 h`; there is no "keep"
+- **What a Paranoid Mode device adds expires after 12 h (since 2026-10-08,
+  SYNC_VERSION 12; 24 h until 2026-10-28 — items created before then keep the
+  24 h they carry).** Every item (file, snippet or link) created on a device with
+  Paranoid Mode on carries `expiresAt = createdAt + 12 h`; there is no "keep"
   override, and the card shows a countdown ("Deletes in 5h"). The field is
   encrypted with the rest of the item: `createdAt` is plaintext, so in the clear
   `expiresAt` would add exactly one bit per item — *this device runs Paranoid
   Mode* — which is the bit Paranoid users least want published. Items added
-  before Paranoid was turned on never expire; an expiring item still expires
+  before Paranoid was turned on follow the 30-day rule below; an expiring item still expires
   if Paranoid is later turned off (the expiry is on the item, not the device).
   **Deletion** is an ordinary Delete (tombstone + change entry + cached bytes
   dropped + compaction flagged) performed by **whichever unlocked device — in
@@ -410,7 +413,7 @@ sharing; same single sync key as everything else).
   device's next successful sync, exactly as for a manual Delete (see History
   reclamation). The field is untrusted on read: anything but a positive finite
   number means "never expires". **Residuals (honest):** (1) **nothing runs on
-  the backend** — if no device is unlocked after the 24 h, the item and its
+  the backend** — if no device is unlocked after the 12 h, the item and its
   bytes stay on GitHub until one is (a locked device never sweeps: its rows are
   ciphertext and the at-rest middleware refuses writes); (2) **device clocks**
   decide — one running ahead deletes early, one behind late; there is no
@@ -427,6 +430,25 @@ sharing; same single sync key as everything else).
   have. **Integrity:** only a holder of the sync key can set or change an expiry
   (AES-GCM per record), and such a holder can already delete any item — no new
   capability.
+- **Everything else is deleted 30 days after it was added (since 2026-10-28).**
+  Every item, Paranoid or not, goes at `createdAt + 30 days` (the Paranoid
+  `expiresAt`, when present, is always sooner); over its last 10 days the card
+  fades into the page. Items already in the folder when the rule shipped are not
+  deleted before **2026-11-07** (a constant in the code, so every device agrees
+  without anything synced). The deadline is **derived** from the plaintext
+  `createdAt` — no new field, nothing new in the clear (`createdAt` was already
+  visible to a backend reader), no SYNC_VERSION bump: an older build never
+  deletes on its own and simply receives the tombstone. Deletion, the sweep
+  triggers and residuals (1)–(3) are exactly those of the Paranoid expiry above
+  (an ordinary Delete by the first unlocked device past the deadline; nothing
+  runs on the backend; device clocks decide; backups/history/tombstones keep the
+  encrypted metadata a while). **Integrity (honest):** `createdAt` is plaintext
+  metadata, so a backend writer (PAT, no sync password) can tamper with it inside
+  the existing timestamp window: make an item go early — which grants nothing,
+  it can already tombstone or delete it (Scenario 7) — or postpone its deletion,
+  keeping ciphertext on GitHub it already holds. It gains no read access either
+  way. A file shared from Android to the Inbox leaves a pointer task that
+  outlives the file it names.
 - **Residual leak (accepted):** an adversary who can read the backend (Scenario 7),
   or who watches the traffic (Scenario 4), sees the **number** of blob objects, each
   one's **padded size bucket** (exact size for files written before 2026-10-04,

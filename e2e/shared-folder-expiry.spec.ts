@@ -1,6 +1,6 @@
-// What a device in Paranoid Mode adds to the Shared Folder is deleted 24 h
+// What a device in Paranoid Mode adds to the Shared Folder is deleted 12 h
 // later, and its card says so; what was added before Paranoid stays. A night
-// asleep is the usual way past the 24 h: the vault idle-locks, and the expired
+// asleep is the usual way past the 12 h: the vault idle-locks, and the expired
 // item goes as soon as the vault is opened again. Real UI on the production
 // build; Playwright's clock moves the wall clock without running timers.
 import type { Page } from '@playwright/test';
@@ -24,7 +24,7 @@ async function pasteLink(page: Page, url: string): Promise<void> {
 
 const card = (page: Page, host: string) => page.locator('[data-redact]').filter({ hasText: host });
 
-test('a link added in Paranoid Mode counts down and is gone after 24 h; one added before stays', async ({ page }) => {
+test('a link added in Paranoid Mode counts down and is gone after 12 h; one added before stays', async ({ page }) => {
   await page.clock.install();
   await openApp(page);
   await openSharedFolder(page);
@@ -36,11 +36,11 @@ test('a link added in Paranoid Mode counts down and is gone after 24 h; one adde
   await closeSettings(page);
   await openSharedFolder(page);
   await pasteLink(page, 'https://during.example.com/goes');
-  await expect(card(page, 'during.example.com').getByText('Deletes in 24h')).toBeVisible();
+  await expect(card(page, 'during.example.com').getByText('Deletes in 12h')).toBeVisible();
 
-  // A night asleep: the wall clock moves 25 h, no timer runs. The vault locks.
+  // A night asleep: the wall clock moves 13 h, no timer runs. The vault locks.
   const now = await page.evaluate(() => Date.now());
-  await page.clock.setSystemTime(now + 25 * HOUR);
+  await page.clock.setSystemTime(now + 13 * HOUR);
   await expect(lockHeading(page)).toBeVisible({ timeout: 10_000 });
 
   expect(await unlock(page, MAIN_PASSPHRASE)).toBe(true);
@@ -56,9 +56,9 @@ test('a few hours in, the card shows the hours left', async ({ page }) => {
   await closeSettings(page);
   await openSharedFolder(page);
   await pasteLink(page, 'https://countdown.example.com/');
-  await expect(card(page, 'countdown.example.com').getByText('Deletes in 24h')).toBeVisible();
+  await expect(card(page, 'countdown.example.com').getByText('Deletes in 12h')).toBeVisible();
 
   // Ten minutes on (inside the idle window), with the minute tick run.
   await page.clock.runFor(10 * 60_000);
-  await expect(card(page, 'countdown.example.com').getByText('Deletes in 23h')).toBeVisible();
+  await expect(card(page, 'countdown.example.com').getByText('Deletes in 11h')).toBeVisible();
 });

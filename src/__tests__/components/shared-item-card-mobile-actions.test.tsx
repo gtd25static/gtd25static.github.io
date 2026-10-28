@@ -11,6 +11,9 @@ import type { SharedItem } from '../../db/models';
 vi.mock('../../hooks/use-shared-items', () => ({
   formatBytes: (n: number) => `${n} B`,
   sharedItemExpiry: () => undefined,
+  paranoidExpiry: () => undefined,
+  createdTime: () => 0,
+  sharedItemOpacity: () => 1,
   deleteSharedItem: vi.fn(async (_id: string) => undefined),
 }));
 vi.mock('../../sync/shared-blobs', () => ({ getSharedBlobBytes: vi.fn() }));

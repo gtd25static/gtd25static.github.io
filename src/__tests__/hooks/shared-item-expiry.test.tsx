@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
 // What a device in Paranoid Mode adds to the Shared Folder (file, snippet or
-// link) is deleted 24 h after it was added — on whichever unlocked device sees
+// link) is deleted 12 h after it was added — on whichever unlocked device sees
 // it expired first, bytes included — and its card says when. The expiry is
 // encrypted like the item's other fields: in the clear it would say which
-// device runs Paranoid Mode.
+// device runs Paranoid Mode. (The 30-day rule for everything else:
+// shared-item-retention.test.tsx.)
 import { render, renderHook, screen, waitFor } from '@testing-library/react';
 import '../setup-component';
 import { db } from '../../db';
@@ -14,7 +15,7 @@ import {
   createFileItem,
   createSnippetItem,
   expireSharedItems,
-  sharedItemExpiry,
+  paranoidExpiry,
   useSharedItemExpiry,
 } from '../../hooks/use-shared-items';
 import { SharedItemCard } from '../../components/shared-folder/SharedItemCard';
@@ -47,13 +48,13 @@ afterEach(() => {
 const stored = async (id: string) => db.sharedItems.get(id);
 
 describe('a new item', () => {
-  it('outside Paranoid Mode never expires', async () => {
+  it('outside Paranoid Mode carries no expiry of its own', async () => {
     const item = await createLinkItem('https://example.com', 'Example');
     expect(item?.expiresAt).toBeUndefined();
     expect((await stored(item!.id))?.expiresAt).toBeUndefined();
   });
 
-  it('from a device in Paranoid Mode expires 24 h after it was added — link, snippet and file alike', async () => {
+  it('from a device in Paranoid Mode expires 12 h after it was added — link, snippet and file alike', async () => {
     await enableParanoid('shared expiry passphrase 7 harbour');
     const link = await createLinkItem('https://example.com', 'Example');
     const snippet = await createSnippetItem('notes', 'some text');
@@ -64,7 +65,7 @@ describe('a new item', () => {
       expect(item!.expiresAt).toBe(item!.createdAt + PARANOID_SHARED_ITEM_TTL_MS);
       expect((await stored(item!.id))?.expiresAt).toBe(item!.expiresAt);
     }
-    expect(PARANOID_SHARED_ITEM_TTL_MS).toBe(24 * HOUR);
+    expect(PARANOID_SHARED_ITEM_TTL_MS).toBe(12 * HOUR);
   });
 
   it('carries its expiry in the change that syncs it', async () => {
@@ -75,9 +76,9 @@ describe('a new item', () => {
   });
 });
 
-describe('sharedItemExpiry (synced data, untrusted)', () => {
+describe('paranoidExpiry (synced data, untrusted)', () => {
   it('a positive finite number is the expiry', () => {
-    expect(sharedItemExpiry(makeSharedItem({ expiresAt: 1234 }))).toBe(1234);
+    expect(paranoidExpiry(makeSharedItem({ expiresAt: 1234 }))).toBe(1234);
   });
 
   it.each([
@@ -89,7 +90,7 @@ describe('sharedItemExpiry (synced data, untrusted)', () => {
     ['negative', -5],
     ['null', null],
   ])('%s is no expiry', (_label, value) => {
-    expect(sharedItemExpiry(makeSharedItem({ expiresAt: value as unknown as number }))).toBeUndefined();
+    expect(paranoidExpiry(makeSharedItem({ expiresAt: value as unknown as number }))).toBeUndefined();
   });
 });
 
@@ -98,16 +99,16 @@ describe('expireSharedItems', () => {
     const now = Date.now();
     const expired = makeSharedItem({ type: 'file', blobId: 'blob-expired', expiresAt: now - 1 });
     const later = makeSharedItem({ expiresAt: now + HOUR });
-    const forever = makeSharedItem();
+    const fresh = makeSharedItem(); // no Paranoid expiry, a month left
     const alreadyGone = makeSharedItem({ expiresAt: now - HOUR, deletedAt: now - 10, updatedAt: now - 10 });
-    await db.sharedItems.bulkAdd([expired, later, forever, alreadyGone]);
+    await db.sharedItems.bulkAdd([expired, later, fresh, alreadyGone]);
     await db.sharedBlobs.put({ id: 'blob-expired' } as never);
 
     expect(await expireSharedItems(now)).toBe(1);
 
     expect((await stored(expired.id))?.deletedAt).toBeGreaterThan(0);
     expect((await stored(later.id))?.deletedAt).toBeUndefined();
-    expect((await stored(forever.id))?.deletedAt).toBeUndefined();
+    expect((await stored(fresh.id))?.deletedAt).toBeUndefined();
     expect((await stored(alreadyGone.id))?.deletedAt).toBe(now - 10);
     expect(await db.sharedBlobs.get('blob-expired')).toBeUndefined();
     const changes = (await db.changeLog.toArray()).filter((c) => c.entityType === 'sharedItem');
@@ -171,7 +172,7 @@ describe('useSharedItemExpiry', () => {
     }
   });
 
-  it('leaves items without an expiry alone', async () => {
+  it('leaves items not yet due alone', async () => {
     const item = makeSharedItem();
     await db.sharedItems.add(item);
     renderHook(() => useSharedItemExpiry());
@@ -184,14 +185,14 @@ describe('useSharedItemExpiry', () => {
 describe('the card', () => {
   const card = (over: Partial<SharedItem>) => render(<SharedItemCard item={makeSharedItem({ name: 'Example', ...over })} />);
 
-  it('says nothing for an item that never expires', () => {
+  it('no countdown for an item added outside Paranoid Mode', () => {
     card({});
     expect(screen.queryByText(/Deletes in/)).toBeNull();
   });
 
   it('counts down the hours left', () => {
-    card({ expiresAt: Date.now() + 23.5 * HOUR });
-    expect(screen.getByText('Deletes in 23h')).toBeInTheDocument();
+    card({ expiresAt: Date.now() + 11.5 * HOUR });
+    expect(screen.getByText('Deletes in 11h')).toBeInTheDocument();
   });
 
   it('counts the minutes in the last hour', () => {

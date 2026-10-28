@@ -1,6 +1,14 @@
 import { useState } from 'react';
 import type { SharedItem } from '../../db/models';
-import { formatBytes, deleteSharedItem, sharedItemExpiry } from '../../hooks/use-shared-items';
+import {
+  formatBytes,
+  deleteSharedItem,
+  createdTime,
+  paranoidExpiry,
+  sharedItemExpiry,
+  sharedItemOpacity,
+} from '../../hooks/use-shared-items';
+import { PARANOID_SHARED_ITEM_TTL_MS } from '../../lib/constants';
 import { useMinuteTick } from '../../hooks/use-minute-tick';
 import { getSharedBlobBytes } from '../../sync/shared-blobs';
 import { extractHostname, sanitizeUrl } from '../../lib/link-utils';
@@ -64,6 +72,18 @@ function TypeIcon({ type }: { type: SharedItem['type'] }) {
   );
 }
 
+// When an item was added, in the browser's language: "28 Oct, 14:05" on the
+// card (no year: nothing stays a month), with the year in its tooltip.
+function formatAdded(ts: number, withYear = false): string {
+  return new Date(ts).toLocaleString(undefined, {
+    year: withYear ? 'numeric' : undefined,
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
 /** Time left before an expiring item goes: minutes in its last hour, else whole hours. */
 function timeLeft(ms: number): string {
   const minutes = Math.max(1, Math.ceil(ms / 60_000));
@@ -82,7 +102,7 @@ function ExpiryBadge({ expiresAt }: { expiresAt: number }) {
           ? 'bg-red-50 text-red-700 dark:bg-red-900/30 dark:text-red-300'
           : 'bg-amber-50 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300'
       }`}
-      title="Added from a device in Paranoid Mode: deleted from every device 24 hours after it was added"
+      title={`Added from a device in Paranoid Mode: deleted from every device ${PARANOID_SHARED_ITEM_TTL_MS / 3_600_000} hours after it was added`}
     >
       <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden>
         <circle cx="8" cy="8" r="6.5" />
@@ -94,7 +114,12 @@ function ExpiryBadge({ expiresAt }: { expiresAt: number }) {
 }
 
 export function SharedItemCard({ item }: { item: SharedItem }) {
-  const expiresAt = sharedItemExpiry(item);
+  useMinuteTick(); // the fade deepens on its own
+  const expiresAt = paranoidExpiry(item);
+  const created = createdTime(item);
+  const deletes = sharedItemExpiry(item);
+  // Its last days before the 30-day rule deletes it, the card fades into the page.
+  const opacity = sharedItemOpacity(item);
   const [busy, setBusy] = useState(false);
   const [previewOpen, setPreviewOpen] = useState(false);
   // Images and text snippets preview in an overlay on click (Copy/Download from
@@ -163,7 +188,11 @@ export function SharedItemCard({ item }: { item: SharedItem }) {
   }
 
   return (
-    <div data-redact className="group flex items-center gap-3 rounded-xl border border-zinc-200 bg-white px-3 py-2.5 dark:border-zinc-700 dark:bg-zinc-800/50">
+    <div
+      data-redact
+      className="group flex items-center gap-3 rounded-xl border border-zinc-200 bg-white px-3 py-2.5 dark:border-zinc-700 dark:bg-zinc-800/50"
+      style={opacity < 1 ? { opacity } : undefined}
+    >
       <TypeIcon type={item.type} />
       <div className="min-w-0 flex-1">
         {item.type === 'link' && item.url ? (
@@ -187,6 +216,14 @@ export function SharedItemCard({ item }: { item: SharedItem }) {
           </button>
         )}
         <div className="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-zinc-400">
+          {created > 0 && (
+            <span
+              className="shrink-0 tabular-nums"
+              title={`Added ${formatAdded(created, true)}${deletes !== undefined ? ` — deleted from every device on ${formatAdded(deletes, true)}` : ''}`}
+            >
+              {formatAdded(created)}
+            </span>
+          )}
           <span className="min-w-0 truncate">
             {item.type === 'link' && item.url
               ? extractHostname(item.url)

@@ -30,7 +30,15 @@ export const MAX_SHARED_FOLDER_BYTES = 30 * 1024 * 1024;
 
 // What a device in Paranoid Mode adds to the Shared Folder (file, snippet or
 // link) is deleted everywhere this long after it was added.
-export const PARANOID_SHARED_ITEM_TTL_MS = 24 * 60 * 60 * 1000;
+export const PARANOID_SHARED_ITEM_TTL_MS = 12 * 60 * 60 * 1000;
+
+// Everything else in the Shared Folder is deleted everywhere this long after it
+// was added; over the last SHARED_ITEM_FADE_MS its card fades into the page.
+export const SHARED_ITEM_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+export const SHARED_ITEM_FADE_MS = 10 * 24 * 60 * 60 * 1000;
+// The 30-day rule arrived on 2026-10-28: nothing deleted by it goes before this,
+// so the items already in the folder then got their ten days of fading too.
+export const SHARED_ITEM_RETENTION_GRACE_UNTIL = Date.UTC(2026, 10, 7);
 
 // Mindmaps: node label length cap (chars) and outline-import node cap. The node
 // cap bounds both changelog volume on bulk import and the canvas render load.

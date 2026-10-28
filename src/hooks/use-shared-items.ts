@@ -10,7 +10,13 @@ import { initFieldTimestamps, stampUpdatedFields } from '../sync/field-timestamp
 import { encryptRow, getActiveAtRestKey } from '../db/vault-middleware';
 import { SYNC_VERSION } from '../sync/version';
 import { uploadSharedBlob, deleteSharedBlob, sharedBlobBlocker, withBlobBranchLock } from '../sync/shared-blobs';
-import { MAX_SHARED_FOLDER_BYTES, PARANOID_SHARED_ITEM_TTL_MS } from '../lib/constants';
+import {
+  MAX_SHARED_FOLDER_BYTES,
+  PARANOID_SHARED_ITEM_TTL_MS,
+  SHARED_ITEM_FADE_MS,
+  SHARED_ITEM_RETENTION_GRACE_UNTIL,
+  SHARED_ITEM_RETENTION_MS,
+} from '../lib/constants';
 import { isParanoidEnabled } from '../db/vault';
 import { isValidUrl } from '../lib/link-utils';
 import { toast } from '../components/ui/Toast';
@@ -18,15 +24,21 @@ import { useMinuteTick } from './use-minute-tick';
 
 // --- Queries ---
 
+/** The live items, newest first. */
 export function useSharedItems(): SharedItem[] {
   return useLiveQuery(
     async () => {
-      const all = await db.sharedItems.orderBy('order').toArray();
-      return all.filter((i) => !i.deletedAt);
+      const all = await db.sharedItems.toArray();
+      return all.filter((i) => !i.deletedAt).sort((a, b) => createdTime(b) - createdTime(a));
     },
     [],
     [],
   );
+}
+
+/** When `item` was added (epoch ms), or 0. Synced data: anything but a positive finite number is none. */
+export function createdTime(item: SharedItem): number {
+  return Number.isFinite(item.createdAt) && item.createdAt > 0 ? item.createdAt : 0;
 }
 
 export interface SharedStorage {
@@ -136,9 +148,39 @@ function expiryFields(createdAt: number): Pick<SharedItem, 'expiresAt'> {
   return isParanoidEnabled() ? { expiresAt: createdAt + PARANOID_SHARED_ITEM_TTL_MS } : {};
 }
 
-/** When `item` is deleted on its own (epoch ms), or undefined if never. Synced data: a non-number is no expiry. */
-export function sharedItemExpiry(item: SharedItem): number | undefined {
+/** The Paranoid Mode expiry `item` carries (epoch ms), or undefined. Synced data: a non-number is no expiry. */
+export function paranoidExpiry(item: SharedItem): number | undefined {
   return Number.isFinite(item.expiresAt) && item.expiresAt! > 0 ? item.expiresAt : undefined;
+}
+
+/** When the 30-day rule deletes `item` (epoch ms), or undefined if it has no creation time. */
+export function retentionExpiry(item: SharedItem): number | undefined {
+  const created = createdTime(item);
+  return created ? Math.max(created + SHARED_ITEM_RETENTION_MS, SHARED_ITEM_RETENTION_GRACE_UNTIL) : undefined;
+}
+
+/** When `item` is deleted on its own (epoch ms) — the sooner of the two rules — or undefined if never. */
+export function sharedItemExpiry(item: SharedItem): number | undefined {
+  const paranoid = paranoidExpiry(item);
+  const retention = retentionExpiry(item);
+  if (paranoid === undefined) return retention;
+  return retention === undefined ? paranoid : Math.min(paranoid, retention);
+}
+
+// How faint a card gets, its last moment before the 30-day rule deletes it.
+const FADED_OPACITY = 0.2;
+
+/**
+ * How visible `item`'s card is: fully until the last SHARED_ITEM_FADE_MS
+ * before the 30-day rule deletes it, then fading linearly to FADED_OPACITY.
+ * Not an item added in Paranoid Mode: gone within hours, it would be faint
+ * from the start — its countdown says when instead.
+ */
+export function sharedItemOpacity(item: SharedItem, now: number = Date.now()): number {
+  const expiry = retentionExpiry(item);
+  if (paranoidExpiry(item) !== undefined || expiry === undefined) return 1;
+  const left = Math.min(1, Math.max(0, (expiry - now) / SHARED_ITEM_FADE_MS));
+  return FADED_OPACITY + (1 - FADED_OPACITY) * left;
 }
 
 // --- Create ---
@@ -273,9 +315,9 @@ export async function deleteSharedItem(id: string): Promise<void> {
 }
 
 /**
- * Delete the items whose expiry has passed (added from a device in Paranoid
- * Mode) — on whichever device sees it first, bytes included, like a Delete.
- * Returns how many went.
+ * Delete the items whose expiry has passed (30 days old, or 12 h if added from
+ * a device in Paranoid Mode) — on whichever device sees it first, bytes
+ * included, like a Delete. Returns how many went.
  */
 export async function expireSharedItems(now: number = Date.now()): Promise<number> {
   try {
@@ -293,6 +335,8 @@ export async function expireSharedItems(now: number = Date.now()): Promise<numbe
 
 // Fire just after the expiry, so the sweep finds it due.
 const EXPIRY_SLACK_MS = 250;
+// setTimeout's longest delay (~24.8 days): a longer one fires at once.
+const MAX_TIMER_MS = 2 ** 31 - 1;
 
 /**
  * While the app is unlocked: delete the expired shared items now, and the next
@@ -327,8 +371,9 @@ export function useSharedItemExpiry(): void {
       sweep();
       return;
     }
-    // Expiries are at most a day out: well inside setTimeout's ~24.8-day range.
-    const timer = setTimeout(sweep, delay + EXPIRY_SLACK_MS);
+    // A 30-day expiry is past setTimeout's range: capped, the timer fires early,
+    // the sweep finds nothing due, and the minute tick arms it again.
+    const timer = setTimeout(sweep, Math.min(delay + EXPIRY_SLACK_MS, MAX_TIMER_MS));
     return () => clearTimeout(timer);
   }, [nextExpiry, tick]);
 }
