@@ -173,6 +173,8 @@ export interface SharedItem {
   url?: string;        // link only
   blobId?: string;     // file/snippet: opaque ref to backend blob
   mimeType?: string;   // file/snippet
+  // Always 0, unused: the folder lists by createdAt. Kept because older builds
+  // require it on a synced item (skipped without it) and sort by it.
   order: number;
   createdAt: number;
   updatedAt: number;

@@ -139,10 +139,6 @@ async function checkFits(bytes: number): Promise<boolean> {
   return true;
 }
 
-async function nextOrder(): Promise<number> {
-  return db.sharedItems.count();
-}
-
 /** A new item's expiry: added from a device in Paranoid Mode, it lasts PARANOID_SHARED_ITEM_TTL_MS. */
 function expiryFields(createdAt: number): Pick<SharedItem, 'expiresAt'> {
   return isParanoidEnabled() ? { expiresAt: createdAt + PARANOID_SHARED_ITEM_TTL_MS } : {};
@@ -203,7 +199,7 @@ export async function createLinkItem(url: string, title?: string): Promise<Share
       name,
       size,
       url: trimmed,
-      order: await nextOrder(),
+      order: 0,
       createdAt: now,
       updatedAt: now,
       ...expiryFields(now),
@@ -240,7 +236,7 @@ export async function createFileItem(file: File): Promise<SharedItem | undefined
         size: bytes.length,
         blobId,
         mimeType: file.type || 'application/octet-stream',
-        order: await nextOrder(),
+        order: 0,
         createdAt: now,
         updatedAt: now,
         ...expiryFields(now),
@@ -277,7 +273,7 @@ export async function createSnippetItem(name: string, text: string): Promise<Sha
         size: bytes.length,
         blobId,
         mimeType: 'text/plain',
-        order: await nextOrder(),
+        order: 0,
         createdAt: now,
         updatedAt: now,
         ...expiryFields(now),

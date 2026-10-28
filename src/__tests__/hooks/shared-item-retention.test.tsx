@@ -10,6 +10,7 @@ import { db } from '../../db';
 import { resetDb } from '../helpers/db-helpers';
 import { makeSharedItem } from '../helpers/sync-helpers';
 import {
+  createLinkItem,
   expireSharedItems,
   retentionExpiry,
   sharedItemExpiry,
@@ -23,6 +24,7 @@ import {
   SHARED_ITEM_RETENTION_GRACE_UNTIL as GRACE,
   SHARED_ITEM_RETENTION_MS,
 } from '../../lib/constants';
+import { validateEntityShape } from '../../sync/change-log';
 import type { SharedItem } from '../../db/models';
 
 vi.mock('../../components/ui/Toast', () => ({ toast: vi.fn() }));
@@ -143,6 +145,13 @@ describe('the folder lists the newest first', () => {
     ]);
     const { result } = renderHook(() => useSharedItems());
     await waitFor(() => expect(result.current.map((i) => i.id)).toEqual(['newest', 'middle', 'oldest', 'unreadable']));
+  });
+
+  it('a new item still carries an order, unused here: older builds skip a synced item without one', async () => {
+    const item = await createLinkItem('https://example.com', 'Example');
+    expect(item?.order).toBe(0);
+    const change = (await db.changeLog.toArray()).find((c) => c.entityId === item!.id);
+    expect(validateEntityShape(change?.data, 'sharedItem')).toBe(true);
   });
 });
 
