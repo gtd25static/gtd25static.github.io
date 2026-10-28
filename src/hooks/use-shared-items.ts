@@ -41,6 +41,26 @@ export function createdTime(item: SharedItem): number {
   return Number.isFinite(item.createdAt) && item.createdAt > 0 ? item.createdAt : 0;
 }
 
+const NONE_PENDING: ReadonlySet<string> = new Set();
+
+/**
+ * The ids of the items with a change this device hasn't pushed yet: their
+ * change entries stay in the change log until a sync uploads them. (A file's
+ * bytes are uploaded before its item exists, so only the item can wait.)
+ * None without sync: nothing would ever go, so nothing is waiting for it.
+ */
+export function usePendingSharedItemIds(): ReadonlySet<string> {
+  return useLiveQuery(
+    async () => {
+      if (!(await db.localSettings.get('local'))?.syncEnabled) return NONE_PENDING;
+      const entries = await db.changeLog.toArray();
+      return new Set(entries.filter((e) => e.entityType === 'sharedItem').map((e) => e.entityId));
+    },
+    [],
+    NONE_PENDING,
+  );
+}
+
 export interface SharedStorage {
   usedBytes: number;
   totalBytes: number;

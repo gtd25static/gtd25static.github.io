@@ -113,7 +113,25 @@ function ExpiryBadge({ expiresAt }: { expiresAt: number }) {
   );
 }
 
-export function SharedItemCard({ item }: { item: SharedItem }) {
+/** The mark on an item this device hasn't uploaded yet; it goes once a sync has. */
+function PendingSyncIcon() {
+  return (
+    <span
+      role="img"
+      aria-label="Not synced yet"
+      title="Not synced yet: it reaches your other devices with the next sync"
+      className="inline-flex shrink-0 items-center"
+    >
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden>
+        <path d="M7 18a4.5 4.5 0 01-.6-8.96A6 6 0 0118 9a4 4 0 01-.5 9" strokeLinecap="round" strokeLinejoin="round" />
+        <path d="M12 20v-7m0 0l-2.5 2.5M12 13l2.5 2.5" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+    </span>
+  );
+}
+
+/** `pending`: this device has a change to it not yet uploaded (see usePendingSharedItemIds). */
+export function SharedItemCard({ item, pending = false }: { item: SharedItem; pending?: boolean }) {
   useMinuteTick(); // the fade deepens on its own
   const expiresAt = paranoidExpiry(item);
   const created = createdTime(item);
@@ -224,6 +242,7 @@ export function SharedItemCard({ item }: { item: SharedItem }) {
               {formatAdded(created)}
             </span>
           )}
+          {pending && <PendingSyncIcon />}
           <span className="min-w-0 truncate">
             {item.type === 'link' && item.url
               ? extractHostname(item.url)

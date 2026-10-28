@@ -6,6 +6,7 @@ import { CreateSnippetForm } from './CreateSnippetForm';
 import { PasteUploadDialog } from './PasteUploadDialog';
 import {
   useSharedItems,
+  usePendingSharedItemIds,
   useSharedStorage,
   createLinkItem,
   createFileItem,
@@ -19,6 +20,7 @@ import { confirmDialog } from '../ui/ConfirmDialog';
 
 export function SharedFolderView() {
   const items = useSharedItems();
+  const pending = usePendingSharedItemIds();
   const storage = useSharedStorage();
   const { locked } = useVault();
   const [creatingSnippet, setCreatingSnippet] = useState(false);
@@ -170,7 +172,7 @@ export function SharedFolderView() {
         ) : (
           <div className="space-y-2">
             {items.map((item) => (
-              <SharedItemCard key={item.id} item={item} />
+              <SharedItemCard key={item.id} item={item} pending={pending.has(item.id)} />
             ))}
           </div>
         )}

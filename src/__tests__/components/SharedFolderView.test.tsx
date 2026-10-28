@@ -16,6 +16,7 @@ const h = vi.hoisted(() => ({
 
 vi.mock('../../hooks/use-shared-items', () => ({
   useSharedItems: () => [],
+  usePendingSharedItemIds: () => new Set(),
   useSharedStorage: () => ({ usedBytes: 0, totalBytes: 30 * 1024 * 1024, remaining: 30 * 1024 * 1024 }),
   createFileItem: h.createFileItem,
   createLinkItem: h.createLinkItem,
