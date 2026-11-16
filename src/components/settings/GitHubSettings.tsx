@@ -19,6 +19,8 @@ import { checkSecretStrength } from '../../lib/password-strength';
 import { PasswordStrengthBar } from '../ui/PasswordStrengthBar';
 import { RotationProgressDialog } from './RotationProgressDialog';
 import { requireOwner } from './passphrase-gate';
+import { EnrollShowDialog } from './EnrollShowDialog';
+import { EnrollScanDialog } from './EnrollScanDialog';
 
 function describeContent({ lists, tasks, maps }: { lists: number; tasks: number; maps: number }): string {
   const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
@@ -47,6 +49,7 @@ export function GitHubSettings() {
   const [encPasswordConfirm, setEncPasswordConfirm] = useState('');
   const [testing, setTesting] = useState(false);
   const [initialized, setInitialized] = useState(false);
+  const [enrollDialog, setEnrollDialog] = useState<'show' | 'scan' | null>(null);
 
   // The PAT and sync password live in the vault when Paranoid Mode is on, else
   // in localSettings. Repo is never secret, so always localSettings.
@@ -74,6 +77,11 @@ export function GitHubSettings() {
       setInitialized(true);
     }
   }, [paranoid, unlocked, local.githubPat, local.githubRepo, local.encryptionPassword, initialized]);
+
+  // What a QR enrolment hands over: the saved settings of a device that syncs.
+  const enrollCreds = !paranoid && local.syncEnabled && local.githubPat && local.githubRepo && local.encryptionPassword
+    ? { pat: local.githubPat, repo: local.githubRepo, password: local.encryptionPassword }
+    : null;
 
   async function handleSave() {
     const newPassword = keepsSavedPassword ? currentSyncPassword : typedPassword;
@@ -319,6 +327,29 @@ export function GitHubSettings() {
         <Button size="sm" variant="ghost" onClick={handleForcePush} disabled={!!rotation}>Force Push</Button>
         <Button size="sm" variant="ghost" onClick={handleForcePull} disabled={!!rotation}>Force Pull</Button>
       </div>
+      {/* QR enrolment (sync/device-enroll.ts): non-Paranoid devices only, both sides. */}
+      {!paranoid && (
+        <div className="flex flex-wrap gap-2">
+          {enrollCreds && (
+            <Button size="sm" variant="secondary" onClick={() => setEnrollDialog('show')} disabled={!!rotation}>
+              Add a device (QR)
+            </Button>
+          )}
+          <Button size="sm" variant="secondary" onClick={() => setEnrollDialog('scan')} disabled={!!rotation}>
+            Join with a QR code
+          </Button>
+        </div>
+      )}
+      {enrollDialog === 'show' && enrollCreds && (
+        <EnrollShowDialog creds={enrollCreds} onClose={() => setEnrollDialog(null)} />
+      )}
+      {enrollDialog === 'scan' && (
+        <EnrollScanDialog
+          replacesSync={!!local.syncEnabled}
+          // A join replaced the saved settings: show those, not what the form held.
+          onClose={() => { setEnrollDialog(null); setEncPasswordConfirm(''); setInitialized(false); }}
+        />
+      )}
     </div>
   );
 }

@@ -125,13 +125,24 @@ class FakeRepo {
     },
     testConnection: async () => true,
     transferTimeoutMs: (bytes: number) => 15_000 + Math.floor(bytes / 262_144) * 1000,
-    getFile: async (_pat: string, _repo: string, path: string) => {
-      const sha = this.sha(path);
-      return sha ? { data: this.readText(path)!, sha } : null;
+    getFile: async (_pat: string, _repo: string, path: string, _signal?: AbortSignal, ref?: string) => {
+      const branch = ref ?? DEFAULT_BRANCH;
+      const sha = this.sha(path, branch);
+      return sha ? { data: this.readText(path, branch)!, sha } : null;
     },
     getFileConditional: async () => { throw new Error('fake repo: getFileConditional not modelled'); },
-    putFile: async (_pat: string, _repo: string, path: string, content: string, sha?: string) =>
-      this.writeText(path, content, DEFAULT_BRANCH, sha),
+    putFile: async (
+      _pat: string, _repo: string, path: string, content: string, sha?: string, _signal?: AbortSignal,
+      options?: { branch?: string },
+    ) => {
+      // As GitHub answers a write that names a branch: one that does not exist is
+      // an error, and a create (no sha) over an existing file is refused.
+      if (options?.branch) {
+        if (!this.refs.has(options.branch)) throw new Error('GitHub API error: 404');
+        if (sha === undefined && this.sha(path, options.branch)) throw new Error('CONFLICT');
+      }
+      return this.writeText(path, content, options?.branch ?? DEFAULT_BRANCH, sha);
+    },
     deleteFile: async (_pat: string, _repo: string, path: string, sha: string, _signal?: AbortSignal, branch?: string) =>
       this.remove(path, branch ?? DEFAULT_BRANCH, sha),
     putBinaryFile: async (_pat: string, _repo: string, path: string, bytes: Uint8Array, sha?: string, _signal?: AbortSignal, branch?: string) =>
@@ -147,6 +158,9 @@ class FakeRepo {
       if (this.refs.has(branch)) throw new Error('GitHub API error (createRef): 422');
       this.refs.set(branch, sha);
     },
+    deleteRef: async (_pat: string, _repo: string, branch: string) => { this.refs.delete(branch); },
+    listBranches: async (_pat: string, _repo: string, prefix: string) =>
+      [...this.refs.keys()].filter((branch) => branch.startsWith(prefix)),
     updateRef: async (_pat: string, _repo: string, branch: string, sha: string, force: boolean) => {
       if (!force && this.refs.has(branch)) throw new Error('fake repo: non-fast-forward update needs force');
       this.refs.set(branch, sha);

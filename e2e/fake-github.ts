@@ -53,6 +53,17 @@ export class FakeGitHub {
   readonly blockedExternal: string[] = [];
   /** Requests currently stalled by hold(). */
   held = 0;
+  /**
+   * Answer the Git data API for branches (blobs, trees, commits, refs) — off by
+   * default: other flows (key rotation, shared files) probe refs and would take
+   * paths the fake does not model once they are answered.
+   */
+  refs = false;
+  /** Branches created through the refs API, by head commit (the default branch always exists). */
+  private readonly branches = new Map<string, string>();
+  /** Trees and commits made through the Git data API (only with `refs`). */
+  private readonly trees = new Map<string, Array<{ path: string; sha: string }>>();
+  private readonly commits = new Map<string, string>();
   /** `${branch}:${path}` -> file bytes + blob sha. */
   private readonly files = new Map<string, { bytes: Buffer; sha: string }>();
   /** Every blob ever written, by sha (the Git Data API serves old ones too). */
@@ -89,6 +100,16 @@ export class FakeGitHub {
       this.holdGate = null;
       release();
     };
+  }
+
+  /** Every branch that exists now, the default one included. */
+  branchNames(): string[] {
+    return [DEFAULT_BRANCH, ...this.branches.keys()];
+  }
+
+  /** Every `branch:path` ever stored that is still there. */
+  paths(): string[] {
+    return [...this.files.keys()];
   }
 
   hasFile(path: string, branch = DEFAULT_BRANCH): boolean {
@@ -171,6 +192,10 @@ export class FakeGitHub {
       }
       return json(200, { sha: blobSha, size: bytes.length, encoding: 'base64', content: bytes.toString('base64') });
     }
+    if (this.refs) {
+      const handled = this.respondRefs(method, url, repoPrefix, postData);
+      if (handled) return handled;
+    }
     const contentsPrefix = `${repoPrefix}/contents/`;
     if (!url.pathname.startsWith(contentsPrefix)) return this.unhandledRoute(method, url);
 
@@ -226,6 +251,64 @@ export class FakeGitHub {
     }
 
     return this.unhandledRoute(method, url);
+  }
+
+  /**
+   * The Git data API for branches (see `refs`): blobs, trees and commits to build
+   * a commit, and refs to name it — get, list by prefix, create, delete. A branch
+   * created on a commit holds that commit's files.
+   */
+  private respondRefs(method: string, url: URL, repoPrefix: string, postData: string | null): FakeResponse | null {
+    const git = `${repoPrefix}/git/`;
+    if (!url.pathname.startsWith(git)) return null;
+    const route = url.pathname.slice(git.length);
+    let body: Record<string, unknown> = {};
+    if (method === 'POST') {
+      try { body = JSON.parse(postData ?? '{}'); } catch { return json(400, { message: 'Problems parsing JSON' }); }
+    }
+    const ref = (branch: string) => ({ ref: `refs/heads/${branch}`, object: { type: 'commit', sha: this.branches.get(branch) } });
+
+    if (method === 'POST' && route === 'blobs' && typeof body.content === 'string') {
+      const bytes = Buffer.from(body.content, 'base64');
+      const sha = gitBlobSha(bytes);
+      this.blobs.set(sha, bytes);
+      return json(201, { sha });
+    }
+    if (method === 'POST' && route === 'trees' && Array.isArray(body.tree)) {
+      const files = (body.tree as Array<{ path: string; sha: string }>).map((e) => ({ path: e.path, sha: e.sha }));
+      const sha = gitBlobSha(Buffer.from(`tree ${JSON.stringify(files)}`));
+      this.trees.set(sha, files);
+      return json(201, { sha });
+    }
+    if (method === 'POST' && route === 'commits' && typeof body.tree === 'string' && this.trees.has(body.tree)) {
+      const sha = gitBlobSha(Buffer.from(`commit ${body.tree} ${Date.now()} ${Math.random()}`));
+      this.commits.set(sha, body.tree);
+      return json(201, { sha });
+    }
+    if (method === 'GET' && route.startsWith('ref/heads/')) {
+      const branch = decodeURIComponent(route.slice('ref/heads/'.length));
+      return this.branches.has(branch) ? json(200, ref(branch)) : json(404, { message: 'Not Found' });
+    }
+    if (method === 'GET' && route.startsWith('matching-refs/heads/')) {
+      const prefix = decodeURIComponent(route.slice('matching-refs/heads/'.length));
+      return json(200, [...this.branches.keys()].filter((b) => b.startsWith(prefix)).map(ref));
+    }
+    if (method === 'POST' && route === 'refs') {
+      const branch = typeof body.ref === 'string' ? /^refs\/heads\/(.+)$/.exec(body.ref)?.[1] : undefined;
+      const tree = typeof body.sha === 'string' ? this.trees.get(this.commits.get(body.sha) ?? '') : undefined;
+      if (!branch || !tree) return json(422, { message: 'Invalid request' });
+      if (branch === DEFAULT_BRANCH || this.branches.has(branch)) return json(422, { message: 'Reference already exists' });
+      this.branches.set(branch, body.sha as string);
+      for (const file of tree) this.files.set(`${branch}:${file.path}`, { bytes: this.blobs.get(file.sha)!, sha: file.sha });
+      return json(201, ref(branch));
+    }
+    if (method === 'DELETE' && route.startsWith('refs/heads/')) {
+      const branch = decodeURIComponent(route.slice('refs/heads/'.length));
+      if (!this.branches.delete(branch)) return json(422, { message: 'Reference does not exist' });
+      for (const key of [...this.files.keys()]) if (key.startsWith(`${branch}:`)) this.files.delete(key);
+      return { status: 204 };
+    }
+    return null;
   }
 
   private unhandledRoute(method: string, url: URL): FakeResponse {

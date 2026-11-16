@@ -1,6 +1,8 @@
 # GTD25 — Security Review & Threat Model
 
-**Last updated:** 2026-10-28 (**Shared Folder: everything is deleted 30 days after it was added; a Paranoid Mode device's items after 12 h instead of 24 h.** (1) Every item (file, snippet or link) is now deleted by the first unlocked device that holds it past `createdAt` + 30 days — the same ordinary Delete the Paranoid expiry already used (tombstone, change entry, cached bytes dropped, compaction so the bytes leave the `gtd25-blobs` tip at that device's next sync). Over its last 10 days the card fades into the page. The items already in the folder when the rule arrived are not deleted before 2026-11-07 (a fixed date in the code, so every device agrees). The rule is derived from the plaintext `createdAt`: **no new field, nothing new in the clear, no SYNC_VERSION bump** — an older build simply never deletes on its own and receives the tombstone. (2) `PARANOID_SHARED_ITEM_TTL_MS` goes 24 h → 12 h for items created from now on; items already created keep the 24 h `expiresAt` they carry. (3) The folder lists items newest first and each card shows when it was added (from the same plaintext `createdAt` — nothing a backend reader didn't already see). **Impact on prior conclusions:** improves Scenarios 2 (device disk image) and 7 (backend reader): nothing in the Shared Folder stays on the devices or at the blob-branch tip much past 30 days (12 h for Paranoid-device uploads), where before non-Paranoid items stayed until deleted by hand. The same residuals as the Paranoid expiry apply (no backend timer, device clocks decide, backups/history/tombstones keep encrypted metadata a while — see the Shared Folder section). One new honest residual: the 30 days key off `createdAt`, plaintext metadata a backend writer can tamper with inside the existing timestamp window — it could make an item go early (it could already tombstone or delete it) or postpone its deletion; it gains no read access either way.)
+**Last updated:** 2026-11-16 (**Enrol a new device with a QR code — non-Paranoid devices only, on both sides.** A device that syncs shows a QR (Settings → GitHub Sync → Add a device) carrying the repository, the **PAT**, a one-time P-256 public key and a one-time 256-bit secret — **never the sync password**. The new device (Join with a QR code) reads it with the camera inside the page, opens a temporary branch `gtd25-enroll-<id>` — one orphan commit holding only its own one-time public key — and both screens show a 6-digit code derived from HKDF(ECDH ‖ QR secret); only when the user confirms the codes match does the old device write the sync password there, AES-GCM-encrypted under that key. The new device opens it, deletes the branch and joins **all or nothing**: it first checks that the repository holds data this version reads and that the password opens it, then stores the credentials (plaintext localSettings, as on any non-Paranoid device) with a fresh sync state and force-pulls under the sync lock; a pull that does not complete puts the previous settings back. Its own data is replaced (a safety copy is kept), never uploaded — a repository without data is refused, because the next sync would otherwise have uploaded this device's data into it. The old device refuses to show a code for a token that reaches beyond the sync repository, and sweeps exchange branches earlier attempts left behind. **Impact on prior conclusions:** nothing changes in what is encrypted, in the synced data's wire format or in SYNC_VERSION. New exposure, see **Scenario 9**: the QR is a **bearer credential for the PAT** (on screen ≤ 5 min, hidden as soon as the new device answers; the token itself stays valid until replaced) — whoever photographs it gets Scenario 7 (ciphertext read/write), not the content; the password still needs a code that matches on the user's own new device. Nothing of the exchange lands on the default branch; the deleted branch's commits stay on GitHub until its own garbage collection (no API forces it, and a token holder can find them through the events API meanwhile), but opening them needs both the QR secret, which is never written anywhere, and an ephemeral private key that never left page memory — a later break of P-256 alone does not open them. A QR from someone else's device makes this device join *their* repository (Scenario 9e).)
+
+**Previously updated:** 2026-10-28 (**Shared Folder: everything is deleted 30 days after it was added; a Paranoid Mode device's items after 12 h instead of 24 h.** (1) Every item (file, snippet or link) is now deleted by the first unlocked device that holds it past `createdAt` + 30 days — the same ordinary Delete the Paranoid expiry already used (tombstone, change entry, cached bytes dropped, compaction so the bytes leave the `gtd25-blobs` tip at that device's next sync). Over its last 10 days the card fades into the page. The items already in the folder when the rule arrived are not deleted before 2026-11-07 (a fixed date in the code, so every device agrees). The rule is derived from the plaintext `createdAt`: **no new field, nothing new in the clear, no SYNC_VERSION bump** — an older build simply never deletes on its own and receives the tombstone. (2) `PARANOID_SHARED_ITEM_TTL_MS` goes 24 h → 12 h for items created from now on; items already created keep the 24 h `expiresAt` they carry. (3) The folder lists items newest first and each card shows when it was added (from the same plaintext `createdAt` — nothing a backend reader didn't already see). **Impact on prior conclusions:** improves Scenarios 2 (device disk image) and 7 (backend reader): nothing in the Shared Folder stays on the devices or at the blob-branch tip much past 30 days (12 h for Paranoid-device uploads), where before non-Paranoid items stayed until deleted by hand. The same residuals as the Paranoid expiry apply (no backend timer, device clocks decide, backups/history/tombstones keep encrypted metadata a while — see the Shared Folder section). One new honest residual: the 30 days key off `createdAt`, plaintext metadata a backend writer can tamper with inside the existing timestamp window — it could make an item go early (it could already tombstone or delete it) or postpone its deletion; it gains no read access either way.)
 
 **Previously updated:** 2026-10-18 (**Shared Folder text snippets readable without a download.** A snippet opens in a preview (text shown inline as a text node — never markup — with Copy and Download) and copies straight from its card; both copies go through the clipboard-hygiene wrapper, so Paranoid's auto-clear applies. Reading a snippet used to require downloading it into a file on disk; now it is held in the preview's memory while open and dropped on close (the view unmounts on lock). No `blob:` URL is made for the preview. **Impact on prior conclusions:** Scenario 3 (memory dump while unlocked) gains one more short-lived retainer of plaintext, an open snippet's text, dropped on close and on lock. Scenario 2 (disk image) slightly improves: a snippet no longer has to land in the Downloads folder to be read. Nothing at rest, on the wire, or in the encrypted/plaintext split changes.)
 
@@ -579,6 +581,7 @@ does not overwrite.**
 |---|---|---|---|
 | Sync content | AES‑256‑GCM | PBKDF2‑SHA256, 600k, `syncPassword` | `encryptionVerifier` in snapshot |
 | Vault at-rest | AES‑256‑GCM (random DEK) | DEK wrapped by Argon2id(passphrase) and/or FIDO2‑PRF — each wrap AES‑GCM with **AAD = its slot** (`slot1`/`slot2`/`prf:<credential>`/`ruk`), so wraps can't be moved between slots | `verifier` in vault row |
+| Device enrolment by QR (Scenario 9) | AES‑256‑GCM, AAD = pairing id | HKDF‑SHA256(ECDH‑P256 of two one-time, non-extractable key pairs ‖ 256‑bit QR secret; salt = pairing id; info = both public keys) | none — a 6‑digit code from the same HKDF output, compared by the user on both screens |
 
 ### Key sizes, KDFs & brute-force economics
 
@@ -1543,6 +1546,86 @@ locked device unwraps the DEK. Device identity keys are distributed via a regist
   remove the local entry even if remote cleanup partially fails, and a failed
   `sendRemoteWipe` records no false "command sent" state.
 
+### Scenario 9 — QR enrolment of a new device (non-Paranoid only, both sides)
+
+**What moves where** (`src/sync/device-enroll.ts`, `joinRepository` in `sync-engine.ts`):
+- **The QR** (shown on demand by a device that syncs; single use; valid 5 min; hidden as
+  soon as the new device answers): repository, **PAT**, a pairing id, the old device's
+  one-time P-256 public key, a one-time 256-bit secret. **Not** the sync password.
+- **The repository**, on a temporary branch `gtd25-enroll-<pairing id>` (never the default
+  branch) created as **one orphan commit holding only the exchange file**: the new device's
+  one-time public key, then the sync password as AES‑256‑GCM ciphertext under HKDF(ECDH ‖ QR
+  secret). The new device deletes the branch once it has the answer; either side deletes it on
+  cancel, mismatch or timeout (best effort), and every new "Add a device" deletes any
+  `gtd25-enroll-*` branch left behind (a tab closed mid-exchange runs no cleanup).
+- **Memory only**: both private keys (generated non-extractable, dropped with the dialog), the
+  QR text and the derived key. Camera frames are decoded in the page (jsQR) and never stored
+  or sent.
+- **At the end**, on the new device, all or nothing: first, before anything changes, the
+  repository must hold a snapshot this version reads and the password must open its verifier
+  (a repository **without** data is refused — the next sync's first-device path would
+  otherwise upload this device's data into it). Then, under the sync lock: PAT, repository and
+  sync password in plaintext localSettings — exactly what typing them into Settings stores on a
+  non-Paranoid device (Scenario 2, OFF column) — a fresh sync state (nothing of a repository it
+  synced before carries over: an unfinished password change, a pending blob purge, the session
+  caches), and a force pull (its pending changes discarded, its data replaced, a safety copy
+  kept; nothing of it is uploaded). A pull that does not complete puts the previous settings
+  and sync state back.
+
+**Threats and what holds:**
+- **(a) Someone sees or records the QR** (over the shoulder, a camera in the room, screen
+  sharing, a screenshot or an OS screen history such as Windows Recall). 🟠 They get the
+  **PAT**: Scenario 7 (read and write ciphertext, delete or tamper as a backend writer) until
+  the token is replaced — **not** the content and **not** the password. The QR secret alone is
+  useless without a private key. *If in doubt, replace the PAT* — the dialog says so whenever
+  something looks wrong. A token that reaches further — a classic `repo` token, or one that
+  can push to this app's own site, where one push runs code on every device — would make a
+  photo of the QR far worse, so the old device checks the token's reach first (the same check
+  as at save time) and shows no code for such a token. The check is best effort: when GitHub
+  cannot be asked, the code is shown.
+- **(b) They race the real device with the photographed QR.** 🟢 The first answer wins: the
+  real device is told "this code was already used" and shows **no code**, so the user has
+  nothing that matches and does not confirm. The old device shows a code the attacker can
+  compute; it says to send only if the new device shows exactly that code. **Residual:** a
+  user who confirms without looking at the new device gives the attacker the password.
+- **(c) They replace the new device's request after it was written.** 🟢 The code on each
+  screen comes from the ECDH secret: without one of the private keys the attacker cannot predict
+  the new device's code, so the two codes differ (a 1-in-10⁶ chance of a match, one try per QR).
+  The answer is written only over the exact request whose code was shown (sha check): a request
+  swapped after that is refused. The new device stops when its own key disappears from the file.
+- **(d) A live observer of the new device's screen who holds the QR.** 🟠 Knowing the new
+  device's code, they can delete its request (the new device then says the other side
+  cancelled — and that a code still shown there must not be confirmed) and post their own, after
+  grinding ~10⁶ key pairs, within the QR's 5 minutes, for one whose code on the old device equals
+  the code the user saw. A user who confirms then sends them the password. Accepted, with the
+  warning: it needs a live view of the new device's screen as well as the QR.
+- **(e) Someone else's QR.** 🟠 Scanning a QR shown by a device that is not yours makes this
+  device join **their** repository: your data on this device is not uploaded (force pull), but
+  what you write from then on syncs to them, and the password you then hold is theirs. A
+  repository without data is refused (see "At the end"), so nothing already on this device is
+  uploaded there. The dialog says to scan only codes from your own devices before the camera
+  opens, and shows the repository's name next to the code. *Only scan codes from your own
+  devices.*
+- **(f) A crafted QR as input.** 🟢 Parsed strictly: fixed prefix, repository and token held
+  to GitHub's alphabets and lengths (no path, query or header injection), pairing id, secret
+  and public key exactly sized (the key an uncompressed P‑256 point), 1 KB cap. The exchange
+  file is likewise validated before use — a well-formed key that is not on the curve included —
+  and anything else is "tampered": nothing is sent.
+- **(g) What GitHub keeps.** 🟢 for content / 🟠 for metadata. The default branch's history
+  never holds the exchange. The deleted branch's commits stay until GitHub's own garbage
+  collection (there is no API to force it; their SHAs are visible to a token holder through the
+  events API). They hold a public key and a ciphertext that opens only with the QR secret
+  (never written anywhere) **and** one of the private keys (gone with the page): forward
+  secret, and **not opened by a later break of P‑256 alone** (harvest now, decrypt later needs
+  the QR picture too). A reader of the backend (Scenario 7) learns that, and when, a device was
+  enrolled. A branch left behind (a tab closed mid-exchange, a delete that failed offline)
+  holds only its own orphan commit — it keeps none of the default branch's history reachable,
+  so it does not undo the squash a password change makes — and the next "Add a device" deletes
+  it.
+- **(h) Paranoid Mode.** Not offered on either side, and `joinRepository` refuses with the
+  Paranoid flag set: a Paranoid device keeps its sync secrets in the vault and changing where it
+  syncs is behind the passphrase (Scenario 3); a QR would be a way around both.
+
 ---
 
 ## 4. Cross-cutting residual risks (true in multiple scenarios)
@@ -1880,6 +1963,10 @@ syncPassword and prune old backups if the earlier plaintext exposure matters.
    readable (§4). A passphrase change re-keys by default. When the reason is a
    copy of storage or memory, **also change the sync password and revoke the
    GitHub token** — a re-key carries both over, and the copy held them.
+11. **Enrol devices by QR only between your own devices, out of view** (Scenario 9): show
+   the code only when the new device is ready, never screenshot it, send the password only
+   when both screens show the same code, and replace the PAT if a code was seen by anyone else
+   or the dialog reports someone else answered.
 
 ## 6. Summary matrix (content confidentiality)
 | # | Threat | Paranoid OFF | Paranoid ON |
@@ -1891,6 +1978,7 @@ syncPassword and prune old backups if the earlier plaintext exposure matters.
 | 6 | Repo name, no PAT | 🟢 if repo private | 🟢 if repo private |
 | 7 | Backend readable | 🟠 content to syncPassword strength; metadata fully exposed | 🟠 same (no effect) |
 | 8 | Remote unlock/wipe (opt-in) | n/a | 🟢 unlock is forward-secret vs disk+backend; ⚠️ PAT plaintext at rest; approver holds RUK (approver+disk = DEK); wipe = recoverable DoS with best-effort signed confirmation |
+| 9 | QR enrolment (opt-in) | 🟠 a photo of the QR (on screen ≤ 5 min) = the PAT until replaced (Scenario 7; refused for over-reaching tokens); 🟢 password only after a matching code; leftovers on GitHub need the QR secret + a discarded key; 🟠 a stranger's QR joins their repo (nothing uploaded) | n/a (not offered) |
 
 ---
 

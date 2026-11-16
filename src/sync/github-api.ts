@@ -212,8 +212,11 @@ export async function getFile(
   repo: string,
   path: string,
   signal?: AbortSignal,
+  ref?: string,
 ): Promise<{ data: string; sha: string; etag?: string } | null> {
-  const resp = await githubFetch(pat, repo, path, undefined, signal, false, CONTENTS_DOWNLOAD_TIMEOUT_MS);
+  const resp = await githubFetch(
+    pat, repo, ref ? `${path}?ref=${encodeURIComponent(ref)}` : path, undefined, signal, false, CONTENTS_DOWNLOAD_TIMEOUT_MS,
+  );
   if (resp.status === 404) return null;
   if (!resp.ok) throw new Error(`GitHub API error: ${resp.status}`);
   // The ETag lets a later conditional GET (the Paranoid idle probe) ask whether
@@ -304,13 +307,14 @@ export async function putFile(
   content: string,
   sha?: string,
   signal?: AbortSignal,
-  options?: { keepalive?: boolean },
+  options?: { keepalive?: boolean; branch?: string },
 ): Promise<string> {
   const body: Record<string, string> = {
     message: commitMessage(`gtd25 sync: ${path}`),
     content: utf8ToBase64(content),
   };
   if (sha) body.sha = sha;
+  if (options?.branch) body.branch = options.branch;
 
   const resp = await githubFetch(pat, repo, path, {
     method: 'PUT',
@@ -451,6 +455,27 @@ export async function createRef(pat: string, repo: string, branch: string, sha: 
     body: JSON.stringify({ ref: `refs/heads/${branch}`, sha }),
   }, signal);
   if (!resp.ok) throw new Error(`GitHub API error (createRef ${branch}): ${resp.status}`);
+}
+
+/** The branches whose names start with `prefix`. */
+export async function listBranches(pat: string, repo: string, prefix: string, signal?: AbortSignal): Promise<string[]> {
+  const resp = await apiFetch(pat, gitUrl(repo, `git/matching-refs/heads/${encodeURIComponent(prefix)}`), undefined, signal);
+  if (!resp.ok) throw new Error(`GitHub API error (listBranches): ${resp.status}`);
+  const json = await resp.json();
+  if (!Array.isArray(json)) return [];
+  return json
+    .map((r: { ref?: unknown }) => (typeof r?.ref === 'string' ? r.ref : ''))
+    .filter((ref: string) => ref.startsWith('refs/heads/'))
+    .map((ref: string) => ref.slice('refs/heads/'.length));
+}
+
+/** Delete a branch. One already gone is not an error. */
+export async function deleteRef(pat: string, repo: string, branch: string, signal?: AbortSignal): Promise<void> {
+  const resp = await apiFetch(pat, gitUrl(repo, `git/refs/heads/${encodeURIComponent(branch)}`), { method: 'DELETE' }, signal);
+  // 422 "Reference does not exist" is GitHub's answer for a branch already deleted.
+  if (!resp.ok && resp.status !== 404 && resp.status !== 422) {
+    throw new Error(`GitHub API error (deleteRef ${branch}): ${resp.status}`);
+  }
 }
 
 export async function updateRef(pat: string, repo: string, branch: string, sha: string, force: boolean, signal?: AbortSignal): Promise<void> {

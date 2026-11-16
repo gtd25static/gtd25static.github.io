@@ -451,3 +451,40 @@ describe('GitHubSettings — a token that reaches beyond the sync repository', (
     expect(h.toast).not.toHaveBeenCalledWith('TOKEN REACHES TOO FAR', 'error');
   });
 });
+
+// QR enrolment (sync/device-enroll.ts) is for non-Paranoid devices on both
+// sides; showing a code needs this device's saved credentials.
+describe('GitHubSettings — QR enrolment buttons', () => {
+  beforeEach(() => {
+    h.secrets = undefined;
+    h.local = {
+      githubPat: 'ghp_token',
+      githubRepo: 'owner/repo',
+      encryptionPassword: 'alpha rhino cactus velvet moon',
+      syncEnabled: true,
+    };
+  });
+
+  it('a syncing device can add a device and join', () => {
+    h.vault = { enabled: false, unlocked: false };
+    render(<GitHubSettings />);
+    expect(screen.getByRole('button', { name: 'Add a device (QR)' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Join with a QR code' })).toBeInTheDocument();
+  });
+
+  it('a device that does not sync yet can only join', () => {
+    h.vault = { enabled: false, unlocked: false };
+    h.local = { syncEnabled: false };
+    render(<GitHubSettings />);
+    expect(screen.queryByRole('button', { name: 'Add a device (QR)' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Join with a QR code' })).toBeInTheDocument();
+  });
+
+  it('a Paranoid device offers neither', () => {
+    h.vault = { enabled: true, unlocked: true };
+    h.secrets = { githubPat: 'ghp_token', syncPassword: 'alpha rhino cactus velvet moon' };
+    render(<GitHubSettings />);
+    expect(screen.queryByRole('button', { name: 'Add a device (QR)' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Join with a QR code' })).not.toBeInTheDocument();
+  });
+});

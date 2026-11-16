@@ -2592,6 +2592,70 @@ export function forcePull(): Promise<void> {
 }
 
 /**
+ * Enrolment by QR (sync/device-enroll.ts): adopt these credentials and replace
+ * this device's data with the repository's — all or nothing.
+ *
+ * Checked before anything changes: the repository holds data, this app version
+ * reads it, and the password opens it. A repository without a snapshot would
+ * otherwise get this device's data uploaded by the next sync (its first-device
+ * path) — into whatever repository the QR named. Then, under the sync lock (no
+ * ordinary sync in between, which would merge instead of replace): the
+ * credentials, a fresh sync state (nothing of the repository synced before
+ * carries over: an unfinished password change, a pending blob purge, the session
+ * caches) and the pull. A pull that does not complete puts back the settings
+ * and the sync state as they were.
+ */
+export function joinRepository(creds: { pat: string; repo: string; password: string }): Promise<{ joined: true } | { joined: false; reason: string }> {
+  if (isParanoidFlagSet()) return Promise.reject(new Error('Not available in Paranoid Mode'));
+  return inCriticalSection(() => withSyncLock(async () => {
+    const snapshotFile = await getFile(creds.pat, creds.repo, SNAPSHOT_FILE);
+    if (!snapshotFile) {
+      return { joined: false as const, reason: 'The other device has not synced any data to this repository yet. Sync it first, then show a new code.' };
+    }
+    const parsed = safeParseJson<SyncData>(snapshotFile.data, 'remote snapshot (join)');
+    if (!parsed.ok || !parsed.value.encryptionSalt) {
+      return { joined: false as const, reason: 'The repository\'s data cannot be read.' };
+    }
+    if (!isCompatibleVersion(parsed.value.syncVersion)) {
+      return { joined: false as const, reason: 'The repository needs a newer version of the app: update this device first.' };
+    }
+    const key = await deriveKey(creds.password, parsed.value.encryptionSalt);
+    if (!(await checkVerifier(key, parsed.value.encryptionVerifier ?? ''))) {
+      return { joined: false as const, reason: 'The password received does not open this repository (was it just changed?). Nothing was changed here.' };
+    }
+
+    const settingsBefore = await db.localSettings.get('local');
+    const metaBefore = await db.syncMeta.get('sync-meta');
+    endSyncSession();
+    clearEncryptionKey();
+    await db.transaction('rw', db.localSettings, db.syncMeta, async () => {
+      await db.localSettings.update('local', {
+        githubPat: creds.pat,
+        githubRepo: creds.repo,
+        encryptionPassword: creds.password,
+        previousEncryptionPassword: undefined,
+        previousEncryptionSalt: undefined,
+        syncEnabled: true,
+      });
+      // Kept: only when this device started recording conflict bases (device-local).
+      await db.syncMeta.put({ id: 'sync-meta', pendingChanges: false, conflictBaseSince: metaBefore?.conflictBaseSince });
+    });
+    cacheEncryptionKey(key, parsed.value.encryptionSalt);
+    await forcePullHoldingLock();
+    if ((await db.syncMeta.get('sync-meta'))?.lastPulledAt) return { joined: true as const };
+
+    endSyncSession();
+    clearEncryptionKey();
+    await db.transaction('rw', db.localSettings, db.syncMeta, async () => {
+      if (settingsBefore) await db.localSettings.put(settingsBefore);
+      if (metaBefore) await db.syncMeta.put(metaBefore);
+      else await db.syncMeta.delete('sync-meta');
+    });
+    return { joined: false as const, reason: 'The repository\'s data could not be downloaded. Nothing was changed on this device.' };
+  }));
+}
+
+/**
  * Replace local data with the remote snapshot plus its changelog. Everything is
  * fetched and merged in memory first, then written in ONE transaction with the
  * discarded pending changes and the sync bookkeeping: cut short or failing, it
