@@ -20,25 +20,62 @@ async function newDevice(browser: Browser, github: FakeGitHub): Promise<{ contex
   return { context, page };
 }
 
-/** Replace the page's camera with a canvas that shows this SVG on a white background. */
+/**
+ * Replace the page's camera with a canvas showing this SVG the way a phone held
+ * up to a laptop sees it: the code covers ~40% of the frame's height, on a grey
+ * bezel, tilted a little, slightly out of focus, washed out (a lit screen filmed)
+ * and noisy. Like Chrome, the camera gives 640×480 unless a resolution is asked
+ * for. What was asked is kept in `window.__cameraAsked`.
+ */
 async function pointCameraAt(page: Page, svg: string): Promise<void> {
   await page.evaluate(async (markup) => {
     const image = new Image();
-    image.src = `data:image/svg+xml;base64,${btoa(markup)}`;
+    // Without a size the SVG rasterises at the browser's default and is stretched.
+    image.src = `data:image/svg+xml;base64,${btoa(markup.replace('<svg ', '<svg width="1000" height="1000" '))}`;
     await image.decode();
-    const canvas = document.createElement('canvas');
-    canvas.width = 640;
-    canvas.height = 640;
-    const ctx = canvas.getContext('2d')!;
-    const draw = () => {
-      ctx.fillStyle = '#fff';
-      ctx.fillRect(0, 0, 640, 640);
-      ctx.drawImage(image, 80, 80, 480, 480);
+    navigator.mediaDevices.getUserMedia = async (constraints) => {
+      (window as unknown as { __cameraAsked: unknown }).__cameraAsked = constraints;
+      const video = (constraints?.video ?? {}) as { width?: { ideal?: number }; height?: { ideal?: number } };
+      const width = video.width?.ideal ?? 640;
+      const height = video.height?.ideal ?? 480;
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext('2d')!;
+      const noise = [0, 1, 2].map(() => {
+        const layer = document.createElement('canvas');
+        layer.width = width;
+        layer.height = height;
+        const pixels = layer.getContext('2d')!.createImageData(width, height);
+        for (let i = 0; i < pixels.data.length; i += 4) {
+          const v = Math.random() * 255;
+          pixels.data[i] = pixels.data[i + 1] = pixels.data[i + 2] = v;
+          pixels.data[i + 3] = 255;
+        }
+        layer.getContext('2d')!.putImageData(pixels, 0, 0);
+        return layer;
+      });
+      const qr = height * 0.4;
+      let frame = 0;
+      const draw = () => {
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.filter = 'none';
+        ctx.globalAlpha = 1;
+        ctx.fillStyle = '#5a5a5a';
+        ctx.fillRect(0, 0, width, height);
+        ctx.translate(width / 2, height / 2);
+        ctx.rotate((6 * Math.PI) / 180);
+        ctx.filter = `blur(${height / 720}px) contrast(0.6) brightness(1.05)`;
+        ctx.drawImage(image, -qr / 2, -qr / 2, qr, qr);
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.filter = 'none';
+        ctx.globalAlpha = 0.18;
+        ctx.drawImage(noise[frame++ % noise.length], 0, 0);
+      };
+      draw();
+      setInterval(draw, 100); // a static canvas stops producing frames
+      return canvas.captureStream(10);
     };
-    draw();
-    setInterval(draw, 100); // a static canvas stops producing frames
-    const stream = canvas.captureStream(10);
-    navigator.mediaDevices.getUserMedia = async () => stream;
   }, svg);
 }
 
@@ -74,6 +111,10 @@ test('a new device joins from a QR code, replacing its own data, and the exchang
   await scan.getByRole('button', { name: 'Open camera', exact: true }).click();
   const newCode = scan.getByTestId('enroll-code');
   await expect(newCode).toHaveText(/^\d{3} \d{3}$/, { timeout: 30_000 });
+  // The back camera at 1080p: at the 640×480 Chrome opens by default this frame is not read.
+  expect(await other.page.evaluate(() => (window as unknown as { __cameraAsked: unknown }).__cameraAsked)).toMatchObject({
+    video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } },
+  });
   await expect(scan.getByText(github.fullName)).toBeVisible();
 
   // Both screens show the same code; the QR is off the old device's screen.

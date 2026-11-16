@@ -148,7 +148,9 @@ export function EnrollScanDialog({ onClose, replacesSync }: { onClose: () => voi
           <>
             <video ref={videoRef} className="aspect-square w-full rounded-md bg-black object-cover" muted playsInline />
             <p className="text-zinc-500">
-              {notOurs ? 'That QR code is not an enrolment code from this app.' : 'Point the camera at the code.'}
+              {notOurs
+                ? 'That QR code is not an enrolment code from this app.'
+                : 'Point the camera at the code and come closer until it fills most of the picture.'}
             </p>
           </>
         )}

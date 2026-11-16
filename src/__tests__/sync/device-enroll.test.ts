@@ -52,7 +52,7 @@ describe('QR payload', () => {
 
   it('fits a QR code a phone reads off a screen', async () => {
     const host = await createEnrollOffer(PAT, 'a-rather-long-owner-name/a-rather-long-repository-name');
-    expect(encode(host.qrText, { ecc: 'M' }).version).toBeLessThanOrEqual(15);
+    expect(encode(host.qrText, { ecc: 'L' }).version).toBeLessThanOrEqual(13);
   });
 
   it('refuses anything that is not a well-formed enrolment code', async () => {
