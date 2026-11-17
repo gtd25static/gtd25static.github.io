@@ -86,6 +86,17 @@ describe('joinRepository', () => {
     expect(await db.localBackups.count()).toBeGreaterThan(0); // a safety copy of what was replaced
   });
 
+  it('downloads the repository once, and says where it is: checks first, then the lock, then the replace', async () => {
+    await seedRemote();
+    const realGetFile = fakeGitHubApi.getFile;
+    const getFile = vi.spyOn(fakeGitHubApi, 'getFile').mockImplementation((...args: Parameters<typeof realGetFile>) => realGetFile(...args));
+    const steps: string[] = [];
+
+    expect(await joinRepository(CREDS, (step) => steps.push(step))).toEqual({ joined: true });
+    expect(steps).toEqual(['downloading', 'checking', 'waiting', 'replacing']);
+    expect(getFile.mock.calls.filter((call) => call[2] === SNAPSHOT_FILE)).toHaveLength(1);
+  });
+
   it('refuses a repository without data, changes nothing, and no later sync uploads this device\'s data', async () => {
     // A device with data of its own that does not sync, shown a QR for a
     // repository with no snapshot (e.g. by someone else's device).

@@ -156,8 +156,22 @@ describe('EnrollScanDialog (the new device)', () => {
     expect(m.requestEnrollment).toHaveBeenCalledWith(offer, expect.any(AbortSignal));
 
     await act(async () => received.resolve(PASSWORD));
-    expect(h.joinRepository).toHaveBeenCalledWith({ pat: PAT, repo: REPO, password: PASSWORD });
+    expect(h.joinRepository).toHaveBeenCalledWith({ pat: PAT, repo: REPO, password: PASSWORD }, expect.any(Function));
     expect(await screen.findByText(/now syncs with/)).toBeInTheDocument();
+  });
+
+  it('while joining, shows which step it is on and for how long', async () => {
+    const user = userEvent.setup();
+    m.requestEnrollment.mockResolvedValue({ offer, code: '482 913', myPub: 'pub', aesKey: {} as CryptoKey });
+    m.receiveEnrollSecret.mockResolvedValue(PASSWORD);
+    h.joinRepository.mockImplementation((_creds: unknown, onStep: (step: string) => void) => {
+      onStep('waiting');
+      return new Promise(() => {});
+    });
+    render(<EnrollScanDialog replacesSync={false} onClose={vi.fn()} />);
+    await openCamera(user);
+    act(() => h.onText!(host.qrText));
+    expect(await screen.findByTestId('join-step')).toHaveTextContent(/Waiting for another sync on this device.*\(\d+ s\)/);
   });
 
   it('a join the repository refuses says why', async () => {

@@ -5,7 +5,7 @@ import {
   parseEnrollQr, requestEnrollment, receiveEnrollSecret, discardEnrollment, EnrollError,
   type EnrollOffer, type EnrollJoin,
 } from '../../sync/device-enroll';
-import { joinRepository } from '../../sync/sync-engine';
+import { joinRepository, type JoinStep } from '../../sync/sync-engine';
 import { startQrScanner } from '../../lib/qr-scan';
 import { recordError } from '../../lib/diagnostics';
 
@@ -14,9 +14,35 @@ type Phase =
   | { kind: 'scanning' }
   | { kind: 'requesting' }
   | { kind: 'code'; code: string }
-  | { kind: 'joining' }
+  | { kind: 'joining'; step: JoinStep; since: number }
   | { kind: 'done'; repo: string }
   | { kind: 'error'; message: string };
+
+const JOIN_STEP_TEXT: Record<JoinStep, string> = {
+  downloading: 'Downloading the repository\'s data…',
+  checking: 'Checking the password…',
+  waiting: 'Waiting for another sync on this device to finish (another tab or window of the app?)…',
+  replacing: 'Replacing this device\'s data with the repository\'s…',
+};
+
+/** The join's current step, with the seconds it has taken so far. */
+function JoinProgress({ step, since }: { step: JoinStep; since: number }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, []);
+  return (
+    <>
+      <p className="text-zinc-500" data-testid="join-step">
+        {JOIN_STEP_TEXT[step]} <span className="tabular-nums">({Math.max(0, Math.floor((now - since) / 1000))} s)</span>
+      </p>
+      <p className="text-xs text-zinc-500 dark:text-zinc-400">
+        Keep the app open on this screen until it finishes: a large repository can take a minute or two.
+      </p>
+    </>
+  );
+}
 
 const SOMEONE_ELSE =
   'Someone else may have the code: on the other device, replace your GitHub token, then show a new code.';
@@ -100,8 +126,12 @@ export function EnrollScanDialog({ onClose, replacesSync }: { onClose: () => voi
         setPhase({ kind: 'code', code: join.code });
         const password = await receiveEnrollSecret(join, { signal });
         receivedRef.current = true;
-        setPhase({ kind: 'joining' });
-        const result = await joinRepository({ pat: offer.pat, repo: offer.repo, password });
+        const since = Date.now();
+        setPhase({ kind: 'joining', step: 'downloading', since });
+        const result = await joinRepository(
+          { pat: offer.pat, repo: offer.repo, password },
+          (step) => setPhase({ kind: 'joining', step, since }),
+        );
         setPhase(result.joined ? { kind: 'done', repo: offer.repo } : { kind: 'error', message: result.reason });
       } catch (err) {
         // Closed mid-request: a request that landed anyway is withdrawn.
@@ -168,7 +198,7 @@ export function EnrollScanDialog({ onClose, replacesSync }: { onClose: () => voi
           </>
         )}
 
-        {phase.kind === 'joining' && <p className="text-zinc-500">Downloading your data…</p>}
+        {phase.kind === 'joining' && <JoinProgress step={phase.step} since={phase.since} />}
 
         {phase.kind === 'done' && (
           <>
