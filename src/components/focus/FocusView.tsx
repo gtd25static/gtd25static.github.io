@@ -1,11 +1,13 @@
-import { useFocusSet, useFocusModeDaily } from '../../hooks/use-focus-mode';
+import { useFocusSet, useFocusModeDaily, refillFocusNow } from '../../hooks/use-focus-mode';
+import { recordError } from '../../lib/diagnostics';
 import { MotivationBanner } from '../banners/MotivationBanner';
 import { FocusTaskCard } from './FocusTaskCard';
 
 /**
  * Focus Mode: the daily 2-3 task commitment view (default view on app open).
  * Tasks here can only be completed or deleted; a completed slot is held until
- * tomorrow, while slots lost any other way are topped up continuously.
+ * tomorrow, while slots lost any other way are topped up continuously. Once
+ * the whole set is cleared, Refill picks a fresh one the same day.
  */
 export function FocusView() {
   const { members, completedTodayCount, state, revision } = useFocusSet();
@@ -50,8 +52,14 @@ export function FocusView() {
               {completedTodayCount > 0
                 ? `You cleared ${completedTodayCount} focus task${completedTodayCount > 1 ? 's' : ''} today. `
                 : ''}
-              You're done here — see you tomorrow.
+              You're done here — see you tomorrow, or Refill for more.
             </p>
+            <button
+              onClick={() => void refillFocusNow().catch((e) => recordError('focus.refill', e))}
+              className="mt-1 rounded-full bg-accent-600 px-4 py-2 md:py-1.5 text-sm font-medium text-white hover:bg-accent-700"
+            >
+              Refill
+            </button>
           </div>
         )}
 

@@ -9,7 +9,8 @@ import { isInboxList } from './constants';
  * or deleted. Composition picks happen once per local day; a slot vacated by
  * COMPLETING its task is held until tomorrow (the commitment payoff), while a
  * slot lost any other way (recurring reset, blocked, archived, moved list,
- * cross-device trim) is topped up continuously (see use-focus-mode).
+ * cross-device trim) is topped up continuously (see use-focus-mode). Once the
+ * whole set is cleared, the user may Refill: a fresh set the same day.
  */
 
 export const FOCUS_SET_SIZE = 3;
@@ -17,6 +18,13 @@ export const FOCUS_URGENT_CAP = 2;
 // Due within this many days claims an urgent slot. Deliberately tighter than the
 // badge threshold (DUE_SOON_DAYS = 14): only genuinely approaching deadlines.
 export const FOCUS_DUE_SOON_DAYS = 7;
+/**
+ * focusedAt of a done-today task whose slot a Refill handed to the fresh set:
+ * still a carrier (`!= null`), so it counts in "cleared N today", but it holds
+ * no slot and is never a member again, not even if reopened. 0 (the epoch)
+ * can't be a real focus time. The next daily refresh clears it like any carrier.
+ */
+export const FOCUS_RELEASED = 0;
 
 /**
  * The lists Focus picks from: the task lists that ask for attention, minus the
@@ -45,7 +53,7 @@ export function localDayKey(now: number): string {
  */
 export function focusMembers(tasks: Task[], allowedListIds: Set<string>): Task[] {
   return eligibleForFocus(tasks, allowedListIds)
-    .filter((t) => t.focusedAt != null)
+    .filter((t) => t.focusedAt != null && t.focusedAt !== FOCUS_RELEASED)
     .sort((a, b) => a.focusedAt! - b.focusedAt! || a.id.localeCompare(b.id));
 }
 
@@ -58,7 +66,9 @@ export function focusOverflow(members: Task[]): Task[] {
  * Done-today focus carriers: completed focus tasks that HOLD their slot until
  * tomorrow's daily refresh, and drive the "cleared N today" count. Deleted
  * tasks deliberately don't count (deleting disowns the slot). One definition
- * shared by useFocusSet and maintainFocusSet — keep them in lockstep.
+ * shared by useFocusSet and maintainFocusSet — keep them in lockstep. Those
+ * released by a Refill (FOCUS_RELEASED) are included: they still count as
+ * cleared; maintainFocusSet leaves them out of the held slots itself.
  */
 export function focusCompletedToday(tasks: Task[], now: number): Task[] {
   const dayStart = new Date(now);

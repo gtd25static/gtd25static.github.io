@@ -4,6 +4,7 @@ import { db } from '../db';
 import type { Task } from '../db/models';
 import { eligibleForFocus } from '../lib/focus-pick';
 import {
+  FOCUS_RELEASED,
   FOCUS_SET_SIZE,
   focusCompletedToday,
   focusListIds,
@@ -85,7 +86,8 @@ export async function maintainFocusSet(now: number = Date.now()): Promise<void> 
     const members = focusMembers(tasks, allowed);
     const keep = members.slice(0, FOCUS_SET_SIZE);
     const overflow = focusOverflow(members);
-    const held = focusCompletedToday(tasks, now);
+    // A Refill moved the released carriers' slots to its fresh set.
+    const held = focusCompletedToday(tasks, now).filter((t) => t.focusedAt !== FOCUS_RELEASED);
     if (overflow.length === 0 && keep.length + held.length >= FOCUS_SET_SIZE) return;
 
     for (const task of overflow) {
@@ -97,6 +99,39 @@ export async function maintainFocusSet(now: number = Date.now()): Promise<void> 
     }
   } finally {
     maintainInFlight = false;
+  }
+}
+
+let refillInFlight = false;
+
+/**
+ * The "Refill" on the Focus complete screen: once every focus task is done, a
+ * fresh set is picked now, with the daily refresh's composition
+ * (selectFocusRefill, no members). Today's done carriers are released
+ * (FOCUS_RELEASED): they keep counting as cleared but no longer hold a slot,
+ * so a refilled task finished today holds ITS slot until tomorrow, and one
+ * deleted or blocked is topped up as usual. Picks are written before the
+ * releases, so a maintenance tick landing in between never sees an empty set
+ * with free slots and picks on its own. A no-op while open members remain.
+ */
+export async function refillFocusNow(now: number = Date.now()): Promise<void> {
+  if (refillInFlight) return;
+  refillInFlight = true;
+  try {
+    const [tasks, lists] = await Promise.all([db.tasks.toArray(), db.taskLists.toArray()]);
+    const allowed = focusListIds(lists);
+    if (focusMembers(tasks, allowed).length > 0) return;
+
+    const picks = selectFocusRefill(eligibleForFocus(tasks, allowed), [], now);
+    if (picks.length === 0) return;
+    for (const pick of picks) {
+      await updateTask(pick.id, { focusedAt: now });
+    }
+    for (const done of focusCompletedToday(tasks, now)) {
+      if (done.focusedAt !== FOCUS_RELEASED) await updateTask(done.id, { focusedAt: FOCUS_RELEASED });
+    }
+  } finally {
+    refillInFlight = false;
   }
 }
 
@@ -157,7 +192,8 @@ export function useFocusModeDaily(dataRevision?: object): void {
 /**
  * Live focus set (≤ FOCUS_SET_SIZE, canonical order) plus the view state:
  * - 'tasks'          — members to show
- * - 'all-done-today' — set cleared today; no refill until tomorrow (the payoff)
+ * - 'all-done-today' — set cleared today; nothing new until tomorrow (the
+ *                      payoff) unless the user asks for a Refill
  * - 'all-clear'      — nothing eligible at all
  * - 'loading'        — data not ready, or today's refill hasn't run yet
  */

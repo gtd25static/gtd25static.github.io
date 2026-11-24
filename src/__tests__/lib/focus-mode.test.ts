@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
+  FOCUS_RELEASED,
   FOCUS_SET_SIZE,
   focusCompletedToday,
   focusMembers,
@@ -55,6 +56,17 @@ describe('focusMembers / focusOverflow', () => {
       makeTask({ id: 'other-list', focusedAt: NOW - 5 * DAY, listId: 'follow-ups-1' }),
     ];
     expect(focusMembers(tasks, allowed).map((t) => t.id)).toEqual(['oldest', 'a', 'b']);
+  });
+
+  // A carrier released by a Refill and then reopened (undo, other device) is out
+  // of the set for good: as a member it would sort first, push out a fresh pick
+  // and show "Day 20000+" (focusedAt 0 is the epoch).
+  it('excludes a released carrier even when it is open again', () => {
+    const tasks = [
+      makeTask({ id: 'reopened', focusedAt: FOCUS_RELEASED }),
+      makeTask({ id: 'member', focusedAt: NOW }),
+    ];
+    expect(focusMembers(tasks, allowed).map((t) => t.id)).toEqual(['member']);
   });
 
   it('overflow is everything beyond the set size, in canonical order', () => {
@@ -244,6 +256,11 @@ describe('focusCompletedToday', () => {
       makeTask({ id: 'done-no-completedAt', focusedAt: NOW - DAY, status: 'done' }),
     ];
     expect(focusCompletedToday(tasks, NOW).map((t) => t.id)).toEqual(['held']);
+  });
+
+  it('still counts a done-today carrier released by a Refill', () => {
+    const released = makeTask({ id: 'released', focusedAt: FOCUS_RELEASED, status: 'done', completedAt: NOW - 1000 });
+    expect(focusCompletedToday([released], NOW).map((t) => t.id)).toEqual(['released']);
   });
 
   it('uses the local-midnight boundary', () => {

@@ -1,11 +1,11 @@
 // @vitest-environment jsdom
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import '../setup-component';
 import { db, ensureDefaults } from '../../db';
 import { resetDb, assertDefined } from '../helpers/db-helpers';
 import { resetAppState } from '../helpers/component-helpers';
 import { createTaskList } from '../../hooks/use-task-lists';
-import { createTask, deleteTask } from '../../hooks/use-tasks';
+import { createTask, deleteTask, setTaskStatus } from '../../hooks/use-tasks';
 import { FocusView } from '../../components/focus/FocusView';
 
 vi.mock('../../components/banners/MotivationBanner', () => ({ MotivationBanner: () => null }));
@@ -66,5 +66,23 @@ describe('FocusView', { timeout: 20_000 }, () => {
     render(<FocusView />);
     expect(screen.queryByText(/New tasks arrive tomorrow/)).toBeNull();
     expect(screen.getByText(/finished task.*tomorrow/i)).toBeInTheDocument();
+  });
+
+  it('offers a Refill once the set is cleared, and keeps counting what was cleared', async () => {
+    for (let i = 0; i < 6; i++) await createTask(listId, { title: `Task ${i}` });
+    render(<FocusView />);
+    await waitFor(() => expect(shownTitles()).toHaveLength(3));
+    const cleared = shownTitles();
+    expect(screen.queryByRole('button', { name: 'Refill' })).toBeNull();
+
+    for (const title of cleared) {
+      const task = assertDefined((await db.tasks.toArray()).find((t) => t.title === title));
+      await setTaskStatus(task.id, 'done');
+    }
+    fireEvent.click(await screen.findByRole('button', { name: 'Refill' }));
+
+    await waitFor(() => expect(shownTitles()).toHaveLength(3));
+    expect(shownTitles().filter((t) => cleared.includes(t))).toEqual([]);
+    expect(screen.getByText('3 focus tasks cleared today')).toBeInTheDocument();
   });
 });

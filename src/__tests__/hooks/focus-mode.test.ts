@@ -2,10 +2,17 @@ import { db } from '../../db';
 import { resetDb, assertDefined } from '../helpers/db-helpers';
 import { createTaskList, getOrCreateInbox } from '../../hooks/use-task-lists';
 import { createTask, updateTask, setTaskStatus, deleteTask, moveTaskToList } from '../../hooks/use-tasks';
-import { maybeRefillFocus, maintainFocusSet } from '../../hooks/use-focus-mode';
+import { maybeRefillFocus, maintainFocusSet, refillFocusNow } from '../../hooks/use-focus-mode';
 import { checkRecurringTasks } from '../../hooks/use-recurring';
 import { updateLocalSettings } from '../../hooks/use-settings';
-import { localDayKey, FOCUS_SET_SIZE, focusMembers, focusListIds } from '../../lib/focus-mode';
+import {
+  localDayKey,
+  FOCUS_RELEASED,
+  FOCUS_SET_SIZE,
+  focusCompletedToday,
+  focusMembers,
+  focusListIds,
+} from '../../lib/focus-mode';
 
 const DAY = 24 * 60 * 60 * 1000;
 
@@ -362,5 +369,154 @@ describe('maintainFocusSet', () => {
 
     expect(await liveFocused()).toHaveLength(FOCUS_SET_SIZE);
     expect(await focusedTasks()).toHaveLength(FOCUS_SET_SIZE); // no double-pick 4th carrier
+  });
+});
+
+// The "Refill" button on the Focus complete screen: a fresh set today, while
+// what was cleared keeps counting and a finished slot still waits for tomorrow.
+describe('refillFocusNow', () => {
+  /** `count` plain tasks, today's set picked and all of it completed ("Focus complete"). */
+  async function clearedSet(now: number, count = 6) {
+    for (let i = 0; i < count; i++) {
+      await createTask(listId, { title: `Task ${i}` });
+    }
+    await maybeRefillFocus(now);
+    const cleared = await focusedTasks();
+    for (const m of cleared) {
+      await setTaskStatus(m.id, 'done');
+    }
+    return cleared;
+  }
+
+  /** The live set, as Focus shows it. */
+  async function liveSet() {
+    const [tasks, lists] = await Promise.all([db.tasks.toArray(), db.taskLists.toArray()]);
+    return focusMembers(tasks, focusListIds(lists));
+  }
+
+  it('picks a fresh set and releases the cleared tasks, which still count as cleared today', async () => {
+    const now = Date.now();
+    const cleared = await clearedSet(now);
+
+    await refillFocusNow(now + 60_000);
+
+    const fresh = await liveSet();
+    expect(fresh).toHaveLength(FOCUS_SET_SIZE);
+    expect(fresh.every((t) => t.status === 'todo' && t.focusedAt === now + 60_000)).toBe(true);
+    expect(fresh.filter((t) => cleared.some((c) => c.id === t.id))).toEqual([]);
+    for (const c of cleared) {
+      expect(assertDefined(await db.tasks.get(c.id), 'cleared').focusedAt).toBe(FOCUS_RELEASED);
+    }
+    expect(focusCompletedToday(await db.tasks.toArray(), now + 60_000)).toHaveLength(FOCUS_SET_SIZE);
+  });
+
+  it('a refilled task finished today holds its slot: no top-up until tomorrow', async () => {
+    const now = Date.now();
+    await clearedSet(now, 8);
+    await refillFocusNow(now + 60_000);
+    const [first] = await liveSet();
+
+    await setTaskStatus(first.id, 'done');
+    const changesBefore = await db.changeLog.count();
+    await maintainFocusSet(now + 120_000);
+
+    expect(await db.changeLog.count()).toBe(changesBefore);
+    expect(await liveSet()).toHaveLength(FOCUS_SET_SIZE - 1);
+    expect(focusCompletedToday(await db.tasks.toArray(), now + 120_000)).toHaveLength(FOCUS_SET_SIZE + 1);
+  });
+
+  it('a refilled task deleted or blocked is topped up at once (released tasks hold no slot)', async () => {
+    const now = Date.now();
+    await clearedSet(now, 8);
+    await refillFocusNow(now + 60_000);
+    const [first, second] = await liveSet();
+
+    await deleteTask(first.id);
+    await setTaskStatus(second.id, 'blocked');
+    await maintainFocusSet(now + 120_000);
+
+    const ids = (await liveSet()).map((t) => t.id);
+    expect(ids).toHaveLength(FOCUS_SET_SIZE);
+    expect(ids).not.toContain(first.id);
+    expect(ids).not.toContain(second.id);
+  });
+
+  it('next day: the open refilled tasks stay, one pick fills the finished slot, released tasks are cleared', async () => {
+    const now = Date.now();
+    const cleared = await clearedSet(now, 8);
+    await refillFocusNow(now + 60_000);
+    const [finished, ...open] = await liveSet();
+    await setTaskStatus(finished.id, 'done');
+
+    await maybeRefillFocus(now + DAY);
+
+    const nextDay = (await liveSet()).map((t) => t.id);
+    expect(nextDay).toHaveLength(FOCUS_SET_SIZE);
+    expect(nextDay.slice(0, 2)).toEqual(open.map((t) => t.id));
+    for (const t of [...cleared, finished]) {
+      expect(assertDefined(await db.tasks.get(t.id), 'carrier').focusedAt).toBeUndefined();
+    }
+  });
+
+  it('does nothing while the set still has open tasks', async () => {
+    const now = Date.now();
+    for (let i = 0; i < 6; i++) {
+      await createTask(listId, { title: `Task ${i}` });
+    }
+    await maybeRefillFocus(now);
+    const [first] = await focusedTasks();
+    await setTaskStatus(first.id, 'done');
+    const changesBefore = await db.changeLog.count();
+
+    await refillFocusNow(now + 60_000);
+
+    expect(await db.changeLog.count()).toBe(changesBefore);
+  });
+
+  it('picks with the same composition: an overdue task claims a slot', async () => {
+    const now = Date.now();
+    await clearedSet(now);
+    const overdue = assertDefined(
+      await createTask(listId, { title: 'Overdue', dueDate: now - 2 * DAY }), 'overdue');
+
+    await refillFocusNow(now + 60_000);
+
+    expect((await liveSet()).map((t) => t.id)).toContain(overdue.id);
+  });
+
+  it('can refill again once the refilled set is cleared too', async () => {
+    const now = Date.now();
+    await clearedSet(now, 9);
+    await refillFocusNow(now + 60_000);
+    for (const t of await liveSet()) {
+      await setTaskStatus(t.id, 'done');
+    }
+
+    await refillFocusNow(now + 120_000);
+
+    expect(await liveSet()).toHaveLength(FOCUS_SET_SIZE);
+    expect(focusCompletedToday(await db.tasks.toArray(), now + 120_000)).toHaveLength(2 * FOCUS_SET_SIZE);
+  });
+
+  it('a double click refills once', async () => {
+    const now = Date.now();
+    await clearedSet(now, 9);
+
+    await Promise.all([refillFocusNow(now + 60_000), refillFocusNow(now + 60_001)]);
+
+    const open = (await db.tasks.toArray()).filter((t) => t.status === 'todo' && t.focusedAt != null);
+    expect(open).toHaveLength(FOCUS_SET_SIZE);
+  });
+
+  it('a released task reopened (Undo) stays out of the set', async () => {
+    const now = Date.now();
+    const [reopened] = await clearedSet(now);
+    await refillFocusNow(now + 60_000);
+    const fresh = (await liveSet()).map((t) => t.id);
+
+    await setTaskStatus(reopened.id, 'todo');
+    await maintainFocusSet(now + 120_000);
+
+    expect((await liveSet()).map((t) => t.id)).toEqual(fresh);
   });
 });
