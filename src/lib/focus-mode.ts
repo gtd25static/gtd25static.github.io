@@ -27,14 +27,19 @@ export const FOCUS_DUE_SOON_DAYS = 7;
 export const FOCUS_RELEASED = 0;
 
 /**
- * The lists Focus picks from: the task lists that ask for attention, minus the
- * Inbox — its items are raw captures still to be processed, not next actions.
- * Every "Inbox" list counts (a second one can arrive from another device).
+ * The lists Focus may pick from, in sidebar order: the task lists that ask for
+ * attention, minus the Inbox — its items are raw captures still to be
+ * processed, not next actions. Every "Inbox" list counts (a second one can
+ * arrive from another device). The Focus view's list selector shows these.
  */
-export function focusListIds(lists: TaskList[]): Set<string> {
+export function focusCandidateLists(lists: TaskList[]): TaskList[] {
   const ids = taskListIds(lists);
-  for (const list of lists) if (isInboxList(list)) ids.delete(list.id);
-  return ids;
+  return lists.filter((l) => ids.has(l.id) && !isInboxList(l)).sort((a, b) => a.order - b.order);
+}
+
+/** The lists Focus picks from: the candidates the user hasn't left out. */
+export function focusListIds(lists: TaskList[]): Set<string> {
+  return new Set(focusCandidateLists(lists).filter((l) => l.excludedFromFocus !== true).map((l) => l.id));
 }
 
 /** Local-calendar day key ('YYYY-MM-DD') used to gate the once-daily refill. */

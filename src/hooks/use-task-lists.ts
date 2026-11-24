@@ -72,6 +72,31 @@ export async function unarchiveTaskList(id: string) {
   await setArchivedAt(id, undefined, 'unarchive task list');
 }
 
+/**
+ * Leave a list out of Focus Mode's picks, or take it back. Its open focus
+ * members leave the set at once and are topped up from the other lists
+ * (maintainFocusSet); their focusedAt is cleared by the next daily refresh.
+ */
+export async function setListExcludedFromFocus(id: string, excluded: boolean) {
+  try {
+    await ensureDeviceId();
+    await db.transaction('rw', [db.taskLists, db.changeLog], async () => {
+      const existing = await db.taskLists.get(id);
+      if (!existing) return;
+      const now = Date.now();
+      const fieldTimestamps = stampUpdatedFields(existing.fieldTimestamps, ['excludedFromFocus'], now);
+      await db.taskLists.update(id, { excludedFromFocus: excluded || undefined, updatedAt: now, fieldTimestamps });
+      const updated = await db.taskLists.get(id);
+      if (updated) {
+        await recordChangeInTx('taskList', id, 'upsert', updated as unknown as Record<string, unknown>);
+      }
+    });
+    scheduleSyncDebounced();
+  } catch (error) {
+    handleDbError(error, 'set list focus exclusion');
+  }
+}
+
 async function setArchivedAt(id: string, archivedAt: number | undefined, errorContext: string) {
   try {
     await ensureDeviceId();

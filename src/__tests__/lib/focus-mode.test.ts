@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   FOCUS_RELEASED,
   FOCUS_SET_SIZE,
+  focusCandidateLists,
   focusCompletedToday,
   focusMembers,
   focusListIds,
@@ -286,5 +287,30 @@ describe('focusListIds', () => {
       list('gone', 'Gone', { deletedAt: NOW }),
     ]);
     expect([...ids]).toEqual(['work']);
+  });
+
+  it('leaves out the lists the user unticked in Focus', () => {
+    const ids = focusListIds([
+      list('work', 'Work'),
+      list('someday', 'Someday', { excludedFromFocus: true }),
+    ]);
+    expect([...ids]).toEqual(['work']);
+  });
+});
+
+describe('focusCandidateLists', () => {
+  const list = (id: string, name: string, extra: Partial<TaskList> = {}): TaskList =>
+    ({ id, name, type: 'tasks', order: 0, createdAt: NOW, updatedAt: NOW, ...extra });
+
+  it('is what the selector offers: unticked lists included, sidebar order, no Inbox/follow-ups/archived/deleted', () => {
+    const lists = focusCandidateLists([
+      list('b', 'B', { order: 2, excludedFromFocus: true }),
+      list('a', 'A', { order: 1 }),
+      list('inbox', 'Inbox'),
+      list('people', 'People', { type: 'follow-ups' }),
+      list('old', 'Old', { archivedAt: NOW }),
+      list('gone', 'Gone', { deletedAt: NOW }),
+    ]);
+    expect(lists.map((l) => l.id)).toEqual(['a', 'b']);
   });
 });

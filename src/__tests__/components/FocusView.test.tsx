@@ -85,4 +85,20 @@ describe('FocusView', { timeout: 20_000 }, () => {
     expect(shownTitles().filter((t) => cleared.includes(t))).toEqual([]);
     expect(screen.getByText('3 focus tasks cleared today')).toBeInTheDocument();
   });
+
+  it('picks only from the lists ticked under "Lists"', async () => {
+    const home = (await createTaskList('Home')).id;
+    for (let i = 0; i < 3; i++) await createTask(listId, { title: `Task ${i}` });
+    for (let i = 3; i < 6; i++) await createTask(home, { title: `Task ${i}` });
+    render(<FocusView />);
+    await waitFor(() => expect(shownTitles()).toHaveLength(3));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Lists' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Work' }));
+
+    await waitFor(() => expect(shownTitles().sort()).toEqual(['Task 3', 'Task 4', 'Task 5']));
+    expect(screen.getByRole('checkbox', { name: 'Work' })).not.toBeChecked();
+    expect(screen.getByRole('checkbox', { name: 'Home' })).toBeChecked();
+    expect(screen.getByRole('button', { name: 'Lists · 1/2' })).toBeInTheDocument();
+  });
 });

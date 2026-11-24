@@ -1,6 +1,6 @@
 import { db } from '../../db';
 import { resetDb, assertDefined } from '../helpers/db-helpers';
-import { createTaskList, getOrCreateInbox } from '../../hooks/use-task-lists';
+import { createTaskList, getOrCreateInbox, setListExcludedFromFocus } from '../../hooks/use-task-lists';
 import { createTask, updateTask, setTaskStatus, deleteTask, moveTaskToList } from '../../hooks/use-tasks';
 import { maybeRefillFocus, maintainFocusSet, refillFocusNow } from '../../hooks/use-focus-mode';
 import { checkRecurringTasks } from '../../hooks/use-recurring';
@@ -518,5 +518,57 @@ describe('refillFocusNow', () => {
     await maintainFocusSet(now + 120_000);
 
     expect((await liveSet()).map((t) => t.id)).toEqual(fresh);
+  });
+});
+
+// The Focus view's "Lists" selector: which task lists Focus picks from.
+describe('setListExcludedFromFocus', () => {
+  it('stamps the field and records a change entry so it syncs; ticking back clears it', async () => {
+    await db.changeLog.clear();
+
+    await setListExcludedFromFocus(listId, true);
+
+    const stored = assertDefined(await db.taskLists.get(listId), 'list');
+    expect(stored.excludedFromFocus).toBe(true);
+    expect(stored.fieldTimestamps?.excludedFromFocus).toBeGreaterThan(0);
+    const entries = await db.changeLog.toArray();
+    expect(entries).toHaveLength(1);
+    expect(entries[0].entityType).toBe('taskList');
+
+    await setListExcludedFromFocus(listId, false);
+    expect(assertDefined(await db.taskLists.get(listId), 'list').excludedFromFocus).toBeUndefined();
+  });
+
+  it('the daily pick never takes a task from a list left out', async () => {
+    const other = assertDefined(await createTaskList('Someday', 'tasks'), 'other');
+    for (let i = 0; i < 5; i++) {
+      await createTask(other.id, { title: `Someday ${i}` });
+    }
+    const keep = assertDefined(await createTask(listId, { title: 'Real work' }), 'keep');
+    await setListExcludedFromFocus(other.id, true);
+
+    await maybeRefillFocus(Date.now());
+
+    expect((await focusedTasks()).map((t) => t.id)).toEqual([keep.id]);
+  });
+
+  it('leaving a list out replaces its focus tasks from the other lists at once', async () => {
+    const now = Date.now();
+    const other = assertDefined(await createTaskList('Someday', 'tasks'), 'other');
+    for (let i = 0; i < 3; i++) {
+      await createTask(other.id, { title: `Someday ${i}` });
+    }
+    await maybeRefillFocus(now);
+    for (let i = 0; i < 3; i++) {
+      await createTask(listId, { title: `Task ${i}` });
+    }
+
+    await setListExcludedFromFocus(other.id, true);
+    await maintainFocusSet(now + 60_000);
+
+    const [tasks, lists] = await Promise.all([db.tasks.toArray(), db.taskLists.toArray()]);
+    const members = focusMembers(tasks, focusListIds(lists));
+    expect(members).toHaveLength(FOCUS_SET_SIZE);
+    expect(members.every((t) => t.listId === listId)).toBe(true);
   });
 });

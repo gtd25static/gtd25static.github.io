@@ -34,6 +34,11 @@ export interface TaskList {
   // than ARCHIVED_LIST_RETENTION_MS. Plaintext metadata (a timestamp, like
   // deletedAt) — NOT in SENSITIVE_FIELDS.taskList.
   archivedAt?: number;
+  // Left out of Focus Mode's picks by the user (Focus view → Lists); absent =
+  // included, so new lists feed Focus. Synced, because the focus set is: a
+  // device that disagreed would keep trimming/topping up the other's picks.
+  // Plaintext metadata like archivedAt — NOT in SENSITIVE_FIELDS.taskList.
+  excludedFromFocus?: boolean;
   // The list's saved quick-filter searches, shown as chips (oldest first). What
   // someone searches for is content: SENSITIVE (encrypted on the wire and at
   // rest), merged as a whole (LWW). Untrusted on read — see lib/list-filter.ts.

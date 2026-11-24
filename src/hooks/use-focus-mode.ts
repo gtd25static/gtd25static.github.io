@@ -1,11 +1,12 @@
 import { useEffect } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../db';
-import type { Task } from '../db/models';
+import type { Task, TaskList } from '../db/models';
 import { eligibleForFocus } from '../lib/focus-pick';
 import {
   FOCUS_RELEASED,
   FOCUS_SET_SIZE,
+  focusCandidateLists,
   focusCompletedToday,
   focusListIds,
   focusMembers,
@@ -201,6 +202,8 @@ export function useFocusSet(): {
   members: Task[];
   eligibleCount: number;
   completedTodayCount: number;
+  /** The lists Focus may pick from (for the list selector), each with its excludedFromFocus. */
+  candidateLists: TaskList[];
   state: FocusSetState;
   /** A new object whenever the tasks, lists or local settings behind it change. */
   revision: object | undefined;
@@ -215,7 +218,7 @@ export function useFocusSet(): {
   }, []);
 
   if (!data) {
-    return { members: [], eligibleCount: 0, completedTodayCount: 0, state: 'loading', revision: undefined };
+    return { members: [], eligibleCount: 0, completedTodayCount: 0, candidateLists: [], state: 'loading', revision: undefined };
   }
 
   const now = Date.now();
@@ -240,5 +243,6 @@ export function useFocusSet(): {
           ? 'all-clear'
           : 'all-done-today';
 
-  return { members, eligibleCount, completedTodayCount, state, revision: data };
+  const candidateLists = focusCandidateLists(data.lists);
+  return { members, eligibleCount, completedTodayCount, candidateLists, state, revision: data };
 }
