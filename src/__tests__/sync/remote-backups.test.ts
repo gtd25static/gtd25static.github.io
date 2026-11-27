@@ -154,6 +154,29 @@ describe('maybeCreateBackups — localStorage staleness', () => {
     expect(mockGetFile).toHaveBeenCalledWith('pat', 'repo', BACKUP_FILES.hourly);
   });
 
+  it('for a week after a reset only the hourly tier follows: daily and weekly keep the state before it', async () => {
+    const { db } = await import('../../db');
+    await db.syncMeta.update('sync-meta', { lastWipeSeenAt: Date.now() - 2 * 24 * 3600_000 });
+    mockGetFile.mockResolvedValue(null);
+    mockPutFile.mockResolvedValue('sha');
+
+    await maybeCreateBackups('pat', 'repo', mockEncKey());
+
+    const written = mockPutFile.mock.calls.map((c) => c[2]);
+    expect(written).toEqual([BACKUP_FILES.hourly]);
+  });
+
+  it('a reset over a week old holds nothing back', async () => {
+    const { db } = await import('../../db');
+    await db.syncMeta.update('sync-meta', { lastWipeSeenAt: Date.now() - 8 * 24 * 3600_000 });
+    mockGetFile.mockResolvedValue(null);
+    mockPutFile.mockResolvedValue('sha');
+
+    await maybeCreateBackups('pat', 'repo', mockEncKey());
+
+    expect(mockPutFile.mock.calls.map((c) => c[2]).sort()).toEqual(Object.values(BACKUP_FILES).sort());
+  });
+
   it('includes missing-timestamp tiers', async () => {
     mockGetFile.mockResolvedValue(null);
     mockPutFile.mockResolvedValue('sha');

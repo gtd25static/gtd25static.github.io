@@ -18,6 +18,7 @@ const h = vi.hoisted(() => ({
   setVaultSecrets: vi.fn(async () => undefined),
   isRemoteUnlockEnrolled: vi.fn(async () => false),
   contentReplacedByLinking: vi.fn(async () => null as null | { lists: number; tasks: number; maps: number }),
+  forgetRepositorySyncState: vi.fn(async () => undefined),
   hasEncryptionKey: vi.fn(() => false),
   ensureEncryptionKey: vi.fn(async () => null),
   rotateSyncKey: vi.fn(),
@@ -44,6 +45,7 @@ vi.mock('../../sync/sync-engine', () => ({
   forcePush: vi.fn(),
   forcePull: vi.fn(),
   contentReplacedByLinking: h.contentReplacedByLinking,
+  forgetRepositorySyncState: h.forgetRepositorySyncState,
 }));
 vi.mock('../../components/ui/ConfirmDialog', () => ({ confirmDialog: h.confirm }));
 vi.mock('../../components/settings/passphrase-gate', () => ({
@@ -199,7 +201,7 @@ describe('GitHubSettings — linking a device that already has data', () => {
     render(<GitHubSettings />);
     await link(user);
 
-    expect(h.contentReplacedByLinking).toHaveBeenCalledWith('ghp_token', 'owner/repo');
+    expect(h.contentReplacedByLinking).toHaveBeenCalledWith('ghp_token', 'owner/repo', false);
     expect(h.confirm).toHaveBeenCalledWith(expect.stringContaining('2 lists, 5 tasks'), expect.objectContaining({ danger: true }));
     expect(h.updateLocalSettings).not.toHaveBeenCalled();
   });
@@ -359,6 +361,37 @@ describe('GitHubSettings — Paranoid: where this device syncs is behind the pas
     render(<GitHubSettings />);
     await repoChangedTo(user, 'owner/new-repo');
     expect(h.updateLocalSettings).toHaveBeenCalledWith(expect.objectContaining({ githubRepo: 'owner/new-repo' }));
+  });
+
+  // Reliability review 2026-11-27: a syncing device moved to another repository
+  // kept the old one's sync state — no question asked, a silent merge of the two.
+  it('moving to another repository asks before replacing, and starts that repository afresh', async () => {
+    h.requirePassphrase.mockResolvedValue('the passphrase');
+    h.forgetRepositorySyncState.mockClear();
+    h.contentReplacedByLinking.mockResolvedValue({ lists: 2, tasks: 5, maps: 0 });
+    h.confirm.mockResolvedValue(true);
+    const user = userEvent.setup();
+    render(<GitHubSettings />);
+    await repoChangedTo(user, 'owner/new-repo');
+    expect(h.contentReplacedByLinking).toHaveBeenCalledWith('ghp_old', 'owner/new-repo', true);
+    expect(h.confirm).toHaveBeenCalledWith(expect.stringContaining('not yet synced to the current repository'), expect.objectContaining({ danger: true }));
+    expect(h.forgetRepositorySyncState).toHaveBeenCalledOnce();
+    expect(h.updateLocalSettings).toHaveBeenCalledWith(expect.objectContaining({ githubRepo: 'owner/new-repo' }));
+    h.contentReplacedByLinking.mockResolvedValue(null);
+  });
+
+  it('backing out of the move changes nothing', async () => {
+    h.requirePassphrase.mockResolvedValue('the passphrase');
+    h.forgetRepositorySyncState.mockClear();
+    h.contentReplacedByLinking.mockResolvedValue({ lists: 2, tasks: 5, maps: 0 });
+    h.confirm.mockResolvedValue(false);
+    const user = userEvent.setup();
+    render(<GitHubSettings />);
+    await repoChangedTo(user, 'owner/new-repo');
+    expect(h.forgetRepositorySyncState).not.toHaveBeenCalled();
+    expect(h.updateLocalSettings).not.toHaveBeenCalled();
+    h.contentReplacedByLinking.mockResolvedValue(null);
+    h.confirm.mockResolvedValue(true);
   });
 
   it('does not ask when nothing about the sync target changed', async () => {

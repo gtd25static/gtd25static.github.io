@@ -1,4 +1,5 @@
 import { getFile, putFile } from './github-api';
+import { db } from '../db';
 import {
   encryptSyncData,
   decryptSyncData,
@@ -34,6 +35,8 @@ const TIER_THRESHOLDS: Record<BackupTier, number> = {
 };
 
 const BACKUP_CHECK_INTERVAL_MS = 15 * 60 * 1000; // 15 minutes
+/** How long after a reset the daily and weekly tiers keep the state before it. */
+export const RESET_HOLD_MS = 7 * 24 * 60 * 60 * 1000;
 
 // --- Module state ---
 let lastBackupCheckAt = 0;
@@ -71,7 +74,14 @@ export async function maybeCreateBackups(
   lastBackupCheckAt = Date.now();
 
   const now = Date.now();
-  const tiers = Object.keys(BACKUP_FILES) as BackupTier[];
+  // For a week after a reset (Wipe All Data, an import, a restore) only the
+  // hourly tier follows: the daily and weekly ones keep the state before it.
+  // They used to fill with the emptied or imported state within a day (daily)
+  // and at most a week (weekly), and the restore points the wipe dialog
+  // promised were gone.
+  const resetAt = (await db.syncMeta.get('sync-meta'))?.lastWipeSeenAt ?? 0;
+  const tiers = (Object.keys(BACKUP_FILES) as BackupTier[])
+    .filter((tier) => tier === 'hourly' || now - resetAt >= RESET_HOLD_MS);
 
   // Check localStorage for each tier — collect stale tiers
   const staleTiers = tiers.filter((tier) => {

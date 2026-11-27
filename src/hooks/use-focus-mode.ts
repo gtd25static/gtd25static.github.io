@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { db } from '../db';
+import { db, awaitingCatchUpSync } from '../db';
 import type { Task, TaskList } from '../db/models';
 import { eligibleForFocus } from '../lib/focus-pick';
 import {
@@ -44,7 +44,9 @@ export async function maybeRefillFocus(now: number = Date.now()): Promise<void> 
   const keep = members.slice(0, FOCUS_SET_SIZE);
   const memberIds = new Set(members.map((t) => t.id));
   // focusedAt carriers to clear: ineligible (stale) + over-fill beyond the set size.
-  const stale = tasks.filter((t) => t.focusedAt != null && !memberIds.has(t.id));
+  // Never a row this device can't read: focusMembers leaves it out, and clearing it
+  // wrote its placeholder (and the flag) over the row for good.
+  const stale = tasks.filter((t) => t.focusedAt != null && !memberIds.has(t.id) && !(t as { _decryptError?: boolean })._decryptError);
   const overflow = focusOverflow(members);
 
   await updateLocalSettings({ lastFocusRefillDay: todayKey });
@@ -153,6 +155,10 @@ async function runFocusMaintenance(): Promise<void> {
   }
   tickRunning = true;
   try {
+    // A device catching up picks nothing until it has synced (see awaitingCatchUpSync):
+    // a pick stamps the task, and a task deleted elsewhere came back everywhere.
+    // The sync's changes bump dataRevision, which runs this again.
+    if (await awaitingCatchUpSync()) return;
     do {
       tickAgain = false;
       const now = Date.now();

@@ -135,6 +135,21 @@ describe('safety backups survive app restarts', () => {
     expect((await localBackupKeys()).length).toBeLessThanOrEqual(3);
   });
 
+  it('restoring a copy over a day old does not delete it: the restore\'s own copy used to push it out', async () => {
+    const DAY = 24 * 60 * 60 * 1000;
+    await edit('good state');
+    await createLocalBackup(); // C1, before a mistaken import
+    const [c1] = await localBackupKeys();
+    await db.localBackups.update(c1, { timestamp: Date.now() - 2 * DAY }); // a day and more ago
+    await edit('bad state');
+    await createLocalBackup({ reason: 'boot' }); // an app start since
+    await new Promise((r) => setTimeout(r, 2));
+    await createLocalBackup(); // C2: the restore of C1 copies the bad state first
+
+    expect(await localBackupKeys()).toContain(c1);
+    expect((await readLocalBackup(c1)).tasks[0].title).toBe('good state');
+  });
+
   it('an app start with nothing changed since the newest copy takes no new copy', async () => {
     await edit('unchanged');
     await createLocalBackup({ reason: 'boot' });

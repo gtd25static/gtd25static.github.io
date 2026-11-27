@@ -10,6 +10,7 @@ import { initFieldTimestamps, stampUpdatedFields } from '../sync/field-timestamp
 import { INBOX_LIST_NAME, pickInboxList } from '../lib/constants';
 import { SYNC_VERSION } from '../sync/version';
 import { runLocalMigrations } from '../sync/local-migrations';
+import { TOMBSTONE_RETENTION_MS } from '../sync/conflict-resolution';
 import { vaultMiddleware } from './vault-middleware';
 import { warningIndexMiddleware, normaliseWarningsInStore } from './warning-index';
 
@@ -139,6 +140,39 @@ db.on('versionchange', () => {
   // Dexie's own handler closes the connection; we only have to surface it.
   databaseClosedHandler?.();
 });
+
+/**
+ * True while this device is back after longer than deletions are kept on the
+ * remote and has not synced since. Rows deleted elsewhere meanwhile are still
+ * live here (their tombstones are gone), and the next sync moves them to the
+ * Trash — unless something rewrote them first: a recurring reset, a Focus pick
+ * or an orphan repair at startup stamped them as edited now, and that edit
+ * brought them back on every device. Those automatic writes wait for it.
+ */
+export async function awaitingCatchUpSync(): Promise<boolean> {
+  if (!(await db.localSettings.get('local'))?.syncEnabled) return false;
+  const lastPulledAt = (await db.syncMeta.get('sync-meta'))?.lastPulledAt;
+  return !!lastPulledAt && Date.now() - lastPulledAt >= TOMBSTONE_RETENTION_MS;
+}
+
+let orphansAfterSync: (() => void) | null = null;
+
+/** cleanOrphans, deferred to the first successful sync on a device catching up (see awaitingCatchUpSync). */
+async function cleanOrphansWhenCurrent(): Promise<void> {
+  if (!(await awaitingCatchUpSync())) {
+    await cleanOrphans();
+    return;
+  }
+  const { onSyncSuccess, offSyncSuccess } = await import('../sync/sync-engine');
+  if (orphansAfterSync) offSyncSuccess(orphansAfterSync);
+  const afterSync = () => {
+    offSyncSuccess(afterSync);
+    if (orphansAfterSync === afterSync) orphansAfterSync = null;
+    void cleanOrphans().catch((e) => recordError('orphans.afterSync', e));
+  };
+  orphansAfterSync = afterSync;
+  onSyncSuccess(afterSync);
+}
 
 export async function cleanOrphans() {
   const now = Date.now();
@@ -296,7 +330,8 @@ export async function cleanMindmapOrphans() {
 
     async function repairFolder(id: string, changes: Partial<MindmapFolder>, fields: string[]) {
       const row = await db.mindmapFolders.get(id);
-      if (!row) return;
+      // Never a row this device can't read: the write would persist its placeholder.
+      if (!row || (row as { _decryptError?: boolean })._decryptError) return;
       const ft = stampUpdatedFields(row.fieldTimestamps, fields, now);
       await db.mindmapFolders.update(id, { ...changes, updatedAt: now, fieldTimestamps: ft });
       const updated = await db.mindmapFolders.get(id);
@@ -306,7 +341,8 @@ export async function cleanMindmapOrphans() {
 
     async function repairMap(id: string, changes: Partial<Mindmap>, fields: string[]) {
       const row = await db.mindmaps.get(id);
-      if (!row) return;
+      // Never a row this device can't read: the write would persist its placeholder.
+      if (!row || (row as { _decryptError?: boolean })._decryptError) return;
       const ft = stampUpdatedFields(row.fieldTimestamps, fields, now);
       await db.mindmaps.update(id, { ...changes, updatedAt: now, fieldTimestamps: ft });
       const updated = await db.mindmaps.get(id);
@@ -316,7 +352,8 @@ export async function cleanMindmapOrphans() {
 
     async function repairNode(id: string, changes: Partial<MindmapNode>, fields: string[]) {
       const row = await db.mindmapNodes.get(id);
-      if (!row) return;
+      // Never a row this device can't read: the write would persist its placeholder.
+      if (!row || (row as { _decryptError?: boolean })._decryptError) return;
       const ft = stampUpdatedFields(row.fieldTimestamps, fields, now);
       await db.mindmapNodes.update(id, { ...changes, updatedAt: now, fieldTimestamps: ft });
       const updated = await db.mindmapNodes.get(id);
@@ -387,6 +424,19 @@ export async function cleanMindmapOrphans() {
         await repairNode(n.id, { deletedAt: cascadeAt }, ['deletedAt']);
         n.deletedAt = cascadeAt;
       }
+    }
+
+    // Live nodes of a deleted map — added on one device while another deleted the
+    // map — join its delete at its exact deletedAt (restoring the map brings them
+    // back under its root). They used to have one promoted to root instead: a
+    // restore then left two roots, and the next start's repair flattened part of
+    // that branch.
+    const mapById = new Map(maps.map((m) => [m.id, m]));
+    for (const n of nodes) {
+      const mapDeletedAt = mapById.get(n.mapId)?.deletedAt;
+      if (n.deletedAt || !mapDeletedAt) continue;
+      await repairNode(n.id, { deletedAt: mapDeletedAt }, ['deletedAt']);
+      n.deletedAt = mapDeletedAt;
     }
 
     // Node whose map is hard-missing → soft-delete.
@@ -537,7 +587,7 @@ export async function ensureDefaults() {
   });
 
   // Clean orphaned records
-  await step('orphans', cleanOrphans);
+  await step('orphans', cleanOrphansWhenCurrent);
 
   // Lists archived and tasks completed / follow-ups resolved over 12 months ago
   // move to the Trash, then the 30-day purge below (next startup at the

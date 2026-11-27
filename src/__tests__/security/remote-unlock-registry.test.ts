@@ -10,7 +10,7 @@ import {
   REGISTRY_PATH, unlockReqPath, cmdPath,
 } from '../../sync/remote-unlock';
 import { generateIdentityKeys, publicIdentityOf, registryMac, registryEntryBytes, verifyRegistryMac } from '../../sync/remote-unlock-crypto';
-import { squashDefaultBranch } from '../../sync/history-compaction';
+import { requestDefaultBranchSquash } from '../../sync/history-compaction';
 import { getFile } from '../../sync/github-api';
 import { cacheEncryptionKey, clearEncryptionKey, generateSalt } from '../../sync/crypto';
 
@@ -25,7 +25,7 @@ vi.mock('../../sync/github-api', () => ({
   }),
 }));
 
-vi.mock('../../sync/history-compaction', () => ({ squashDefaultBranch: vi.fn(() => Promise.resolve(true)) }));
+vi.mock('../../sync/history-compaction', () => ({ requestDefaultBranchSquash: vi.fn(() => Promise.resolve()) }));
 
 // A fast HMAC key stands in for the (slow PBKDF2) syncPassword-derived registry key.
 async function fakeMacKey(seed = 1): Promise<CryptoKey> {
@@ -242,10 +242,10 @@ describe('remote-unlock: maybeSealRegistry (once per device, after a sync)', () 
     files[REGISTRY_PATH] = { data: '{}', sha: 's' };
     await maybeSealRegistry('pat', 'me/repo');
     expect(getFile).not.toHaveBeenCalled();
-    expect(squashDefaultBranch).not.toHaveBeenCalled();
+    expect(requestDefaultBranchSquash).not.toHaveBeenCalled();
   });
 
-  it('seals the legacy entries, squashes the history once, and does nothing on later syncs', async () => {
+  it('seals the legacy entries, has the next sync squash the history (once), and does nothing on later syncs', async () => {
     await setUpSync();
     const key = (await getRegistryMacKey())!;
     const id = await generateIdentityKeys();
@@ -254,26 +254,26 @@ describe('remote-unlock: maybeSealRegistry (once per device, after a sync)', () 
 
     await maybeSealRegistry('pat', 'me/repo');
     expect(files[REGISTRY_PATH].data).not.toContain('Old Phone');
-    expect(squashDefaultBranch).toHaveBeenCalledTimes(1);
+    expect(requestDefaultBranchSquash).toHaveBeenCalledTimes(1);
     expect((await db.syncMeta.get('sync-meta'))?.registrySealedAt).toBeGreaterThan(0);
 
     await maybeSealRegistry('pat', 'me/repo');
-    expect(squashDefaultBranch).toHaveBeenCalledTimes(1);
+    expect(requestDefaultBranchSquash).toHaveBeenCalledTimes(1);
   });
 
-  it('squashes even when another device already sealed everything (names an older build wrote since)', async () => {
+  it('asks for the squash even when another device already sealed everything (names an older build wrote since)', async () => {
     await setUpSync();
     const key = (await getRegistryMacKey())!;
     const sealed = await buildRegistryEntry('x', 'X', publicIdentityOf(await generateIdentityKeys()), false, key);
     files[REGISTRY_PATH] = { data: JSON.stringify({ x: sealed }), sha: 's' };
     await maybeSealRegistry('pat', 'me/repo');
-    expect(squashDefaultBranch).toHaveBeenCalledTimes(1);
+    expect(requestDefaultBranchSquash).toHaveBeenCalledTimes(1);
   });
 
   it('no registry: marks itself done without a squash', async () => {
     await setUpSync();
     await maybeSealRegistry('pat', 'me/repo');
-    expect(squashDefaultBranch).not.toHaveBeenCalled();
+    expect(requestDefaultBranchSquash).not.toHaveBeenCalled();
     expect((await db.syncMeta.get('sync-meta'))?.registrySealedAt).toBeGreaterThan(0);
   });
 
@@ -283,17 +283,10 @@ describe('remote-unlock: maybeSealRegistry (once per device, after a sync)', () 
     await ensureDeviceIdentity();
     files[REGISTRY_PATH] = { data: '{}', sha: 's' };
     await maybeSealRegistry('pat', 'me/repo');
-    expect(squashDefaultBranch).not.toHaveBeenCalled();
+    expect(requestDefaultBranchSquash).not.toHaveBeenCalled();
     expect((await db.syncMeta.get('sync-meta'))?.registrySealedAt).toBeUndefined();
   });
 
-  it('a refused squash still marks it done (the monthly squash retries), and the error surfaces', async () => {
-    await setUpSync();
-    files[REGISTRY_PATH] = { data: '{}', sha: 's' };
-    vi.mocked(squashDefaultBranch).mockRejectedValueOnce(new Error('force push refused'));
-    await expect(maybeSealRegistry('pat', 'me/repo')).rejects.toThrow('force push refused');
-    expect((await db.syncMeta.get('sync-meta'))?.registrySealedAt).toBeGreaterThan(0);
-  });
 });
 
 describe('remote-unlock: names stored as sealed blobs by an older build', () => {

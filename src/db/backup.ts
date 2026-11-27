@@ -54,11 +54,15 @@ async function listBackups(): Promise<StoredBackup[]> {
 // within minutes. The oldest pre-change copy of the last day is kept as well.
 const PRE_CHANGE_HOLD_MS = 24 * 60 * 60 * 1000;
 
+// The two newest pre-change copies are both kept: restoring one takes a new copy
+// first (of the state being replaced), and with only the newest held, the copy
+// being restored was deleted by its own restore — gone if that restore failed or
+// turned out to be the wrong one.
 async function pruneOldBackups(): Promise<void> {
   const copies = await listBackups();
   const keep = new Set(copies.slice(0, MAX_BACKUPS).map((c) => c.id));
   const changes = copies.filter((c) => (c.reason ?? 'boot') === 'change');
-  if (changes[0]) keep.add(changes[0].id);
+  for (const c of changes.slice(0, 2)) keep.add(c.id);
   const since = Date.now() - PRE_CHANGE_HOLD_MS;
   const oldestRecentChange = changes.filter((c) => c.timestamp >= since).pop();
   if (oldestRecentChange) keep.add(oldestRecentChange.id);
@@ -101,12 +105,16 @@ function legacyBackupKeys(): string[] {
  */
 export async function adoptLegacyLocalBackups(): Promise<void> {
   for (const key of legacyBackupKeys()) {
+    let parsed = false;
     try {
       const stored = JSON.parse(localStorage.getItem(key) ?? '') as Omit<StoredBackup, 'id'>;
+      parsed = true;
       const timestamp = Number(stored.timestamp) || parseInt(key.slice(BACKUP_KEY_PREFIX.length), 10) || 0;
       await db.localBackups.put({ ...stored, id: key, timestamp });
     } catch (err) {
       recordError('backup.adoptLegacy', err);
+      // A copy that would not store (quota, say) stays where it is for the next start.
+      if (parsed) continue;
     }
     try { localStorage.removeItem(key); } catch { /* storage unavailable */ }
   }

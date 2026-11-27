@@ -627,10 +627,12 @@ function notifyPasswordNeeded(salt: string, opts?: { keyChanged?: boolean }) {
   for (const cb of passwordNeededListeners) cb(salt, opts);
 }
 
-/** Note that `repo` opened with a verified key (see SyncMeta.encryptedRepo). */
-async function rememberEncryptedRepo(repo: string): Promise<void> {
+/** Note that `repo` opened with a verified key under `salt` (see SyncMeta.encryptedRepo/encryptedSalt). */
+async function rememberEncryptedRepo(repo: string, salt: string): Promise<void> {
   const meta = await db.syncMeta.get('sync-meta');
-  if (meta && meta.encryptedRepo !== repo) await db.syncMeta.update('sync-meta', { encryptedRepo: repo });
+  if (meta && (meta.encryptedRepo !== repo || meta.encryptedSalt !== salt)) {
+    await db.syncMeta.update('sync-meta', { encryptedRepo: repo, encryptedSalt: salt });
+  }
 }
 
 /** The remote is at this build's SYNC_VERSION now (it was, or was just migrated up). */
@@ -713,6 +715,21 @@ function releaseSyncLock(signal: AbortSignal | null) {
  * whichever vault is unlocked next); and drops the credentials and remote state
  * cached for flushOnHide. The sync lock is released by that operation's finally.
  */
+/**
+ * A syncing device pointed at another repository joins it as a new link: what it
+ * knew of the old one goes (the pull cursor, the reset it last saw, the salt,
+ * an unfinished password change, the highest version seen...). Carried over, the
+ * device skipped the "this replaces what is here" question and the join,
+ * merged the two repositories silently, adopted the new one's last reset as if
+ * it had just happened, or sent a month-old repository's rows to the Trash.
+ */
+export async function forgetRepositorySyncState(): Promise<void> {
+  const before = await db.syncMeta.get('sync-meta');
+  endSyncSession();
+  clearEncryptionKey();
+  await db.syncMeta.put({ id: 'sync-meta', pendingChanges: false, conflictBaseSince: before?.conflictBaseSince });
+}
+
 export function endSyncSession(): void {
   syncAbort?.abort();
   cachedCreds = null;
@@ -964,7 +981,30 @@ export async function getLocalSnapshot(): Promise<SyncData> {
  * edit recorded after the read is not in the upload and must stay pending (they
  * used to be cleared wholesale, and such an edit never reached another device).
  */
-async function getLocalSnapshotWithPendingIds(): Promise<{ snapshot: SyncData; pendingIds: string[] }> {
+const ROW_COLLECTIONS = ['taskLists', 'tasks', 'subtasks', 'sharedItems', 'mindmapFolders', 'mindmaps', 'mindmapNodes'] as const;
+type RowCollection = typeof ROW_COLLECTIONS[number];
+
+/**
+ * A whole-snapshot upload (first upload, Force Push) never carries a row this
+ * device could not read: its placeholder ("⚠︎ unreadable", no content, no field
+ * timestamps) won the merge on every other device and replaced the good copy
+ * there. Returns the rows without them, and which ids were left out.
+ */
+function dropUnreadableRows(data: SyncData): { data: SyncData; unreadable: Array<{ collection: RowCollection; id: string }> } {
+  const unreadable: Array<{ collection: RowCollection; id: string }> = [];
+  const out: SyncData = { ...data };
+  for (const collection of ROW_COLLECTIONS) {
+    const rows = (data[collection] ?? []) as Array<{ id: string; _decryptError?: boolean }>;
+    if (!rows.some((r) => r._decryptError)) continue;
+    (out as unknown as Record<string, unknown[]>)[collection] = rows.filter((r) => {
+      if (r._decryptError) unreadable.push({ collection, id: r.id });
+      return !r._decryptError;
+    });
+  }
+  return { data: out, unreadable };
+}
+
+async function getLocalSnapshotWithPendingIds(): Promise<{ snapshot: SyncData; pendingIds: string[]; unreadable: Array<{ collection: RowCollection; id: string }> }> {
   const { taskLists, tasks, subtasks, sharedItems, mindmapFolders, mindmaps, mindmapNodes, pendingIds } = await db.transaction(
     'r',
     [db.taskLists, db.tasks, db.subtasks, db.sharedItems, db.mindmapFolders, db.mindmaps, db.mindmapNodes, db.changeLog],
@@ -984,14 +1024,12 @@ async function getLocalSnapshotWithPendingIds(): Promise<{ snapshot: SyncData; p
   };
   const pomodoroSettings = await db.pomodoroSettings.get('pomodoro') ?? undefined;
   const soundPresets = await db.soundPresets.toArray();
-  return {
-    snapshot: withoutBase({
-      syncVersion: SYNC_VERSION, taskLists, tasks, subtasks, sharedItems,
-      mindmapFolders, mindmaps, mindmapNodes, settings,
-      pomodoroSettings, soundPresets,
-    }),
-    pendingIds,
-  };
+  const { data, unreadable } = dropUnreadableRows(withoutBase({
+    syncVersion: SYNC_VERSION, taskLists, tasks, subtasks, sharedItems,
+    mindmapFolders, mindmaps, mindmapNodes, settings,
+    pomodoroSettings, soundPresets,
+  }));
+  return { snapshot: data, pendingIds, unreadable };
 }
 
 /**
@@ -1061,8 +1099,13 @@ async function resolveEncryptionKey(
 
   // No remote salt but local password set — first time encrypting. The salt this
   // page already used, if any (it outlives the key's idle expiry): a fresh one
-  // here left whatever was pushed under the first unreadable to everyone.
-  const salt = getCachedSalt() ?? generateSalt();
+  // here left whatever was pushed under the first unreadable to everyone. Else
+  // the salt this repository last opened with: a remote that lost its snapshot
+  // (Force Push, an import or a restore recreating it) keeps its key, and with
+  // it its Shared Folder files and remote backups.
+  const meta = await db.syncMeta.get('sync-meta');
+  const knownSalt = meta?.encryptedRepo && meta.encryptedRepo === local?.githubRepo ? meta.encryptedSalt : undefined;
+  const salt = getCachedSalt() ?? knownSalt ?? generateSalt();
   const key = await deriveKey(localPassword, salt);
   cacheEncryptionKey(key, salt);
   return key;
@@ -1143,8 +1186,10 @@ async function pruneRemoteBackups(pat: string, repo: string) {
 export async function contentReplacedByLinking(
   pat: string,
   repo: string,
+  /** Moving a syncing device to another repository: it joins that one as a new link (see forgetRepositorySyncState). */
+  movingRepo = false,
 ): Promise<{ lists: number; tasks: number; maps: number } | null> {
-  if ((await db.syncMeta.get('sync-meta'))?.lastPulledAt) return null;
+  if (!movingRepo && (await db.syncMeta.get('sync-meta'))?.lastPulledAt) return null;
   const [lists, tasks, maps] = await Promise.all([
     db.taskLists.filter((l) => !l.deletedAt).count(),
     db.tasks.filter((t) => !t.deletedAt).count(),
@@ -1287,11 +1332,52 @@ export const ROTATION_MARKER_FILE = 'gtd25-key-rotation.json';
  * the last sync's ETag (a free 304) in the usual case. Errors say yes: the
  * write that follows fails on its own if the network is down.
  */
+// A password change takes seconds to minutes. A mark older than this was left by
+// one that stopped (and whose device may never come back).
+const ABANDONED_ROTATION_MS = 60 * 60_000;
+
+/**
+ * Whether the remote's rotation mark still stops new encrypted writes. Only the
+ * device that started a change used to clear its mark, or show the Settings
+ * banner that finishes or forgets it: when that device was gone, every other
+ * device had its Shared Folder uploads and remote backups blocked for good. An
+ * abandoned mark is now settled here — removed if its change committed (the key
+ * in use is its key), else pinned on this device too, so the banner shows here.
+ */
+function parseRotationMark(data: string): { newSalt: string; newVerifier: string; startedAt: number } | null {
+  try {
+    const v = JSON.parse(data) as { newSalt?: unknown; newVerifier?: unknown; startedAt?: unknown } | null;
+    return v && typeof v.newSalt === 'string' && typeof v.newVerifier === 'string' && typeof v.startedAt === 'number'
+      ? { newSalt: v.newSalt, newVerifier: v.newVerifier, startedAt: v.startedAt }
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+async function rotationMarkStillBlocks(creds: { pat: string; repo: string }, mark: { data: string; sha: string }): Promise<boolean> {
+  const pin = parseRotationMark(mark.data);
+  if (!pin) return true; // not ours to judge
+  if (Date.now() - pin.startedAt < ABANDONED_ROTATION_MS) return true; // a change in progress somewhere
+  const key = getCachedEncryptionKey();
+  if (key && pin.newSalt === getCachedSalt() && await checkVerifier(key, pin.newVerifier)) {
+    await deleteFile(creds.pat, creds.repo, ROTATION_MARKER_FILE, mark.sha)
+      .catch((err) => recordError('sync.rotationMarkLeftover', err));
+    return false;
+  }
+  const meta = await db.syncMeta.get('sync-meta');
+  if (meta && meta.keyRotation?.newSalt !== pin.newSalt) {
+    await db.syncMeta.update('sync-meta', { keyRotation: pin });
+  }
+  return true;
+}
+
 export async function remoteKeyIsCurrent(): Promise<boolean> {
   try {
     const creds = await getCredentials();
     if (!creds) return false;
-    if (await getFile(creds.pat, creds.repo, ROTATION_MARKER_FILE)) return false;
+    const mark = await getFile(creds.pat, creds.repo, ROTATION_MARKER_FILE);
+    if (mark && await rotationMarkStillBlocks(creds, mark)) return false;
     const snap = await getFileConditional(creds.pat, creds.repo, SNAPSHOT_FILE, probeSnapshotEtag);
     if (snap.status !== 'ok') return true;
     const parsed = safeParseJson<SyncData>(snap.data, 'snapshot (key check)');
@@ -1779,7 +1865,7 @@ async function runSync(manual = false, pushLimit?: number): Promise<number> {
           notifyPasswordNeeded(remoteSalt, { keyChanged: true });
           return -1;
         }
-        await rememberEncryptedRepo(creds.repo);
+        await rememberEncryptedRepo(creds.repo, remoteSalt);
       }
     }
 
@@ -2496,11 +2582,18 @@ export async function forcePushHoldingLock(options: ForcePushOptions = {}): Prom
     // Not at a key rotation's commit point: it synced first and checked nothing
     // was pending, and refusing there strands the shared files it already moved.
     if (existingSnapshot && !replacingKey) {
-      const localCount = liveItemCount(localData);
       // The remote as devices see it: its snapshot with its changelog on top —
       // deletes wait there until compaction, and counting the bare snapshot
       // refused a push right after deleting a project.
-      const remoteCount = liveItemCount(await remoteWithChangelog(creds, encKey, existingSnapshot, signal));
+      const remoteView = await remoteWithChangelog(creds, encKey, existingSnapshot, signal);
+      // A row this device could not read keeps the remote's copy (left out of
+      // the local snapshot, it would vanish from the remote — see dropUnreadableRows).
+      for (const { collection, id } of local.unreadable) {
+        const remoteRow = (remoteView[collection] as Array<{ id: string }> | undefined)?.find((r) => r.id === id);
+        if (remoteRow) (localData[collection] as unknown as Array<{ id: string }>).push(remoteRow);
+      }
+      const localCount = liveItemCount(localData);
+      const remoteCount = liveItemCount(remoteView);
       if (remoteCount > 0 && (localCount === 0 || (remoteCount >= FORCE_PUSH_GUARD_MIN && localCount < remoteCount / 2))) {
         reportProgress('error', 'Force push refused', 0);
         toast(`Force push refused: this device holds ${localCount} item(s), the remote ${remoteCount}. Pull first, or delete on the device that has them.`, 'error');
@@ -2738,14 +2831,15 @@ async function forcePullHoldingLock(
     if (encResult === 'needs-password') return;
     const encKey = encResult;
     if (snapshot.encryptionSalt) {
+      const salt = snapshot.encryptionSalt;
       const ok = await checkVerifier(encKey, snapshot.encryptionVerifier ?? '');
       if (!ok) {
         clearEncryptionKey();
-        notifyPasswordNeeded(snapshot.encryptionSalt, { keyChanged: true });
+        notifyPasswordNeeded(salt, { keyChanged: true });
         return;
       }
       snapshot = await decryptSyncData(encKey, snapshot);
-      await rememberEncryptedRepo(creds.repo);
+      await rememberEncryptedRepo(creds.repo, salt);
     }
 
     // The changelog on top, merged in memory (all of it, this device's own
@@ -3067,7 +3161,15 @@ async function importDataHoldingLock(data: ImportData): Promise<void> {
       dropPendingUpTo: wipedAt,
       pomodoroSettings: data.pomodoroSettings,
       soundPresets: data.soundPresets,
-      syncMeta: { lastPulledAt: Date.now(), lastPushedAt: Date.now(), ...(wipedAt ? { lastWipeSeenAt: wipedAt } : {}) },
+      // Without sync, this device is left as never synced: its content no longer
+      // has anything to do with what a repository last gave it. Marked synced, a
+      // later link skipped the "this replaces what is here" question and the
+      // join, merged silently, and never uploaded the import (no pending
+      // entries) — and a link a month on sent every imported row to the Trash
+      // as "deleted on other devices". Linking now asks, then joins.
+      syncMeta: creds
+        ? { lastPulledAt: Date.now(), lastPushedAt: Date.now(), ...(wipedAt ? { lastWipeSeenAt: wipedAt } : {}) }
+        : { lastPulledAt: undefined, lastPushedAt: undefined },
     });
 
     // Apply theme from imported settings
@@ -3141,10 +3243,6 @@ async function restoreFromBackupHoldingLock(tier: BackupTier): Promise<void> {
     const { encKey, existing } = remoteKey;
     if (refuseWriteOverNewerRemote(existing?.data, 'restoreFromBackup')) return;
 
-    // Everything below replaces local state wholesale. Take a device-local safety
-    // copy first so a mis-click is recoverable (Settings → Backups).
-    await createLocalBackupOrWarn();
-
     // Fetch backup file
     const backupFile = await getFile(creds.pat, creds.repo, BACKUP_FILES[tier], signal);
     if (!backupFile) {
@@ -3168,23 +3266,29 @@ async function restoreFromBackupHoldingLock(tier: BackupTier): Promise<void> {
       backupData = await decryptSyncData(encKey, backupData);
     }
 
-    // The restored state, every collection included — the Shared Folder was
-    // left out of the remote snapshot, and compaction then dropped items (and,
-    // a week later, files) the devices still listed. A backup older than a
-    // collection keeps what is here and on the remote for it.
+    // Everything below replaces local state wholesale. Take a device-local safety
+    // copy first so a mis-click is recoverable (Settings → Backups) — only now,
+    // with the backup read and opened: taken before, a backup that turned out
+    // missing or unreadable still cost a held copy (see pruneOldBackups).
+    await createLocalBackupOrWarn();
+
+    // The restored state, every collection included. The Shared Folder is
+    // carried over rather than replaced, as by importData: an item added after
+    // the backup was taken was deleted everywhere (and its file a week later),
+    // and no safety copy holds the Shared Folder to bring it back. A backup
+    // older than the mind maps keeps what is here and on the remote for them.
     const pendingIds = await getPendingIds();
-    const needsCarry = !backupData.sharedItems || !backupData.mindmaps;
-    const local = needsCarry ? await getLocalSnapshot() : null;
-    const remotePlain = needsCarry ? await decryptedRemote(creds, remoteKey, signal) : null;
+    const local = await getLocalSnapshot();
+    const remotePlain = await decryptedRemote(creds, remoteKey, signal);
     const restored: SyncData = {
       syncVersion: SYNC_VERSION,
       taskLists: backupData.taskLists,
       tasks: backupData.tasks,
       subtasks: backupData.subtasks,
-      sharedItems: backupData.sharedItems ?? mergeById(remotePlain?.sharedItems, local?.sharedItems),
-      mindmapFolders: backupData.mindmaps ? backupData.mindmapFolders ?? [] : mergeById(remotePlain?.mindmapFolders, local?.mindmapFolders),
-      mindmaps: backupData.mindmaps ?? mergeById(remotePlain?.mindmaps, local?.mindmaps),
-      mindmapNodes: backupData.mindmaps ? backupData.mindmapNodes ?? [] : mergeById(remotePlain?.mindmapNodes, local?.mindmapNodes),
+      sharedItems: mergeById(backupData.sharedItems, remotePlain?.sharedItems, local.sharedItems),
+      mindmapFolders: backupData.mindmaps ? backupData.mindmapFolders ?? [] : mergeById(remotePlain?.mindmapFolders, local.mindmapFolders),
+      mindmaps: backupData.mindmaps ?? mergeById(remotePlain?.mindmaps, local.mindmaps),
+      mindmapNodes: backupData.mindmaps ? backupData.mindmapNodes ?? [] : mergeById(remotePlain?.mindmapNodes, local.mindmapNodes),
       settings: backupData.settings ?? {
         theme: (localStorage.getItem('gtd25-theme') as Settings['theme']) ?? 'system',
       },

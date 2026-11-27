@@ -1,4 +1,4 @@
-import { db } from '../db';
+import { db, awaitingCatchUpSync } from '../db';
 import type { Task } from '../db/models';
 import { recordChangeBatchInTx, ensureDeviceId } from '../sync/change-log';
 import { scheduleSyncDebounced } from '../sync/sync-engine';
@@ -84,6 +84,8 @@ function occurrencesUpTo(from: number, interval: number, unit: RecurrenceUnit, n
  * A field already set after the occurrence is left alone for the same reason.
  */
 export async function checkRecurringTasks() {
+  // A device catching up resets nothing until it has synced (see awaitingCatchUpSync).
+  if (await awaitingCatchUpSync()) return;
   const now = Date.now();
   const candidates = await db.tasks.where('nextOccurrence').belowOrEqual(now).toArray();
   const dueIds = candidates.filter((t) => isDue(t, now)).map((t) => t.id);

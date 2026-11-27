@@ -12,6 +12,7 @@ import type { LocalSettings } from '../../db/models';
 // 5xx) on specific paths so we can assert that atomic operations stay consistent under them.
 let files: Record<string, { data: string; sha: string }> = {};
 let failPutPaths: Set<string> = new Set();
+let landedThenFailPaths: Set<string> = new Set();
 let failGetPaths: Set<string> = new Set();
 let failDeletePaths: Set<string> = new Set();
 // A write that meets a stale sha once (a file just written or deleted reads back old).
@@ -25,6 +26,8 @@ vi.mock('../../sync/github-api', () => ({
     if (failPutPaths.has(path)) return Promise.reject(new Error(`put failed (500): ${path}`));
     if (conflictOncePaths.delete(path)) return Promise.reject(new Error('CONFLICT'));
     files[path] = { data: content, sha: `sha-${Math.random()}` };
+    // Written, but the reply is lost (a timeout after GitHub stored it).
+    if (landedThenFailPaths.has(path)) return Promise.reject(new Error(`timed out: ${path}`));
     return Promise.resolve(files[path].sha);
   }),
   deleteFile: vi.fn((_p: string, _r: string, path: string) => {
@@ -139,6 +142,7 @@ function managedIds(devices: ru.ManagedDevice[]): string[] {
 beforeEach(async () => {
   files = {};
   failPutPaths = new Set();
+  landedThenFailPaths = new Set();
   failGetPaths = new Set();
   failDeletePaths = new Set();
   conflictOncePaths = new Set();
@@ -391,6 +395,25 @@ describe('remote wipe', () => {
     expect(status?.commandNonce).toBe(command.nonce);
     const refreshed = await ru.refreshManagedDeviceWipeStatuses(PAT, REPO, macKey);
     expect(refreshed.find((d) => d.deviceId === LAP)?.lastWipeAck?.commandNonce).toBe(command.nonce);
+  });
+
+  it('ignores a wipe command its approver signed before being (re)made an approver — a leftover, not an order', async () => {
+    // Remote unlock turned off and on again keeps the device id; a wipe sent in
+    // between (an "inactive" device wiped, then forgotten) sat in the command file.
+    await enrollPair();
+    const base = { target: LAP, nonce: 'old', ts: Date.now() - 60 * 60_000 };
+    const sig = await signPayload(phoneIdentity.ecdsaPriv, new TextEncoder().encode(`wipe|${base.target}|${base.nonce}|${base.ts}`));
+    files[ru.cmdPath(LAP)] = { data: JSON.stringify({ ...base, from: PHONE, sig }), sha: 'stale' };
+
+    await actAsLaptop();
+    expect((await ru.pollRemoteCommands(PAT, REPO, LAP)).wiped).toBe(false);
+    expect(panicSpy).not.toHaveBeenCalled();
+
+    // One sent after the enrolment is honoured as before.
+    await actAsPhone();
+    await ru.sendRemoteWipe(PAT, REPO, LAP);
+    await actAsLaptop();
+    expect((await ru.pollRemoteCommands(PAT, REPO, LAP)).wiped).toBe(true);
   });
 
   it('ignores a wipe command signed by a non-approver (forged)', async () => {
@@ -1046,7 +1069,7 @@ describe('remote unlock: removing one approver', () => {
     expect((await db.localSettings.get('local'))?.githubPat).toBeUndefined();
   });
 
-  it('a failed re-delivery changes nothing — the old key still works', async () => {
+  it('a failed re-delivery leaves the old key working, and keeps the staged one for the retry', async () => {
     await enrollTwoApprovers();
     const oldWrap = (await db.vault.get('vault'))?.dekWrappedByRuk;
     const goodRuk = rukBytes(phoneLocal.remoteApproverFor![LAP]!.ruk);
@@ -1056,13 +1079,33 @@ describe('remote unlock: removing one approver', () => {
     await expect(ru.removeApprover(
       { pat: PAT, repo: REPO, deviceId: LAP, deviceName: 'Work Laptop', macKey }, PHONE2)).rejects.toThrow();
 
-    // Nothing rotated, nothing dropped: remote unlock is exactly as it was.
+    // Nothing rotated, nothing dropped: the old key opens as before.
     const v = await db.vault.get('vault');
     expect(v?.dekWrappedByRuk).toBe(oldWrap);
-    expect(v?.dekWrappedByRukNext).toBeUndefined(); // the staged key nobody got is gone
+    expect(v?.dekWrappedByRukNext).toBeDefined(); // kept: a retry hands out the same one
     expect(v?.remoteUnlock?.approvers.map((a) => a.deviceId).sort()).toEqual([PHONE, PHONE2]);
     vault.lock();
     expect(await vault.unlockWithRemoteKey(goodRuk)).toBe(true);
+  });
+
+  it('a hand-out that landed with its reply lost still lets that approver unlock', async () => {
+    await enrollTwoApprovers();
+    landedThenFailPaths.add(ru.approverInboxPath(PHONE));
+
+    await actAsLaptop();
+    await expect(ru.removeApprover(
+      { pat: PAT, repo: REPO, deviceId: LAP, deviceName: 'Work Laptop', macKey }, PHONE2)).rejects.toThrow();
+
+    // The phone got the staged key and swaps to it (a newer invite)...
+    await actAsPhone();
+    await ru.pollApproverInbox(PAT, REPO, PHONE, macKey);
+    phoneLocal = await snapshotLocal();
+    const handedOut = rukBytes(phoneLocal.remoteApproverFor![LAP]!.ruk);
+
+    // ...and the laptop still opens with it: the staged key was not thrown away.
+    await actAsLaptop();
+    vault.lock();
+    expect(await vault.unlockWithRemoteKey(handedOut)).toBe(true);
   });
 });
 

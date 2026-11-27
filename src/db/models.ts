@@ -342,6 +342,11 @@ export interface SyncMeta {
   // That repository showing up without a salt was stripped by whoever can write
   // it — taking it for a first encryption used to destroy the content.
   encryptedRepo?: string;
+  // The salt that repository last opened with (public: it sits in its snapshot).
+  // A remote that lost its snapshot keeps its key from it: Force Push, an import
+  // or a restore there used to mint a new salt, leaving every Shared Folder file
+  // and every remote backup under a key nothing derived any more.
+  encryptedSalt?: string;
   // The highest syncVersion this device has seen on the remote. It only ever goes
   // up; lower means someone lowered it (to let an older build in, which would
   // write newer encrypted fields back in the clear).
@@ -465,6 +470,9 @@ export interface RemoteApproverInfo {
   name: string;
   ecdhPub: JsonWebKey;
   ecdsaPub: JsonWebKey;
+  // In a protected device's approver list only (under its seal): when this device
+  // made it an approver. A wipe command signed before then is a leftover, not an order.
+  addedAt?: number;
 }
 
 // One enrolled FIDO2/PRF authenticator (a YubiKey, or a phone over hybrid

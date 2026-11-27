@@ -46,6 +46,15 @@ export async function squashDefaultBranch(pat: string, repo: string): Promise<bo
 }
 
 /**
+ * Have the next successful sync squash the default branch (through the gated
+ * path below: one squash mechanism, with its retry-once-a-day on failure),
+ * rather than squashing right after a write of one's own.
+ */
+export async function requestDefaultBranchSquash(): Promise<void> {
+  await db.syncMeta.update('sync-meta', { lastMainSquashAt: 0, mainSquashFailedAt: undefined });
+}
+
+/**
  * Gated entry point, called fire-and-forget at the end of a successful sync.
  * Squashes at most once per interval. The very first call only arms the clock so
  * a fresh repo isn't force-pushed immediately.

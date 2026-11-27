@@ -216,7 +216,7 @@ export function BackupsSettings() {
           variant="danger"
           onClick={async () => {
             const message = syncConfigured
-              ? 'This will delete ALL lists, tasks, subtasks, mindmaps and the Shared Folder on this device and every synced device. Encrypted remote backups (including a pre-wipe safety backup) are kept in the sync repo and can be restored later.'
+              ? 'This will delete ALL lists, tasks, subtasks, mindmaps and the Shared Folder on this device and every synced device. For 7 days the daily and weekly remote backups below keep what is deleted (lists, tasks and mind maps — not the Shared Folder\'s files, which are gone for good); restore one of them in that time to undo this.'
               : 'This will delete ALL lists, tasks, subtasks, mindmaps and the Shared Folder on this device. Sync is not configured, so there is no remote backup to restore from — this cannot be undone.';
             if (await confirmDialog(message, { confirmLabel: 'Wipe All Data', typeToConfirm: 'yes' })) {
               wipeAllData();

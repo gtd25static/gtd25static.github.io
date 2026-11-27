@@ -16,12 +16,12 @@ import {
 import { encryptBlob, decryptBlob } from './crypto';
 import { importKekFromBytes } from '../db/vault-crypto';
 import { isParanoidFlagSet } from '../db/paranoid-flag';
-import { wrapDekWithRuk, stageNextRuk, promoteNextRuk, discardNextRuk, getStagedRukRaw, unlockWithRemoteKey, clearRemoteUnlock, getVaultSecrets, getRukRaw, isRemoteUnlockEnrolled, isUnlocked, setRemoteApprovers } from '../db/vault';
+import { wrapDekWithRuk, stageNextRuk, promoteNextRuk, getStagedRukRaw, unlockWithRemoteKey, clearRemoteUnlock, getVaultSecrets, getRukRaw, isRemoteUnlockEnrolled, isUnlocked, setRemoteApprovers } from '../db/vault';
 export { isRemoteUnlockEnrolled } from '../db/vault'; // re-exported so the UI imports it from one place
 import { getCachedSalt } from './crypto';
 import { deriveRegistryMacKey, deriveRegistrySealKey } from './remote-unlock-crypto';
 import { recordError } from '../lib/diagnostics';
-import { squashDefaultBranch } from './history-compaction';
+import { requestDefaultBranchSquash } from './history-compaction';
 
 // --- Mailbox file paths (live in the existing sync repo) ---
 export const REGISTRY_PATH = 'gtd25-devices.json';
@@ -37,8 +37,15 @@ export async function ensureDeviceIdentity(): Promise<DeviceIdentity> {
   const local = await db.localSettings.get('local');
   if (local?.deviceIdentity) return local.deviceIdentity;
   const identity = await generateIdentityKeys();
-  await db.localSettings.update('local', { deviceIdentity: identity });
-  return identity;
+  // Two tabs generating at once: the first write wins and both return it (one
+  // used to publish its keys while the other's were stored, and invites sent
+  // to the published ones never opened).
+  return db.transaction('rw', db.localSettings, async () => {
+    const now = await db.localSettings.get('local');
+    if (now?.deviceIdentity) return now.deviceIdentity;
+    await db.localSettings.update('local', { deviceIdentity: identity });
+    return identity;
+  });
 }
 
 function defaultDeviceName(): string {
@@ -393,7 +400,8 @@ export async function enableRemoteUnlock(ctx: EnrollContext, approverDeviceIds: 
     ruk.fill(0);
   }
 
-  await setRemoteApprovers(approvers.map((a) => ({ deviceId: a.deviceId, name: a.name, ecdhPub: a.ecdhPub, ecdsaPub: a.ecdsaPub })));
+  const addedAt = Date.now();
+  await setRemoteApprovers(approvers.map((a) => ({ deviceId: a.deviceId, name: a.name, ecdhPub: a.ecdhPub, ecdsaPub: a.ecdsaPub, addedAt })));
   // Keep the PAT plaintext so the locked device can reach the mailbox.
   await db.localSettings.update('local', { githubPat: pat });
   return approvers;
@@ -424,7 +432,8 @@ export async function addApprovers(ctx: EnrollContext, approverDeviceIds: string
   } finally {
     ruk.fill(0);
   }
-  const merged = [...(vault?.remoteUnlock?.approvers ?? []), ...toAdd.map((a) => ({ deviceId: a.deviceId, name: a.name, ecdhPub: a.ecdhPub, ecdsaPub: a.ecdsaPub }))];
+  const addedAt = Date.now();
+  const merged = [...(vault?.remoteUnlock?.approvers ?? []), ...toAdd.map((a) => ({ deviceId: a.deviceId, name: a.name, ecdhPub: a.ecdhPub, ecdsaPub: a.ecdsaPub, addedAt }))];
   await setRemoteApprovers(merged);
   // The locked device's mailbox poll (and the wipe watcher) needs the PAT in the clear.
   await db.localSettings.update('local', { githubPat: pat });
@@ -551,10 +560,14 @@ export async function removeApprover(ctx: EnrollContext, targetDeviceId: string)
     // vault too, so those already handed it can unlock; the device being removed
     // still can as well until this runs again (retrying is safe: a fresh RUK
     // with a newer timestamp wins). "Nothing was changed" would be a lie.
+    // The staged key is kept even when no hand-out seemed to land: a write that
+    // reached GitHub with its reply lost counts as failed here, and that approver
+    // swapped its working key for the staged one — discarded, it opened nothing.
+    // A staged key nobody holds is harmless (unlock tries both), and a retry
+    // hands out that same one.
     recordError('remoteUnlock.removeApprover.partial', err);
-    if (delivered === 0 && !staged) await discardNextRuk().catch((e) => recordError('remoteUnlock.removeApprover.discard', e));
     throw new Error(delivered === 0
-      ? 'Could not reach the trusted devices — nothing was changed, remote unlock still works as before.'
+      ? 'Could not reach the trusted devices — remote unlock still works as before; try again to remove it.'
       : `Interrupted after handing the new key to ${delivered} of ${staying.length} device(s). Until you run this again the device you are removing can still unlock this one — the vault itself is unaffected, and retrying is safe.`);
   } finally {
     ruk.fill(0);
@@ -876,9 +889,15 @@ export async function pollRemoteCommands(pat: string, repo: string, deviceId: st
   if (res.status === 'absent') return { etag: null, wiped: false };
 
   const cmd = (() => { try { return JSON.parse(res.data) as WipeCommand; } catch { return null; } })();
-  if (cmd && cmd.target === deviceId && typeof cmd.sig === 'string') {
+  if (cmd && cmd.target === deviceId && typeof cmd.sig === 'string' && Number.isFinite(cmd.ts)) {
     const approvers = await approverVerifyKeys();
     for (const approver of approvers) {
+      // A command signed before this device (re)made that approver one is a
+      // leftover: turning remote unlock off and on again — or removing and
+      // re-adding an approver — kept the same device id, and a wipe sent in
+      // between (an "inactive" device wiped, then forgotten) fired on the
+      // device in use the moment it was enrolled again.
+      if (approver.addedAt && cmd.ts < approver.addedAt - WIPE_COMMAND_SKEW_MS) continue;
       if (await verifyPayload(approver.ecdsaPub, cmd.sig, wipeBytes({ target: cmd.target, nonce: cmd.nonce, ts: cmd.ts }))) {
         try {
           await publishWipeStatus(pat, repo, cmd, approver.deviceId, deviceId);
@@ -895,10 +914,12 @@ export async function pollRemoteCommands(pat: string, repo: string, deviceId: st
 }
 
 /** Cached approver verify-keys for THIS protected device (from the vault). */
-async function approverVerifyKeys(): Promise<Array<{ deviceId: string; ecdsaPub: JsonWebKey }>> {
+async function approverVerifyKeys(): Promise<Array<{ deviceId: string; ecdsaPub: JsonWebKey; addedAt?: number }>> {
   const vault = await db.vault.get('vault');
-  return (vault?.remoteUnlock?.approvers ?? []).map((a) => ({ deviceId: a.deviceId, ecdsaPub: a.ecdsaPub }));
+  return (vault?.remoteUnlock?.approvers ?? []).map((a) => ({ deviceId: a.deviceId, ecdsaPub: a.ecdsaPub, addedAt: a.addedAt }));
 }
+// Clock difference allowed between an approver and this device when dating a command.
+const WIPE_COMMAND_SKEW_MS = 10 * 60_000;
 
 async function publishWipeStatus(
   pat: string,
@@ -1511,9 +1532,9 @@ export async function publishOwnRegistryEntry(): Promise<boolean> {
 
 /**
  * Once per device, after a successful sync: seal the registry entries still
- * carrying a device name / Paranoid flag in the clear, then squash the default
- * branch so the history that held them is no longer reachable (GitHub collects
- * it later, on its own schedule). Squashing once on every device, not just the
+ * carrying a device name / Paranoid flag in the clear, then have the next sync
+ * squash the default branch so the history that held them is no longer
+ * reachable (GitHub collects it later, on its own schedule). Squashing once on every device, not just the
  * first to seal, also covers names an older build wrote in between. Needs the
  * sync password, so a locked Paranoid device waits for its next unlocked sync.
  * Residual: a registry whose only participating devices never run this build
@@ -1532,10 +1553,11 @@ export async function maybeSealRegistry(pat: string, repo: string): Promise<void
   const macKey = await getRegistryMacKey();
   if (!macKey) return;
   await sealLegacyRegistryEntries(pat, repo, macKey);
-  // Done whatever the squash does: a refusal (force pushes blocked) or a lost
-  // race with another push is left to the monthly squash, not retried every sync.
+  // Squashed by the next sync, not here: a squash right after this device's own
+  // write could read the branch before that write and force it back (the ref
+  // update is not compare-and-swap).
+  await requestDefaultBranchSquash();
   await done();
-  await squashDefaultBranch(pat, repo);
 }
 
 let heartbeatBaseline: number | null = null;
@@ -1600,7 +1622,11 @@ export async function listApproverCandidates(): Promise<RegistryEntry[]> {
   const ctx = await buildEnrollContext();
   const reg = await readAuthenticRegistry(ctx.pat, ctx.repo, ctx.macKey);
   const vault = await db.vault.get('vault');
-  const enrolled = new Set((vault?.remoteUnlock?.approvers ?? []).map((a) => a.deviceId));
+  // Listed approvers count as enrolled only while a wrap exists: a re-key cut
+  // before its re-issue keeps the list but no key, and excluding them then left
+  // nothing to pick in "Set up remote unlock".
+  const listed = (await isRemoteUnlockEnrolled()) ? vault?.remoteUnlock?.approvers ?? [] : [];
+  const enrolled = new Set(listed.map((a) => a.deviceId));
   return reg.filter((e) => !e.paranoid && e.deviceId !== ctx.deviceId && !enrolled.has(e.deviceId));
 }
 

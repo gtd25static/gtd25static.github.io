@@ -339,7 +339,8 @@ export async function expireSharedItems(now: number = Date.now()): Promise<numbe
   try {
     const expired = (await db.sharedItems.toArray()).filter((i) => {
       const expiry = sharedItemExpiry(i);
-      return !i.deletedAt && expiry !== undefined && expiry <= now;
+      // Not a row this device can't read: its delete would push a placeholder.
+      return !i.deletedAt && !(i as { _decryptError?: boolean })._decryptError && expiry !== undefined && expiry <= now;
     });
     for (const item of expired) await deleteSharedItem(item.id);
     return expired.length;

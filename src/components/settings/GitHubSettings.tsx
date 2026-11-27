@@ -6,7 +6,7 @@ import { Button } from '../ui/Button';
 import { toast } from '../ui/Toast';
 import { confirmDialog } from '../ui/ConfirmDialog';
 import { testConnection, tokenReach, tokenReachWarning } from '../../sync/github-api';
-import { syncNow, forcePush, forcePull, contentReplacedByLinking, ensureEncryptionKey } from '../../sync/sync-engine';
+import { syncNow, forcePush, forcePull, contentReplacedByLinking, ensureEncryptionKey, forgetRepositorySyncState } from '../../sync/sync-engine';
 import { withSyncLock } from '../../sync/sync-lock';
 import { deriveKey, cacheEncryptionKey, generateSalt, hasEncryptionKey } from '../../sync/crypto';
 import {
@@ -103,7 +103,11 @@ export function GitHubSettings() {
       if (!hasEncryptionKey()) await ensureEncryptionKey();
       if (!hasEncryptionKey()) await syncNow();
     }
-    const rotating = wasSyncEnabled && willEnableSync && !!newPassword && hasEncryptionKey()
+    // Another repository for a device that already syncs: it joins that one as a
+    // new link (asked first, then pulled), and a password typed with it is that
+    // repository's, not a change of this one's.
+    const movingRepo = wasSyncEnabled && willEnableSync && !!local.githubRepo && repo.trim() !== local.githubRepo;
+    const rotating = wasSyncEnabled && willEnableSync && !movingRepo && !!newPassword && hasEncryptionKey()
       && (passwordChanged || !!unfinishedRotation);
 
     // Require confirmation when setting/changing password
@@ -130,12 +134,13 @@ export function GitHubSettings() {
     // Linking replaces this device's content with what the repository already
     // holds (never merged — see contentReplacedByLinking). Say so before it
     // happens: it used to be silent, and the only copy was a safety backup.
-    if (!wasSyncEnabled && willEnableSync) {
-      const replaced = await contentReplacedByLinking(effectivePat, repo.trim());
+    if ((!wasSyncEnabled && willEnableSync) || movingRepo) {
+      const replaced = await contentReplacedByLinking(effectivePat, repo.trim(), movingRepo);
       if (replaced && !(await confirmDialog(
         `This device already has ${describeContent(replaced)}. If the repository already holds data, connecting ` +
-        'replaces everything on this device with it — this device\'s items are not uploaded. A safety copy is kept ' +
-        'in Settings → Backups; export a backup first if you want your own copy.',
+        'replaces everything on this device with it — this device\'s items are not uploaded' +
+        (movingRepo ? ', and changes not yet synced to the current repository are not carried over' : '') +
+        '. A safety copy is kept in Settings → Backups; export a backup first if you want your own copy.',
         { confirmLabel: 'Connect and replace', danger: true },
       ))) return;
     }
@@ -157,31 +162,39 @@ export function GitHubSettings() {
       await updateLocalSettings({ changelogPruned: undefined });
     }
 
-    if (paranoid) {
-      if (!unlocked) { toast('Unlock the vault to change sync credentials', 'error'); return; }
-      // Secrets go into the vault; localSettings keeps only the non-secret repo,
-      // and the plaintext credential fields stay cleared.
-      await setVaultSecrets({ githubPat: effectivePat || undefined, syncPassword: passwordToStore });
-      // Remote unlock/wipe deliberately keeps a plaintext copy of the PAT here:
-      // it is the only way a LOCKED device can reach its mailbox. Clearing it on
-      // every save silently killed the remote wipe (the watcher stops polling)
-      // and the lock screen's "request unlock", while Settings still read
-      // "Enabled" — the enrolment lives in the vault row, not in this field.
-      const mailboxPat = (await isRemoteUnlockEnrolled()) ? effectivePat || undefined : undefined;
-      await updateLocalSettings({
-        githubRepo: repo.trim() || undefined,
-        syncEnabled: willEnableSync,
-        githubPat: mailboxPat,
-        encryptionPassword: undefined,
-      });
-    } else {
-      await updateLocalSettings({
-        githubPat: pat.trim() || undefined,
-        githubRepo: repo.trim() || undefined,
-        syncEnabled: willEnableSync,
-        encryptionPassword: passwordToStore,
-      });
-    }
+    if (paranoid && !unlocked) { toast('Unlock the vault to change sync credentials', 'error'); return; }
+    // Saved under the sync lock, the repository and the state that goes with it
+    // together: a sync landing between the two ran against the old repository
+    // as a device that never synced there (or against the new one with the old
+    // one's state).
+    const saveCredentials = async () => {
+      if (paranoid) {
+        // Secrets go into the vault; localSettings keeps only the non-secret repo,
+        // and the plaintext credential fields stay cleared.
+        await setVaultSecrets({ githubPat: effectivePat || undefined, syncPassword: passwordToStore });
+        // Remote unlock/wipe deliberately keeps a plaintext copy of the PAT here:
+        // it is the only way a LOCKED device can reach its mailbox. Clearing it on
+        // every save silently killed the remote wipe (the watcher stops polling)
+        // and the lock screen's "request unlock", while Settings still read
+        // "Enabled" — the enrolment lives in the vault row, not in this field.
+        const mailboxPat = (await isRemoteUnlockEnrolled()) ? effectivePat || undefined : undefined;
+        await updateLocalSettings({
+          githubRepo: repo.trim() || undefined,
+          syncEnabled: willEnableSync,
+          githubPat: mailboxPat,
+          encryptionPassword: undefined,
+        });
+      } else {
+        await updateLocalSettings({
+          githubPat: pat.trim() || undefined,
+          githubRepo: repo.trim() || undefined,
+          syncEnabled: willEnableSync,
+          encryptionPassword: passwordToStore,
+        });
+      }
+    };
+    if (movingRepo) await withSyncLock(async () => { await forgetRepositorySyncState(); await saveCredentials(); });
+    else await saveCredentials();
     toast('Sync settings saved', 'success');
     if (willEnableSync && (effectivePat !== storedPat || !wasSyncEnabled)) void warnIfTokenReachesTooFar(effectivePat);
     // A new token or repository on a device that already syncs: sync now, rather

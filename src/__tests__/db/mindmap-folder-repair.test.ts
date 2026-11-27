@@ -1,6 +1,7 @@
 import { db, cleanMindmapOrphans } from '../../db';
 import { resetDb, assertDefined } from '../helpers/db-helpers';
-import { createMindmapFolder, createMindmap, deleteMindmapFolder, restoreMindmapFolder } from '../../hooks/use-mindmaps';
+import { createMindmapFolder, createMindmap, deleteMindmapFolder, restoreMindmapFolder, deleteMindmap, restoreMindmap } from '../../hooks/use-mindmaps';
+import type { MindmapNode } from '../../db/models';
 
 // Reliability review 2026-10-06 (M8): device A moved folder F1 into F2 while
 // device B moved F2 into F1. Every parent existed, so the orphan repair did
@@ -62,4 +63,29 @@ it('a subfolder created in a deleted folder joins it too, with its maps', async 
 
   expect((await db.mindmapFolders.get(sub.id))?.deletedAt).toBe(deletedAt);
   expect((await db.mindmaps.get(map.id))?.deletedAt).toBe(deletedAt);
+});
+
+// Reliability review 2026-11-27: a node added on one device to a map another
+// device deleted had one node promoted to root; restoring the map then left two
+// roots, and the next start's repair flattened part of that branch.
+it('nodes added to a map deleted elsewhere join its delete, and come back under its root', async () => {
+  const map = assertDefined(await createMindmap('Plans'));
+  const root = assertDefined(await db.mindmapNodes.where('mapId').equals(map.id).first());
+  await deleteMindmap(map.id);
+  const deletedAt = assertDefined((await db.mindmaps.get(map.id))?.deletedAt);
+  // Synced in from the other device: a live branch under the root.
+  const now = Date.now();
+  const node = (id: string, parentId: string) => ({ id, mapId: map.id, parentId, label: id, order: 0, createdAt: now, updatedAt: now }) as MindmapNode;
+  await db.mindmapNodes.bulkAdd([node('n', root.id), node('n1', 'n')]);
+
+  await cleanMindmapOrphans();
+
+  expect((await db.mindmapNodes.get('n'))?.deletedAt).toBe(deletedAt);
+  expect((await db.mindmapNodes.get('n1'))?.deletedAt).toBe(deletedAt);
+  expect((await db.mindmapNodes.get('n'))?.parentId).toBe(root.id); // not promoted to root
+
+  await restoreMindmap(map.id);
+  const live = (await db.mindmapNodes.where('mapId').equals(map.id).toArray()).filter((n) => !n.deletedAt);
+  expect(live.filter((n) => !n.parentId).map((n) => n.id)).toEqual([root.id]);
+  expect(live.map((n) => n.id).sort()).toEqual(['n', 'n1', root.id].sort());
 });
