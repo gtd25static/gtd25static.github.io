@@ -1087,7 +1087,8 @@ describe('remote unlock: activity heartbeat and "last seen"', () => {
 
     expect(await ru.refreshRegistryHeartbeat(enrolledAt + ru.REGISTRY_HEARTBEAT_MS + 1, macKey)).toBe(true);
     expect(registrySha()).not.toBe(shaBefore);
-    expect(ownEntry().paranoid).toBe(true);
+    expect(ownEntry().paranoid).toBe(false); // sealed: the wire never says Paranoid
+    expect((await ru.readAuthenticRegistry(PAT, REPO, macKey)).find((e) => e.deviceId === LAP)?.paranoid).toBe(true);
     expect(await ru.isAuthenticEntry(ownEntry(), macKey)).toBe(true);
 
     // The next one is a day after that refresh.

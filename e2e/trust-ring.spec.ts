@@ -30,7 +30,9 @@ test('a trusted device shows when the protected device was last seen', async ({ 
   // derives from it); an empty device writes none, and the salt is born later.
   await expect.poll(() => github.readText('gtd25-snapshot.json'), { timeout: 60_000 }).toBeTruthy();
   await nameDevice(phone, 'My Phone');
-  await expect.poll(() => github.readText('gtd25-devices.json'), { timeout: 60_000 }).toContain('My Phone');
+  // Published sealed: the backend sees an entry, never the name.
+  await expect.poll(() => github.readText('gtd25-devices.json'), { timeout: 60_000 }).toContain('sealed:v1:');
+  expect(github.readText('gtd25-devices.json')).not.toContain('My Phone');
   // The phone shows its own fingerprint, so the one the laptop shows can be compared
   // (threat-model review batch 3: it used to be shown on the laptop's side only).
   const phoneSettings = await openSettings(phone, 'Security');

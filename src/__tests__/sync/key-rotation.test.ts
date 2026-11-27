@@ -22,7 +22,7 @@ import { syncNow, endSyncSession, SNAPSHOT_FILE, CHANGELOG_FILE } from '../../sy
 import { BLOB_BRANCH, KEEP_PATH, blobPath, blobAad, decryptSharedBlob, paddedLength, sealSharedBlob } from '../../sync/shared-blobs';
 import { BACKUP_FILES } from '../../sync/remote-backups';
 import { publishOwnRegistryEntry, readAuthenticRegistry, buildRegistryEntry, REGISTRY_PATH, type RegistryTombstone } from '../../sync/remote-unlock';
-import { deriveRegistryMacKey, registryMac, verifyRegistryMac } from '../../sync/remote-unlock-crypto';
+import { deriveRegistryMacKey, registryMac, registryEntryBytes, verifyRegistryMac } from '../../sync/remote-unlock-crypto';
 import { SYNC_VERSION } from '../../sync/version';
 
 // Changing the sync password rotates everything in the repo that the old key
@@ -535,6 +535,26 @@ describe('rotateSyncKey across devices and failures (reliability review)', () =>
     expect(authentic.map((e) => e.deviceId).sort()).toEqual(['device-A', 'device-B']);
     const tomb = (JSON.parse(fakeRepo.readText(REGISTRY_PATH)!) as Record<string, RegistryTombstone>)['device-C'];
     expect(await verifyRegistryMac(newMac, tomb.mac, new TextEncoder().encode(`registry-tombstone|device-C|${removedAt}`))).toBe(true);
+  });
+
+  it('re-seals names and Paranoid flags under the new key (entries from before sealing come out sealed)', async () => {
+    await seed();
+    const oldMac = await deriveRegistryMacKey(OLD_PW, oldSalt);
+    const reg = JSON.parse(fakeRepo.readText(REGISTRY_PATH)!) as Record<string, unknown>;
+    const ids = { ecdhPub: { kty: 'EC' }, ecdsaPub: { kty: 'EC' } } as never;
+    reg['device-B'] = await buildRegistryEntry('device-B', 'Sealed Phone', ids, true, oldMac);
+    const legacy = { deviceId: 'device-L', name: 'Legacy Laptop', ecdhPub: { kty: 'EC' }, ecdsaPub: { kty: 'EC' }, paranoid: true, updatedAt: 99 };
+    reg['device-L'] = { ...legacy, mac: await registryMac(oldMac, registryEntryBytes(legacy)) };
+    fakeRepo.writeText(REGISTRY_PATH, JSON.stringify(reg), 'main', fakeRepo.sha(REGISTRY_PATH)!);
+
+    await rotateSyncKey(NEW_PW);
+    const { salt } = await newKeyFromRemote();
+    expect(fakeRepo.readText(REGISTRY_PATH)).not.toContain('Legacy Laptop');
+    const authentic = await readAuthenticRegistry(PAT, REPO, await deriveRegistryMacKey(NEW_PW, salt));
+    expect(authentic.find((e) => e.deviceId === 'device-B')).toMatchObject({ name: 'Sealed Phone', paranoid: true });
+    expect(authentic.find((e) => e.deviceId === 'device-L')).toMatchObject({ name: 'Legacy Laptop', paranoid: true, updatedAt: 99 });
+    // The old key opens none of it any more.
+    expect(await readAuthenticRegistry(PAT, REPO, oldMac)).toEqual([]);
   });
 
   it('keeps the pin when an old-key leftover could not be deleted, so a retry finishes it', async () => {

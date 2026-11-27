@@ -310,6 +310,9 @@ export interface SyncMeta {
   unknownBlobsSeenAt?: Record<string, number>;
   // Periodic squash of the sync repo's default branch to bound git history growth.
   lastMainSquashAt?: number;
+  // When this device sealed the registry's legacy plaintext entries (device names,
+  // Paranoid flags) and squashed the history that still held them: once per device.
+  registrySealedAt?: number;
   // Set before this device's first upload to an empty repo, cleared when it
   // completes: an upload cut between its snapshot and its changelog is finished
   // by the next sync instead of being refused as an incomplete remote.

@@ -19,8 +19,9 @@ import { isParanoidFlagSet } from '../db/paranoid-flag';
 import { wrapDekWithRuk, stageNextRuk, promoteNextRuk, discardNextRuk, getStagedRukRaw, unlockWithRemoteKey, clearRemoteUnlock, getVaultSecrets, getRukRaw, isRemoteUnlockEnrolled, isUnlocked, setRemoteApprovers } from '../db/vault';
 export { isRemoteUnlockEnrolled } from '../db/vault'; // re-exported so the UI imports it from one place
 import { getCachedSalt } from './crypto';
-import { deriveRegistryMacKey } from './remote-unlock-crypto';
+import { deriveRegistryMacKey, deriveRegistrySealKey } from './remote-unlock-crypto';
 import { recordError } from '../lib/diagnostics';
+import { squashDefaultBranch } from './history-compaction';
 
 // --- Mailbox file paths (live in the existing sync repo) ---
 export const REGISTRY_PATH = 'gtd25-devices.json';
@@ -99,12 +100,51 @@ async function isAuthenticTombstone(e: unknown, macKey: CryptoKey): Promise<bool
   return verifyRegistryMac(macKey, t.mac, tombstoneBytes(t.deviceId, t.removedAt!));
 }
 
+// The device name and Paranoid flag travel sealed (AES-GCM under a key derived
+// from the registry MAC key, so readable only with the sync password): on the
+// wire `name` is SEALED_PREFIX + ciphertext and `paranoid` is always false. The
+// MAC covers those wire values, so a build from before sealing still verifies
+// the entry (it shows the ciphertext as the name until it updates). Entries
+// written before sealing (plaintext name) are still read, and sealed in place by
+// sealLegacyRegistryEntries.
+const SEALED_PREFIX = 'sealed:v1:';
+// The plaintext is padded to a multiple of this, so the ciphertext's length
+// does not give away the name's.
+const SEAL_PAD = 128;
+const sealAad = (deviceId: string): Uint8Array => te0.encode(`registry-seal|${deviceId}`);
+
+export function isSealedEntry(e: { name?: unknown }): boolean {
+  return typeof e.name === 'string' && e.name.startsWith(SEALED_PREFIX);
+}
+
+async function sealedWireEntry(
+  e: { deviceId: string; name: string; ecdhPub: JsonWebKey; ecdsaPub: JsonWebKey; paranoid: boolean; updatedAt: number },
+  macKey: CryptoKey,
+): Promise<RegistryEntry> {
+  const body = JSON.stringify({ n: e.name, p: e.paranoid });
+  const plaintext = body + ' '.repeat((SEAL_PAD - (te0.encode(body).length % SEAL_PAD)) % SEAL_PAD);
+  const sealed = await encryptBlob(await deriveRegistrySealKey(macKey), plaintext, sealAad(e.deviceId));
+  const wire = { deviceId: e.deviceId, name: SEALED_PREFIX + sealed, ecdhPub: e.ecdhPub, ecdsaPub: e.ecdsaPub, paranoid: false, updatedAt: e.updatedAt };
+  return { ...wire, mac: await registryMac(macKey, registryEntryBytes(wire)) };
+}
+
+/** An authentic entry with its real name and Paranoid flag; null when a sealed one does not open. */
+async function openEntry(e: RegistryEntry, macKey: CryptoKey): Promise<RegistryEntry | null> {
+  if (!isSealedEntry(e)) return e; // written before sealing
+  try {
+    const body = JSON.parse(await decryptBlob(await deriveRegistrySealKey(macKey), e.name.slice(SEALED_PREFIX.length), sealAad(e.deviceId))) as { n?: unknown; p?: unknown };
+    if (typeof body.n !== 'string' || typeof body.p !== 'boolean') return null;
+    return { ...e, name: body.n, paranoid: body.p };
+  } catch {
+    return null;
+  }
+}
+
+/** The entry as published: name and Paranoid flag sealed, MAC'd under the sync-derived key. */
 export async function buildRegistryEntry(
   deviceId: string, name: string, pub: PublicIdentity, paranoid: boolean, macKey: CryptoKey,
 ): Promise<RegistryEntry> {
-  const base = { deviceId, name, ecdhPub: pub.ecdhPub, ecdsaPub: pub.ecdsaPub, paranoid, updatedAt: Date.now() };
-  const mac = await registryMac(macKey, registryEntryBytes(base));
-  return { ...base, mac };
+  return sealedWireEntry({ deviceId, name, ecdhPub: pub.ecdhPub, ecdsaPub: pub.ecdsaPub, paranoid, updatedAt: Date.now() }, macKey);
 }
 
 /** True only if the entry's MAC verifies under the syncPassword-derived key. */
@@ -141,51 +181,69 @@ export async function publishRegistryEntry(pat: string, repo: string, entry: Reg
 
 /**
  * A sync key rotation: re-MAC, under the new key, every entry and tombstone that
- * verifies under the old one. Re-MACing only this device's own entry (all it
- * used to do) left the other devices unverifiable until each republished, and a
- * forgotten device's tombstone — the signal that drops it from every approver —
- * stopped counting for good. Anything not authentic under either key is left as
- * it is (it counts for nothing either way). Retried on a concurrent write.
+ * verifies under the old one, re-sealing each entry's name and Paranoid flag
+ * under the new key too (entries from before sealing come out sealed). Re-MACing
+ * only this device's own entry (all it used to do) left the other devices
+ * unverifiable until each republished, and a forgotten device's tombstone — the
+ * signal that drops it from every approver — stopped counting for good. Anything
+ * not authentic under either key is left as it is (it counts for nothing either
+ * way). Retried on a concurrent write.
  */
 export async function remacRegistry(pat: string, repo: string, oldMacKey: CryptoKey, newMacKey: CryptoKey): Promise<void> {
+  await rewriteRegistry(pat, repo, oldMacKey, newMacKey, false);
+}
+
+/**
+ * Seal, in place, every authentic entry still carrying its name and Paranoid
+ * flag in the clear (written before sealing, or by a build that predates it).
+ * True when it rewrote the file.
+ */
+export async function sealLegacyRegistryEntries(pat: string, repo: string, macKey: CryptoKey): Promise<boolean> {
+  return rewriteRegistry(pat, repo, macKey, macKey, true);
+}
+
+async function rewriteRegistry(pat: string, repo: string, oldMacKey: CryptoKey, newMacKey: CryptoKey, legacyOnly: boolean): Promise<boolean> {
   for (let attempt = 1; ; attempt++) {
     const existing = await getFile(pat, repo, REGISTRY_PATH);
     const reg = existing ? safeParseRegistry(existing.data) : null;
-    if (!existing || !reg) return;
+    if (!existing || !reg) return false;
     let changed = false;
     for (const [id, e] of Object.entries(reg)) {
       if (!e || typeof e !== 'object') continue;
+      if (legacyOnly && 'name' in e && isSealedEntry(e)) continue;
       if (await isAuthenticTombstone(e, oldMacKey)) {
+        if (legacyOnly) continue; // nothing in a tombstone to seal
         const t = e as RegistryTombstone;
         reg[id] = { ...t, mac: await registryMac(newMacKey, tombstoneBytes(t.deviceId, t.removedAt)) };
         changed = true;
       } else if (await isAuthenticEntry(e, oldMacKey)) {
-        const entry = e as RegistryEntry;
-        reg[id] = { ...entry, mac: await registryMac(newMacKey, registryEntryBytes({
-          deviceId: entry.deviceId, name: entry.name, ecdhPub: entry.ecdhPub, ecdsaPub: entry.ecdsaPub,
-          paranoid: entry.paranoid, updatedAt: entry.updatedAt,
-        })) };
+        const entry = await openEntry(e as RegistryEntry, oldMacKey);
+        if (!entry) continue; // authentic but unreadable: leave it as it is
+        reg[id] = await sealedWireEntry(entry, newMacKey);
         changed = true;
       }
     }
-    if (!changed) return;
+    if (!changed) return false;
     try {
       await putFile(pat, repo, REGISTRY_PATH, JSON.stringify(reg), existing.sha);
-      return;
+      return true;
     } catch (err) {
       if (!(err instanceof Error && err.message === 'CONFLICT') || attempt >= 3) throw err;
     }
   }
 }
 
-/** Read the registry and return ONLY entries whose MAC verifies (forged/foreign dropped). */
+/** Read the registry and return ONLY entries whose MAC verifies (forged/foreign
+ *  dropped), with their name and Paranoid flag unsealed. */
 export async function readAuthenticRegistry(pat: string, repo: string, macKey: CryptoKey): Promise<RegistryEntry[]> {
   const file = await getFile(pat, repo, REGISTRY_PATH);
   if (!file) return [];
   const reg = safeParseRegistry(file.data) ?? {};
   const out: RegistryEntry[] = [];
   for (const e of Object.values(reg)) {
-    if (e && await isAuthenticEntry(e, macKey)) out.push(e as RegistryEntry);
+    if (!e || !(await isAuthenticEntry(e, macKey))) continue;
+    const opened = await openEntry(e as RegistryEntry, macKey);
+    if (opened) out.push(opened);
   }
   return out;
 }
@@ -258,7 +316,7 @@ async function requestDigest(r: { fromDeviceId: string; nonce: string; ts: numbe
 }
 
 // --- Wire shapes ---
-interface ApproverInvite { fromDeviceId: string; fromName: string; fromEcdsaPub: JsonWebKey; rukEcies: EciesBlob; ts: number; sig?: string }
+interface ApproverInvite { fromDeviceId: string; fromEcdsaPub: JsonWebKey; rukEcies: EciesBlob; ts: number; sig?: string }
 interface WipeCommand { target: string; nonce: string; ts: number; from: string; sig: string }
 interface WipeStatus { target: string; commandNonce: string; commandTs: number; wipedAt: number; fromApproverDeviceId: string; protectedDeviceId: string; sig: string }
 interface UnlockRequest { fromDeviceId: string; nonce: string; ts: number; kForApprover: Record<string, EciesBlob>; sig: string }
@@ -320,7 +378,7 @@ export async function enableRemoteUnlock(ctx: EnrollContext, approverDeviceIds: 
       const ts = Date.now();
       const sig = await signPayload(identity.ecdsaPriv, inviteBytes(a.deviceId, { fromDeviceId: deviceId, ts, rukEcies }));
       await postApproverInvite(pat, repo, a.deviceId, {
-        fromDeviceId: deviceId, fromName: deviceName, fromEcdsaPub: identity.ecdsaPub, rukEcies, ts, sig,
+        fromDeviceId: deviceId, fromEcdsaPub: identity.ecdsaPub, rukEcies, ts, sig,
       });
       delivered.push(a.deviceId);
     }
@@ -347,7 +405,7 @@ export async function enableRemoteUnlock(ctx: EnrollContext, approverDeviceIds: 
  * it to each new approver, then append them to the cached approver list.
  */
 export async function addApprovers(ctx: EnrollContext, approverDeviceIds: string[]): Promise<RegistryEntry[]> {
-  const { pat, repo, deviceId, deviceName, macKey } = ctx;
+  const { pat, repo, deviceId, macKey } = ctx;
   const ruk = await getRukRaw();
   if (!ruk) throw new Error('Unlock the vault first (remote unlock must already be set up here)');
   const authentic = await readAuthenticRegistry(pat, repo, macKey);
@@ -361,7 +419,7 @@ export async function addApprovers(ctx: EnrollContext, approverDeviceIds: string
       const rukEcies = await eciesEncryptTo(a.ecdhPub, ruk);
       const ts = Date.now();
       const sig = await signPayload(identity.ecdsaPriv, inviteBytes(a.deviceId, { fromDeviceId: deviceId, ts, rukEcies }));
-      await postApproverInvite(pat, repo, a.deviceId, { fromDeviceId: deviceId, fromName: deviceName, fromEcdsaPub: identity.ecdsaPub, rukEcies, ts, sig });
+      await postApproverInvite(pat, repo, a.deviceId, { fromDeviceId: deviceId, fromEcdsaPub: identity.ecdsaPub, rukEcies, ts, sig });
     }
   } finally {
     ruk.fill(0);
@@ -414,7 +472,7 @@ export async function reissueRemoteUnlock(ctx?: EnrollContext): Promise<boolean>
       const ts = Date.now();
       const sig = await signPayload(identity.ecdsaPriv, inviteBytes(a.deviceId, { fromDeviceId: c.deviceId, ts, rukEcies }));
       await postApproverInvite(c.pat, c.repo, a.deviceId, {
-        fromDeviceId: c.deviceId, fromName: c.deviceName, fromEcdsaPub: identity.ecdsaPub, rukEcies, ts, sig,
+        fromDeviceId: c.deviceId, fromEcdsaPub: identity.ecdsaPub, rukEcies, ts, sig,
       });
     }
     await promoteNextRuk(ruk);
@@ -449,7 +507,7 @@ export async function reissueRemoteUnlock(ctx?: EnrollContext): Promise<boolean>
  * wrap nobody can open.
  */
 export async function removeApprover(ctx: EnrollContext, targetDeviceId: string): Promise<{ remaining: number }> {
-  const { pat, repo, deviceId, deviceName } = ctx;
+  const { pat, repo, deviceId } = ctx;
   const vault = await db.vault.get('vault');
   const approvers = vault?.remoteUnlock?.approvers ?? [];
   if (!approvers.some((a) => a.deviceId === targetDeviceId)) {
@@ -482,7 +540,7 @@ export async function removeApprover(ctx: EnrollContext, targetDeviceId: string)
       const ts = Date.now();
       const sig = await signPayload(identity.ecdsaPriv, inviteBytes(a.deviceId, { fromDeviceId: deviceId, ts, rukEcies }));
       await postApproverInvite(pat, repo, a.deviceId, {
-        fromDeviceId: deviceId, fromName: deviceName, fromEcdsaPub: identity.ecdsaPub, rukEcies, ts, sig,
+        fromDeviceId: deviceId, fromEcdsaPub: identity.ecdsaPub, rukEcies, ts, sig,
       });
       delivered++;
     }
@@ -780,24 +838,28 @@ async function writeRegistryTombstone(pat: string, repo: string, deviceId: strin
  * Which devices the registry lists, and — for the entries whose MAC verifies
  * (so a backend writer can't fake one) — when each was last refreshed.
  */
-async function readRegistryKeys(pat: string, repo: string, macKey: CryptoKey | null): Promise<{ present: boolean; ids: Set<string>; seenAt: Map<string, number>; tombstoned: Set<string> }> {
+async function readRegistryKeys(pat: string, repo: string, macKey: CryptoKey | null): Promise<{ present: boolean; ids: Set<string>; seenAt: Map<string, number>; tombstoned: Set<string>; authentic: Map<string, RegistryEntry> }> {
   const seenAt = new Map<string, number>();
   const tombstoned = new Set<string>();
+  const authentic = new Map<string, RegistryEntry>();
   try {
     const file = await getFile(pat, repo, REGISTRY_PATH);
     const reg = file ? safeParseRegistry(file.data) : null;
-    if (!reg) return { present: false, ids: new Set<string>(), seenAt, tombstoned };
+    if (!reg) return { present: false, ids: new Set<string>(), seenAt, tombstoned, authentic };
     if (macKey) {
       for (const e of Object.values(reg)) {
         if (!e || typeof e !== 'object') continue; // a primitive in the file is nobody
         if (await isAuthenticTombstone(e, macKey)) tombstoned.add(e.deviceId);
-        else if ('updatedAt' in e && Number.isFinite(e.updatedAt) && await isAuthenticEntry(e, macKey)) seenAt.set(e.deviceId, e.updatedAt);
+        else if ('updatedAt' in e && Number.isFinite(e.updatedAt) && await isAuthenticEntry(e, macKey)) {
+          seenAt.set(e.deviceId, e.updatedAt);
+          authentic.set(e.deviceId, e);
+        }
       }
     }
-    return { present: true, ids: new Set(Object.keys(reg)), seenAt, tombstoned };
+    return { present: true, ids: new Set(Object.keys(reg)), seenAt, tombstoned, authentic };
   } catch (err) {
     recordError('remoteUnlock.readRegistryKeys', err);
-    return { present: false, ids: new Set<string>(), seenAt, tombstoned };
+    return { present: false, ids: new Set<string>(), seenAt, tombstoned, authentic };
   }
 }
 
@@ -929,7 +991,18 @@ export async function refreshManagedDeviceWipeStatuses(pat: string, repo: string
   if (isParanoidFlagSet()) return [];
   const local = await db.localSettings.get('local');
   const snapshot = local?.remoteApproverFor ?? {};
-  const registry = await readRegistryKeys(pat, repo, macKey ?? await getRegistryMacKey().catch(() => null));
+  const key = macKey ?? await getRegistryMacKey().catch(() => null);
+  const registry = await readRegistryKeys(pat, repo, key);
+
+  // A name stored as a sealed blob: the invite was accepted by a build that could
+  // not open the registry's sealed names. Opened here once the entry verifies.
+  const repairedNames = new Map<string, string>();
+  for (const [deviceId, entry] of Object.entries(snapshot)) {
+    const raw = registry.authentic.get(deviceId);
+    if (!key || !raw || !isSealedEntry(entry)) continue;
+    const opened = await openEntry(raw, key);
+    if (opened) repairedNames.set(deviceId, opened.name);
+  }
 
   const decisions: Record<string, LifecycleDecision> = {};
   for (const deviceId of Object.keys(snapshot)) {
@@ -966,6 +1039,12 @@ export async function refreshManagedDeviceWipeStatuses(pat: string, repo: string
 
   await mutateRemoteApproverFor((cur) => {
     let changed = false;
+    for (const [deviceId, name] of repairedNames) {
+      if (cur[deviceId] && isSealedEntry(cur[deviceId])) {
+        cur[deviceId] = { ...cur[deviceId], name };
+        changed = true;
+      }
+    }
     // "Last seen": only ever moves forward (entries are MAC-verified above).
     for (const [deviceId, seen] of registry.seenAt) {
       const entry = cur[deviceId];
@@ -1430,6 +1509,35 @@ export async function publishOwnRegistryEntry(): Promise<boolean> {
   return true;
 }
 
+/**
+ * Once per device, after a successful sync: seal the registry entries still
+ * carrying a device name / Paranoid flag in the clear, then squash the default
+ * branch so the history that held them is no longer reachable (GitHub collects
+ * it later, on its own schedule). Squashing once on every device, not just the
+ * first to seal, also covers names an older build wrote in between. Needs the
+ * sync password, so a locked Paranoid device waits for its next unlocked sync.
+ * Residual: a registry whose only participating devices never run this build
+ * keeps its names in the clear.
+ */
+export async function maybeSealRegistry(pat: string, repo: string): Promise<void> {
+  const meta = await db.syncMeta.get('sync-meta');
+  if (!meta || meta.registrySealedAt) return;
+  // Only a device that takes part in the registry (it has published an entry)
+  // does it — and seals every entry, not just its own. The rest never touch the
+  // network for this, like the other after-sync housekeeping.
+  if (!(await db.localSettings.get('local'))?.deviceIdentity) return;
+  const done = () => db.syncMeta.update('sync-meta', { registrySealedAt: Date.now() });
+  // No registry, no names: nothing to seal (and no PBKDF2 on every sync).
+  if (!(await getFile(pat, repo, REGISTRY_PATH))) { await done(); return; }
+  const macKey = await getRegistryMacKey();
+  if (!macKey) return;
+  await sealLegacyRegistryEntries(pat, repo, macKey);
+  // Done whatever the squash does: a refusal (force pushes blocked) or a lost
+  // race with another push is left to the monthly squash, not retried every sync.
+  await done();
+  await squashDefaultBranch(pat, repo);
+}
+
 let heartbeatBaseline: number | null = null;
 // After a failed attempt (offline, GitHub error) wait before the next one: each
 // attempt derives the registry key (PBKDF2), too costly for the 12 s poll.
@@ -1499,5 +1607,8 @@ export async function listApproverCandidates(): Promise<RegistryEntry[]> {
 /** Cached approver display info for the enrolled (protected) device. */
 export async function listEnrolledApprovers(): Promise<Array<{ deviceId: string; name: string }>> {
   const vault = await db.vault.get('vault');
-  return (vault?.remoteUnlock?.approvers ?? []).map((a) => ({ deviceId: a.deviceId, name: a.name }));
+  // A sealed blob for a name: enrolled by a build that could not open the
+  // registry's sealed names. Not rewritten here (the list is checked against its
+  // sealed copy at every unlock): just not shown as base64.
+  return (vault?.remoteUnlock?.approvers ?? []).map((a) => ({ deviceId: a.deviceId, name: isSealedEntry(a) ? 'Unnamed device' : a.name }));
 }

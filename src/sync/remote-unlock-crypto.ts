@@ -151,6 +151,17 @@ export async function verifyRegistryMac(macKey: CryptoKey, macBase64: string, me
   }
 }
 
+/**
+ * AES-GCM key that seals a registry entry's name and Paranoid flag, derived from
+ * the registry MAC key (HKDF-Expand, one block: HMAC(K_reg, label || 0x01)), so
+ * every device able to verify an entry can also read it, at no extra PBKDF2 cost.
+ * The label holds no '|', so it never collides with an entry or tombstone MAC message.
+ */
+export async function deriveRegistrySealKey(macKey: CryptoKey): Promise<CryptoKey> {
+  const okm = await crypto.subtle.sign('HMAC', macKey, utf8.encode('gtd25-registry-seal-v1\u0001') as BufferSource);
+  return crypto.subtle.importKey('raw', okm, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']);
+}
+
 // --- Verification code & fingerprint (human cross-checks) ---
 
 async function sha256(bytes: Uint8Array): Promise<Uint8Array> {

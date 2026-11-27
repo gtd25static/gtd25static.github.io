@@ -2112,6 +2112,13 @@ async function runSync(manual = false, pushLimit?: number): Promise<number> {
       recordError('sync.historyCompaction', err);
     });
 
+    // Fire-and-forget, once per device: seal device names / Paranoid flags the
+    // registry still holds in the clear, and squash the history that held them.
+    // (Imported lazily: a static import would close more module cycles through db/vault.)
+    import('./remote-unlock').then((m) => m.maybeSealRegistry(creds.pat, creds.repo)).catch((err) => {
+      recordError('sync.registrySeal', err);
+    });
+
     return remaining;
   } catch (err) {
     if (err instanceof DOMException && err.name === 'AbortError') return -1;
